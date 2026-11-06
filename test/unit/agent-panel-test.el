@@ -242,5 +242,34 @@ unanswered, and panel \"s1\" as `buf'."
                  (should (string-match-p "Pair · waiting for you" (drgnx-agent-panel-test--text buf))))
         (drgnx-command-undefine 'agents-pair)))))
 
+(declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-always "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-accept "drgnx-agent-panel-cards")
+
+(ert-deftest drgnx-agent-panel/permission-card-keys ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot
+       (list :id "s1" :status "waiting"
+             :permissions (list (list :id 7 :title "Run rm -rf build"
+                                      :options (list (list :optionId "allow" :kind "allow_once")
+                                                     (list :optionId "always" :kind "allow_always")
+                                                     (list :optionId "reject" :kind "reject_once"))))))
+      (should (string-match-p "↵ Allow · A Always · D Deny" (drgnx-agent-panel-test--text buf)))
+      (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
+      (should (eq 'drgnx-agent-panel-ring (get-text-property (point) 'face)))
+      (drgnx-agent-panel-allow)
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls)))
+      (drgnx-agent-panel-always)
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "always") (car drgnx-agent-panel-test--calls)))
+      (drgnx-agent-panel-reject)
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "reject") (car drgnx-agent-panel-test--calls)))
+      ;; a permission card is not a diff card
+      (should-error (drgnx-agent-panel-accept) :type 'user-error)
+      ;; answered: the hub's next snapshot has no request and the card goes
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
+      (should-not (string-match-p "Allow" (drgnx-agent-panel-test--text buf))))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

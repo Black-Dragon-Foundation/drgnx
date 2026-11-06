@@ -93,6 +93,20 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-composer--queue-row "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer--row "drgnx-agent-panel-composer")
 
+(declare-function drgnx-agent-panel-cards-keys "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards-top-keys "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards--pin-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards--todo-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards--ledger-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards-redraw "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards-setup "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards-note-entries "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-cards--perm-row "drgnx-agent-panel-cards")
+
+(unless (featurep 'drgnx-agent-panel-cards)
+  (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-composer)
   (load (expand-file-name "drgnx-agent-panel-composer" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-steps)
@@ -178,6 +192,11 @@ folds under it."
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
     (:strip (drgnx-agent-panel--strip-row))
+    (:pin (drgnx-agent-panel-cards--pin-row (cadr key)))
+    (:todo (drgnx-agent-panel-cards--todo-row))
+    (:ledger (drgnx-agent-panel-cards--ledger-row))
+    (:diff (drgnx-agent-panel-cards--diff-row (cadr key) (nth 2 key)))
+    (:perm (drgnx-agent-panel-cards--perm-row (cadr key)))
     (:q (drgnx-agent-panel-composer--queue-row (cadr key)))
     (:composer (drgnx-agent-panel-composer--row))
     (_ "\n")))
@@ -190,9 +209,11 @@ folds under it."
   "Every row key the panel should hold now, in order."
   (append (list (list :header) (list :chips))
           (list (list :strip))
+          (drgnx-agent-panel-cards-top-keys)
           (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
           (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
             (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))
+          (drgnx-agent-panel-cards-keys)
           (drgnx-agent-panel-composer-keys)))
 
 (defun drgnx-agent-panel--reconcile ()
@@ -224,7 +245,8 @@ folds under it."
           ((not (equal now "busy")) (setq drgnx-agent-panel--busy-since nil)))
     (drgnx-agent-panel--dirty (list :header) (list :chips))
     (drgnx-agent-panel--reconcile)
-    (drgnx-agent-panel-composer-redraw)))
+    (drgnx-agent-panel-composer-redraw)
+    (drgnx-agent-panel-cards-redraw)))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
@@ -245,7 +267,8 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
           (when (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry idx)) 'tool)
             (cl-pushnew (list :e idx) keys :test #'equal)))
         (when (drgnx-view-p drgnx-view)
-          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys)))))))
+          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys))))
+      (drgnx-agent-panel-cards-note-entries (current-buffer) touched from-slice))))
 
 (defun drgnx-agent-panel--take-steps (steps)
   (dolist (s steps)
@@ -278,7 +301,8 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
                (setq drgnx-agent-panel--more (and first (>= (length steps) n)))
                (if (null first)
                    (progn (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t drgnx-agent-panel--more nil)
-                          (drgnx-agent-panel--reconcile))
+                          (drgnx-agent-panel--reconcile)
+                          (unless older (drgnx-agent-panel-cards-load buf)))
                  (drgnx-agent-panel--ask
                   "agents/slice" (list :id id :from_step (plist-get first :seq) :n n)
                   (lambda (r2 err2)
@@ -287,7 +311,8 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
                         (setq drgnx-agent-panel--loading nil drgnx-agent-panel--loaded t)
                         (drgnx-agent-panel--take-steps (append (if err2 steps (or (plist-get r2 :steps) steps)) nil))
                         (unless err2 (drgnx-agent-panel--take-entries (plist-get r2 :entries) t))
-                        (drgnx-agent-panel--reconcile))))))))))))))
+                        (drgnx-agent-panel--reconcile)
+                        (unless older (drgnx-agent-panel-cards-load buf)))))))))))))))
 
 (defun drgnx-agent-panel-older ()
   "Load the page of steps before the first one shown, when the hub has one."
@@ -443,6 +468,7 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
   (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-composer-setup)
+  (drgnx-agent-panel-cards-setup)
   (drgnx-agent-panel-sync-windows))
 
 (defun drgnx-agent-panel--teardown ()

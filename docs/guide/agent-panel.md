@@ -45,3 +45,14 @@ Under the transcript are the notes waiting for the agent's turn to end, one row 
   the turn, after a confirmation line; it also ends after the current step.
 - `C` and the Pair chip next to the composer start pair mode. They are there only when pair mode is.
 - The model and mode chips are read-only here.
+
+## Cards
+
+What the agent changed and what it asks sit under the transcript as cards.
+
+- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). `a` accepts the hunk: it writes
+  the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
+  agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
+  of its own; both keys are the review view's own functions (module `tools/work-space`).
+- **Permission cards:** a request the agent waits on, ringed in the attention colour. `RET` allows it once, `A` always,
+  `D` denies it. The card goes when the hub's next snapshot no longer holds the request.

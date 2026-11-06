@@ -156,5 +156,82 @@ session.  The module's own setup is not used: the module fixture moves the confi
        "the edited note answered")
       (should-not (string-search "drop me" (drgnx-agent-panel-hub-test--entry-text buf))))))
 
+(load (expand-file-name "modules/tools/drgnx-work-space" drgnx-dir) nil t)   ; the review view the cards call
+(declare-function drgnx-agent-panel-accept "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-allow "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel--reconcile "drgnx-agent-panel")
+(declare-function drgnx-agents-mirror-test--asking "agents-mirror-test")
+(defvar drgnx-agent-panel--diffs)
+
+(defmacro drgnx-agent-panel-hub-test--spying (calls-var msgs-var &rest body)
+  "BODY with every hub call pushed on CALLS-VAR (METHOD . PARAMS) and every message on MSGS-VAR."
+  (declare (indent 2))
+  `(cl-letf* ((orig (symbol-function 'drgnx-hub-call))
+              ((symbol-function 'drgnx-hub-call)
+               (lambda (m p &rest r) (push (cons m p) ,calls-var) (apply orig m p r)))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args) (when fmt (push (apply #'format fmt args) ,msgs-var)))))
+     ,@body))
+
+(defun drgnx-agent-panel-hub-test--card (buf key)
+  (with-current-buffer buf
+    (drgnx-agent-panel--reconcile)
+    (drgnx-view-draw-now drgnx-view)
+    (goto-char (drgnx-view-row-start drgnx-view key))))
+
+(ert-deftest drgnx-agent-panel/accept-writes-the-review-mark ()
+  (drgnx-agent-panel-hub-test--with
+    (let ((buf (drgnx-agent-panel-buffer id)) (diff "@@ -1 +1 @@\n-a\n+b\n") calls msgs)
+      (drgnx-agent-panel-hub-test--show buf)
+      (with-current-buffer buf (setq drgnx-agent-panel--diffs (list (cons "a.txt" diff))))
+      (drgnx-agent-panel-hub-test--card buf '(:diff "a.txt" 0))
+      (drgnx-agent-panel-hub-test--spying calls msgs
+        (with-current-buffer buf (drgnx-agent-panel-accept))
+        (drgnx-agents-mirror-test--settle (lambda () (seq-find (lambda (m) (string-prefix-p "Accepted a.txt" m)) msgs))
+                                          "the hub's answer to the review mark"))
+      (let ((mark (cdr (assoc "review/mark" calls))))
+        (should (equal id (plist-get mark :agent)))
+        (should (equal "accepted" (plist-get mark :state)))
+        (should (equal (secure-hash 'sha1 diff) (plist-get mark :hash)))))))
+
+(ert-deftest drgnx-agent-panel/reject-queues-the-take-it-back-message ()
+  (drgnx-agent-panel-hub-test--with
+    (let ((buf (drgnx-agent-panel-buffer id)) (diff "@@ -1 +1 @@\n-a\n+b\n") calls msgs)
+      (drgnx-agent-panel-hub-test--show buf)
+      (drgnx-agent-panel-hub-test--turn id "slow")
+      (drgnx-agents-mirror-test--settle (lambda () (eq 'busy (drgnx-agent-session-status (drgnx-agents-mirror-test--mirror id))))
+                                        "the slow turn running")
+      (with-current-buffer buf (setq drgnx-agent-panel--diffs (list (cons "a.txt" diff))))
+      (drgnx-agent-panel-hub-test--card buf '(:diff "a.txt" 0))
+      (drgnx-agent-panel-hub-test--spying calls msgs
+        (with-current-buffer buf (drgnx-agent-panel-reject)))
+      ;; the message is in the agent's queue, behind the turn that is running, which is not cancelled
+      (drgnx-agents-mirror-test--settle
+       (lambda () (seq-some (lambda (q) (string-prefix-p "I reject your change to a.txt" q)) (drgnx-agent-panel-hub-test--queue buf)))
+       "the take-it-back message queued")
+      (should (equal "pending" (plist-get (cdr (assoc "review/mark" calls)) :state)))
+      (should (assoc "agents/send" calls))
+      (should-not (assoc "agents/stop" calls)))))
+
+(ert-deftest drgnx-agent-panel/allow-answers-the-permission ()
+  (drgnx-agents-mirror-test--with '()
+    (drgnx-agents-mirror-test--asking root)   ; before anything starts: the hub reads the profiles and the matrix then
+    (add-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+    (drgnx-agents-mirror-sync)
+    (let* ((m (drgnx-agents-mirror-test--start :profile "asks" :role "worker")) (sid (drgnx-agent-session-remote m))
+           (buf (drgnx-agent-panel-buffer sid)))
+      (drgnx-agent-panel-hub-test--show buf)
+      (drgnx-agent-panel-hub-test--turn sid "ask:permission edit")
+      (drgnx-agents-mirror-test--settle (lambda () (plist-get (buffer-local-value 'drgnx-agent-panel--snap buf) :permissions))
+                                        "the permission request in the panel's snapshot")
+      (drgnx-agent-panel-hub-test--card buf (list :perm (plist-get (car (append (plist-get (buffer-local-value 'drgnx-agent-panel--snap buf) :permissions) nil)) :id)))
+      (with-current-buffer buf (drgnx-agent-panel-allow))
+      (drgnx-agents-mirror-test--settle
+       (lambda () (string-search "permission: allow" (drgnx-agent-panel-hub-test--entry-text buf))) "the agent's word on the answer")
+      (should-not (plist-get (buffer-local-value 'drgnx-agent-panel--snap buf) :permissions))
+      (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
+      (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))
+
 (provide 'agent-panel-hub-test)
 ;;; agent-panel-hub-test.el ends here

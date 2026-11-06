@@ -978,7 +978,9 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel agents-panel-toggle agents-panel-older agents-panel-toggle-type
                               agents-panel-preset-1 agents-panel-preset-2 agents-panel-preset-3 agents-panel-make-default
                               agents-panel-send agents-panel-stop agents-panel-pause agents-panel-resume
-                              agents-panel-edit-queued agents-panel-drop-queued agents-panel-pair))   ; part 3: the agent panel
+                              agents-panel-edit-queued agents-panel-drop-queued agents-panel-pair
+                              agents-panel-accept agents-panel-reject agents-panel-allow agents-panel-always
+                              agents-panel-pin agents-panel-ledger))   ; part 3: the agent panel
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))
