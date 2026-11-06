@@ -13,12 +13,14 @@
 pub mod aws;
 pub mod ca;
 pub mod creds;
+pub mod image;
 pub mod market;
 pub mod meter;
 pub mod net;
 pub mod sweep;
 #[cfg(test)]
 pub(crate) mod testmock;
+pub mod user_data;
 
 use mimir::BoxFuture;
 use std::collections::BTreeMap;

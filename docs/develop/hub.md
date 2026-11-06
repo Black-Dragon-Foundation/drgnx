@@ -2178,6 +2178,37 @@ the user's agent untouched with `SSH_AUTH_SOCK` on a recording listener, the con
 `tests/fleet_cloud.rs` [C] (`fleet.sh up --cloud`: a mock cloud's machine reached by certificate only, a changed host
 key refused).
 
+## Runners: the AWS image
+
+`runners/cloud/image.rs` and `user_data.rs` (design §6.7.2). drgnx's own image is Fedora Cloud 45 with everything a
+runner needs baked in, so a started machine is ready in about a minute.
+
+- `image::build(api, list, cfg, inputs) -> Built {id, reused, base}`: resolves the base (`resolve_base`: Fedora's
+  published `releases.json` through `FedoraList`, parsed by `parse_fedora_list` for the release, region and arch;
+  else the caller's named fallback; else `unavailable: no supported base image`), hashes the inputs with the base
+  (`user_data::input_hash`), and returns the image already carrying that hash (`reused`, no machine). Otherwise it
+  starts the build machine (`ImageApi::start_builder`: on-demand, **stops** at power-off instead of terminating),
+  waits for it to stop (`wait_stopped`, bounded by `BuildCfg.wait`, 10 s polls on the hub clock), images it
+  (`create_image`: encrypted block device, the hub's tag and `drgnx-version`, `drgnx-bundle`, `drgnx-input-hash`,
+  `drgnx-built` on the image and its snapshot), ends the machine (also when imaging failed), and keeps the newest two
+  (`keep_newest`; the older ones are `deregister`ed with their snapshots).
+- `user_data::render_build(inputs)`: the build machine's cloud-config. It installs git, podman, the runner bundle
+  (checked against its SHA-256), the watchdog and first-boot units, the CA's public key, the `runner` user, the
+  project images by digest, the git mirrors fetched from the hub and a warm cargo registry, then runs `FINAL_STEPS`:
+  remove `/etc/ssh/ssh_host_*`, `cloud-init clean --logs`, `sync`, `systemctl poweroff`. `ssh_deletekeys` is set, so
+  each instance makes its own host keys. `BuildInputs` takes public data only and refuses anything else (a private key
+  line, a URL with credentials, an image not named by digest).
+- `user_data::render(ca, principal, limits, flavor)`: an instance's user-data, **public things only** (the principal,
+  the watchdog's limits, optionally a newer CA public key). Any process on the machine can read it from the instance
+  metadata. `image/drgnx-first-boot` reads it at boot (IMDSv2), writes the `TrustedUserCAKeys` and
+  `AuthorizedPrincipalsFile` drop-in and the watchdog's limits, and reloads sshd.
+
+Tests: `runners::cloud::image::` and `user_data::` ([D] pure: `user_data_holds_no_secret`,
+`host_keys_removed_before_the_snapshot`, `keeps_the_newest_two_images`; [B] `image::build_then_start_from_it` against
+`ratatoskr-mock cloud`, the guest's power-off played by the test at the one point the build waits), and
+`test/runners/image-units.sh` (the first-boot script against a stand-in metadata service, and the units, in a
+container).
+
 ## Runners: attempts
 
 Every placement of a job on a runner is an **attempt** with a nonce the hub made (`sleipnir::proto::JobRef {job,

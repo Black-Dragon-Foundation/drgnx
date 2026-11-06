@@ -475,6 +475,157 @@ impl Provider for Aws {
     }
 }
 
+/// The image build's calls (design 6.7.2).
+impl super::image::ImageApi for Aws {
+    fn start_builder<'a>(
+        &'a self,
+        req: &'a StartReq,
+    ) -> BoxFuture<'a, Result<Instance, CloudError>> {
+        Box::pin(async move {
+            // the build machine stops at power-off (a terminated disk cannot be imaged); the watchdog's limits
+            // do not apply to it, so it is on-demand and the build's own wait bounds it
+            let mut p = self.run_params(req);
+            for (k, v) in p.iter_mut() {
+                if k == "InstanceInitiatedShutdownBehavior" {
+                    *v = "stop".into();
+                }
+            }
+            let root = self.ec2("RunInstances", p).await?;
+            let item = root
+                .find("instancesSet/item")
+                .ok_or_else(|| CloudError::Other("RunInstances answered no instance".into()))?;
+            Ok(Instance {
+                id: item.text_at("instanceId").unwrap_or_default().to_string(),
+                zone: item
+                    .text_at("placement/availabilityZone")
+                    .unwrap_or_default()
+                    .to_string(),
+            })
+        })
+    }
+
+    fn wait_stopped<'a>(
+        &'a self,
+        id: &'a str,
+        limit: std::time::Duration,
+    ) -> BoxFuture<'a, Result<(), CloudError>> {
+        Box::pin(async move {
+            let started = crate::clock::now();
+            loop {
+                match self.describe(id).await {
+                    Ok(i) if i.state == InstanceState::Stopped => return Ok(()),
+                    Ok(i) if matches!(i.state, InstanceState::Ending | InstanceState::Gone) => {
+                        return Err(CloudError::Other(format!(
+                            "the image build machine {id} ended before it stopped"
+                        )));
+                    }
+                    // not listed yet, or a hiccup: the limit below bounds the wait
+                    Ok(_) | Err(CloudError::Transient(_)) => {}
+                    Err(e) => return Err(e),
+                }
+                if started.elapsed() >= limit {
+                    return Err(CloudError::Other(format!(
+                        "the image build machine {id} did not power off within {limit:?} (a build step failed; \
+                         its console shows which)"
+                    )));
+                }
+                crate::clock::sleep(std::time::Duration::from_secs(10)).await;
+            }
+        })
+    }
+
+    fn create_image<'a>(
+        &'a self,
+        instance: &'a str,
+        name: &'a str,
+        tags: &'a BTreeMap<String, String>,
+    ) -> BoxFuture<'a, Result<String, CloudError>> {
+        Box::pin(async move {
+            let mut p: Vec<(String, String)> = [
+                ("InstanceId", instance),
+                ("Name", name),
+                ("BlockDeviceMapping.1.DeviceName", "/dev/sda1"),
+                ("BlockDeviceMapping.1.Ebs.Encrypted", "true"),
+                ("BlockDeviceMapping.1.Ebs.DeleteOnTermination", "true"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            for (n, ty) in ["image", "snapshot"].into_iter().enumerate() {
+                let s = format!("TagSpecification.{}", n + 1);
+                p.push((format!("{s}.ResourceType"), ty.into()));
+                p.push((format!("{s}.Tag.1.Key"), HUB_TAG.into()));
+                p.push((format!("{s}.Tag.1.Value"), self.cfg.hub_id.clone()));
+                for (i, (k, v)) in tags.iter().enumerate() {
+                    p.push((format!("{s}.Tag.{}.Key", i + 2), k.clone()));
+                    p.push((format!("{s}.Tag.{}.Value", i + 2), v.clone()));
+                }
+            }
+            let root = self.ec2("CreateImage", p).await?;
+            root.text_at("imageId")
+                .filter(|i| !i.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| CloudError::Other("CreateImage answered no image".into()))
+        })
+    }
+
+    fn images(&self) -> BoxFuture<'_, Result<Vec<super::image::ImageInfo>, CloudError>> {
+        Box::pin(async move {
+            let p = vec![
+                ("Owner.1".to_string(), "self".to_string()),
+                ("Filter.1.Name".to_string(), format!("tag:{HUB_TAG}")),
+                ("Filter.1.Value.1".to_string(), self.cfg.hub_id.clone()),
+            ];
+            let root = self.ec2("DescribeImages", p).await?;
+            Ok(root
+                .find_all("imagesSet/item")
+                .into_iter()
+                .map(|i| super::image::ImageInfo {
+                    id: i.text_at("imageId").unwrap_or_default().to_string(),
+                    name: i.text_at("name").unwrap_or_default().to_string(),
+                    snapshot: i
+                        .find_all("blockDeviceMapping/item")
+                        .into_iter()
+                        .find_map(|b| b.text_at("ebs/snapshotId"))
+                        .unwrap_or_default()
+                        .to_string(),
+                    tags: i
+                        .find_all("tagSet/item")
+                        .into_iter()
+                        .filter_map(|t| {
+                            Some((
+                                t.text_at("key")?.to_string(),
+                                t.text_at("value").unwrap_or("").to_string(),
+                            ))
+                        })
+                        .collect(),
+                })
+                .collect())
+        })
+    }
+
+    fn deregister<'a>(
+        &'a self,
+        image: &'a super::image::ImageInfo,
+    ) -> BoxFuture<'a, Result<(), CloudError>> {
+        Box::pin(async move {
+            self.ec2(
+                "DeregisterImage",
+                vec![("ImageId".into(), image.id.clone())],
+            )
+            .await?;
+            if !image.snapshot.is_empty() {
+                self.ec2(
+                    "DeleteSnapshot",
+                    vec![("SnapshotId".into(), image.snapshot.clone())],
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    }
+}
+
 const FORM: &str = "application/x-www-form-urlencoded; charset=utf-8";
 
 /// RFC 3986 percent-encoding, as AWS's Query API and SigV4 want it: unreserved characters stay.
@@ -499,7 +650,7 @@ fn form_body(pairs: &[(String, String)]) -> String {
 }
 
 /// `2026-11-06T00:00:00Z`.
-fn iso(t: SystemTime) -> String {
+pub(super) fn iso(t: SystemTime) -> String {
     let secs = t
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
@@ -861,7 +1012,7 @@ pub fn policy_for(hub_id: &str, regions: &[String], sizes: &[String]) -> String 
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::runners::cloud::creds::Source;
     use secrecy::SecretString;
@@ -1145,7 +1296,7 @@ mod tests {
 
     /// `ratatoskr-mock cloud` with no containers, and a client of it whose credentials come from a command that
     /// prints fake ones (built in pieces).
-    struct Mock {
+    pub(in crate::runners::cloud) struct Mock {
         child: std::process::Child,
         base: String,
     }
@@ -1158,7 +1309,7 @@ mod tests {
     }
 
     impl Mock {
-        fn start() -> Mock {
+        pub(in crate::runners::cloud) fn start() -> Mock {
             use std::io::BufRead;
             let mut child = std::process::Command::new(crate::embed::tests::mock_binary())
                 .args([
@@ -1191,7 +1342,11 @@ mod tests {
             }
         }
 
-        fn client(&self) -> Aws {
+        pub(in crate::runners::cloud) fn base(&self) -> &str {
+            &self.base
+        }
+
+        pub(in crate::runners::cloud) fn client(&self) -> Aws {
             let id = ["AS", "IA", "FAKEFAKEFAKE0002"].concat();
             let secret = ["fake", "/secret", "0002"].concat();
             let json = format!(
@@ -1205,7 +1360,7 @@ mod tests {
         }
 
         /// A knob: `POST /__mock/NAME` with BODY.
-        async fn knob(&self, name: &str, body: Value) {
+        pub(in crate::runners::cloud) async fn knob(&self, name: &str, body: Value) {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let addr = self
                 .base

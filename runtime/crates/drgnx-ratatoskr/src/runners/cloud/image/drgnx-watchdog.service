@@ -1,0 +1,14 @@
+[Unit]
+Description=drgnx watchdog: powers the machine off when idle, unattended or past its lifetime
+After=drgnx-first-boot.service
+Requires=drgnx-first-boot.service
+
+[Service]
+EnvironmentFile=/etc/drgnx/watchdog.env
+# the limits come from the instance user-data, through drgnx-first-boot; on aws a power-off ends the instance
+ExecStart=/usr/local/bin/sleipnir watchdog --idle ${DRGNX_WATCHDOG_IDLE} --lifetime ${DRGNX_WATCHDOG_LIFETIME} --unattended ${DRGNX_WATCHDOG_UNATTENDED} --provider ${DRGNX_WATCHDOG_PROVIDER}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -318,6 +318,13 @@ The machine accepts certificates from that authority and nothing else. Its host 
 it prints them at first boot, and pinned: a machine whose console doesn't show them is never connected to, and a host
 key that changes later is refused.
 
+**The image.** On AWS drgnx makes its own machine image from Fedora Cloud 45 (the newest listed one, named in the
+output; if Fedora lists none for your region, drgnx says so and stops unless you named another base). It has git,
+podman, the runner, the watchdog, your CA's public key, your project images and git mirrors and a warm cargo registry,
+so a started machine is ready in about a minute. The image is encrypted, holds no host key and no secret of yours, and
+is rebuilt only when what's in it changes. The two newest images are kept; older ones are deleted with their snapshots.
+A machine's startup text (user-data) holds only its name, the watchdog's limits and, when newer, the CA's public key.
+
 ### Spot
 
 Cloud machines are spot machines by default, with on-demand when spot fails (`drgnx-runners-cloud-market`: `spot`,
