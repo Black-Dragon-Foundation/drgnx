@@ -98,6 +98,7 @@ pub mod manager;
 pub mod matrix_gate;
 pub mod peer;
 pub mod recording;
+pub mod recording_cli;
 pub mod records;
 pub mod runner;
 pub mod runner_cli;

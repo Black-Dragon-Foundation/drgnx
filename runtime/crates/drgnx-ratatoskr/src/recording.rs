@@ -82,6 +82,13 @@ pub async fn start(env: &Env) -> Result<(), String> {
                 ));
             }
             let r = Recorder::start(Path::new(dir), Roots::of_env(env), provenance)?;
+            // the caps `bin/drgnx record start` was given, for the manifest and the report (the run enforces them)
+            if let Some(caps) = var(env, "DRGNX_RECORD_CAPS")
+                .and_then(|c| serde_json::from_str::<Value>(c).ok())
+                .filter(Value::is_object)
+            {
+                r.manifest(|m| m["caps"] = caps);
+            }
             tracing::info!(dir, provenance, "recording this run (DRGNX_RECORD)");
             let _ = MODE.set(Mode::Record(r));
             Ok(())
@@ -167,6 +174,12 @@ pub fn replayed_profile(
         Some(Provider::Gemini) => "gemini",
         _ => "claude",
     };
+    p.command = replay_command(r, kind);
+    Some(p)
+}
+
+/// The command of a replayed agent of KIND.
+fn replay_command(r: &Replay, kind: &str) -> Vec<String> {
     let s = |p: &Path| p.to_string_lossy().into_owned();
     let mut command = vec![
         s(&r.mock),
@@ -185,8 +198,32 @@ pub fn replayed_profile(
     if r.strict {
         command.push("--strict".into());
     }
-    p.command = command;
-    Some(p)
+    command
+}
+
+/// What a sandboxed replayer needs beside the session's own paths: the recording and its binary's directory to read,
+/// the scratch directory (misses, claims) to write.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplayDirs {
+    pub read: Vec<PathBuf>,
+    pub write: Vec<PathBuf>,
+}
+
+fn replay_dirs_of(r: &Replay) -> ReplayDirs {
+    let mut read = vec![r.dir.clone()];
+    read.extend(r.mock.parent().map(Path::to_path_buf));
+    ReplayDirs {
+        read,
+        write: vec![r.scratch.clone()],
+    }
+}
+
+/// While replaying, the directories a sandboxed agent launch must reach for the replayer to run; else none.
+pub fn replay_dirs() -> Option<ReplayDirs> {
+    match MODE.get() {
+        Some(Mode::Replay(r)) => Some(replay_dirs_of(r)),
+        _ => None,
+    }
 }
 
 /// Start `ratatoskr-mock llm --replay DIR` and read its port; with it, the mock and the replay's scratch directory
@@ -260,6 +297,8 @@ pub struct Recorder {
     started: Instant,
     seq: AtomicU64,
     exchanges: AtomicU64,
+    /// The longest a connection's reader thread spent in a worktree look, in microseconds.
+    worst_stall_us: AtomicU64,
     scrub: Mutex<Scrub>,
     roots: Roots,
     lines: Mutex<mpsc::Sender<(String, String)>>,
@@ -302,6 +341,7 @@ impl Recorder {
             started: crate::clock::real_now(),
             seq: AtomicU64::new(0),
             exchanges: AtomicU64::new(0),
+            worst_stall_us: AtomicU64::new(0),
             scrub: Mutex::new(Scrub::default()),
             roots,
             lines: Mutex::new(tx),
@@ -325,6 +365,15 @@ impl Recorder {
         let line = json!({"seq": seq, "t_ms": self.t_ms(at), "dir": dir, "msg": msg}).to_string();
         // the receiver gone means the hub is stopping: nothing more is written
         let _ = lock(&self.lines).send((stream.to_owned(), line));
+    }
+
+    /// A connection's reader thread spent D in the worktree look (git and file reads, on that thread): the worst so
+    /// far is in the manifest's `stats.worst_effects_stall_ms`, for the report.
+    fn stalled(&self, d: std::time::Duration) {
+        let us = u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
+        if self.worst_stall_us.fetch_max(us, Ordering::Relaxed) < us {
+            self.manifest(|m| m["stats"] = json!({"worst_effects_stall_ms": us as f64 / 1000.0}));
+        }
     }
 
     /// The manifest changed by F, written whole again (to a temporary file, then renamed: never half a manifest).
@@ -762,7 +811,10 @@ impl hermod::LineTap for AcpTap {
             }
         }
         if effects {
+            let began = crate::clock::real_now();
             self.effects(&mut st.tree, at);
+            self.rec
+                .stalled(crate::clock::real_now().saturating_duration_since(began));
         }
         let msg = lock(&self.rec.scrub).value(&msg);
         let seq = self.rec.next_seq();
@@ -879,4 +931,39 @@ fn walk(root: &Path) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn replay(strict: bool) -> Replay {
+        Replay {
+            dir: "/rec/run".into(),
+            port: 1,
+            mock: "/bin/dir/ratatoskr-mock".into(),
+            scratch: "/scratch/replay".into(),
+            roots: "{}".into(),
+            speed: "0".into(),
+            strict,
+        }
+    }
+
+    // Pattern D (pure): `DRGNX_REPLAY_STRICT=1` puts `--strict` on every replayed agent's command, and only then.
+    #[test]
+    fn strict_reaches_the_replayed_agents_command() {
+        assert!(replay_command(&replay(true), "claude").contains(&"--strict".to_owned()));
+        assert!(!replay_command(&replay(false), "claude").contains(&"--strict".to_owned()));
+    }
+
+    // Pattern D (pure): the sandboxed replayer reads the recording and its own binary's dir, and writes its scratch.
+    #[test]
+    fn the_replayer_needs_the_recording_and_scratch_dirs() {
+        let d = replay_dirs_of(&replay(false));
+        assert_eq!(
+            d.read,
+            [PathBuf::from("/rec/run"), PathBuf::from("/bin/dir")]
+        );
+        assert_eq!(d.write, [PathBuf::from("/scratch/replay")]);
+    }
 }

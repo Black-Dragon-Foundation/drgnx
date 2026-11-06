@@ -441,10 +441,45 @@ impl Replay {
         }
     }
 
+    /// V as this run sends it: the recorded run's roots (raw paths, or the `$STATE`-style names an exported recording
+    /// holds) and its session's cwd (`$WT`) replaced by this run's, so a recording made under one root replays under
+    /// another.
+    fn to_live(&self, v: &Value) -> Value {
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        for (name, p) in self.rec_roots.as_object().into_iter().flatten() {
+            if let (Some(rec), Some(live)) = (p.as_str(), self.live_roots[name].as_str()) {
+                pairs.push((rec.to_owned(), live.to_owned()));
+                pairs.push((name.clone(), live.to_owned()));
+            }
+        }
+        if let (Some(rec), Some(live)) = (
+            self.conns.first().and_then(|c| c.wt.as_deref()),
+            self.live_wt.as_deref(),
+        ) {
+            pairs.push((rec.to_owned(), live.to_owned()));
+            pairs.push(("$WT".to_owned(), live.to_owned()));
+        }
+        pairs.retain(|(from, to)| !from.is_empty() && from != to);
+        pairs.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
+        fn walk(v: &Value, pairs: &[(String, String)]) -> Value {
+            match v {
+                Value::String(s) => {
+                    Value::String(pairs.iter().fold(s.clone(), |t, (f, to)| t.replace(f, to)))
+                }
+                Value::Array(a) => Value::Array(a.iter().map(|x| walk(x, pairs)).collect()),
+                Value::Object(o) => {
+                    Value::Object(o.iter().map(|(k, x)| (k.clone(), walk(x, pairs))).collect())
+                }
+                other => other.clone(),
+            }
+        }
+        walk(v, &pairs)
+    }
+
     fn perform(&mut self, line: &Line) {
         match line.dir.as_str() {
             "out" => {
-                let mut m = line.msg.clone();
+                let mut m = self.to_live(&line.msg);
                 if m.get("method").is_none()
                     && let Some(live) = m.get("id").and_then(|id| self.ids.get(&id.to_string()))
                 {
@@ -454,7 +489,8 @@ impl Replay {
             }
             "mcp" => {
                 let tool = line.msg["tool"].as_str().unwrap_or_default();
-                let _ = super::mcp_call(self.mcp.as_ref(), tool, &line.msg["args"].to_string());
+                let args = self.to_live(&line.msg["args"]).to_string();
+                let _ = super::mcp_call(self.mcp.as_ref(), tool, &args);
             }
             "effect" => self.effect(line),
             "llm" => self.resend(line),

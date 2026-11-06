@@ -991,6 +991,88 @@ cmd_test() {
   esac
 }
 
+## drgnx record / replay — live recordings (docs/develop/recordings.md)
+
+RECORD_SELECTOR='"^drgnx-agents-smoke/"'   # an ERT selector, read as a Lisp string (the smoke script's tests)
+
+record_lisp() { # SUBCOMMAND ARGS… — stop, lint, export and path are core/drgnx-record.el's, in a batch Emacs
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-record -f drgnx-record-cli -- "$@"
+}
+
+record_usage() {
+  echo "usage: drgnx record start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- drgnx-ARGS…" >&2
+  echo "       drgnx record stop NAME | lint DIR-OR-NAME… | export NAME --to DIR" >&2
+  echo "       drgnx replay NAME-OR-DIR [--speed 0|1|N] [--strict] [-- drgnx-ARGS…]" >&2
+}
+
+record_number() { # VALUE — a plain decimal number
+  [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+cmd_record() { # start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- ARGS… | stop NAME | lint … | export …
+  local sub="${1:-}"; [ "$#" -gt 0 ] && shift
+  case "$sub" in
+    stop | lint | export | path | root) record_lisp "$sub" "$@"; return ;;
+    start) ;;
+    *) record_usage; return 2 ;;
+  esac
+  local name="${1:-}" usd="" weekly="" minutes=""
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { record_usage; return 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --cap-usd) usd="${2:-}"; record_number "$usd" || { record_usage; return 2; }; shift 2 ;;
+      --cap-weekly) weekly="${2:-}"; record_number "$weekly" || { record_usage; return 2; }; shift 2 ;;
+      --max-minutes) minutes="${2:-}"; [[ "$minutes" =~ ^[0-9]+$ ]] || { record_usage; return 2; }; shift 2 ;;
+      --) shift; break ;;
+      *) record_usage; return 2 ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || { echo "drgnx record start: the command to run goes after --" >&2; return 2; }
+  local root dir caps="" provenance=live rc=0 ended
+  root="$(record_lisp root)" || return 1
+  dir="$root/$(date +%F)-$name"
+  [ ! -e "$dir" ] || { echo "drgnx record start: $dir exists already: record into a new name" >&2; return 1; }
+  mkdir -p "$dir/bundle" || return 1
+  # only the scripted mocks make a recording a mock: the repository keeps those and no others
+  [ "${DRGNX_SMOKE_PROFILES:-}" != mock ] || provenance=mock
+  [ -z "$usd" ] || caps="${caps:+$caps,}\"usd\":$usd"
+  [ -z "$weekly" ] || caps="${caps:+$caps,}\"weekly_pct\":$weekly"
+  [ -z "$minutes" ] || caps="${caps:+$caps,}\"minutes\":$minutes"
+  echo "drgnx record: recording into $dir ($provenance)" >&2
+  # a narrowed run: the smoke script, unless the caller picked tests
+  local run=("$here/bin/drgnx")
+  [ -z "$minutes" ] || run=(timeout --foreground "${minutes}m" "$here/bin/drgnx")
+  DRGNX_RECORD="$dir" DRGNX_RECORD_PROVENANCE="$provenance" DRGNX_RECORD_CAPS="{$caps}" \
+    DRGNX_TEST_SELECTOR="${DRGNX_TEST_SELECTOR:-$RECORD_SELECTOR}" "${run[@]}" "$@" || rc=$?
+  ended="$(date -u +%FT%TZ)"
+  printf '{"exit":%s,"ended":"%s","provenance":"%s"}\n' "$rc" "$ended" "$provenance" > "$dir/bundle/run.json"
+  echo "drgnx record: the command ended with $rc; \`drgnx record stop $name' finishes the record" >&2
+  return "$rc"
+}
+
+cmd_replay() { # NAME-OR-DIR [--speed 0|1|N] [--strict] [-- ARGS…] — run drgnx ARGS with the recording backing the outside ends
+  local name="${1:-}" speed=0 strict=""
+  [ -n "$name" ] && [[ "$name" != -* ]] || { record_usage; return 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --speed) speed="${2:-}"; record_number "$speed" || { record_usage; return 2; }; shift 2 ;;
+      --strict) strict=1; shift ;;
+      --) shift; break ;;
+      *) record_usage; return 2 ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || set -- test --ui
+  local dir
+  dir="$(record_lisp path "$name")" || return 1
+  [ -f "$dir/manifest.json" ] || { echo "drgnx replay: $dir is not a recording" >&2; return 1; }
+  # a replay keeps the scratch dir of the run it is in: the test row reads the misses file from there
+  DRGNX_REPLAY="$dir" DRGNX_REPLAY_SPEED="$speed" DRGNX_REPLAY_STRICT="$strict" \
+    DRGNX_TEST_SELECTOR="${DRGNX_TEST_SELECTOR:-$RECORD_SELECTOR}" "$here/bin/drgnx" "$@"
+}
+
 ## drgnx lease — the host lease: how many test runs the machine carries at once (docs/develop/check.md, "The host lease")
 
 lease_dir() { # the directory of the lock files; empty: no lease
@@ -2029,6 +2111,12 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                sharded; GUI jobs as memory allows; bench, then perf, alone); one summary
        drgnx fmt [--check] [FILE…]
                                format drgnx's Emacs Lisp (all of it, or FILEs); --check: only report
+       drgnx record start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- drgnx-ARGS…
+                               run drgnx ARGS with the outside ends recorded (docs/develop/recordings.md)
+       drgnx record stop NAME | lint DIR-OR-NAME… | export NAME --to DIR
+                               finish a record (report, lint) / the secret lint / a mock-made run as a repo fixture
+       drgnx replay NAME-OR-DIR [--speed 0|1|N] [--strict] [-- drgnx-ARGS…]
+                               run drgnx ARGS (default: test --ui) with a recording backing the outside ends
        drgnx work record [--task ID] [SHA…]
                                link commits (default HEAD) to a task (default $DRGNX_TASK); no commit message changes
        drgnx work scan [--board FILE] [DIR…]
@@ -2173,6 +2261,8 @@ case "${1:-help}" in
   fmt) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  record) shift; cmd_record "$@" ;;
+  replay) shift; cmd_replay "$@" ;;
   update) shift; cmd_update "$@" ;;
   open) shift; cmd_open "$@" ;;
   -t|--gui) cmd_open "$@" ;;

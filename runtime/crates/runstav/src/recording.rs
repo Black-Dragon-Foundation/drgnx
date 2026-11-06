@@ -256,7 +256,13 @@ impl<'r> Normalizer<'r> {
     }
 
     fn paths(&self, s: &str) -> String {
-        let mut t = s.to_owned();
+        // where the hub binary is and where its session sockets are depend on the build and the runtime dir, not on
+        // the run: a recording made under one replays under another
+        let mut t = replace_dir(
+            &replace_dir(s, "$SOCK", is_session_dir),
+            "$BIN",
+            is_hub_binary,
+        );
         for (name, root) in &self.roots.0 {
             t = replace_bounded(&t, root, name);
         }
@@ -343,6 +349,57 @@ impl<'r> Normalizer<'r> {
         out.push_str(&s[last..]);
         out
     }
+}
+
+/// REST (which starts at a `/`) begins `/s/SID/`: a session's directory under the hub's socket directory.
+fn is_session_dir(rest: &str) -> bool {
+    let b = rest.as_bytes();
+    rest.starts_with("/s/a")
+        && b.len() > 16
+        && b[4..16]
+            .iter()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+        && b[16] == b'/'
+}
+
+/// REST (which starts at a `/`) is the last part of a path: `/ratatoskr` or `/ratatoskr-mock`, nothing after it.
+fn is_hub_binary(rest: &str) -> bool {
+    ["/ratatoskr-mock", "/ratatoskr"].iter().any(|name| {
+        rest.strip_prefix(name).is_some_and(|after| {
+            after
+                .chars()
+                .next()
+                .is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/')))
+        })
+    })
+}
+
+/// S with the directory before each `/` that HIT accepts replaced by NAME (an absolute path's front; a `/` with
+/// nothing before it in the path is left alone).
+fn replace_dir(s: &str, name: &str, hit: fn(&str) -> bool) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for (idx, _) in s.match_indices('/') {
+        if idx < last || !hit(&s[idx..]) {
+            continue;
+        }
+        let mut start = idx;
+        while start > last {
+            let c = s[..start].chars().next_back().unwrap_or(' ');
+            if c.is_whitespace() || matches!(c, '"' | '\'' | ',' | ':' | '=' | '(' | ')') {
+                break;
+            }
+            start -= c.len_utf8();
+        }
+        if start == idx || !s[start..].starts_with('/') {
+            continue;
+        }
+        out.push_str(&s[last..start]);
+        out.push_str(name);
+        last = idx;
+    }
+    out.push_str(&s[last..]);
+    out
 }
 
 fn id_char(c: u8) -> bool {
@@ -1602,5 +1659,33 @@ mod tests {
                 .contains("not a drgnx recording")
         );
         assert!(check_manifest(&json!({})).is_err());
+    }
+
+    // Pattern D (pure): a recording made under one root and build replays from another root and build.
+    #[test]
+    fn normalize_ignores_the_bridge_binary_and_the_socket_dir() {
+        let msg = |bin: &str, sock_dir: &str| {
+            json!({"mcpServers": [{"name": "drgnx", "command": format!("{bin}/ratatoskr"),
+                "args": ["mcp-bridge", "--socket", format!("{sock_dir}/s/a0123456789ab/mcp.sock")]}],
+                "note": "ratatoskr is the hub"})
+        };
+        let norm = |r: &str, v: Value| {
+            let roots = roots(r);
+            Normalizer::new(&roots).value(&v)
+        };
+        // another build dir, another runtime dir, another run's roots
+        let a = norm(
+            "AAA111",
+            msg("/work/one/runtime/target/debug", "/run/user/1000/drgnx"),
+        );
+        let b = norm(
+            "BBB222",
+            msg("/opt/other/bin", "/tmp/rtsk-BBB222/state/drgnx/hub"),
+        );
+        assert_eq!(a, b);
+        assert_eq!(a["mcpServers"][0]["command"], "$BIN/ratatoskr");
+        assert_eq!(a["mcpServers"][0]["args"][2], "$SOCK/s/$SID1/mcp.sock");
+        // a word that only mentions the name is left alone
+        assert_eq!(a["note"], "ratatoskr is the hub");
     }
 }

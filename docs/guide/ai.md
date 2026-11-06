@@ -407,7 +407,22 @@ error instead.
 What is written never holds a key or a token: the gateway's keys and the tokens it issues are replaced by `$SECRET`
 before anything reaches the disk, no authorization header is stored, and a lint checks every file of a run. Live
 recordings stay on your machine; drgnx's own repository holds only recordings made from its scripted mock providers.
-The details are in [the recordings page](../develop/recordings.md).
+
+From a terminal, the commands do the setup:
+
+```
+drgnx record start smoke --cap-usd 5 --max-minutes 20 -- test --ui   # run a command with the outside ends recorded
+drgnx record stop smoke                                              # end the record: its report, the secret lint
+drgnx replay smoke --speed 0 --strict -- test --ui                   # the same command, answered from the recording
+drgnx record lint DIR…                                               # the secret lint alone, over any run
+```
+
+Runs are kept in `$DRGNX_RECORDINGS` (default: `recordings/` in drgnx's state directory), one directory per run,
+`DATE-NAME`. `--cap-usd`, `--cap-weekly` and `--max-minutes` are written into the run's record, and the minutes end
+the command when they pass. The command after `--` is any `drgnx` command; the recording is for the hub that command
+starts. `--speed` scales the recorded waits (0: none, 1: as they were), and `--strict` also fails a replay that left
+recorded lines unused. The details, and the steps of the smoke run you start yourself, are in
+[the recordings page](../develop/recordings.md).
 
 ## Tests
 
