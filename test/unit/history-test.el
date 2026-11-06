@@ -126,6 +126,16 @@
       (when b (with-current-buffer b (set-buffer-modified-p nil)) (drgnx-history--forget b) (kill-buffer b))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-history/work-space-module-owns-the-mode ()
+  ;; D: the module tools/work-space turns the mode on in its setup and off in its teardown, and leaves nothing behind
+  (skip-unless (drgnx-history-test--hooked-p))
+  (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+  (drgnx-test-with-modules '(tools/work-space) :strict t
+                           (should drgnx-history-mode)
+                           (should (memq 'drgnx-history--found find-file-hook)))
+  (should-not drgnx-history-mode)
+  (should-not (memq 'drgnx-history--found find-file-hook)))
+
 (ert-deftest drgnx-history/no-prompt-in-timer ()
   ;; D lint: nothing in the module asks the user anything; its hooks and its timer run unattended
   (let ((file (locate-library "drgnx-history.el")))

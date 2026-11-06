@@ -312,9 +312,5 @@ Stays off in an Emacs without Nidhogg's change hook."
            (mapc #'drgnx-history--forget all))
          (drgnx-timer-cancel 'history-drain))))
 
-(defun drgnx-history-maybe-start ()
-  "Turn the mode on where Nidhogg's change hook exists and this Emacs is interactive."
-  (when (and (not noninteractive) (drgnx-history--primitives-p)) (drgnx-history-mode 1)))
-
 (provide 'drgnx-history)
 ;;; drgnx-history.el ends here

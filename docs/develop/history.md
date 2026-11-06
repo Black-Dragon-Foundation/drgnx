@@ -157,6 +157,7 @@ buffer over 256 K characters is drained only after 0.3 s of idleness and its cha
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
 that goes drops every registration; the next connection registers the buffers again.
 
+The module `tools/work-space` turns the mode on in its setup and off in its teardown.
 A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is
 unregistered at the next drain.
 
