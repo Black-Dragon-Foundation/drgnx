@@ -326,6 +326,7 @@ nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  
 (defun drgnx-statusbar--fonts-applied ()
   "On `drgnx-look-fonts-applied-hook': the fonts changed, so the bars are measured again."
   (setq drgnx-pixels-generation (1+ drgnx-pixels-generation))
+  (drgnx-statusbar--base-sync)
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
@@ -356,6 +357,14 @@ for it.  An override spec: a theme's colours stay under it."
   (unless (eq drgnx-statusbar--base-saved 'none)
     (pcase-dolist (`(,f . ,spec) drgnx-statusbar--base-saved) (face-spec-set f spec))
     (setq drgnx-statusbar--base-saved 'none)))
+
+(defun drgnx-statusbar--base-sync ()
+  "The mode line's own faces inherit the caption face while its height is absolute (ui/look writes it so), and not
+otherwise: a relative height there and in the bar's faces, which inherit it too, would apply twice to every run, and
+the bar would be drawn smaller than it was measured."
+  (if (let ((h (face-attribute 'drgnx-ui-caption :height nil t))) (or (integerp h) (eq h 'unspecified)))
+      (drgnx-statusbar--base-on)
+    (drgnx-statusbar--base-off)))
 
 (defun drgnx-statusbar--scale (&optional frame)
   "FRAME's scale (1.0 without a native shell)."
@@ -1182,7 +1191,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (advice-add 'flymake-start :after #'drgnx-statusbar--flymake-started)               ; nor for this
         (drgnx-statusbar--misc-report-soon)
-        (drgnx-statusbar--base-on)
+        (drgnx-statusbar--base-sync)
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
     (drgnx-statusbar--base-off)

@@ -250,15 +250,18 @@ active (`drgnx-statusbar-test--epochs')."
 (ert-deftest drgnx-statusbar/the-mode-line-is-in-the-caption-face-while-the-bar-is-on ()
   "Pattern D: while the bar is on, the mode line's own faces (`mode-line-active', `mode-line-inactive') inherit the
 caption type face the bar's text is in, then `mode-line' as before, so a run of the bar merges no other font onto them
-\(a font merged at every run copied a font spec); off, their override specs are what they were."
+\(a font merged at every run copied a font spec); off, their override specs are what they were.  The caption's height
+is absolute here, as ui/look writes it."
   (drgnx-test-with-state
     (drgnx-statusbar-test--with
       (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
-            (faces '(mode-line-active mode-line-inactive)))
+            (faces '(mode-line-active mode-line-inactive))
+            (caption (get 'drgnx-ui-caption 'face-override-spec)))
         (let ((before (mapcar (lambda (f) (get f 'face-override-spec)) faces)))
           (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
             (unwind-protect
                 (progn
+                  (face-spec-set 'drgnx-ui-caption '((t :height 89)))
                   (drgnx-statusbar-mode 1)
                   (dolist (f faces)
                     (let ((inherit (ensure-list (face-attribute f :inherit))))
@@ -267,7 +270,33 @@ caption type face the bar's text is in, then `mode-line' as before, so a run of 
                   (should (memq 'drgnx-ui-caption (ensure-list (face-attribute 'drgnx-statusbar :inherit))))
                   (drgnx-statusbar-mode -1)
                   (should (equal before (mapcar (lambda (f) (get f 'face-override-spec)) faces))))
-              (drgnx-statusbar-mode -1))))))))
+              (drgnx-statusbar-mode -1)
+              (face-spec-set 'drgnx-ui-caption caption))))))))
+
+(ert-deftest drgnx-statusbar/a-relative-caption-height-is-not-applied-twice ()
+  "Pattern D: a run of the bar is in the caption face, merged onto the mode line's own faces.  A relative caption
+height (ui/look off, or a size given as a ratio) that those faces inherit too would be applied twice, and the bar's
+text drawn smaller than it was measured.  So they inherit the caption face only while its height is absolute, and
+follow it when the fonts change."
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+            (caption (get 'drgnx-ui-caption 'face-override-spec))
+            (inherits (lambda () (memq 'drgnx-ui-caption (ensure-list (face-attribute 'mode-line-active :inherit))))))
+        (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+          (unwind-protect
+              (progn
+                (face-spec-set 'drgnx-ui-caption '((t :height 0.889)))
+                (drgnx-statusbar-mode 1)
+                (should-not (funcall inherits))
+                (face-spec-set 'drgnx-ui-caption '((t :height 89)))
+                (run-hooks 'drgnx-look-fonts-applied-hook)
+                (should (funcall inherits))
+                (face-spec-set 'drgnx-ui-caption '((t :height 0.889)))
+                (run-hooks 'drgnx-look-fonts-applied-hook)
+                (should-not (funcall inherits)))
+            (drgnx-statusbar-mode -1)
+            (face-spec-set 'drgnx-ui-caption caption)))))))
 
 (ert-deftest drgnx-statusbar/segments-read-no-files-and-start-no-process ()
   (drgnx-statusbar-test--with

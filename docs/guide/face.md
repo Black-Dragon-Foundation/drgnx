@@ -160,7 +160,8 @@ In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) each ed
 what you need at a glance, nothing that shouts. It is built from **segments**. Turn it off and on with **Toggle
 Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch. While it is on, the mode line's own faces
 (`mode-line-active`, `mode-line-inactive`) inherit the caption type face, which the bar's text is in, so Emacs merges no
-other font into each piece of the bar; a buffer that keeps its own mode line shows it in that face too.
+other font into each piece of the bar; a buffer that keeps its own mode line shows it in that face too. They do so only
+while the caption's height is absolute, as ui/look writes it: a relative one (ui/look off) would apply twice to the bar.
 
 | Left | Shows | Click |
 |---|---|---|
