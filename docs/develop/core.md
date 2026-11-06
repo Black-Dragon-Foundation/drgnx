@@ -953,7 +953,14 @@ stack — the code that knows what it changed knows how to change it back):
   writes it and, when the report shows the module's stage has run, calls `drgnx-modules--run-one` (which checks
   packages and requirements) and runs `drgnx-modules-after-teardown-functions` (not the after-stage hook, whose
   subscriber skips `startup`) so keys and menus follow whatever the stage. Neither prompts; the question "Also turn off X, Y?" belongs to the
-  command `drgnx-modules-list-toggle`. `drgnx-modules-toggle` (onboarding) only writes.
+  command `drgnx-modules-list-toggle`, which then saves the choice as the Settings page saves a value
+  (`drgnx-settings-editors-commit` of each module setting that changes) and applies it through the settings'
+  `:apply` (`drgnx-modules--settings-apply`), the path the Extensions view's Built-in rows take, so the two never
+  disagree: turning a module back on also brings back the dependents that went with it. `drgnx-modules-toggle`
+  (onboarding) only writes.
+- `(drgnx-modules-retry-waiting)` runs the setup of every module waiting for packages (status `missing-packages`)
+  whose packages now load, and returns them; live activation calls it after an Extensions job installed packages
+  (`modules/tools/drgnx-extensions-live.el`, [Extensions](extensions.md#live-activation)).
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
