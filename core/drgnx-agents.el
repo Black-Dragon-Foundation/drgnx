@@ -143,7 +143,8 @@ unless listed.  An agent not listed shows only the files its commands name.  Rea
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir mcp-sid mcp-socket)           ; unused since the hub runs every session; kept so the shape stays
+  mcp-dir mcp-sid mcp-socket            ; unused since the hub runs every session; kept so the shape stays
+  hooked panel plugins-changed hooks)   ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 

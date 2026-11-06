@@ -35,6 +35,16 @@ A plugin is in one of five states:
 the plugin into `changed`; no call reaches the new code. The page shows what you approved beside what the plugin asks
 for now, so you can see what grew. Approve again, with the new hash, or remove it.
 
+**The page (Settings → Plugins, command `Plugins…`, module `tools/plugins`).** One section per plugin: its state and
+hash, its abilities, each hook with its point, the verdicts it may return and what it looks at, and for a hook that may
+`change` what it may rewrite (a tool's arguments, "the file contents of writes", the commit message or the review notes);
+the hosts it may reach; what it sees (diffs and file contents in the projects where it is enabled, which it may send to
+its hosts; its key-value store, shared across those projects); and "In this project": whether it runs in the project
+the page was opened from, that project's rules and the rules switched off there. `a` approves the plugin at point (the
+hash that section displayed, never one fetched again), `d` disables it, `p` turns it on or off for the project (written
+to your private workspace file: only you can set it), `g` reads the list again. The notice "Plugin NAME waits for your
+approval" opens the same page. Replacing and removing a plugin stay in the CLI, as the page says.
+
 **Only you approve.** Approving and switching a plugin off are the user's own calls: no agent, no manager and no tool an
 agent can reach can do either. The approval lives in drgnx's own store (not in a settings file), so a settings file
 copied to another machine approves nothing.
