@@ -116,6 +116,8 @@ fn cli_name(p: Provider) -> &'static str {
         Provider::Claude => "claude",
         Provider::Codex => "codex",
         Provider::Gemini => "gemini",
+        Provider::Kimi => "kimi",
+        Provider::DeepSeek => "deepseek",
     }
 }
 
