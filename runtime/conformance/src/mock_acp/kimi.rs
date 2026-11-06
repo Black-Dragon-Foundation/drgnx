@@ -1,4 +1,5 @@
-//! The Kimi Code personality (`kimi acp`): `loadSession`, and `list, resume, close, delete, fork`.  Its tools obey
+//! The Kimi Code personality (`kimi acp`): `loadSession`, and `list, resume, close, delete, fork`; its four modes,
+//! reported when a session opens and switched with a `current_mode_update`.  Its tools obey
 //! its config as Kimi Code's policy does: a user ask rule in `$KIMI_CODE_HOME/config.toml` makes a tool ask; a tool
 //! it approves by default (reads, searches, its fetches) runs without asking otherwise; any other tool asks (manual
 //! mode's fallback).  A permission request has a `title` and no `kind`; the `tool_call` before it has the kind of
@@ -20,8 +21,43 @@ const DEFAULT_APPROVED: [&str; 6] = [
     "FetchURL",
 ];
 
+/// Kimi Code's ACP modes, `(id, name)`, in `ACP_MODES`' order (`packages/acp-server/src/modes.ts:22-43`): the only ids
+/// `isAcpModeId` (`:52-54`) knows, so `session/set_mode` to another is invalid params (`server.ts:483-488`).
+const MODES: [(&str, &str); 4] = [
+    ("default", "Default"),
+    ("plan", "Plan"),
+    ("auto", "Auto"),
+    ("yolo", "YOLO"),
+];
+
 pub fn session_caps() -> Value {
     json!({"list": {}, "resume": {}, "close": {}, "delete": {}, "fork": {}})
+}
+
+/// Whether ID is a mode Kimi Code's ACP server knows.
+pub fn known_mode(id: &str) -> bool {
+    MODES.iter().any(|(m, _)| *m == id)
+}
+
+/// The `modes` of an answer that opens a session (`AcpSession.modeState`, `session.ts:1067-1069`): every session opens
+/// in `default` (`modes.ts:46`, `session.ts:208`); `--start-mode MODE` in ARGV stands in for a Kimi that opens in
+/// another.
+pub fn modes(argv: &[String]) -> Value {
+    let current = argv
+        .iter()
+        .position(|a| a == "--start-mode")
+        .and_then(|i| argv.get(i + 1))
+        .map_or("default", String::as_str);
+    let available: Vec<Value> = MODES
+        .iter()
+        .map(|(id, name)| json!({"id": id, "name": name}))
+        .collect();
+    json!({"currentModeId": current, "availableModes": available})
+}
+
+/// The notification a switch to MODE sends (`setMode`, `session.ts:1138-1156`; its shape, `events-map.ts:471-482`).
+pub fn mode_update(mode: &str) -> Value {
+    json!({"sessionUpdate": "current_mode_update", "currentModeId": mode})
 }
 
 /// The tool names of `$KIMI_CODE_HOME/config.toml`'s ask rules (`tool = "NAME"` lines).

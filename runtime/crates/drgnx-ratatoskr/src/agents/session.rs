@@ -737,6 +737,10 @@ pub struct Session {
     mode: Option<Mode>,
     provider: Option<String>,
     enforced: bool,
+    /// The provider whose lock this session's mode switches are checked against ([`plock::refused_mode_switch`]),
+    /// and whether that lock holds (whatever the sandbox: `enforced` needs both).
+    locked_as: Option<crate::settings::profiles::Provider>,
+    lock_held: bool,
     enforced_why: Option<String>,
     /// Why its `browser` cell allows the browser but it has none (OD1 (b)).
     browser_why: Option<String>,
@@ -855,6 +859,8 @@ struct Launched {
     level_why: Option<String>,
     caps: Option<Value>,
     enforced: bool,
+    /// Whether the provider's lock holds (`lock::plan`'s verdict, whatever the sandbox).
+    lock_held: bool,
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
@@ -1917,6 +1923,7 @@ async fn launch(
             level_why,
             caps: capabilities,
             enforced: prep.enforced,
+            lock_held: prep.plan.enforced == plock::Enforced::Yes,
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
             net,
@@ -2013,6 +2020,8 @@ fn assemble(
         }),
         provider: profile.ai.clone(),
         enforced: l.enforced,
+        locked_as: profile.provider(),
+        lock_held: l.lock_held,
         enforced_why: l.enforced_why,
         browser_why: l.browser_why,
         capabilities: l.caps,
@@ -3267,6 +3276,18 @@ impl Session {
                 }
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
+                        // a switch to a mode the lock refuses ends the session, as one reported at its start does
+                        if let Some(plock::LockBroken(why)) =
+                            plock::refused_mode_switch(self.locked_as, self.lock_held, &v)
+                        {
+                            tracing::warn!(sid = %self.id, "session ended, its lock broken: {why}");
+                            let s = self.clone();
+                            crate::clock::spawn(
+                                "session:lock-broken",
+                                async move { s.end(true).await },
+                            );
+                            return;
+                        }
                         if let Some(total) = v
                             .pointer("/cost/amount")
                             .and_then(Value::as_f64)

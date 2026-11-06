@@ -559,12 +559,14 @@ fn kimi_tools(kind: &str) -> &'static [&'static str] {
     }
 }
 
-/// Kimi Code's config: manual mode, and a user ask rule (which beats its default approval of reads) for each tool of
-/// KINDS.
+/// Kimi Code's config: manual mode, no plan mode at start (`default_plan_mode` would enter it,
+/// `packages/agent-core-v2/src/features/plan/configSection.ts:5-13`), and a user ask rule (which beats its default
+/// approval of reads) for each tool of KINDS.
 fn kimi_config(kinds: &[&str]) -> Vec<u8> {
     let mut t = String::from(
         "# drgnx: the hub's config for this session's Kimi Code (read-only inside its sandbox).\n\
-         default_permission_mode = \"manual\"\n",
+         default_permission_mode = \"manual\"\n\
+         default_plan_mode = false\n",
     );
     for tool in kinds.iter().flat_map(|k| kimi_tools(k)) {
         t.push_str(&format!(
@@ -1088,11 +1090,42 @@ pub fn codex_mode_confirmed(reported: Option<&str>) -> Result<(), LockBroken> {
     }
 }
 
+/// Kimi Code's plan mode lets the writes of its plan file through without asking its hooks (`event.allow()`,
+/// `packages/agent-core-v2/src/features/plan/planService.ts:112-116`), so under Kimi's lock a session in it is refused:
+/// REPORTED is the mode Kimi reported (`modes.currentModeId` of the answer that opened the session, or a
+/// `current_mode_update`).
+pub fn kimi_mode_refused(reported: Option<&str>) -> Result<(), LockBroken> {
+    match reported {
+        Some("plan") => Err(LockBroken(
+            "Kimi Code runs in plan mode, whose plan-file writes skip its hooks".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Why UPDATE, a `session/update` of a running session whose agent is PROVIDER, breaks the lock, when LOCKED (the lock
+/// holds) and UPDATE is a switch to a mode the lock refuses ([`kimi_mode_refused`]).  Kimi Code tells every switch it
+/// makes for the client (`packages/acp-server/src/session.ts:1138-1156`); one its engine makes alone is not told.
+pub fn refused_mode_switch(
+    provider: Option<Provider>,
+    locked: bool,
+    update: &Value,
+) -> Option<LockBroken> {
+    if !locked
+        || provider != Some(Provider::Kimi)
+        || update.get("sessionUpdate").and_then(Value::as_str) != Some("current_mode_update")
+    {
+        return None;
+    }
+    kimi_mode_refused(update.get("currentModeId").and_then(Value::as_str)).err()
+}
+
 /// Checks the lock of PLAN at session start, with CAPS the agent's capabilities from `initialize`: the mode the CLI is
 /// put in is the asking one.  Codex's mode is checked whether or not its lock is proven: the one it reports must be
 /// [`CODEX_MODE`].  With an enforced lock, Gemini must hold its admin policy's rules when it reports them
-/// ([`gemini_policy_confirmed`]); Claude, Gemini and Kimi Code are set to `default` (a refusal ends the session), and
-/// DeepSeek Harness has no modes; a profile with no lock fails.
+/// ([`gemini_policy_confirmed`]), Kimi Code must not report plan mode ([`kimi_mode_refused`]); Claude, Gemini and
+/// Kimi Code are set to `default` (a refusal ends the session), and DeepSeek Harness has no modes; a profile with no
+/// lock fails.
 pub async fn verify(
     conn: &hermod::Conn,
     sid: &hermod::SessionId,
@@ -1109,7 +1142,13 @@ pub async fn verify(
                 .await
                 .map_err(|e| LockBroken(format!("`default` mode refused: {e}")))
         }
-        Some(Provider::Claude | Provider::Kimi) => conn
+        Some(Provider::Kimi) => {
+            kimi_mode_refused(conn.reported_mode(sid).as_deref())?;
+            conn.set_mode(sid, "default")
+                .await
+                .map_err(|e| LockBroken(format!("`default` mode refused: {e}")))
+        }
+        Some(Provider::Claude) => conn
             .set_mode(sid, "default")
             .await
             .map_err(|e| LockBroken(format!("`default` mode refused: {e}"))),

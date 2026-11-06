@@ -324,6 +324,48 @@ fn gemini_fork_reports_its_admin_policy() {
     assert_eq!(report(&[], &good, true), Value::Null);
 }
 
+// [C] handshake: Kimi Code's ACP server reports its four modes and `default` when a session opens
+// (`packages/acp-server/src/modes.ts:22-46`), refuses a mode id it does not know (`:52-54`), and tells the client a
+// switch with `current_mode_update` (`session.ts:1138-1156`); the personality's `--start-mode MODE` opens in MODE (a
+// Kimi the lock must refuse), and the word `mode MODE` switches during a turn.
+#[test]
+fn kimi_reports_its_modes_and_switches() {
+    let d = dir();
+    let opened = |extra: &[&str]| {
+        let mut args = vec!["--as", "kimi"];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        a.init();
+        let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+        (a, r)
+    };
+    let (mut a, r) = opened(&[]);
+    let modes = &r["result"]["modes"];
+    assert_eq!(modes["currentModeId"], "default", "{r}");
+    let ids: Vec<&str> = modes["availableModes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["default", "plan", "auto", "yolo"]);
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_string();
+    let bad = a.call(
+        "session/set_mode",
+        json!({"sessionId": sid, "modeId": "read-only"}),
+    );
+    assert_eq!(bad["error"]["code"], -32602, "{bad}");
+    a.prompt(&sid, "mode plan");
+    let switched = a.updates("current_mode_update");
+    assert_eq!(
+        switched.last().map(|u| u["currentModeId"].clone()),
+        Some(json!("plan")),
+        "{switched:?}"
+    );
+    let (_, r) = opened(&["--start-mode", "plan"]);
+    assert_eq!(r["result"]["modes"]["currentModeId"], "plan", "{r}");
+}
+
 #[test]
 fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
     let d = dir();

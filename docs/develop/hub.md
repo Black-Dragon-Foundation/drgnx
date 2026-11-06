@@ -882,7 +882,9 @@ test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir
 handshake, `lock::verify` (a lock that does not hold kills the session; Codex's, proven or not, holds only when the
 mode `session/new`'s answer reports, `hermod::Conn::reported_mode`, is `read-only`; an enforced Gemini's, when its
 `initialize` reports `_meta["_drgnx/panel"].adminPolicy`, only when the admin policy loaded with at least the rules
-the lock wrote, `lock::gemini_policy_confirmed`). Every permission request then goes through
+the lock wrote, `lock::gemini_policy_confirmed`; Kimi Code's, only when the reported mode is not `plan`,
+`lock::kimi_mode_refused`). A running session's `current_mode_update` to a mode its lock refuses (Kimi Code's `plan`,
+`lock::refused_mode_switch`) ends it the same way. Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
 refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
 browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card

@@ -384,6 +384,7 @@ fn kimi_strips_yolo_and_asks_for_subscribed_kinds() {
     let config = file_of(&plan, &home.join("config.toml")).unwrap();
     for want in [
         "default_permission_mode = \"manual\"",
+        "default_plan_mode = false",
         "[[permission.rules]]",
         "tool = \"Read\"",
         "decision = \"ask\"",
@@ -402,6 +403,27 @@ fn kimi_strips_yolo_and_asks_for_subscribed_kinds() {
     ] {
         assert!(entries.contains(&(name, used)), "{name}");
     }
+}
+
+// [D] pure: Kimi Code's plan mode lets its plan-file writes through without the hooks (`planService.ts:112-116`,
+// `event.allow()`), so under its lock a session that reports `plan` (`session/new`'s mode, or a `current_mode_update`,
+// `packages/acp-server/src/session.ts:1138-1156`) is refused, with the reason; another provider, another mode, or a
+// lock that does not hold changes nothing.
+#[test]
+fn kimi_plan_mode_is_refused_under_its_lock() {
+    let LockBroken(why) = kimi_mode_refused(Some("plan")).unwrap_err();
+    assert!(why.contains("plan mode"), "{why}");
+    for ok in [Some("default"), Some("auto"), None] {
+        assert_eq!(kimi_mode_refused(ok), Ok(()), "{ok:?}");
+    }
+    let to = |m: &str| json!({"sessionUpdate": "current_mode_update", "currentModeId": m});
+    let k = Some(Provider::Kimi);
+    assert!(refused_mode_switch(k, true, &to("plan")).is_some());
+    assert!(refused_mode_switch(k, true, &to("default")).is_none());
+    assert!(refused_mode_switch(k, false, &to("plan")).is_none());
+    assert!(refused_mode_switch(Some(Provider::Claude), true, &to("plan")).is_none());
+    let chunk = json!({"sessionUpdate": "agent_message_chunk", "currentModeId": "plan"});
+    assert!(refused_mode_switch(k, true, &chunk).is_none());
 }
 
 // [D] pure: DeepSeek Harness gets an overlay that keeps `approval.policy: ask` beside the full-access sandbox mode

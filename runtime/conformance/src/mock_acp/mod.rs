@@ -20,6 +20,7 @@
 //! | `silent N` | N seconds with no output (a `session/cancel` ends the turn, `cancelled`) |
 //! | `crash [TEXT]` | exits 3, "mock crashed[: TEXT]" on stderr (a provider at its limit: `crash 429 rate limit`) |
 //! | `say TEXT` | says TEXT and a line break (a reviewer's `VERDICT: pass` is its last line) |
+//! | `mode MODE` (Kimi Code) | a `current_mode_update` to MODE, as Kimi Code sends for a switch |
 //! | `error CODE TEXT` | the turn ends with the JSON-RPC error CODE, TEXT (a provider at its limit: `error 429 rate limit`) |
 //! | anything else | "You said: ..." in two chunks |
 //!
@@ -29,7 +30,8 @@
 //! Kimi Code's and DeepSeek Harness's `provider:WHAT ARG` tools ask or run as their locks say (`kimi.rs`, `dsh.rs`).  `--llm URL`: each turn first
 //! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted
-//! (Codex: only the four codex-acp knows, `codex.rs`).
+//! (Codex: only the four codex-acp knows, `codex.rs`; Kimi Code: only its four, each switch told by a
+//! `current_mode_update`, `kimi.rs`).  `--start-mode MODE` (Kimi Code): sessions open in MODE, not `default`.
 //! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
 //! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
 //! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
@@ -406,7 +408,7 @@ impl Agent {
                 if let Some(v) = self.sessions.remove(&s) {
                     self.sessions.insert(sid, v);
                 }
-                reply(json!({}));
+                reply(self.with_modes(json!({})));
             }
             "session/list" if self.kind != Kind::Gemini => {
                 let mut ids: Vec<&String> = self.sessions.keys().collect();
@@ -463,9 +465,14 @@ impl Agent {
                     .and_then(|i| self.argv.get(i + 1));
                 if refused.is_some_and(|r| r == mode)
                     || (self.kind == Kind::Codex && !codex::known_mode(mode))
+                    || (self.kind == Kind::Kimi && !kimi::known_mode(mode))
                 {
                     rpc_error(&id, -32602, &format!("mode {mode:?} refused"));
                 } else {
+                    if self.kind == Kind::Kimi {
+                        let sid = params["sessionId"].as_str().unwrap_or_default();
+                        self.update(sid, kimi::mode_update(mode));
+                    }
                     reply(json!({}));
                 }
             }
@@ -543,10 +550,13 @@ impl Agent {
         send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
     }
 
-    /// RESULT, an answer that opens a session, with the session's `modes` where the personality reports them (Codex).
+    /// RESULT, an answer that opens a session, with the session's `modes` where the personality reports them (Codex,
+    /// Kimi Code).
     fn with_modes(&self, mut result: Value) -> Value {
-        if self.kind == Kind::Codex {
-            result["modes"] = codex::modes();
+        match self.kind {
+            Kind::Codex => result["modes"] = codex::modes(),
+            Kind::Kimi => result["modes"] = kimi::modes(&self.argv),
+            _ => {}
         }
         result
     }
@@ -707,6 +717,8 @@ impl Agent {
                     "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
                 );
             }
+            // Kimi Code switches its mode mid-turn, as its `mode` config option does (`session.ts:1138-1156`)
+            "mode" if self.kind == Kind::Kimi => self.update(sid, kimi::mode_update(rest)),
             // Kimi Code's and DeepSeek Harness's tools ask or run as their locks say
             _ if head.starts_with("provider:") && matches!(self.kind, Kind::Kimi | Kind::Dsh) => {
                 self.gated_tool(sid, turn, &head[9..], rest);
