@@ -331,6 +331,11 @@ check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
         -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
+affected_emacs() { # A..B [--run] [--no-cache] — the test groups a git range can affect (core/drgnx-affected.el); --run runs them
+  exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-affected -f drgnx-affected-cli -- "$@"
+}
+
 test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
   local fn="${1:-drgnx-run-ert-batch}"; shift || true   # --find-polluter runs its own entry point of the runner
   trap '' PIPE
@@ -960,6 +965,7 @@ cmd_test() {
       else
         test_batch
       fi ;;
+    --affected) shift; affected_emacs "$@" ;;
     --orders) shift; test_orders "$@" ;;
     --stress) shift; test_stress "$@" ;;
     --preflight) shift; test_preflight "$@" ;;
@@ -987,7 +993,7 @@ cmd_test() {
     --day) shift; run_in_tmp ui_exec test-day "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test --affected A..B [--run [--no-cache]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 
@@ -1083,6 +1089,7 @@ lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `
 
 lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
   case "${1:-}" in
+    --affected) case " $* " in *" --run "*) echo heavy ;; *) echo light ;; esac ;;
     --ui|--tty|--scenario|--bench|--soak|--day|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
     --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
     --orders) case " $* " in *" --container "*|*" --podman "*) echo heavy ;; *) echo light ;; esac ;;
