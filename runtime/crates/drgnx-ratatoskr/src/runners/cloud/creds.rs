@@ -247,29 +247,33 @@ impl Resolver {
         {
             return Ok(c.clone());
         }
-        let creds = match &self.source {
-            Source::Command(argv) => {
-                let out = run_command(argv, COMMAND_TIMEOUT).await.map_err(|e| {
-                    tracing::warn!(command = %argv.first().map(String::as_str).unwrap_or(""), why = %e,
-                        "runners: the cloud credential command was refused");
-                    CloudError::NeedsLogin(self.login_command())
-                })?;
-                parse_aws(&out)
-                    .map_err(|e| CloudError::Other(format!("the credential command: {e}")))?
-            }
-            Source::Keyring(name) => {
-                let value = self
-                    .keys
-                    .as_ref()
-                    .and_then(|k| k.value(name))
-                    .ok_or_else(|| CloudError::NeedsLogin(self.login_command()))?;
-                parse_aws(value.expose_secret().as_bytes())
-                    .map_err(|e| CloudError::Other(format!("the keyring key {name:?}: {e}")))?
-            }
-        };
+        let raw = self.raw().await?;
+        let creds = parse_aws(&raw).map_err(|e| match &self.source {
+            Source::Command(_) => CloudError::Other(format!("the credential command: {e}")),
+            Source::Keyring(name) => CloudError::Other(format!("the keyring key {name:?}: {e}")),
+        })?;
         let creds = Arc::new(creds);
         *self.cached.lock().unwrap_or_else(|e| e.into_inner()) = Some(creds.clone());
         Ok(creds)
+    }
+
+    /// What the source gives, unparsed, in memory that is wiped when dropped: the command's output, or the keyring
+    /// key's value (GCP reads a token or a service-account key from it). A refused command, or a key not handed over,
+    /// is a login.
+    pub async fn raw(&self) -> Result<Zeroizing<Vec<u8>>, CloudError> {
+        match &self.source {
+            Source::Command(argv) => run_command(argv, COMMAND_TIMEOUT).await.map_err(|e| {
+                tracing::warn!(command = %argv.first().map(String::as_str).unwrap_or(""), why = %e,
+                    "runners: the cloud credential command was refused");
+                CloudError::NeedsLogin(self.login_command())
+            }),
+            Source::Keyring(name) => self
+                .keys
+                .as_ref()
+                .and_then(|k| k.value(name))
+                .map(|v| Zeroizing::new(v.expose_secret().as_bytes().to_vec()))
+                .ok_or_else(|| CloudError::NeedsLogin(self.login_command())),
+        }
     }
 }
 

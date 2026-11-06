@@ -1,9 +1,10 @@
 //! `ratatoskr-mock cloud` for the cloud rows (test builds only): one mock with no containers, modelling the fixture
-//! policy for hub `hub-1`, and AWS clients of it whose credentials come from a command that prints fake ones (built in
-//! pieces).
+//! policy for hub `hub-1`, and AWS and GCP clients of it whose credentials come from a command that prints fake ones
+//! (built in pieces).
 
 use super::aws::{Aws, AwsCfg};
 use super::creds::{Resolver, Source};
+use super::gcp::{Gcp, GcpCfg};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -71,6 +72,23 @@ impl Mock {
             probe: None,
         };
         Aws::with_endpoint(cfg, Arc::new(creds), &self.base).unwrap()
+    }
+
+    /// A GCP client of the mock in project `p1`, zone `us-central1-a`, for hub `hub-1`, with an 8 h lifetime; its token
+    /// comes from a command that prints a fake one.
+    pub fn gcp(&self) -> Gcp {
+        let token = ["ya29", ".fake-token-0005"].concat();
+        let creds = Resolver::new(
+            Source::Command(vec!["printf".into(), "%s".into(), token]),
+            None,
+        );
+        let cfg = GcpCfg {
+            project: "p1".into(),
+            zone: "us-central1-a".into(),
+            hub_id: HUB.into(),
+            lifetime: std::time::Duration::from_secs(8 * 3600),
+        };
+        Gcp::with_endpoint(cfg, Arc::new(creds), &self.base).unwrap()
     }
 
     async fn http(&self, method: &str, path: &str, body: &str) -> String {

@@ -628,8 +628,9 @@ impl super::image::ImageApi for Aws {
 
 const FORM: &str = "application/x-www-form-urlencoded; charset=utf-8";
 
-/// RFC 3986 percent-encoding, as AWS's Query API and SigV4 want it: unreserved characters stay.
-fn pct(s: &str) -> String {
+/// RFC 3986 percent-encoding, as AWS's Query API and SigV4 want it: unreserved characters stay. (GCP's queries and
+/// forms, and Ignition's `data:` URLs, use it too.)
+pub(super) fn pct(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {

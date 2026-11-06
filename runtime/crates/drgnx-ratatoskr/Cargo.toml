@@ -106,8 +106,9 @@ aws-sigv4 = { version = "1.6.4", default-features = false, features = ["sign-htt
 aws-credential-types = "1.3"  # the credentials aws-sigv4 signs with (in its tree)
 quick-xml = "0.42"            # EC2's XML answers
 # the cloud SSH CA's and each redial's ed25519 keys (runners::cloud::ca; already in the tree through rustls): the
-# runners plan's fallback, since ssh-key 0.6 would add sha2 0.10 beside the workspace's 0.11
-ring = { version = "0.17", default-features = false }
+# runners plan's fallback, since ssh-key 0.6 would add sha2 0.10 beside the workspace's 0.11. `alloc` for RS256: a GCP
+# service-account key signs its token request (runners::cloud::gcp)
+ring = { version = "0.17", default-features = false, features = ["alloc"] }
 
 # runners: the user's OpenSSH through the crate's native mux (no Android: the transport is Unix desktops only)
 [target.'cfg(all(unix, not(target_os = "android")))'.dependencies]

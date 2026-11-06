@@ -6,6 +6,8 @@
 //! - names the running ones the hub has no link to, for it to reattach (redial with a new certificate);
 //! - ends any unreachable for [`UNREACHABLE_S`] (300 s) in a row, any past its lifetime, any stopped (by anyone), and
 //!   with `CapState::PastCapPlusHour` every one;
+//! - where the idle stop is the hub's (GCP, [`Sweeper::with_idle`]), any reached machine its watchdog reported idle
+//!   ([`Sweeper::idle_since`]) for the idle time;
 //! - never touches a machine without this hub's tag, even one a provider's list returned: it is named in `not_ours`.
 //!
 //! When the credentials need a login (`CloudError::NeedsLogin`) it pauses: it ends nothing, and the card names the
@@ -41,6 +43,8 @@ pub enum Ended {
     Stopped,
     /// The cap plus a machine-hour.
     Cap,
+    /// Idle for the idle time, where the idle stop is the hub's (GCP).
+    Idle,
 }
 
 impl Ended {
@@ -50,6 +54,7 @@ impl Ended {
             Ended::Lifetime => "past its lifetime",
             Ended::Stopped => "stopped",
             Ended::Cap => "the cloud cap",
+            Ended::Idle => "idle",
         }
     }
 }
@@ -82,6 +87,10 @@ pub struct Sweeper {
     bounds: Bounds,
     /// Since when each machine has been out of reach.
     unreachable_since: BTreeMap<String, u64>,
+    /// Where the idle stop is the hub's (GCP): how long a machine may be idle.
+    idle_s: Option<u64>,
+    /// Since when each machine has been idle, as its watchdog reported through `serve`.
+    idle_since: BTreeMap<String, u64>,
     paused: Option<String>,
 }
 
@@ -96,7 +105,28 @@ impl Sweeper {
             hub_id: hub_id.into(),
             bounds,
             unreachable_since: BTreeMap::new(),
+            idle_s: None,
+            idle_since: BTreeMap::new(),
             paused: None,
+        }
+    }
+
+    /// The sweeper of a provider whose idle stop is the hub's (GCP, where the guest never powers off): a reached
+    /// machine idle for IDLE_S is ended.
+    pub fn with_idle(mut self, idle_s: u64) -> Sweeper {
+        self.idle_s = Some(idle_s);
+        self
+    }
+
+    /// What machine ID's watchdog reported through `serve`: idle since SINCE (the hub's clock), or busy (None).
+    pub fn idle_since(&mut self, id: &str, since: Option<u64>) {
+        match since {
+            Some(t) => {
+                self.idle_since.insert(id.to_string(), t);
+            }
+            None => {
+                self.idle_since.remove(id);
+            }
         }
     }
 
@@ -138,7 +168,11 @@ impl Sweeper {
                 }
                 InstanceState::Running if reached(&info.id) => {
                     self.unreachable_since.remove(&info.id);
-                    None
+                    let idle = self
+                        .idle_s
+                        .zip(self.idle_since.get(&info.id))
+                        .is_some_and(|(limit, since)| now.saturating_sub(*since) >= limit);
+                    idle.then_some(Ended::Idle)
                 }
                 InstanceState::Running => {
                     let since = *self.unreachable_since.entry(info.id.clone()).or_insert(now);
@@ -157,11 +191,13 @@ impl Sweeper {
                     return self.failed(e);
                 }
                 self.unreachable_since.remove(&info.id);
+                self.idle_since.remove(&info.id);
                 w.ended.push((info.id, why));
             }
         }
         // forget the machines that are gone
         self.unreachable_since.retain(|id, _| seen.contains(id));
+        self.idle_since.retain(|id, _| seen.contains(id));
         self.paused = None;
         w.ended.sort_by(|a, b| a.0.cmp(&b.0));
         Pass::Done(w)

@@ -290,7 +290,7 @@ keys it holds as it connects.
 
 ## Cloud: what you give drgnx
 
-drgnx can start machines of its own in your AWS account (GCP follows), only with your permission and within your
+drgnx can start machines of its own in your AWS account or GCP project, only with your permission and within your
 limits. It talks to the provider's API directly, over HTTPS, with a role you create for it, scoped to what it does:
 
 - **Credentials come from a command**, by default `aws configure export-credentials`, the same one your `aws` CLI
@@ -307,9 +307,23 @@ limits. It talks to the provider's API directly, over HTTPS, with a role you cre
   calls, only on resources with that tag; every call only in your regions. It denies `iam:PassRole` (machines get no
   role) and making an image or snapshot public. No cloud credential ever reaches a machine.
 
-Every machine drgnx starts is tagged with your hub's id, ends itself when it powers off, and is started with an
-idempotency token, so a retry after a crash or a lost answer finds the machine the first try made instead of paying
-for a second one.
+**On GCP** the same holds, in GCP's terms:
+
+- **Credentials come from a command**, by default `gcloud auth print-access-token` (or `gcloud auth application-default
+  print-access-token` for application default credentials), run the same way: no terminal, a 30 s limit, a login card
+  when it asks for anything. **Or a service-account key** in your keyring (the JSON file GCP gives you), from which
+  drgnx signs its own token requests; many organisations turn such keys off, so the command is the default.
+- **The role**: `drgnx runner cloud setup gcp --project P [--member user:EMAIL]` prints a custom role with only the
+  calls drgnx makes (start, read and delete its machines and their disks, read their serial console, the Fedora
+  CoreOS base, its images and its SSH firewall rules; never a stop, a service account or IAM), the `gcloud` command
+  that creates it, and the one that binds it to you. Give drgnx a **project of its own**: before the first start it
+  checks the project for VMs it didn't start, and if there are any it warns you and gives the binding with a
+  condition, so the role reaches only instances named `drgnx-…`.
+
+Every machine drgnx starts is tagged (on GCP, labelled) with your hub's id and is started with an idempotency token,
+so a retry after a crash or a lost answer finds the machine the first try made instead of paying for a second one. An
+AWS machine ends itself when it powers off; a GCP machine is started with a deadline (its start plus the lifetime) at
+which GCP deletes it, and never powers itself off (below).
 
 **SSH to a cloud machine** uses no key of yours and never your `ssh-agent`. drgnx has its own SSH certificate
 authority (kept in your keyring, held in memory while drgnx runs). For each connection it makes a fresh key in memory,
@@ -324,6 +338,12 @@ podman, the runner, the watchdog, your CA's public key, your project images and 
 so a started machine is ready in about a minute. The image is encrypted, holds no host key and no secret of yours, and
 is rebuilt only when what's in it changes. The two newest images are kept; older ones are deleted with their snapshots.
 A machine's startup text (user-data) holds only its name, the watchdog's limits and, when newer, the CA's public key.
+
+On GCP the machines run Fedora CoreOS `stable`, which sets a machine up once, at its first boot, from a config drgnx
+writes (Ignition): the runner (fetched from your hub and checked by its hash), the watchdog, your CA's public key and
+the machine's name, its host keys printed to its serial console, and automatic updates off, so no update reboots a
+machine mid-job. That config holds nothing secret either. There is no baked GCP image yet: your project images, git
+mirrors and the cargo cache are not preloaded on a GCP machine as they are on AWS.
 
 ### Spot
 
@@ -363,11 +383,12 @@ whatever is past its limits.
 
 **The sweep:** when drgnx starts and every 10 minutes, it lists the machines tagged with its hub id in your regions,
 reconnects to the running ones, and ends any it couldn't reach for 5 minutes, any past its lifetime, and any stopped
-one. It never touches a machine without its tag.
+one (on GCP also any idle for the idle time). It never touches a machine without its tag.
 
-**The network:** one security group per region, tagged with your hub id: SSH (TCP 22) in, from anywhere, IPv4 and IPv6,
-and nothing else. Your address changes behind carrier NAT, so the rule can't name it; the machines accept drgnx's
-short-lived certificates only.
+**The network:** one security group per region (on GCP, two firewall rules, one for IPv4 and one for IPv6, named and
+described with your hub id), tagged with your hub id: SSH (TCP 22) in, from anywhere, IPv4 and IPv6, and nothing else.
+Your address changes behind carrier NAT, so the rule can't name it; the machines accept drgnx's short-lived
+certificates only.
 
 ### When a cloud machine ends itself
 

@@ -2088,11 +2088,45 @@ unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drop
 machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
 sizes)` what `drgnx runner cloud setup aws` prints.
 
+**GCP** (`gcp.rs`, design §6.7.1, §6.7.6, H6): Compute Engine's REST API (and Resource Manager's
+`testIamPermissions`, the Billing Catalog's `skus.list`) as JSON with a bearer token, through the same `Upstream`.
+`Gcp::new(GcpCfg {project, zone, hub_id, lifetime}, creds)`; a machine's id is `ZONE/NAME`. `insert_request(req, now)`
+always sets the `requestId` (`request_id(token)`: a UUID from the start's token, so a retry is the same request), the
+`drgnx-hub` label on the instance and its disk, `terminationTime` = now + the lifetime with
+`instanceTerminationAction=DELETE`, `SPOT` with `preemptionNoticeDuration` 120 s for a spot start (`STANDARD`
+otherwise), `automaticRestart` off, no service account, the network tag `drgnx-<hub id>-ssh` and the Ignition config
+as `user-data`; a name that isn't `drgnx-…` is refused (the conditional role allows only those). `start` waits for its
+operation (GCE reports capacity and quota there); `describe` of a deleted machine is `Gone` (GCE keeps no record);
+`list_ours` is `instances.aggregatedList` with the label filter, in the zone's region; `end` is `instances.delete` (a
+machine already gone is fine) and there is no stop: on GCP the guest never powers off, and the idle stop is the hub's
+delete (`Sweeper::with_idle`). `scheduling(id)` reads back the deadline and its action (the first start's check).
+`classify`: 401 is `NeedsLogin` (a cached token gets one retry with a fresh one first), the zone-pool reasons are
+`Capacity`, 429/5xx and rate limits `Transient`, other 403s `Denied`. Tokens: the credential source's output
+(`Resolver::raw`) is a token (`gcloud auth print-access-token`, used 5 minutes) or a service-account JSON key
+(`parse_service_account`), whose `jwt_assertion` (RS256 by `ring`, scope `cloud-platform`) is traded at its
+`token_uri`. `ROLE` is the custom-role fixture (`gcp-role.json`); `setup_check(gcp, member)` lists the VMs without a
+`drgnx-hub` label and gives the `gcloud` commands (`setup_commands`), the binding with `condition(project)` when there
+are any; `drgnx runner cloud setup gcp` prints both bindings. `ensure_firewall` finds or makes the two rules
+`drgnx-<hub id>-ssh` (`0.0.0.0/0`) and `…-ssh6` (`::/0`), TCP 22 to that tag, the hub id in their description; one of
+ours that allows anything else is refused. The pre-flight's lines: credentials, permissions (every one of the role's),
+the base image (`images.getFromFamily`), other machines, firewall rules.
+
+**Ignition** (`ignition.rs`, design §6.7.2): `render(&Machine {ca_public, principal, limits, bundle_url,
+bundle_sha256})` writes the Fedora CoreOS `stable` config (spec 3.4.0). Ignition runs once, on a disk's first boot, so
+each machine gets its whole setup there instead of in a baked image: the runner user (linger, subordinate ids),
+`/usr/local/bin/sleipnir` fetched from the hub with its `sha256-` verification, the CA's public key, the principal and
+sshd's certificate-only drop-in, the watchdog's `watchdog.env` with `DRGNX_WATCHDOG_PROVIDER=gcp` and the image's own
+watchdog unit (without its first-boot dependency), `drgnx-host-keys.service` printing the fingerprints and keys to
+`/dev/ttyS0` in cloud-init's shape (`ca::pin::from_console` reads them from `getSerialPortOutput`), and Zincati off (a
+`config.d` drop-in and the unit masked). Files are percent-encoded `data:` URLs; nothing in it is secret, and nothing
+in it powers the machine off.
+
 **Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
 `/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
 prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
 in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
-it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`.
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`. `Resolver::raw()`
+is the source's output unparsed (in a `Zeroizing` buffer), for GCP.
 
 **The market** (`market.rs`, design §6.7.3, pure): `Policy {mode}` with `Mode {Spot, OnDemand, SpotThenOnDemand}`
 (`drgnx-runners-cloud-market`, the default the last). `History::record(region, at, Event {Preempted, NoCapacity})`
@@ -2108,7 +2142,12 @@ runner's `preempting` frame (its watchdog's notice, `docs/develop/sleipnir.md`, 
 Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
 classes, the policy's statements, a prompting credential command, the market's fallback and restartability), and [B]
 rows against the mock with its virtual clock (`start_describe_end_round_trip`,
-`a_retry_after_a_crash_returns_the_same_instance`).
+`a_retry_after_a_crash_returns_the_same_instance`). GCP: [D] `gcp::insert_always_has_deadline_delete_and_request_id`,
+`gcp::jwt_fallback_signs_with_ring` (a key `ssh-keygen` makes, verified by `ring`),
+`ignition::ignition_turns_zincati_off_and_holds_no_secret`, `ignition::the_guest_never_powers_off_on_gcp`; [B]
+`gcp::a_stopped_vm_is_deleted_by_the_sweeper` (and an idle one), `gcp::the_deadline_deletes_with_the_hub_down` (the
+mock's clock moved to the deadline with no client running; the firewall rules, the console, the prices),
+`gcp::a_shared_project_gets_the_conditional_role_warning` (the role, the setup's commands, the pre-flight).
 
 ## Runners: cloud spend, the sweeper, the network rule
 
@@ -2136,7 +2175,9 @@ what runs since.
 `drgnx-hub=<this hub>`, whatever the list returned. A running machine `reached` says the hub has no link to goes into
 `reattach`, and is ended after `UNREACHABLE_S` (300 s) unreached in a row; a machine past its lifetime (its
 `launchTime`, `InstanceInfo::launched`), a stopped one, and with `PastCapPlusHour` every one is ended
-(`Ended {Unreachable, Lifetime, Stopped, Cap}`). A `NeedsLogin` pauses it (`paused()` names the command, nothing is
+(`Ended {Unreachable, Lifetime, Stopped, Cap, Idle}`). Where the idle stop is the hub's (GCP), `with_idle(idle_s)`
+ends a reached machine that `idle_since(id, Some(t))` (its watchdog's `Idle {since}`, through `serve`) says has been
+idle that long; `idle_since(id, None)` is busy again. A `NeedsLogin` pauses it (`paused()` names the command, nothing is
 ended); the next pass the credentials work for resumes and ends what is past its bound by then.
 
 **The network rule** (`net.rs`): `ensure_rule(&Aws)` finds or makes the region's one security group

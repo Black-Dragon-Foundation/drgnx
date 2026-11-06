@@ -5,6 +5,8 @@
 //!   console (where a machine prints its host keys) and prices.
 //! - [`aws`]: AWS EC2's Query API, signed with `aws-sigv4`, sent through bifrost's HTTP/1.1 client (rustls on ring)
 //!   and read with `quick-xml`; [`creds`]: where the credentials come from.
+//! - [`gcp`]: Compute Engine's REST API with a bearer token, machines deleted by their deadline; [`ignition`]: the
+//!   Fedora CoreOS config each GCP machine boots with.
 //!
 //! No SDK: about a dozen calls don't justify a second HTTP and TLS stack. Endpoints are the providers' own; a test
 //! build (`test-hooks`) may point them at `ratatoskr-mock cloud` with `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
@@ -13,6 +15,8 @@
 pub mod aws;
 pub mod ca;
 pub mod creds;
+pub mod gcp;
+pub mod ignition;
 pub mod image;
 pub mod market;
 pub mod meter;
