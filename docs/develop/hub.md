@@ -1346,6 +1346,13 @@ checkout read-only for it.
   `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
   answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
   write.
+- **Presence**: the door shares the hub's presence model (`work::presence::Live`). A write it sends is the session's
+  live entry `pair:WRITE` in `pending` mode on the lines it will change (`edit_lines::of_diff` over the session's served
+  read, else the file on disk up to `EDIT_TEXT_MAX`; the file only when `old` is not there once), in place before
+  `pair-apply` goes out. Applied, the entry closes into the session's `edit` entry on the lines the new text covers,
+  ranked at the session's step in that file (`Presence::step_in`), so it replaces the read before it and a later step
+  replaces it; refused, dropped or lost, it goes. The editor's buffer views and `agent-presence` follow; the Work map
+  hears it with the session's next step.
 - **The editor's side** is `modules/tools/drgnx-agent-pair.el` (module `tools/agent-pair`). Every pair call goes on
   the subscribed connection, the one the door sends to. The event handler only queues a `pair-apply` in the buffer
   visiting the file (deadline: arrival plus `ttl_ms` on Emacs's clock); `drgnx-agent-pair--drain` takes the queues

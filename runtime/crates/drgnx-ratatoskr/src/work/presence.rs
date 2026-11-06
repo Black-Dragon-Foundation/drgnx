@@ -299,6 +299,15 @@ impl Presence {
         })
     }
 
+    /// The step of SESSION's closed entry in FILE (0: none): where an entry no step carries (a pair write the editor
+    /// applied) ranks beside the session's own.
+    pub fn step_in(&self, session: &str, file: &str) -> i64 {
+        self.by_session
+            .get(session)
+            .and_then(|m| m.get(file))
+            .map_or(0, |e| e.step)
+    }
+
     /// E as its session's entry in its file, when it ranks above the one there.
     fn put_closed(&mut self, e: Entry, changed: &mut BTreeSet<RepoPath>) {
         let mine = self.by_session.entry(e.session.clone()).or_default();
@@ -719,6 +728,11 @@ impl Live {
             tool_call: tool_call.into(),
             closed,
         })
+    }
+
+    /// See [`Presence::step_in`].
+    pub fn step_in(&self, session: &str, file: &str) -> i64 {
+        lock(&self.model).step_in(session, file)
     }
 
     /// SESSION's live entry under TOOL_CALL goes, the call left open (see [`PresenceEv::Withdraw`]).

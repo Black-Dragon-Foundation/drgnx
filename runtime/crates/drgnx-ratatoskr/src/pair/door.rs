@@ -21,6 +21,9 @@
 //!   holding the wheel, or a matrix change that makes `chat.project-edit` never ([`follow_matrix`]) closes the
 //!   session's door at once: its writes not yet sent are refused, the editor drops those it holds (`pair-drop`, each
 //!   answered `dropped`), and later ones are refused.  Nothing of the session's turn is cancelled.
+//! - **Presence** ([`crate::work::presence`]): a write the editor holds is the session's live `pending` entry on the
+//!   lines it will change (found in the session's served read, else the file); applied, it becomes the session's
+//!   `edit` entry on the lines its new text covers, at the session's step in that file.  Any other end leaves nothing.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +44,9 @@ use super::open_set::{OpenEv, OpenSet, Route};
 use super::writes::{Ev, FileQueue, Outcome, REREAD, Served, WriteId, plan_edit, plan_whole};
 use super::{Refusal, gate, read_gate};
 use crate::settings::agents::Editors;
+use crate::work::edit_lines::{EditRange, of_diff};
+use crate::work::presence::{CallStatus, Entry, Live, LiveUpdate, true_name};
+use runstav::methods::work::{PresenceMode, PresenceSource};
 
 /// How long a write may wait in the editor's queue, counted by the editor from its arrival.
 pub const TTL_MS: u64 = 2000;
@@ -167,6 +173,8 @@ struct St {
 /// The hub's door for paired chats: one per hub.
 pub struct Door {
     editors: Arc<Editors>,
+    /// The presence model the writes show in.
+    presence: Arc<Live>,
     st: Mutex<St>,
     next: AtomicU64,
 }
@@ -176,9 +184,10 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Door {
-    pub fn new(editors: Arc<Editors>) -> Arc<Door> {
+    pub fn new(editors: Arc<Editors>, presence: Arc<Live>) -> Arc<Door> {
         Arc::new(Door {
             editors,
+            presence,
             st: Mutex::default(),
             next: AtomicU64::new(1),
         })
@@ -429,7 +438,7 @@ impl Door {
             // this version writes only through an editor: the hub never writes the disk behind an open file
             Route::Disk => return Err(Refusal(refused_text("not-open", None))),
         };
-        let rx = {
+        let (rx, id, range) = {
             let mut st = lock(&self.st);
             // the door may have closed since the checks above: decided again under the lock the close takes
             match st.sessions.get(session) {
@@ -438,6 +447,11 @@ impl Door {
                 Some(s) if !s.paired() => return Err(Refusal(PAIR_OFF.into())),
                 _ => {}
             }
+            let range = lines_of(
+                st.served.get(&(session.to_string(), real.clone())),
+                &real,
+                &kind,
+            );
             let (planned, whole) = match kind {
                 WriteKind::Edit { old, new } => (plan_edit(&old, &new)?, None),
                 WriteKind::Whole { content } => {
@@ -484,15 +498,58 @@ impl Door {
                     whole,
                 },
             );
+            // pending in the presence feed before the editor is sent the write
+            self.presence.apply_live(
+                session,
+                &presence_call(id),
+                LiveUpdate {
+                    path: true_name(&real.to_string_lossy()),
+                    mode: PresenceMode::Pending,
+                    line: range.map(|r| r.line),
+                    line_end: range.map(|r| r.line_end),
+                    col: range.map(|r| r.col),
+                    status: CallStatus::InProgress,
+                    source: PresenceSource::Edit,
+                    at: crate::clock::wall_secs(),
+                },
+            );
             let fx = st.files.entry(real.clone()).or_default().step(Ev::Submit {
                 id,
                 session: session.to_string(),
             });
             self.run(&mut st, &real, fx);
-            rx
+            (rx, id, range)
         };
         let (outcome, answer) = rx.await.unwrap_or((Outcome::Lost, None));
+        self.landed(session, id, &real, range, outcome == Outcome::Applied);
         self.verdict(session, &real, outcome, answer)
+    }
+
+    /// Write ID of SESSION to FILE ended: its pending entry goes; APPLIED, the session is in FILE on RANGE, editing.
+    fn landed(
+        &self,
+        session: &str,
+        id: WriteId,
+        file: &Path,
+        range: Option<EditRange>,
+        applied: bool,
+    ) {
+        let file = true_name(&file.to_string_lossy());
+        let closed = applied.then(|| Entry {
+            session: session.to_string(),
+            step: self.presence.step_in(session, &file),
+            file,
+            mode: PresenceMode::Edit,
+            line: range.map(|r| r.line),
+            line_end: range.map(|r| r.line_end),
+            col: range.map(|r| r.col),
+            source: PresenceSource::Edit,
+            at: crate::clock::wall_secs(),
+            live: false,
+            tool_call: None,
+        });
+        self.presence
+            .close_live(session, &presence_call(id), closed);
     }
 
     /// The effects FX of FILE's queue, done under the door's lock (sends only queue a line; a timer is a task).
@@ -727,6 +784,33 @@ impl Door {
     }
 }
 
+/// The presence feed's key for pair write ID (no ACP tool call carries it).
+fn presence_call(id: WriteId) -> String {
+    format!("pair:{id}")
+}
+
+/// Where a write KIND of REAL lands, as the hub knows its text: the session's served read SERVED, else the file on
+/// disk (at most [`crate::work::detail::EDIT_TEXT_MAX`]); none when that text is not there or `old` is not in it once.
+fn lines_of(served: Option<&Served>, real: &Path, kind: &WriteKind) -> Option<EditRange> {
+    let disk;
+    let text = match served {
+        Some(s) => s.text.as_str(),
+        None => {
+            let small = std::fs::metadata(real)
+                .is_ok_and(|m| m.len() <= crate::work::detail::EDIT_TEXT_MAX);
+            if !small {
+                return None;
+            }
+            disk = std::fs::read_to_string(real).ok()?;
+            disk.as_str()
+        }
+    };
+    match kind {
+        WriteKind::Edit { old, new } => of_diff(text, Some(old), new, false).ok(),
+        WriteKind::Whole { content } => of_diff(text, Some(text), content, true).ok(),
+    }
+}
+
 /// FILE as the wire spells it.
 fn abs(file: &Path) -> Result<AbsPath, Refusal> {
     AbsPath::new(file.to_string_lossy().into_owned())
@@ -778,7 +862,7 @@ mod tests {
         let editors = Arc::new(Editors::default());
         let out = Arc::new(Outbox::new(1));
         editors.subscribe(1, out.clone());
-        let door = Door::new(editors);
+        let door = Door::new(editors, Arc::default());
         let f = root.join("a.txt").to_string_lossy().into_owned();
         for kind in [
             WriteKind::Edit {
@@ -809,7 +893,7 @@ mod tests {
         let editors = Arc::new(Editors::default());
         let out = Arc::new(Outbox::new(1));
         editors.subscribe(1, out.clone());
-        (d, root, Door::new(editors), out)
+        (d, root, Door::new(editors, Arc::default()), out)
     }
 
     fn opened(door: &Door, file: &Path, kind: super::super::open_set::FileKind) {

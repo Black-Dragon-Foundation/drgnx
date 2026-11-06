@@ -156,7 +156,9 @@ impl Front {
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
-        let pair = crate::pair::door::Door::new(editors.clone());
+        // one presence model: the door's writes show in it beside the sessions' own tool calls
+        let presence = Arc::<crate::work::presence::Live>::default();
+        let pair = crate::pair::door::Door::new(editors.clone(), presence.clone());
         let follows = crate::editor::follow::Follows::new(editors.clone());
         Front {
             cap,
@@ -182,6 +184,7 @@ impl Front {
             core: crate::agent_core::Core {
                 budgets,
                 matrix,
+                presence,
                 ..Default::default()
             },
             browser_nevers: crate::browser::nevers::Nevers::default(),
