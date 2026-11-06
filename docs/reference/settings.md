@@ -945,6 +945,25 @@ then on.
 | `:agents` | `never` |
 | `:schema` | `(enum svg glyphs)` |
 
+## drgnx-look-motion
+
+Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
+preference, `full' always moves, `reduced' never does (no transitions; blur and shadows stay).
+A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const full) (const reduced))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look--motion-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto full reduced)` |
+
 ## drgnx-look-theme
 
 The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
