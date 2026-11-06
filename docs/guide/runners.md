@@ -71,6 +71,26 @@ refuses while a job is on it.
 Some jobs need a secret: a registry token to publish, a deploy key to fetch a private dependency. A job names the
 keys it needs (names only); drgnx gets them to the job on the runner without writing them anywhere there:
 
+- **Only keys the project lists.** A job may name only keys on the project's `drgnx-runners-job-keys` list (names,
+  like `("CRATES_IO_TOKEN")`); one naming any other is refused when it is started. An agent's job also needs the
+  matrix's `job.keys` (ask by default, allowed under Autonomous for the manager and workers, never for chat). A
+  repository's own files can't set either.
+- **You hand them over, the hub keeps them in memory.** When a job needs a key the hub doesn't hold, the hub asks
+  (`runners/need-keys`, names only); your editor answers from your key store with `runners/keys`, from a command you
+  run, never by itself. The hub holds the values in memory only, until it stops; `runners/keys-held` lists the names.
+- **Only where trust allows, only after the job started.** Keys go to a `mine` runner, to a `my-cloud` runner only
+  those on its own list, and never to a `shared` one; and only once the job has started there, one at a time. A
+  keyed job never runs on this machine for now: it waits for a runner and says so.
+- **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
+  each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
+  them (by job or by key); the values are never in them.
+- **The returned log has them masked.** The hub knows the values it sent a job, so its copy of the job's log has every
+  one masked (`*`, the same length): raw, in base64 and percent-encoded, even split across two pieces of the log.
+  drgnx also tells you when a line looks like some other secret ("this log may hold a secret at line N"), but never
+  masks those: it would shred hashes and digests.
+- **A private origin's deploy key.** With `drgnx-runners-origin-key` naming a read-only deploy key or token (a key
+  like any other, held the same way), your own runners fetch a private project from its origin with it instead of
+  being sent a bundle; an `https://` origin takes it as a token, an SSH one as a key.
 - **Only in memory.** The key travels inside drgnx's own connection and goes straight to a small helper that lives
   exactly as long as the job. The helper keeps it in memory that is never swapped, never in a core dump and not
   readable by other programs, and wipes it when the job ends. Nothing is written to the runner's disk, and podman's

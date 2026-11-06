@@ -498,7 +498,7 @@ does not parse.
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
-| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin |
+| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
 | `row` | runner → hub | a test row's name and verdict |
@@ -562,7 +562,10 @@ lacks the commit, and the mirror's ref tips (what a bundle may leave out). The h
 1 MiB at an offset of the total; one is kept only whole and hashing to its name), a bundle (`bundle::Receiver`: a
 chunk past what is held is dropped, an overlap is skipped; at its total it is checked and fetched into the mirror) or
 `origin-fetch` (`Mirror::fetch_origin` in a thread of its own, so pings go on; its end comes back to the loop), and
-`serve` answers `sync-need` again after each. A sync that fails (a bad repository id, a bundle that doesn't check, a
+`serve` answers `sync-need` again after each. An `origin-fetch` with `cred` names the deploy key or token the hub sent
+just before in a `key` frame of the attempt: a `key` frame for a syncing attempt that hasn't started is held in memory
+for that fetch only (`Live::origin_cred`), never handed to the job, and goes to `fetch_origin` as `OriginCred::Https`
+for an `http(s)://` origin or `OriginCred::SshKey` otherwise; a fetch naming a key that didn't come fails the sync. A sync that fails (a bad repository id, a bundle that doesn't check, a
 fetch that fails) ends the attempt `infra: setup`, with why in its log.
 
 **`start`** of a synced attempt first moves its slot to the inputs (`slot::update` under the slot's update lock: the

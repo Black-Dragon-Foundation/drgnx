@@ -23,7 +23,7 @@
 
 (defconst drgnx-agents-matrix-actions
   '(agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit
-                 merge.integration push.ci push.main code.ci-config machines job.container network browser
+                 merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser
                  browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read)
   "The matrix's rows, as the hub spells them (`Action::id' in runstav::methods::matrix).")
 
@@ -216,6 +216,20 @@ The hub pulls them; a job names one of them and nothing else.  Only you can set 
 Off, a job with uncommitted changes never runs on a shared runner.  Never set by a repository's own files."
   :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project :workspace 'never
   :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
+
+(drgnx-defsetting drgnx-runners-job-keys nil
+  "The keys the project's jobs may name, by name (\"CRATES_IO_TOKEN\"): a job naming any other is refused.
+Names only, never a value: the values stay in your key store and reach a job's own process only.  Never set by a
+repository's own files."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'")))
+
+(drgnx-defsetting drgnx-runners-origin-key nil
+  "The name of the project's read-only deploy key or token for its private origin, or nil.
+Your own runners fetch the project from its origin with it instead of being sent a bundle.  A name only: the value
+stays in your key store.  Never set by a repository's own files."
+  :type '(choice (const nil) string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict
+  :agents 'never :runtime "Option<String>" :schema '(or null (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'")))
 
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

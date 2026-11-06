@@ -7,16 +7,20 @@
 //! - [`attempts`]: the attempt state machine (nonces, `detached`, grace, reattach, requeue, late results), pure.
 //! - [`sync`]: a job's inputs frozen at submit, its trust from what the public origin has, and how its code reaches
 //!   a runner (origin, bundle or push; the overlay a runner may get).
+//! - [`keys`]: the job keys the user hands over, sent to a started attempt in `key` frames where trust allows, and
+//!   their audit (`key_sent`, `key_use`); [`redact`]: their bytes masked in what a runner returns.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub mod attempts;
 pub mod health;
+pub mod keys;
 pub mod link;
 pub mod local;
 pub mod methods;
 pub mod queue;
+pub mod redact;
 #[cfg(all(unix, not(target_os = "android")))]
 pub mod registry;
 pub mod ssh_config;

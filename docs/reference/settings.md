@@ -301,7 +301,7 @@ column that matches wins.  Set it in Settings → User; no workspace and no agen
 | `:apply` | - |
 | `:runtime` | `"AgentsMatrix"` |
 | `:agents` | `never` |
-| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
+| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
 
 ## drgnx-agents-mcp
 
@@ -872,6 +872,44 @@ The image a runner runs the project's command jobs in, pinned by digest ("regist
 | `:runtime` | `"Option<String>"` |
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
+
+## drgnx-runners-job-keys
+
+The keys the project's jobs may name, by name ("CRATES_IO_TOKEN"): a job naming any other is refused.
+Names only, never a value: the values stay in your key store and reach a job's own process only.  Never set by a
+repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'"))` |
+
+## drgnx-runners-origin-key
+
+The name of the project's read-only deploy key or token for its private origin, or nil.
+Your own runners fetch the project from its origin with it instead of being sent a bundle.  A name only: the value
+stays in your key store.  Never set by a repository's own files.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'"))` |
 
 ## drgnx-runners-project-visibility
 

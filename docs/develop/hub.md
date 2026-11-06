@@ -1117,7 +1117,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1138,8 +1138,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
+| `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
@@ -2182,7 +2185,7 @@ The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, 
 | Case | What the hub does |
 |---|---|
 | public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
-| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | `origin-fetch` with the key (no key setting yet: never taken) |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | the key in a `key` frame (recorded as `key_sent`), then `origin-fetch` naming it (`cred`); the key is `drgnx-runners-origin-key`, taken only while the hub holds it (else asked for, and the commit goes another way) |
 | over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
 | a small gap | a push; for now a bundle too |
 | a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
@@ -2194,6 +2197,43 @@ verdict, requeue or loss drops the attempt's sync and its bundle file.
 Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
 bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
 shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
+
+## Runners: keys
+
+`runners/keys.rs` and `runners/redact.rs` (design §6.3, §6.6; the user's side is docs/guide/runners.md, "Keys").
+
+**Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
+(`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
+matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
+in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+
+**The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
+`gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
+value and more than 32 keys, naming the key, never the value). `runners/keys-held` answers the names. When an attempt
+needs a key the hub doesn't hold, `runners/need-keys {names}` goes to the user's connections; nothing answers it but a
+command the user runs.
+
+**Sending.** On a keyed attempt's `started` (never before), `Queue::send_keys` sends each held key it hasn't sent yet in
+its own `key` frame, only where `keys::trust_ok` (never `shared`; `my-cloud` only its list, empty until cloud runners
+come); each is a `key_sent` row. Keys taken later go to the started attempts still missing them. A `key-use` frame
+from an attempt the hub placed there becomes a `key_use` row, `runner_reported: true`. Rows go to memory (the last
+10 000) and to the graph (norn kind `key_sent` / `key_use`, written as `("hub", System)`); `runners/audit {job?, key?}`
+reads the graph, or memory when the graph can't be read.
+
+**Redaction.** `QRoute::write_log` (the link's `Route` hook for `log` frames) runs a keyed attempt's chunks through its
+`Redactor` before they reach the hub's copy: every value sent masked in its raw, base64 (both alphabets, padded or not)
+and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
+form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
+`start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
+its keys are held again (`runners/keys`), then it is attached from the copy's end. At `finished` the held tail is
+written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
+secret, never masking it.
+
+Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the-log-or-any-reply` [B] (conformance);
+`tests/fleet_keys.rs` [C] (one frame and one `key_sent` per key and one `key_use` per read, no key bytes on the runner;
+the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
+only and `memory.swap.max` 0).
 
 ## Runners: health
 

@@ -105,6 +105,8 @@
  (drgnx-runners-weight 1.0)
  (drgnx-runners-project-visibility "private")
  (drgnx-runners-shared-overlay nil)
+ (drgnx-runners-job-keys nil)
+ (drgnx-runners-origin-key nil)
  (drgnx-search-model-mirror nil)
  (drgnx-search-builtin t)
  (drgnx-search-include nil)

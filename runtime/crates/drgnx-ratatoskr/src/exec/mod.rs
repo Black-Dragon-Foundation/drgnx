@@ -1654,6 +1654,14 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             hooks.admission = Admission::Fixed(n);
         }
         r.open(dirs.hub.join("exec"), hooks);
+        // the job keys' events go to the user's connections, their audit to the graph
+        if let Some(q) = r.queue() {
+            let editors = f.editors.clone();
+            q.keys()
+                .set_tell(move |event, data| editors.broadcast(event, data));
+            q.keys()
+                .set_sink(crate::runners::keys::graph_sink(f.writer.db.clone()));
+        }
     }
     Ok(r)
 }
@@ -1687,6 +1695,9 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         .unwrap_or_default();
     let shared_overlay =
         setting("drgnx-runners-shared-overlay").and_then(|v| v.as_bool()) == Some(true);
+    let origin_key = setting("drgnx-runners-origin-key")
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
     // the project's heavy patterns mark a job whose command line holds one; nothing else marks a job heavy
     let line = p
         .argv
@@ -1746,7 +1757,39 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         weight,
         visibility,
         shared_overlay,
+        origin_key,
     }
+}
+
+/// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,
+/// the matrix's `job.keys` allows it (an Ask refuses the start with its card, as `code.edit`'s does).
+async fn job_keys(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    cwd: &std::path::Path,
+) -> Result<(), Error> {
+    let names: Vec<String> = p
+        .keys
+        .iter()
+        .flat_map(|k| k.iter())
+        .map(|k| k.to_string())
+        .collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    let list = f
+        .settings
+        .effective("drgnx-runners-job-keys", None)
+        .and_then(|(v, _)| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default();
+    crate::runners::keys::on_the_project_list(&names, &list)
+        .map_err(|why| error(ErrorCode::InvalidParams, format!("keys: {why}")))?;
+    if let Some(sid) = &c.sid {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        gate_session_job(f, sid, cwd, &argv, norn::matrix::Action::JobKeys).await?;
+    }
+    Ok(())
 }
 
 /// A session's job runs commands in its worktree: the matrix's `code.edit` decides, as for the session's own tool
@@ -1859,6 +1902,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
+    job_keys(f, c, &p, &cwd).await?;
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
     // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.

@@ -170,6 +170,9 @@ struct Live {
     bundle: Option<(Sha256, Receiver)>,
     /// Its origin fetch runs.
     fetching: bool,
+    /// The deploy key or token the hub sent before `start` for its origin fetch; in memory only, gone once the fetch
+    /// took it.
+    origin_cred: Option<Key>,
 }
 
 impl Live {
@@ -182,7 +185,19 @@ impl Live {
             sync: None,
             bundle: None,
             fetching: false,
+            origin_cred: None,
         }
+    }
+}
+
+/// The origin credential of KEY for URL: a token over HTTPS (git's credential helper asks `serve` for it), else a
+/// deploy key for an SSH origin.
+fn origin_cred(url: &str, key: Key) -> crate::sync::cred::OriginCred {
+    let value = secrecy::SecretString::from(key.value.expose().to_string());
+    if url.starts_with("https://") || url.starts_with("http://") {
+        crate::sync::cred::OriginCred::Https(value)
+    } else {
+        crate::sync::cred::OriginCred::SshKey(value)
     }
 }
 
@@ -443,7 +458,9 @@ impl<W: Write> Serve<W> {
                 bytes,
                 ..
             } => self.bundle(&r, offset, total, sha256, &bytes),
-            Frame::OriginFetch { r, repo, url, .. } => self.origin_fetch(r, repo, url),
+            Frame::OriginFetch {
+                r, repo, url, cred, ..
+            } => self.origin_fetch(r, repo, url, cred),
             Frame::Start {
                 r,
                 image,
@@ -1126,6 +1143,10 @@ impl<W: Write> Serve<W> {
                 l.keys.push(k);
                 self.hand_keys(&key);
             }
+            // before `start`: the deploy key of the origin fetch that follows, never the job's
+            Some(l) if l.meta.r == k.r && l.sync.is_some() && !l.fetching => {
+                l.origin_cred = Some(k);
+            }
             _ => eprintln!(
                 "sleipnir serve: key {} for {:?}: not a started attempt of this hub's",
                 k.name, k.r
@@ -1362,7 +1383,7 @@ impl<W: Write> Serve<W> {
 
     /// The hub's `origin-fetch` for attempt R: the mirror REPO fetches from URL in a thread of its own (pings go on
     /// meanwhile); its end comes back to the loop ([`Serve::fetched`]).
-    fn origin_fetch(&mut self, r: JobRef, repo: String, url: String) -> Next {
+    fn origin_fetch(&mut self, r: JobRef, repo: String, url: String, cred: Option<String>) -> Next {
         let Some(key) = self.syncing(&r) else {
             eprintln!("sleipnir serve: origin-fetch for an attempt not waiting here: {r:?}");
             return Next::Go;
@@ -1376,11 +1397,24 @@ impl<W: Write> Serve<W> {
         if l.fetching {
             return Next::Go;
         }
+        // the credential the fetch names came in the `key` frame before it; it goes with the fetch
+        let held = l.origin_cred.take();
+        let cred = match (cred, held) {
+            (None, _) => None,
+            (Some(name), Some(k)) if k.name == name => Some(origin_cred(&url, k)),
+            (Some(name), _) => {
+                let why = format!("the origin fetch names the key {name}, which didn't come");
+                return self.sync_failed(&key, &why);
+            }
+        };
+        let Some(l) = self.live.get_mut(&key) else {
+            return Next::Go;
+        };
         l.fetching = true;
         let root = self.cfg.root.clone();
         let fetch = move || {
             Mirror::ensure(&root, &repo)
-                .and_then(|m| m.fetch_origin(&url, None))
+                .and_then(|m| m.fetch_origin(&url, cred))
                 .map_err(|e| e.to_string())
         };
         match self.events.clone() {

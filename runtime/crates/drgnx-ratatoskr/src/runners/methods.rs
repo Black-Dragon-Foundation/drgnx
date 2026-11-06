@@ -1,4 +1,5 @@
-//! The `runners/*` methods: the handlers over the hub's [`Registry`] (docs/develop/hub.md, "Runners: the registry").
+//! The `runners/*` methods: the handlers over the hub's [`Registry`] (docs/develop/hub.md, "Runners: the registry"),
+//! and the job keys' handover and audit (`runners/keys`, `runners/keys-held`, `runners/audit`; "Runners: keys").
 //! All are the user's alone (the method registry's classes). A change sends `runners-changed` with the whole list and
 //! tells the machine registry which runners there are.
 
@@ -6,7 +7,8 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
 use runstav::methods::runners::{
-    AddParams, ByName, ProbeParams, Probed, RemoveParams, Removed, Runner, Runners, SetParams,
+    AddParams, Audit, AuditParams, ByName, KeyNames, KeysParams, ProbeParams, Probed, RemoveParams,
+    Removed, Runner, Runners, SetParams,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::json;
@@ -198,6 +200,40 @@ pub async fn remove(f: &Front, _: &Caller, p: RemoveParams) -> Result<Removed, E
     changed(f).await;
     Ok(Removed {
         name: p.name.as_str().to_string(),
+    })
+}
+
+/// `runners/keys`: job keys to the hub's memory, nowhere else (refused, taking nothing, while the hub can't keep other
+/// processes out of its memory); the started attempts waiting for one get it now.
+pub async fn keys(f: &Front, _: &Caller, p: KeysParams) -> Result<bool, Error> {
+    f.gate.protects_keys()?;
+    let q = crate::exec::queue(f)?;
+    q.take_keys(p.keys.into_pairs(), crate::clock::wall_secs() as u64);
+    Ok(true)
+}
+
+/// `runners/keys-held`: the names of the job keys the hub holds, never a value.
+pub async fn keys_held(f: &Front, _: &Caller, _: Empty) -> Result<KeyNames, Error> {
+    Ok(crate::exec::queue(f)?.keys().held())
+}
+
+/// `runners/audit`: the graph's `key_sent` and `key_use` rows (the hub's memory of them when the graph can't be read),
+/// of one job or one key when asked.
+pub async fn audit(f: &Front, _: &Caller, p: AuditParams) -> Result<Audit, Error> {
+    let job = p.job.as_ref().map(|j| j.as_str());
+    let key = p.key.as_ref().map(|k| k.as_str());
+    let rows = match crate::runners::keys::graph_audit(&f.writer.db).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("runners: the key audit in the graph: {e}");
+            crate::exec::queue(f)?.keys().audit(None, None)
+        }
+    };
+    Ok(Audit {
+        rows: rows
+            .into_iter()
+            .filter(|r| job.is_none_or(|j| r.job == j) && key.is_none_or(|k| r.key.as_str() == k))
+            .collect(),
     })
 }
 

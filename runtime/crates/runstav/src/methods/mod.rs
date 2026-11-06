@@ -251,6 +251,9 @@ params! {
     RunnersSet(runners::SetParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
 }
 
 /// Every method, in no order.

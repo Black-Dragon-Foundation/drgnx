@@ -1780,6 +1780,34 @@
     {
       "data": {
         "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "doc": "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs",
+      "name": "runners/need-keys"
+    },
+    {
+      "data": {
+        "$defs": {
           "SettingScope": {
             "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
             "enum": [
@@ -12913,6 +12941,7 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
               "browser",
               "browser.web",
@@ -13141,6 +13170,7 @@
               "code.ci-config",
               "machines",
               "job.container",
+              "job.keys",
               "network",
               "browser",
               "browser.web",
@@ -15655,6 +15685,139 @@
       "classes": [
         "user"
       ],
+      "doc": "the keys sent to jobs (key_sent) and their reads as runners report them (key_use): names, jobs, attempts, runners, times",
+      "name": "runners/audit",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s params: the rows of one job, one key, or every row.",
+        "properties": {
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "key": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/KeyName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AuditParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AuditKind": {
+            "description": "What an audit row records.",
+            "oneOf": [
+              {
+                "const": "sent",
+                "description": "The hub sent the key to the attempt (what the hub knows for sure).",
+                "type": "string"
+              },
+              {
+                "const": "use",
+                "description": "The job read the key, as its runner reports it.",
+                "type": "string"
+              }
+            ]
+          },
+          "AuditRow": {
+            "additionalProperties": false,
+            "description": "One `key_sent` or `key_use` record: the key's name, never its value.",
+            "properties": {
+              "at": {
+                "description": "Seconds since the epoch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "attempt": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "job": {
+                "type": "string"
+              },
+              "key": {
+                "$ref": "#/$defs/KeyName"
+              },
+              "kind": {
+                "$ref": "#/$defs/AuditKind"
+              },
+              "runner": {
+                "type": "string"
+              },
+              "runner_reported": {
+                "default": false,
+                "description": "The runner said so; the hub can't check it (every `use` row).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "job",
+              "attempt",
+              "key",
+              "runner",
+              "at"
+            ],
+            "type": "object"
+          },
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/audit`'s answer, oldest first.",
+        "properties": {
+          "rows": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AuditRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "Audit",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a runner benched again: the reference workload under the runner's caps",
       "name": "runners/bench",
       "params": {
@@ -16042,6 +16205,92 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "job keys to the hub's memory (never a file), sent to the runners' jobs that name them",
+      "name": "runners/keys",
+      "params": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "RunnerKeys": {
+            "additionalProperties": {
+              "maxLength": 65536,
+              "type": "string"
+            },
+            "description": "key name → value",
+            "maxProperties": 32,
+            "propertyNames": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`runners/keys`' params: the job keys the editor read from the user's store. No `Debug`: it holds keys.",
+        "properties": {
+          "keys": {
+            "$ref": "#/$defs/RunnerKeys"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "title": "KeysParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the job keys the hub holds (names only)",
+      "name": "runners/keys-held",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "KeyName": {
+            "description": "a key name: ASCII letters, digits and _ (not a digit first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The names of the job keys the hub holds or needs, never a value: `runners/keys-held`'s answer, and the data of the\nevent `runners/need-keys`.",
+        "properties": {
+          "names": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/KeyName"
+            },
+            "type": "array"
+          }
+        },
+        "title": "KeyNames",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
