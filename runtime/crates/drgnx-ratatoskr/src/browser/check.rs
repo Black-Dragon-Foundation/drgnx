@@ -128,11 +128,10 @@ async fn attempt(
     let cur = front.settings.current();
     let v = cur.loaded.values.clone();
     let data = paths::data_dir(&Env::process());
-    let found = crate::clock::blocking(move || {
-        crate::browser::resolve::resolve(&cur.loaded.values, &data)
-    })
-    .await
-    .map_err(|e| format!("the browser lookup failed: {e}"))?;
+    let found =
+        crate::clock::blocking(move || crate::browser::resolve::resolve(&cur.loaded.values, &data))
+            .await
+            .map_err(|e| format!("the browser lookup failed: {e}"))?;
     *browser = found.as_ref().ok().map(|f| json!(f));
     let backend = launch::detect().await.ok().map(|s| s.kind());
     let secret = crate::browser::Secret::new().map_err(|e| format!("no random bytes: {e}"))?;
