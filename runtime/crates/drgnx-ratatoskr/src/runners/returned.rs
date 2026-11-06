@@ -625,7 +625,7 @@ mod tests {
         r.is_err()
     }
 
-    /// [D] H2: a returned path is relative and normalised; `..`, an absolute name and a NUL are refused.
+    /// [D]a returned path is relative and normalised; `..`, an absolute name and a NUL are refused.
     #[test]
     fn dotdot_absolute_and_nul_paths_are_refused() {
         for bad in [
@@ -699,7 +699,7 @@ mod tests {
         )
     }
 
-    /// [D] H2: an archive holding a link (symbolic or hard), a device or a FIFO is refused; regular files and folders
+    /// [D]an archive holding a link (symbolic or hard), a device or a FIFO is refused; regular files and folders
     /// pass, a ustar prefix, a GNU long name and a pax path included, each name checked as a returned path.
     #[test]
     fn a_link_in_an_archive_is_refused() {
@@ -762,7 +762,7 @@ mod tests {
         (d, fd)
     }
 
-    /// [D] H2: a link planted in the job's folder is never followed: a write through a linked folder fails and makes
+    /// [D]a link planted in the job's folder is never followed: a write through a linked folder fails and makes
     /// nothing behind it, a linked file is replaced, never written through; the sentinel outside is untouched.
     #[test]
     fn a_planted_symlink_in_the_job_dir_is_not_followed() {
@@ -856,7 +856,7 @@ mod tests {
         rs.iter().any(|r| r.contains(what))
     }
 
-    /// [D] H2: a patch that touches `build.rs` when the job declared only its golden files and `Cargo.lock` is not
+    /// [D]a patch that touches `build.rs` when the job declared only its golden files and `Cargo.lock` is not
     /// applied, and names the file; one within the globs is.
     #[test]
     fn a_patch_touching_build_rs_outside_writes_is_not_applied() {
@@ -891,7 +891,7 @@ mod tests {
         assert!(!reasons(&modify("Cargo.lock"), &[], &["Cargo.lock"]).is_empty());
     }
 
-    /// [D] H2: a patch touching a protected file (`.envrc`, `.claude`, `mise.toml`, …) or anything under `.git`, at any
+    /// [D]a patch touching a protected file (`.envrc`, `.claude`, `mise.toml`, …) or anything under `.git`, at any
     /// depth, is not applied, even when the job's writes are `**`; nor is one leaving the tree, or a file that changed
     /// since the job was submitted.
     #[test]
@@ -928,7 +928,7 @@ mod tests {
         assert!(Patch::parse(jref(2, 2), quoted.as_bytes()).is_err());
     }
 
-    /// [D] H2: no executable bit changes: a mode change, a new executable file, and a new symlink or submodule are
+    /// [D]no executable bit changes: a mode change, a new executable file, and a new symlink or submodule are
     /// all refused.
     #[test]
     fn an_exec_bit_change_is_not_applied() {
@@ -972,7 +972,7 @@ mod tests {
         assert_eq!(reasons(&gone, &["**"], &["old.txt"]), Vec::<String>::new());
     }
 
-    /// [D] H2: a patch from an attempt other than the job's current one (an older number, or the right number with
+    /// [D]a patch from an attempt other than the job's current one (an older number, or the right number with
     /// another nonce) is kept, not applied, and its card says to review it.
     #[test]
     fn a_patch_from_an_old_attempt_is_kept_not_applied() {
@@ -1008,7 +1008,7 @@ mod tests {
         );
     }
 
-    /// [D] H2: a patch from a `shared` runner is never applied, however clean; from `mine` or `my-cloud` it is. A
+    /// [D]a patch from a `shared` runner is never applied, however clean; from `mine` or `my-cloud` it is. A
     /// shared runner's results never count for a gate, and its summaries are labelled.
     #[test]
     fn a_patch_from_shared_is_never_applied() {
@@ -1045,7 +1045,7 @@ mod tests {
         assert!(r.is_err_and(|rs| mentions(&rs, "16 MiB")));
     }
 
-    /// [D] H2: a cargo `target/` (at any depth), a build tree or an image never comes back, by name, whatever the job
+    /// [D]a cargo `target/` (at any depth), a build tree or an image never comes back, by name, whatever the job
     /// declared: not written, and an archive holding one is refused.
     #[test]
     fn target_is_never_returned() {

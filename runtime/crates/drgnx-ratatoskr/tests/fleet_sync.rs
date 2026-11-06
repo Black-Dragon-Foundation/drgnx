@@ -1,7 +1,7 @@
 //! Sync's rows over real SSH to a real `sleipnir serve` in a fake runner (`#[ignore = "fleet"]`, test/runners/): a
-//! job's trust from what the public origin has (H7), a `shared` runner fetching from the origin itself, and the
-//! overlay a `shared` runner gets only when the project allows it and it passes the scan. They run in a fleet's
-//! harness only:
+//! job's trust from what the public origin has (unpushed commits keep it private), a `shared` runner fetching from
+//! the origin itself, and the overlay a `shared` runner gets only when the project allows it and it passes the scan.
+//! They run in a fleet's harness only:
 //!
 //! ```text
 //! cargo test -p drgnx-ratatoskr --features fleet --test fleet_sync --no-run
@@ -469,7 +469,7 @@ async fn result(
 mod sync_rows {
     use super::*;
 
-    /// [C] H7: a public project's job with one commit the origin lacks is `private`, so it never goes to the shared
+    /// [C] a public project's job with one commit the origin lacks is `private`, so it never goes to the shared
     /// runner, and its row says "runs here: 1 commit not on origin". Once pushed, a new job of the project is
     /// public and is offered to it; the first job's inputs stay as they were frozen.
     #[tokio::test]

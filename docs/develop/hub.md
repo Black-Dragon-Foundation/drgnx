@@ -2237,7 +2237,7 @@ only and `memory.swap.max` 0).
 
 ## Runners: returned data
 
-`runners/returned.rs` (design §6.3, H2; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+`runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
 returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
 wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
 
@@ -2264,7 +2264,7 @@ wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `s
   so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
   (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
 
-Tests: `runners::returned::` [D] (the H2 rows: paths, archive links, a planted link, writes globs, protected files and
+Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
 `.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
 
 ## Runners: health
