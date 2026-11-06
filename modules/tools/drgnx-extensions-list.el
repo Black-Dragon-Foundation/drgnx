@@ -32,6 +32,10 @@
 (declare-function drgnx-extensions-live-toggle-project "drgnx-extensions-live")
 (declare-function drgnx-extensions-trust-before-install "drgnx-extensions-trust")
 (declare-function drgnx-extensions-details-open "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-generation-keys "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-generation-row "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-generations "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
 (defvar drgnx-extensions-jobs-changed-functions)
 (defvar drgnx-extensions-recommended)
 (defvar drgnx-packages-off)
@@ -158,16 +162,20 @@ word that starts with @ and is none of these is listed under :unknown, never an 
 
 (defun drgnx-extensions-list--keys ()
   "The keys of the rows the view shows now, in order: a header (`(section . NAME)') then its row ids, one row once.
-While a query is typed: the search results alone."
-  (if (drgnx-extensions-list--typed-p)
-      (cons (cons 'section 'search) (drgnx-extensions-list--section-ids 'search))
-    (let ((seen (make-hash-table :test 'equal)) (out nil))
-      (dolist (s drgnx-extensions-list--sections-order)
-        (let ((ids (cl-remove-if (lambda (id) (gethash id seen)) (drgnx-extensions-list--section-ids s))))
-          (when ids
-            (push (cons 'section s) out)
-            (dolist (id ids) (puthash id t seen) (push id out)))))
-      (nreverse out))))
+While a query is typed: the search results alone, or with @generations the generations."
+  (cond ((memq 'generations (plist-get (drgnx-extensions-list--parsed) :local))
+         (and (fboundp 'drgnx-extensions-details-generation-keys) (drgnx-extensions-details-generation-keys)))
+        ((drgnx-extensions-list--typed-p)
+         (cons (cons 'section 'search) (drgnx-extensions-list--section-ids 'search)))
+        (t
+         (let ((seen (make-hash-table :test 'equal)) (out nil))
+           (dolist (s drgnx-extensions-list--sections-order)
+             (let ((ids (cl-remove-if (lambda (id) (gethash id seen)) (drgnx-extensions-list--section-ids s))))
+               (when ids
+                 (push (cons 'section s) out)
+                 (dolist (id ids) (puthash id t seen) (push id out)))))
+           (nconc (nreverse out)
+                  (and (fboundp 'drgnx-extensions-details-generation-keys) (drgnx-extensions-details-generation-keys)))))))
 
 (defun drgnx-extensions-list--receive (section rows total offset)
   "The hub answered a search for SECTION with ROWS (TOTAL matched), starting at OFFSET: keep them and show them."
@@ -248,6 +256,7 @@ While a query is typed: the search results alone."
   (setq drgnx-extensions-list--epoch (1+ drgnx-extensions-list--epoch))
   (clrhash drgnx-extensions-list--asked)
   (drgnx-extensions-list--note-restart)
+  (when (fboundp 'drgnx-extensions-details-forget-generations) (drgnx-extensions-details-forget-generations))
   (dolist (s (if (drgnx-extensions-list--typed-p) '(search) drgnx-extensions-list--sections-order))
     (drgnx-extensions-list--fetch s 0)))
 
@@ -400,20 +409,23 @@ While a query is typed: the search results alone."
 
 (defun drgnx-extensions-list--render (key)
   "The view's RENDER: KEY is a header `(section . NAME)' or a row id."
-  (if (consp key)
-      (let ((data (cdr (assq (cdr key) drgnx-extensions-list--sections))))
-        (propertize (format "%s (%d)\n" (cdr (assq (cdr key) drgnx-extensions-list--titles))
-                            (if (eq (cdr key) 'search) (or (plist-get data :total) 0)
-                              (length (drgnx-extensions-list--section-ids (cdr key)))))
-                    'face 'bold))
-    (drgnx-extensions-list--render-row key)))
+  (cond ((eq (car-safe key) 'gen) (drgnx-extensions-details-generation-row (cdr key)))
+        ((equal key '(section . generations)) (propertize "Generations\n" 'face 'bold))
+        ((consp key)
+         (let ((data (cdr (assq (cdr key) drgnx-extensions-list--sections))))
+           (propertize (format "%s (%d)\n" (cdr (assq (cdr key) drgnx-extensions-list--titles))
+                               (if (eq (cdr key) 'search) (or (plist-get data :total) 0)
+                                 (length (drgnx-extensions-list--section-ids (cdr key)))))
+                       'face 'bold)))
+        (t (drgnx-extensions-list--render-row key))))
 
 (defun drgnx-extensions-list--sig (key)
   "The signature of KEY's row: what makes it draw again when it changes (headers: their count)."
-  (if (consp key)
-      (vector (plist-get (cdr (assq (cdr key) drgnx-extensions-list--sections)) :total)
-              (length (drgnx-extensions-list--section-ids (cdr key))))
-    (gethash key drgnx-extensions-list--rows key)))
+  (cond ((eq (car-safe key) 'gen) (drgnx-extensions-details-generations))
+        ((consp key)
+         (vector (plist-get (cdr (assq (cdr key) drgnx-extensions-list--sections)) :total)
+                 (length (drgnx-extensions-list--section-ids (cdr key)))))
+        (t (gethash key drgnx-extensions-list--rows key))))
 
 (defun drgnx-extensions-list--sync (_view)
   (drgnx-view-sync-rows drgnx-view (drgnx-extensions-list--keys) #'drgnx-extensions-list--sig))
@@ -547,7 +559,7 @@ While a query is typed: the search results alone."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-details-open)
   (let ((id (drgnx-extensions-list--id-at-point)))
-    (drgnx-extensions-details-open id (equal id drgnx-extensions-list--details-id))
+    (pop-to-buffer (drgnx-extensions-details-open id (equal id drgnx-extensions-list--details-id)))
     (setq drgnx-extensions-list--details-id id)))
 
 (defun drgnx-extensions--before-install (entry)
@@ -558,7 +570,7 @@ While a query is typed: the search results alone."
   "Queue the install of the package at point: the job layer runs it, the row shows its progress."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-queue)
-  (when-let* ((entry (drgnx-extensions--before-install (list :add (drgnx-extensions-list--package-name)))))
+  (when-let* ((entry (drgnx-extensions--before-install (list :add (intern (drgnx-extensions-list--package-name))))))
     (drgnx-extensions-jobs-queue entry)))
 
 (defun drgnx-extensions-uninstall ()
@@ -566,7 +578,7 @@ While a query is typed: the search results alone."
 needs is refused, and the row says why."
   (interactive)
   (drgnx-extensions-list--require 'drgnx-extensions-jobs-queue)
-  (drgnx-extensions-jobs-queue (list :remove (drgnx-extensions-list--package-name))))
+  (drgnx-extensions-jobs-queue (list :remove (intern (drgnx-extensions-list--package-name)))))
 
 (defun drgnx-extensions-update ()
   "Update the package at point."
@@ -596,10 +608,10 @@ needs is refused, and the row says why."
           ((plist-get st :tickets) (dolist (tk (plist-get st :tickets)) (drgnx-extensions-jobs-cancel tk)))
           (t (user-error "Nothing runs for %s" (drgnx-extensions-list--name id))))))
 
-(defun drgnx-extensions-show-log ()
-  "Show the log of the job of the row at point."
+(defun drgnx-extensions-show-log (&optional id)
+  "Show the log of the job of the row at point (or of ID)."
   (interactive)
-  (let* ((id (drgnx-extensions-list--id-at-point)) (job (plist-get (gethash id drgnx-extensions-list--jobs) :job)))
+  (let* ((id (or id (drgnx-extensions-list--id-at-point))) (job (plist-get (gethash id drgnx-extensions-list--jobs) :job)))
     (unless job (user-error "%s has no job" (drgnx-extensions-list--name id)))
     (unless (fboundp 'drgnx-exec-log) (require 'drgnx-exec))
     (let ((text (drgnx-exec-log job 65536)))

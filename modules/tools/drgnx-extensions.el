@@ -18,9 +18,14 @@
 (require 'drgnx-timer)
 (unless (featurep 'drgnx-extensions-list)
   (load (expand-file-name "drgnx-extensions-list" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-extensions-details)
+  (load (expand-file-name "drgnx-extensions-details" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(require 'drgnx-restart)
 
 (declare-function drgnx-statusbar-define-segment "drgnx-statusbar")
 (declare-function drgnx-extensions-jobs-run "drgnx-extensions-jobs")
+(declare-function drgnx-extensions-details--define-view "drgnx-extensions-details")
+(declare-function drgnx-extensions-details-forget-generations "drgnx-extensions-details")
 (declare-function drgnx-extensions-list--define-view "drgnx-extensions-list")
 (declare-function drgnx-extensions-list--jobs-changed "drgnx-extensions-list")
 (declare-function drgnx-extensions-list--teardown "drgnx-extensions-list")
@@ -101,13 +106,20 @@ when you ask (the Refresh command)."
                    (extensions-cancel "Cancel Extension Job" drgnx-extensions-cancel
                                       "Cancel the job or queued click of the row on this line" t)
                    (extensions-show-log "Show Extension Job Log" drgnx-extensions-show-log
-                                        "The log of the job of the row on this line" t)))
+                                        "The log of the job of the row on this line" t)
+                   (extensions-rollback "Roll Back Packages" drgnx-extensions-rollback
+                                        "Put the packages back as they were after an earlier change (a background job)" nil)
+                   (extensions-restart "Restart drgnx" drgnx-restart
+                                       "Restart drgnx to use what changed; asks about unsaved work first" nil)
+                   (extensions-more "More About Extension" drgnx-extensions-more
+                                    "Install another version, copy the name, open the repository, show the settings or the log" nil)))
     (apply #'drgnx-command-define id :category "Extensions" :title title :command fn :doc doc
            (append (and local (list :map drgnx-extensions--local-map))
                    (and (eq id 'extensions-open) (list :menu '("View")))))))
 
 (defun drgnx-extensions--setup ()
   (drgnx-extensions-list--define-view)
+  (drgnx-extensions-details--define-view)
   (drgnx-extensions--define-commands)
   (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
   (when (fboundp 'drgnx-statusbar-define-segment)
@@ -120,6 +132,9 @@ when you ask (the Refresh command)."
   "Close the list, stop the timers and let go of the job layer's hook."
   (remove-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
   (drgnx-extensions--stop-daily-check)
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-extensions-details-mode) (kill-buffer b)))
+  (drgnx-extensions-details-forget-generations)
   (drgnx-extensions-list--teardown))
 
 (drgnx-module-define 'tools/extensions
