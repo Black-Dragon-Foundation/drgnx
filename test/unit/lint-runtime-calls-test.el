@@ -182,7 +182,7 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
   (cons "core/drgnx.el"
         (mapcar (lambda (n) (format "core/drgnx-%s.el" n))
                 '("agent-check" "agent-config-claude" "agent-config-codex" "agent-config-gemini" "agent-config-kimi"
-                  "agent-config" "agents-cards" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
+                  "agent-config" "agents-cards" "agents-hooks" "agents-matrix" "agents-mirror" "agents" "ai-client" "ai-probe" "ai" "bootstrap" "build"
                   "check" "compat-gryphn" "config" "coord-read" "deny" "doctor" "exec" "face-state" "file"
                   "file-stream" "fmt" "frame-kind" "freezes" "gc-census" "gc" "guard" "heap" "history" "hooks" "hub-client" "hub-core"
                   "keys-edit" "keys-modal"
