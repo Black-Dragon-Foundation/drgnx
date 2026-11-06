@@ -1075,7 +1075,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
@@ -2088,8 +2088,10 @@ attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r,
   then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
   the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
   when the job isn't restartable.
-- **The grace** is the runner's, `RunnerCfg::grace()`, passed in at `Placed`: 600 s with linger, 0 without, where a lost
-  link ends the attempt at once (the runner's jobs die with the login).
+- **The grace** is the runner's, passed in at `Placed`: the registry's (`RunnerCfg::grace()`, 600 s with linger) while
+  the runner's last `hello` says it lingers, 0 when it says it doesn't, where a lost link ends the attempt at once (the
+  runner's jobs die with the login). Each `hello` is read again: one without linger sets the grace of the runner's open
+  attempts to 0 (`Core::set_grace`), so linger turned off between two `hello`s ends them with the next lost link.
 - **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
   eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
   told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
@@ -2119,7 +2121,10 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight, visibility, shared_overlay}`, its frozen inputs (below) and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts}`, its frozen inputs (below) and what to start it
+from (`Pending`). `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
+name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
 honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
 `exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
@@ -2137,12 +2142,21 @@ runner (trust, pin, features, state, the project's send mode, the `machines` cel
 runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
 it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
 `Pick::Runner` offers it there (a new attempt, a random nonce, `Placed` into the attempt state machine, an `offer`
-frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's `admit` is answered with
-`start`; a `refuse` puts the job back with the runner's reason; `finished`, a lost link, a `hello` and a preemption go
+frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's last `ready` is its budget
+(free memory and CPU, less what the hub offered it since) and the slots and images it holds: a runner whose budget has
+no room for a job's need is passed by (`no room`), so the hub offers only what fits (§6.8.1); one that sent no `ready`
+yet is offered as before. A runner's `admit` is answered with `start`; a `refuse` puts the job back with the runner's
+reason; `started` is written to `rq_attempt` at once (`running`, so a restart never reads `offered` for a job that
+ran); `finished`, a lost link, a `hello` and a preemption go
 through the attempt state machine, whose verdicts, losses and late results become `Outcome`s: the job layer writes the
 verdict as the job's `exit` (or `why`) and ends it as a job here ends. The session's `Route` writes a runner's log
 frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; a requeue moves the log aside as
 `log.<n>`.
+
+**Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
+and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
+changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
+leaves that state as it is, and nothing is placed there until the runner's next `hello`.
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
@@ -2186,19 +2200,37 @@ verdict stands. When the rows came from more than one attempt the result carries
 words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
 summary (the job folder's `split` file).
 
+`exec/start` takes the suite as `rows: {parser, listed}` (`StartParams.rows`, at most 20000 rows): the job's
+`Placement.suite`. A run on this machine runs once, whole: `{rows}` becomes the selector of every listed row.
+
 **Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
-history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time; no grant, and
-warmth is not known yet, so `warm` is false). The queue keeps each key's last 5 runs per machine, and `forseti::Learned`
-learns the speed ratios between machines from each new row (`Learned::observe_run`). Every candidate's estimate reads
-the job's history on every machine, and the pick is `forseti::pick_with` with what was learned and no warmth. After a
-restart `queue::kept` reads `rq_rows` and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and
-learns again in the same order, so placement is what it was; with no history it is the static rule's. Not wired yet:
-learned link rates (the hub times no transfers), and backfill's reservation and head protection
-(`forseti::backfill::reservation`, `admit::head_protection`), which need every machine's budget.
+history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time, and `warm` when
+its start was: no grant). A job here that ran to its end is one too, machine `local` (`Queue::ran_here`, from the job
+layer's finish). The queue keeps each key's last 5 runs per machine, and `forseti::Learned` learns the speed ratios
+between machines from each new row (`Learned::observe_run`). A bundle the runner took in times the link: its bytes
+over the time from its sending to the runner's next `sync-need` (`Learned::observe_transfer`), and a candidate's
+transfer counts its overlay's bytes unless an attempt there synced the same inputs (the queue remembers the last 64
+input keys per runner). A start is warm on a runner whose last `ready` lists the job's slot
+(`sleipnir::sync::slot::SlotKey::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
+images its attempts ran in. Every candidate's estimate reads the job's history on every machine, and the pick is
+`forseti::pick_with` with what was learned and each candidate's warmth. After a restart `queue::kept` reads `rq_rows`
+and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and learns again in the same order, so
+placement is what it was; with no history it is the static rule's.
+
+**Backfill** (`forseti::backfill`, jobq §5.6). At each tick the head (the first queued job of the highest effective
+priority) reserves, when it fits none of the machines that may take it now, the one where it can start soonest
+(`forseti::reservation`): from this machine's probe and budget (live admission only: one admitting by count has no
+budget to reserve) and each runner's last `ready`, with the expected ends of what the queue runs there (a runner's job
+counts from its `started`, holding its grant, for the time its placement expected). While it holds, a job a machine
+would take waits as "room is kept for job H" there (`admit::head_protection`) unless it ends before the head's start,
+and may still go to another machine; the reservation goes once the head is placed, and is made again every tick.
 
 Tests: `runners::attempts::tests::union_with_latest_attempt_winning`,
 `exec::summary::tests::summary_shows_the_split`, `runners::queue::tests::a_requeue_runs_only_the_rows_without_a_result`,
-`learned_placement_comes_back_after_a_restart` [D]; `tests/runners_orders.rs`
+`learned_placement_comes_back_after_a_restart`, `the_head_reserves_a_runner_and_a_short_job_backfills_it`,
+`a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer`, `a_runner_with_the_jobs_slot_and_image_wins_a_tie`,
+`a_run_here_is_this_machines_history`, `exec::tests::rows_reach_the_queue_and_a_run_here_runs_them_all` [D];
+`tests/runners_orders.rs`
 `every_order_each_row_counted_once_latest_wins` [A] (two attempts' rows and a late `finished`, all 280 orders);
 `tests/fleet_runners.rs` `drill::a_dropped_link_at_row_150_of_240_reruns_only_the_rest` [C].
 

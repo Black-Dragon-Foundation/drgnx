@@ -227,16 +227,6 @@ fn entry(e: ManifestEntry) -> Entry {
     }
 }
 
-/// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now.
-fn slot_key(spec: &forseti::JobSpec) -> SlotKey {
-    SlotKey {
-        project: spec.project.clone(),
-        worktree: spec.tree.display().to_string(),
-        trust: spec.trust,
-        toolchain: String::new(),
-    }
-}
-
 /// How many of the attempt's `key-use` lines went up as `key-use` frames (kept beside them, so a reconnect sends
 /// each read once).
 const KEY_USE_SENT: &str = "key-use.sent";
@@ -287,6 +277,8 @@ pub struct Serve<W: Write> {
     last_units: Instant,
     /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
     events: Option<mpsc::Sender<Event>>,
+    /// The images the attempts it started ran in (so present here), for `ready`.
+    images: BTreeSet<String>,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
@@ -384,6 +376,7 @@ impl<W: Write> Serve<W> {
             last_frame: now,
             last_units: now,
             events: None,
+            images: BTreeSet::new(),
         };
         s.load_running();
         Ok(s)
@@ -608,13 +601,15 @@ impl<W: Write> Serve<W> {
         self.ladder(&m);
         self.grow(&m.running);
         self.weigh(&m.running);
+        // what makes a start warm here: the job's slot, and its image
+        let images = self.images.iter().cloned().collect();
         self.send(&Frame::Ready {
             free_mib: b.mem_mib,
             free_cpu: b.cpu,
             psi: m.psi,
             running,
-            slots: vec![],
-            images: vec![],
+            slots: slot::present(&self.cfg.root),
+            images,
         })
     }
 
@@ -830,7 +825,7 @@ impl<W: Write> Serve<W> {
             return self.refuse(r, "a job id is letters and digits");
         }
         // a slot moves to new inputs only once no running job reads it at others (a writer reads its own copy)
-        let slot = slot_key(&spec).id();
+        let slot = SlotKey::of(&spec).id();
         let busy = !input_key.is_empty()
             && self.live.values().any(|l| {
                 l.meta.started.is_some()
@@ -957,6 +952,7 @@ impl<W: Write> Serve<W> {
             }),
             None => Ok(dir.join("src")),
         };
+        let ran_in = image.clone();
         let launched = src.and_then(|src| {
             self.launch(
                 &dir,
@@ -978,6 +974,7 @@ impl<W: Write> Serve<W> {
                 }
                 self.hand_reservation(&meta, pid);
                 self.last_start = Some(at);
+                self.images.extend(ran_in);
                 if let Some(l) = self.live.get_mut(&(r.job.clone(), r.attempt)) {
                     l.meta = meta;
                     l.pump = Some(0);
@@ -1003,7 +1000,7 @@ impl<W: Write> Serve<W> {
     /// the slot itself (read-only) or a private copy of it in DIR for a job that writes the tree, and the slot's id.
     fn checkout(&self, dir: &Path, meta: &Meta, s: &SyncIn) -> Result<(PathBuf, String), String> {
         let root = &self.cfg.root;
-        let key = slot_key(&meta.spec);
+        let key = SlotKey::of(&meta.spec);
         let p = slot::paths(root, &key);
         let sync_err = |e: crate::sync::SyncError| format!("the checkout: {e}");
         let m = Mirror::ensure(root, &s.repo).map_err(sync_err)?;

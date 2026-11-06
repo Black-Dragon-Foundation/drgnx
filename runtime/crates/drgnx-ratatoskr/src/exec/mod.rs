@@ -780,6 +780,8 @@ impl Inner {
                     .map(|r| r.to_string())
             });
         }
+        // a runner's proxy reaches what the job's grant reaches here
+        place.net_hosts = net_hosts_of(spec.container.as_ref());
         let fspec = spec.forseti_spec(id, &self.hooks.memory);
         // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
         // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
@@ -1082,9 +1084,11 @@ impl Inner {
         self: Arc<Self>,
         id: &str,
         dir: &Path,
-        spec: ExecSpec,
+        mut spec: ExecSpec,
         permit: Option<queue::Slot>,
     ) -> Result<(), Refusal> {
+        // a suite whose rows a runner may split runs here whole
+        spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut proxy = None;
         let (inner, status) = match &spec.starter {
@@ -1376,6 +1380,16 @@ impl Inner {
             ed.broadcast("exec-done", json!(done));
         }
         self.live.remove(id);
+        // a job here that ran to its end is this machine's history, as a runner's run is the runner's
+        if status == ExecStatus::Done {
+            let verdict = if exit == Some(0) { "Pass" } else { "Red" };
+            let wall_s = (end.ended - meta.started).max(0.0);
+            self.queue.ran_here(
+                id,
+                &json!({"verdict": verdict, "wall_s": wall_s}),
+                end.ended as u64,
+            );
+        }
         self.queue.release(id);
         let _ = self.events.send(JobEvent::Done(done));
         self.prune();
@@ -1795,8 +1809,37 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         visibility,
         shared_overlay,
         origin_key,
-        suite: None,
+        suite: suite_of(p),
+        net_hosts: vec![],
     }
+}
+
+/// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its
+/// proxy allows here, and what a runner's proxy gets for it. None without a grant.
+fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
+    c.and_then(|c| {
+        c.net
+            .map(|n| crate::sandbox::allowed_hosts(n, &c.caps.net_hosts))
+    })
+    .unwrap_or_default()
+}
+
+/// The request's `rows` as the queue's suite.
+fn suite_of(p: &StartParams) -> Option<queue::Suite> {
+    p.rows.as_ref().map(|r| queue::Suite {
+        parser: r.parser.to_string(),
+        listed: r.listed.iter().map(|l| l.to_string()).collect(),
+    })
+}
+
+/// ARGV as a run on this machine takes it: [`queue::ROWS`] becomes the selector of every row of SUITE (a job here
+/// runs once, whole).
+fn local_argv(argv: &[String], suite: Option<&queue::Suite>) -> Vec<String> {
+    let Some(s) = suite else {
+        return argv.to_vec();
+    };
+    let all = forseti::split::selector(&s.listed);
+    argv.iter().map(|a| a.replace(queue::ROWS, &all)).collect()
 }
 
 /// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,

@@ -155,9 +155,9 @@ case "${1:-}" in
   exec) shift; i=$1; shift; exec_runner "$i" "$@" ;;
   check) shift; check "$1" ;;
   test) shift; bin=${DRGNX_FLEET_TEST_BIN:?set DRGNX_FLEET_TEST_BIN to the container-built test binary}
-        # the runner bundle the tests install into their runner roots: the sleipnir and drgnx-key binaries beside the
-        # test's deps/
-        for b in sleipnir drgnx-key; do
+        # the runner bundle the tests install into their runner roots: the sleipnir, drgnx-key and drgnx-fwd binaries
+        # beside the test's deps/
+        for b in sleipnir drgnx-key drgnx-fwd; do
           [ ! -x "$(dirname "$bin")/../$b" ] || cp "$(dirname "$bin")/../$b" "$STATE/share/$b"
         done
         podman exec -e HOME="$STATE/home" -e DRGNX_FLEET_SHARE="$STATE/share" "$(name hub)" "$bin" --ignored "$@" ;;

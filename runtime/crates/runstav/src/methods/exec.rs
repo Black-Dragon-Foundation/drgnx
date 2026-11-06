@@ -163,6 +163,21 @@ pub struct StartParams {
     /// How much nicer than the hub the job runs, 0 to 19 (the user's jobs only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nice: Option<i8>,
+    /// A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an
+    /// Emacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have
+    /// no result yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<RowsParam>,
+}
+
+/// `exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RowsParam {
+    /// `ert`, `cargo-test` or `plist`.
+    pub parser: Bounded<String, 16>,
+    /// The rows' names (at most 20000, each at most 512 characters).
+    pub listed: Bounded<Vec<Bounded<String, 512>>, 20000>,
 }
 
 impl StartParams {

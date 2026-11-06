@@ -574,7 +574,9 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 (`missing`) and linger (logind's live answer), and lists this hub's attempts from the folder: `finished` when
 `result.json` is there, `running` while the unit is active, `lost` otherwise, each with its log's length. A `ready`
 follows, then one every 2 s and at every job end: free memory and CPU from `forseti::budget` over the live machine
-(this hub's running attempts counted, the others' through their reservations), PSI and the running attempts.
+(this hub's running attempts counted, the others' through their reservations), PSI, the running attempts, the slots
+present (the folders under `<root>/slots`, sorted: `sync::slot::present`) and the images the attempts this `serve`
+started ran in. The hub counts a start warm where both are there.
 
 **`offer`** is admitted by `forseti::admit` under the machine's admission lock (`linux::reserve::with_admit_lock`):
 it reads the machine with the others' live reservations, decides, sizes the grant (`forseti::size`) and writes the

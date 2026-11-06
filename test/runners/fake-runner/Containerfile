@@ -38,9 +38,10 @@ COPY fleet-load-base.service /etc/systemd/system/fleet-load-base.service
 RUN systemctl enable fleet-load-base.service
 
 # a runner started without linger (`fleet.sh up --no-linger-on I`) gets it when a test writes
-# /fleet/share/enable-linger: the tests run as `runner` in the harness and can't be root here
-COPY fleet-linger.path fleet-linger.service /etc/systemd/system/
-RUN systemctl enable fleet-linger.path
+# /fleet/share/enable-linger: the tests run as `runner` in the harness and can't be root here; a row that takes it away
+# writes /fleet/share/disable-linger
+COPY fleet-linger.path fleet-linger.service fleet-nolinger.path fleet-nolinger.service /etc/systemd/system/
+RUN systemctl enable fleet-linger.path fleet-nolinger.path
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

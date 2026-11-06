@@ -104,20 +104,23 @@ figures the `test-hooks` build admits on (`sleipnir.md`, "The machine probe"). A
 refuses a row's job; a row that wants the runner busy or full rewrites the file.
 Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be root in a runner, so a row that turns
 linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
-`loginctl enable-linger runner`.
+`loginctl enable-linger runner`. A row that turns it off writes `disable-linger` (`fleet-nolinger.path`), and removes
+the file once `loginctl` says so. The share is every runner's, so either file turns linger on or off on all of them.
 
 ## The link drills
 
 `drgnx-ratatoskr`'s `tests/fleet_drills.rs` holds the drills: rows that break the hub's link to a runner mid-job (a
-master told `-O stop`, the connection frozen 3 minutes under a keyed job, `serve` stopped 5 minutes, the hub restarted
-with and without the editor, a changed host key) or let the runner's own guards stop a job (disk below the floor, the
-memory ladder), and four jobs over one link's three sessions. Each proves its outcome from state: the job's attempts
-in the hub's `runtime.db`, the queue's rows, the runner's own log and attempt record, no key bytes on the runner.
-`drills.sh` runs every row 5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot:
+master told `-O stop`, the connection frozen 3 minutes under a keyed job with a network grant, `serve` stopped 5
+minutes, the hub restarted with and without the editor, a changed host key, linger turned off between two `hello`s) or
+let the runner's own guards stop a job (disk below the floor, the memory ladder), and four jobs over one link's three
+sessions. Each proves its outcome from state: the job's attempts in the hub's `runtime.db`, the queue's rows, the
+runner's own log and attempt record, no key bytes on the runner, the job's proxy's answers. `drills.sh` runs every row
+5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot (`test` shares `drgnx-fwd` too, for
+the networked job):
 
 ```
 cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
-cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key
+cargo build -p sleipnir -p drgnx-fwd --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key --bin drgnx-fwd
 DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
 ```
 

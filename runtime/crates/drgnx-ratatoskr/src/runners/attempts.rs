@@ -372,6 +372,16 @@ impl Core {
         out
     }
 
+    /// RUNNER's open attempts take GRACE_S from now on: its `hello` said whether its jobs outlive the link. A detached
+    /// one keeps the deadline it has.
+    pub fn set_grace(&mut self, runner: &str, grace_s: u64) {
+        for a in self.attempts.values_mut() {
+            if a.runner == runner && a.state.open() {
+                a.grace_s = grace_s;
+            }
+        }
+    }
+
     fn get_mut(&mut self, r: &JobRef) -> Option<&mut Attempt> {
         self.attempts.get_mut(&(r.job.clone(), r.attempt))
     }

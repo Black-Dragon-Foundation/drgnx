@@ -10,7 +10,8 @@
 //!
 //! ```text
 //! cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run
-//! cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key   # fleet.sh test shares both
+//! cargo build -p sleipnir --features test-hooks --bin sleipnir --bin drgnx-key   # fleet.sh test shares these
+//! cargo build -p drgnx-fwd                                                       # and the job's way to its proxy
 //! fleet.sh up --runners 2 --max-sessions 3
 //! DRGNX_FLEET_TEST_BIN=<the test binary> fleet.sh test --test-threads=1 drill::
 //! ```
@@ -56,6 +57,16 @@ const PARK: &str = "head -c 2500000 /dev/zero | tr '\\0' x; echo; echo parked; m
 
 /// The name of the key the keyed rows give their job.
 const KEY: &str = "DRILL_KEY";
+
+/// The host a networked row's grant lists, and one it doesn't: neither resolves, so nothing leaves the fleet.
+const LISTED: &str = "allowed.invalid:443";
+const UNLISTED: &str = "unlisted.invalid:443";
+
+/// `probe HOST:PORT`: a `CONNECT` through the job's proxy (`HTTPS_PROXY`'s port in the container), and its status
+/// code, as one `net HOST:PORT CODE` line (an empty code when nothing answered in 20 s).
+const NET_PROBE: &str = "probe() { c=$({ printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' \"$1\" \"$1\" >&3; \
+                         read -r -t 20 v c rest <&3; printf %s \"$c\"; } 3<>/dev/tcp/127.0.0.1/3128 2>/dev/null \
+                         | tr -d '\\r'); echo \"net $1 $c\"; }; ";
 
 /// `st FILE`: a process's `Name`, `PPid` and `Uid` from its status file, into `n`, `pp` and `u`.
 const ST: &str = "st() { n= pp= u=; { while read -r k v rest; do case $k in Name:) n=$v;; PPid:) pp=$v;; \
@@ -174,7 +185,7 @@ impl Drop for UserConfig {
 fn root(runner: &str, name: &str) -> String {
     let share =
         std::env::var("DRGNX_FLEET_SHARE").expect("DRGNX_FLEET_SHARE: run through fleet.sh test");
-    for b in ["sleipnir", "drgnx-key"] {
+    for b in ["sleipnir", "drgnx-key", "drgnx-fwd"] {
         assert!(
             PathBuf::from(&share).join(b).exists(),
             "fleet.sh test puts {b} in the share"
@@ -186,7 +197,7 @@ fn root(runner: &str, name: &str) -> String {
         runner,
         &format!(
             "rm -rf {root} && mkdir -p {root}/bin/test && cp /fleet/share/sleipnir /fleet/share/drgnx-key \
-             {root}/bin/test/ && printf %s '{QUIET_MACHINE}' > {root}/test-machine.json"
+             /fleet/share/drgnx-fwd {root}/bin/test/ && printf %s '{QUIET_MACHINE}' > {root}/test-machine.json"
         ),
     );
     root
@@ -329,17 +340,19 @@ impl Drill {
     async fn link(&mut self) {
         let channels = self.open().await.expect("the transport opens the runner");
         let s = Session::start(&self.runner, channels, self.q.route(), self.q.link_events());
-        self.q.add_runner(
-            RemoteRunner {
-                name: self.runner.clone(),
-                trust: RunnerTrust::Mine,
-                accept: forseti::Accept::All,
-                grace_s: 600,
-                image: Some(self.img.clone()),
-            },
-            s,
-        );
+        self.q.add_runner(self.remote(), s);
         self.ready().await;
+    }
+
+    /// The runner as the registry gives it to the queue.
+    fn remote(&self) -> RemoteRunner {
+        RemoteRunner {
+            name: self.runner.clone(),
+            trust: RunnerTrust::Mine,
+            accept: forseti::Accept::All,
+            grace_s: 600,
+            image: Some(self.img.clone()),
+        }
     }
 
     /// The hub's session ends (as before every new link); returns once the runner's `serve` of it is gone.
@@ -798,11 +811,12 @@ mod drill {
         d.end().await;
     }
 
-    /// [C] The network cut for 3 minutes under a keyed job: the hub's connection to the runner freezes (its `sshd`
-    /// stopped), the hub calls the link lost after 45 s without a frame and detaches the attempt, never a verdict; 3
-    /// minutes pass on the queue's clock and the grace (600 s, the runner lingers) holds; the dead connection goes and
-    /// the hub dials again. The job's helper kept its key through it: the job ends with its own verdict, its key was
-    /// sent once, and no file on the runner holds it.
+    /// [C] The network cut for 3 minutes under a keyed job with a network grant: the hub's connection to the runner
+    /// freezes (its `sshd` stopped), the hub calls the link lost after 45 s without a frame and detaches the attempt,
+    /// never a verdict; 3 minutes pass on the queue's clock and the grace (600 s, the runner lingers) holds; the dead
+    /// connection goes and the hub dials again. The job's helper kept its key and its proxy through it: the job ends
+    /// with its own verdict, its key was sent once and no file on the runner holds it, and before and after the cut its
+    /// proxy refuses a host the grant doesn't list (403) and lets one it lists through.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "fleet"]
     async fn network_cut_3_minutes_with_a_keyed_job() {
@@ -810,8 +824,11 @@ mod drill {
         let v = throwaway();
         d.link().await;
         d.hold(&v);
-        let script = format!("test -n \"${KEY}\" && echo keyed; {PARK}");
-        d.submit(d.job("xcut", &script, &[KEY]));
+        let probes = format!("{NET_PROBE}probe {UNLISTED}; probe {LISTED}");
+        let script = format!("test -n \"${KEY}\" && echo keyed; {probes}; {PARK}; {probes}");
+        let mut job = d.job("xcut", &script, &[KEY]);
+        job.place.net_hosts = vec![LISTED.into()];
+        d.submit(job);
         d.parked("xcut").await;
         assert_eq!(sent(&d.q, "xcut"), 1);
         d.sessions();
@@ -849,6 +866,25 @@ mod drill {
         let (attempt, result) = d.done("xcut").await;
         d.the_jobs_own_verdict("xcut", attempt, &result, &theirs);
         assert!(theirs.starts_with(b"keyed\n"), "the job had its key");
+        // the proxy's answers, before the cut and after it
+        let log = String::from_utf8_lossy(&theirs);
+        let answers = |target: &str| -> Vec<String> {
+            let line = format!("net {target} ");
+            log.lines()
+                .filter_map(|l| l.strip_prefix(line.as_str()).map(String::from))
+                .collect()
+        };
+        assert_eq!(
+            answers(UNLISTED),
+            ["403", "403"],
+            "an unlisted host is refused"
+        );
+        let listed = answers(LISTED);
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(
+            listed.iter().all(|c| !c.is_empty() && c != "403"),
+            "a listed host passes the allow-list: {listed:?}"
+        );
         assert_eq!(sent(&d.q, "xcut"), 1, "its key was sent once");
         assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
         d.no_key_bytes(&v);
@@ -915,12 +951,9 @@ mod drill {
         d.parked(&id).await;
         assert_eq!(sent(&d.q, &id), 1);
         let k = d.kept(&id).await;
-        // open: `offered` stays its word until the next change of state is written
+        // started: `runtime.db` says so before the hub stops
         assert_eq!(k.len(), 1, "{k:?}");
-        assert!(
-            ["offered", "running"].contains(&k[0].state.as_str()),
-            "{k:?}"
-        );
+        assert_eq!(k[0].state, "running", "{k:?}");
         d.sessions();
         // the hub stops: its link ends, its queue goes, its store shuts; the transport leaves the master for the next
         d.unlink().await;
@@ -1088,8 +1121,9 @@ mod drill {
     }
 
     /// [C] The runner's host key changes while a job runs there: its connection ends (the hub hears the channel end),
-    /// and every new dial is refused as a changed host key, never accepted; the attempt stays detached. Once the user
-    /// has checked and accepted the key at a terminal, the hub dials again and the job reattaches.
+    /// and every new dial is refused as a changed host key, never accepted: the runner shows `needs a login` with the
+    /// command to run, and the attempt stays detached. Once the user has checked and accepted the key at a terminal,
+    /// the hub dials again and the job reattaches.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "fleet"]
     async fn host_key_change_needs_login() {
@@ -1131,15 +1165,21 @@ mod drill {
         // the runner comes back with another host key (here: the hub's known key no longer matches it; this row's own
         // ssh, which shares the known hosts, waits until the key is accepted again)
         std::fs::write(&known, &changed).unwrap();
-        match d.open().await {
+        // the hub's dial, as the registry's: refused, and the runner waits for the user
+        match d.q.dial(&*d.t, &d.cfg(), d.remote()).await {
             Err(LinkError::HostKeyChanged) => {}
             Err(e) => panic!("{e}"),
-            Ok(_) => panic!("a changed host key was accepted"),
+            Ok(()) => panic!("a changed host key was accepted"),
         }
         assert_eq!(
             std::fs::read_to_string(&known).unwrap(),
             changed,
             "never accepted"
+        );
+        d.pump();
+        assert_eq!(
+            d.q.runner("r1").unwrap().state,
+            "needs a login: ssh r1 true"
         );
         let k = d.kept("xhost").await;
         assert_eq!((k.len(), k[0].state.as_str()), (1, "detached"), "{k:?}");
@@ -1157,6 +1197,82 @@ mod drill {
         let (attempt, result) = d.done("xhost").await;
         d.the_jobs_own_verdict("xhost", attempt, &result, &theirs);
         assert_eq!(d.lost.len(), 1, "{:?}", d.lost);
+        d.end().await;
+    }
+
+    /// The runners' linger turned on or off (WORD `enable` or `disable`) through the fleet's share, as the image's
+    /// `fleet-linger` and `fleet-nolinger` units read it (the rows run as `runner` and can't be root there); returns once
+    /// runner 1 says so, with the file gone again.
+    async fn set_linger(word: &str) {
+        let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
+        for w in ["enable", "disable"] {
+            let _ = std::fs::remove_file(share.join(format!("{w}-linger")));
+        }
+        let file = share.join(format!("{word}-linger"));
+        std::fs::write(&file, b"").unwrap();
+        let want = if word == "enable" { "yes" } else { "no" };
+        skuld::wait_until_async(&format!("linger {want} on r1"), WAIT, || {
+            let said = sh(
+                "r1",
+                "loginctl show-user $(id -u) --property=Linger --value",
+            );
+            std::future::ready((said == want).then_some(()))
+        })
+        .await;
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    /// Puts linger back on when a row that turned it off fails before it did so itself.
+    struct LingerBack;
+
+    impl Drop for LingerBack {
+        fn drop(&mut self) {
+            if !std::thread::panicking() {
+                return;
+            }
+            let share = PathBuf::from(std::env::var("DRGNX_FLEET_SHARE").unwrap());
+            let _ = std::fs::remove_file(share.join("disable-linger"));
+            let _ = std::fs::write(share.join("enable-linger"), b"");
+        }
+    }
+
+    /// [C] Linger turned off between two `hello`s while a job runs: the second `hello` says so, and from then on the
+    /// job's attempt has no grace (its job ends with the login), so the link lost afterwards puts it back in the queue
+    /// at once, with no time passed on the queue's clock and no verdict. Linger is put back at the end, and the job's
+    /// container, if it outlived the login, goes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn linger_removed_between_two_hellos() {
+        let mut d = Drill::new("nolinger", "r1", "dedicated");
+        let _back = LingerBack;
+        d.link().await;
+        d.submit(d.job("xnolinger", PARK, &[]));
+        d.parked("xnolinger").await;
+        let k = d.kept("xnolinger").await;
+        assert_eq!((k.len(), k[0].state.as_str()), (1, "running"), "{k:?}");
+        // linger goes; the hub's next link (on the same master: the login stays) says so at its hello
+        set_linger("disable").await;
+        d.unlink().await;
+        d.relink().await;
+        // the login ends: the link is lost, and the attempt goes back to the queue at once
+        let (_, sshd) = d.the_serve();
+        sh("r1", &format!("kill -KILL {sshd}"));
+        let why = d
+            .drive("the link lost", |_, _, lost| lost.first().cloned())
+            .await;
+        assert!(why.contains("without bye"), "{why}");
+        let k = d.kept_as("xnolinger", "requeued").await;
+        assert_eq!(k.attempt, 1);
+        assert_eq!(d.jump, 0, "no time passed on the queue's clock");
+        assert!(d.outcomes.is_empty(), "no verdict: {:?}", d.outcomes);
+        set_linger("enable").await;
+        sh(
+            "r1",
+            &format!(
+                "podman rm -f -t 0 {}-xnolinger >/dev/null 2>&1; true",
+                d.prefix
+            ),
+        );
         d.end().await;
     }
 

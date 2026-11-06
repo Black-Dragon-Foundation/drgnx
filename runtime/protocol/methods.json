@@ -7905,6 +7905,31 @@
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
             "type": "string"
+          },
+          "RowsParam": {
+            "additionalProperties": false,
+            "description": "`exec/start`'s `rows`: the parser that reads the rows from the job's log, and the rows in listing order.",
+            "properties": {
+              "listed": {
+                "description": "The rows' names (at most 20000, each at most 512 characters).",
+                "items": {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                "maxItems": 20000,
+                "type": "array"
+              },
+              "parser": {
+                "description": "`ert`, `cargo-test` or `plist`.",
+                "maxLength": 16,
+                "type": "string"
+              }
+            },
+            "required": [
+              "parser",
+              "listed"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -8052,6 +8077,17 @@
               "integer",
               "null"
             ]
+          },
+          "rows": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RowsParam"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A test job whose suite selects rows: its argv holds `{rows}` where the selector of the rows to run goes (an\nEmacs regexp of the names). Every row runs at first; a job a lost runner sends back runs only the rows that have\nno result yet."
           },
           "timebox_s": {
             "description": "Seconds before it is ended: 1 to 86400 (default 3600).",

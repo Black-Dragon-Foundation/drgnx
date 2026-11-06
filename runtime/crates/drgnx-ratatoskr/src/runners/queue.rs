@@ -19,7 +19,7 @@ use crate::exec::Starter;
 use forseti::{
     Accept, Candidate, Drr, Expect, Expected, HistRow, Job, JobId, JobSpec, JobState, JobTrust,
     Kind, Lane, Learned, Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob,
-    WaitReason, Weight,
+    WaitReason, Warmth, Weight,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -145,6 +145,10 @@ pub struct Placement {
     pub origin_key: Option<String>,
     /// A test job's rows, when its suite supports row selection: a requeue then runs only the rows without a result.
     pub suite: Option<Suite>,
+    /// The hosts (`host:port`) the job's network grant reaches: a container job's matrix cell over
+    /// `drgnx-agents-net-hosts`, as its proxy here would allow them. A runner's job proxy gets the same list; none: the
+    /// job has no network.
+    pub net_hosts: Vec<String>,
 }
 
 /// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
@@ -177,6 +181,7 @@ impl Default for Placement {
             shared_overlay: false,
             origin_key: None,
             suite: None,
+            net_hosts: vec![],
         }
     }
 }
@@ -373,6 +378,8 @@ const SYNC_ROUNDS: u32 = 6;
 struct SyncSt {
     rounds: u32,
     bundle: Option<sync::BundleFile>,
+    /// When the bundle went (the queue's clock): its answer times the link.
+    sent_at: u64,
 }
 
 struct Remote {
@@ -385,6 +392,45 @@ struct Remote {
     check: Option<Check>,
     /// The runner's clock minus the hub's at its last `ping`.
     skew_s: Option<i64>,
+    /// What its last `hello` said of linger: without it the runner's jobs end with its login, so an attempt there gets
+    /// no grace.
+    linger: bool,
+    /// Its last `ready`: what it can take now (less what the hub offered it since), and the slots and images it holds.
+    ready: Option<ReadyNow>,
+    /// The input keys its attempts synced, newest last (at most [`SYNCED_KEPT`]): their bytes are there.
+    synced: Vec<String>,
+}
+
+impl Remote {
+    /// An attempt's grace there: the registry's ([`RemoteRunner::grace_s`]) while its `hello` says it lingers, else 0.
+    fn grace(&self) -> u64 {
+        if self.linger { self.r.grace_s } else { 0 }
+    }
+}
+
+/// How many synced input keys the queue remembers per runner.
+const SYNCED_KEPT: usize = 64;
+
+/// A runner's last `ready`.
+struct ReadyNow {
+    budget: forseti::Budget,
+    slots: Vec<String>,
+    images: Vec<String>,
+}
+
+/// A job offered to, or running on, a runner, as backfill counts it: since when (its offer, then its start), how long
+/// it is expected to take there, and what it holds (its grant once admitted, its minimum until then).
+#[derive(Clone, Debug)]
+struct OnMachine {
+    machine: String,
+    since: u64,
+    expected_s: f64,
+    reserve_mib: u64,
+    cores: u32,
+    priority: Priority,
+    restartable: bool,
+    /// Its start was warm (its slot and image there): its history row says so.
+    warm: bool,
 }
 
 /// A health check under way: its canary's attempt, and what it found.
@@ -434,6 +480,11 @@ struct St {
     /// The last runs of each history key on each machine (`rq_history`), and what placement learned from all of them.
     history: BTreeMap<String, BTreeMap<String, Vec<HistRow>>>,
     learned: Learned,
+    /// The jobs on runners, as backfill counts them.
+    on: BTreeMap<String, OnMachine>,
+    /// This tick's head reservation (`forseti::backfill`): the head of the highest waiting priority that fits no
+    /// machine now, and where and when it is to start.
+    reservation: Option<forseti::backfill::Reservation>,
 }
 
 impl St {
@@ -507,7 +558,8 @@ fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<H
         verdict,
         disturbed: false,
         at: now,
-        warm: false,
+        // set by the queue for a runner's start it knew to be warm (its slot and image there)
+        warm: result["warm"].as_bool() == Some(true),
     })
 }
 
@@ -1081,8 +1133,45 @@ impl Queue {
                 next_check: 0,
                 check: None,
                 skew_s: None,
+                linger: true,
+                ready: None,
+                synced: vec![],
             },
         );
+    }
+
+    /// Runner CFG linked over T: its sessions opened, `serve` started on them, the link the queue's (REMOTE is the
+    /// runner a first link adds). A dial refused for a login the user must do, or for a changed host key, puts a
+    /// runner the queue knows in `needs login` with the command its card shows, until its next `hello`; nothing is
+    /// placed there meanwhile. Any other failure (a lost link) leaves its state as the loss made it.
+    pub async fn dial(
+        self: &Arc<Self>,
+        t: &dyn super::transport::Transport,
+        cfg: &super::RunnerCfg,
+        remote: RemoteRunner,
+    ) -> Result<(), super::transport::LinkError> {
+        use super::transport::{LinkError, Login};
+        let channels = match t.open(cfg).await {
+            Ok(c) => c,
+            Err(e) => {
+                let login = match &e {
+                    LinkError::HostKeyChanged => Some(Login::HostKeyChanged),
+                    LinkError::NeedsLogin(l) => Some(l.clone()),
+                    _ => None,
+                };
+                if let Some(l) = login
+                    && let Some(r) = self.lock().runners.get_mut(&cfg.name)
+                {
+                    r.state = RunnerState::NeedsLogin(l.command(&cfg.host));
+                }
+                return Err(e);
+            }
+        };
+        let session = Session::start(&cfg.name, channels, self.route(), self.link_events());
+        if !self.set_session(&cfg.name, session.clone()) {
+            self.add_runner(remote, session);
+        }
+        Ok(())
     }
 
     /// The user's `runners/unbench`: NAME back in rotation, with no strikes.
@@ -1421,7 +1510,7 @@ impl Queue {
                 "requeued" => attempts::AttemptState::Requeued,
                 _ => attempts::AttemptState::Lost,
             };
-            let grace_s = st.runners.get(&a.runner).map_or(600, |r| r.r.grace_s);
+            let grace_s = st.runners.get(&a.runner).map_or(600, Remote::grace);
             let (current, restartable) = (j.attempt == a.attempt, j.s.spec.restartable);
             // a requeued attempt whose rows the next one reruns still stops when its runner lists it
             if state == attempts::AttemptState::Requeued
@@ -1473,6 +1562,21 @@ impl Queue {
         });
         j.state = QState::Local;
         j.machine = Some(LOCAL.into());
+    }
+
+    /// Job ID ran here to RESULT at NOW (`{"verdict", "wall_s"}`): a pass or a red is this machine's history, as a
+    /// runner's is (call it before [`Queue::release`]).
+    pub fn ran_here(&self, id: &str, result: &Value, now: u64) {
+        let mut st = self.lock();
+        let Some(spec) = st
+            .jobs
+            .get(id)
+            .filter(|j| j.state == QState::Local)
+            .map(|j| j.s.spec.clone())
+        else {
+            return;
+        };
+        self.record_run(&mut st, &spec, LOCAL, result, now);
     }
 
     /// Job ID ended here, or never started: it leaves the queue and frees its room.
@@ -1628,61 +1732,89 @@ impl Queue {
             &weights,
         );
         let by_id: HashMap<&JobId, &Job> = queued.iter().map(|j| (&j.id, j)).collect();
+        st.reservation = self.head_reservation(&st, &order, &by_id, &eff, now);
         for id in &order {
             let job = by_id[id];
             let e = eff.get(id).copied().unwrap_or(job.own);
             self.place(&mut st, job, e, now, &mut t.starts);
         }
+        st.reservation = None;
         t
     }
 
-    /// Places JOB: here (admitted: started), on a runner (offered), or not yet (why).
-    fn place(&self, st: &mut St, job: &Job, eff: Priority, now: u64, starts: &mut Vec<String>) {
-        let id = job.id.0.clone();
-        let Some(q) = st.jobs.get(&id) else {
-            return;
-        };
+    /// The head's reservation this tick (`forseti::backfill::reservation`): the first queued job of the highest
+    /// effective priority, when it fits none of the machines that may take it now, reserves the one where it can start
+    /// soonest, from the expected ends of what runs there. Each machine's budget is its own: this machine's from its
+    /// probe (none when it admits by count), a runner's from its last `ready`; a runner that sent none isn't counted.
+    fn head_reservation(
+        &self,
+        st: &St,
+        order: &[JobId],
+        by_id: &HashMap<&JobId, &Job>,
+        eff: &HashMap<JobId, Priority>,
+        now: u64,
+    ) -> Option<forseti::backfill::Reservation> {
+        let needs: Vec<(JobId, forseti::Need)> = order
+            .iter()
+            .map(|id| (id.clone(), need_of(by_id[id])))
+            .collect();
+        let prio = |j: &JobId| eff.get(j).copied().unwrap_or(Priority::P5);
+        let highest = needs.iter().map(|(j, _)| prio(j)).max()?;
+        let head_id = &needs.iter().find(|(j, _)| prio(j) == highest)?.0;
+        let head = by_id[head_id];
+        let q = st.jobs.get(&head.id.0)?;
+        let (cands, _, _) = Self::candidates(st, head, q, false);
+        let (mut machines, mut ends) = (vec![], HashMap::new());
+        for c in cands.iter().filter(|c| {
+            forseti::filter(head, c, q.s.place.send.forseti(), q.s.place.machines_cell).is_ok()
+        }) {
+            if c.local {
+                let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
+                for rj in &running {
+                    let end = forseti::expected_end(rj.started, rj.expected.minutes * 60.0);
+                    ends.insert(rj.id.clone(), end);
+                }
+                machines.extend(self.local.state(&running, st.last_local_start, now));
+            } else if let Some(rd) = st.runners.get(&c.name).and_then(|r| r.ready.as_ref()) {
+                let mut running = vec![];
+                for (id, o) in st.on.iter().filter(|(_, o)| o.machine == c.name) {
+                    ends.insert(
+                        JobId(id.clone()),
+                        forseti::expected_end(o.since, o.expected_s),
+                    );
+                    running.push(o.running(id));
+                }
+                machines.push((runner_state(&c.name, now, running), rd.budget));
+            }
+        }
+        let m: Vec<(&forseti::MachineState, forseti::Budget)> =
+            machines.iter().map(|(m, b)| (m, *b)).collect();
+        forseti::reservation(&needs, eff, &m, &ends).filter(|r| r.at > now)
+    }
+
+    /// The machines that might take JOB (QJOB in the queue): this machine (none for a keyed job: its keys reach a
+    /// runner's job only, and it never runs without them), then every runner but a `shared` one its overlay may not
+    /// reach (the second value says why). Each runner's transfer counts its overlay's bytes unless an attempt there
+    /// synced these inputs before. With FIT a runner whose last `ready` has no room for the job's need now is passed
+    /// by too (the third value: why it waits there): the hub offers only what fits.
+    fn candidates(
+        st: &St,
+        job: &Job,
+        q: &QJob,
+        fit: bool,
+    ) -> (Vec<Candidate>, Option<String>, Option<WaitReason>) {
         // the job's runs on every machine: each candidate's estimate reads them, with what placement learned
         let history = st.history_of(&forseti::history_key(&job.spec));
-        // this machine always (a pin elsewhere filters it), then every runner
-        let mut cands = vec![Candidate {
-            name: LOCAL.into(),
-            local: true,
-            trust: RunnerTrust::Mine,
-            keys_allowed: vec![],
-            features: job.spec.features.clone(),
-            state: RunnerState::Ready,
-            accept: Accept::All,
-            link_bps: None,
-            missing_bytes: 0,
-            start_s: 0.0,
-            wait_s: 0.0,
-            speed: 1.0,
-            history: history.clone(),
-            cloud: None,
-        }];
-        // a keyed job's keys reach a runner's job only: this machine is no candidate for it (it never runs without them)
-        let keyed = !job.spec.keys.is_empty();
-        if keyed {
-            cands.clear();
-        }
-        // a shared runner the job's overlay may not reach is no candidate; the job says why if nothing else takes it
-        let mut held_off = None;
-        for (name, r) in &st.runners {
-            if r.r.trust == RunnerTrust::Shared
-                && let Some(why) = &q.shared_why
-            {
-                held_off.get_or_insert_with(|| why.clone());
-                continue;
-            }
+        let mut cands = vec![];
+        if job.spec.keys.is_empty() {
             cands.push(Candidate {
-                name: name.clone(),
-                local: false,
-                trust: r.r.trust,
+                name: LOCAL.into(),
+                local: true,
+                trust: RunnerTrust::Mine,
                 keys_allowed: vec![],
                 features: job.spec.features.clone(),
-                state: r.state.clone(),
-                accept: r.r.accept,
+                state: RunnerState::Ready,
+                accept: Accept::All,
                 link_bps: None,
                 missing_bytes: 0,
                 start_s: 0.0,
@@ -1692,6 +1824,71 @@ impl Queue {
                 cloud: None,
             });
         }
+        let need = need_of(job);
+        let (mut held_off, mut no_room) = (None, None);
+        for (name, r) in &st.runners {
+            if r.r.trust == RunnerTrust::Shared
+                && let Some(why) = &q.shared_why
+            {
+                held_off.get_or_insert_with(|| why.clone());
+                continue;
+            }
+            if fit
+                && let Some(rd) = &r.ready
+                && !fits(&need, &rd.budget)
+            {
+                no_room.get_or_insert(WaitReason::NoRoom {
+                    need_mib: need.mem_mib,
+                    free_mib: rd.budget.mem_mib,
+                });
+                continue;
+            }
+            let missing_bytes = match &q.s.inputs {
+                Some(f) if !r.synced.contains(&f.input_key) => overlay_bytes(f),
+                _ => 0,
+            };
+            cands.push(Candidate {
+                name: name.clone(),
+                local: false,
+                trust: r.r.trust,
+                keys_allowed: vec![],
+                features: job.spec.features.clone(),
+                state: r.state.clone(),
+                accept: r.r.accept,
+                link_bps: None,
+                missing_bytes,
+                start_s: 0.0,
+                wait_s: 0.0,
+                speed: 1.0,
+                history: history.clone(),
+                cloud: None,
+            });
+        }
+        (cands, held_off, no_room)
+    }
+
+    /// How a start of the job whose slot is SLOT, in IMAGE, would be on C: warm when C's last `ready` lists both.
+    /// Unknown on this machine, and on a runner that sent no `ready`.
+    fn warmth(st: &St, slot: &str, image: Option<&str>, c: &Candidate) -> Option<Warmth> {
+        if c.local {
+            return None;
+        }
+        let rd = st.runners.get(&c.name)?.ready.as_ref()?;
+        Some(Warmth {
+            slot_near: rd.slots.iter().any(|s| s == slot),
+            images_present: image.is_some_and(|i| rd.images.iter().any(|x| x == i)),
+        })
+    }
+
+    /// Places JOB: here (admitted: started), on a runner (offered), or not yet (why). The head's reservation holds a
+    /// machine against a job that wouldn't end before the head's start there; that job may still go elsewhere.
+    fn place(&self, st: &mut St, job: &Job, eff: Priority, now: u64, starts: &mut Vec<String>) {
+        let id = job.id.0.clone();
+        let Some(q) = st.jobs.get(&id) else {
+            return;
+        };
+        let keyed = !job.spec.keys.is_empty();
+        let (mut cands, held_off, no_room) = Self::candidates(st, job, q, true);
         let ctx = PlaceCtx {
             eff,
             send: q.s.place.send.forseti(),
@@ -1701,42 +1898,81 @@ impl Queue {
             now,
             commits_not_on_origin: q.s.inputs.as_ref().map_or(0, Frozen::commits_not_on_origin),
         };
-        // the pick (with what placement learned; no history: the static rule), then this machine's own admission:
-        // refused here, the job may still go to a runner
-        let mut here: Option<WaitReason> = None;
+        // the pick (with what placement learned and how warm each start would be; no history: the static rule), the
+        // head's reservation, then this machine's own admission: held or refused on one machine, the job may still go
+        // to another
+        let slot = sleipnir::sync::slot::SlotKey::of(&job.spec).id();
+        let image = q.s.place.image.clone();
+        let warmth = |c: &Candidate| Self::warmth(st, &slot, image.as_deref(), c);
+        let expect =
+            |c: &Candidate| forseti::finish_with(job, c, now, &st.learned, warmth(c)).expected_s;
+        let held = |c: &Candidate| {
+            let r = st.reservation.as_ref();
+            forseti::head_protection(&job.id, eff, &c.name, expect(c), r, now).err()
+        };
+        let (mut here, mut kept): (Option<WaitReason>, Option<WaitReason>) = (None, None);
         let placed = loop {
-            match forseti::pick_with(job, &cands, &ctx, &st.learned, &|_| None) {
+            match forseti::pick_with(job, &cands, &ctx, &st.learned, &warmth) {
                 Pick::Local => {
+                    let c = cands.iter().find(|c| c.local).expect("this machine");
+                    if let Some(why) = held(c) {
+                        kept.get_or_insert(why);
+                        cands.retain(|c| !c.local);
+                        continue;
+                    }
+                    let e = expect(c);
                     let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
                     match self
                         .local
                         .admit(job, eff, &running, st.last_local_start, now)
                     {
-                        Ok(g) => break Placed::Here(g),
+                        Ok(g) => break Placed::Here(g, e),
                         Err(r) => {
                             here.get_or_insert(r);
                             cands.retain(|c| !c.local);
                         }
                     }
                 }
-                Pick::Runner(n) => break Placed::There(n),
-                Pick::Wait(r) => break Placed::Wait(here.take().unwrap_or(r)),
+                Pick::Runner(n) => {
+                    let c = cands
+                        .iter()
+                        .find(|c| !c.local && c.name == n)
+                        .expect("the runner");
+                    if let Some(why) = held(c) {
+                        kept.get_or_insert(why);
+                        cands.retain(|c| c.local || c.name != n);
+                        continue;
+                    }
+                    let warm = warmth(c).is_some_and(Warmth::warm);
+                    break Placed::There(n, expect(c), warm);
+                }
+                Pick::Wait(r) => {
+                    let why = kept.take().or(here.take()).or(no_room.clone());
+                    break Placed::Wait(why.unwrap_or(r));
+                }
             }
         };
+        // the head is placed: nothing is held for it any more
+        if !matches!(placed, Placed::Wait(_))
+            && st.reservation.as_ref().is_some_and(|r| r.job == job.id)
+        {
+            st.reservation = None;
+        }
         let q = st.jobs.get_mut(&id).expect("the job");
         match placed {
-            Placed::Here(g) => {
+            Placed::Here(g, e) => {
                 q.state = QState::Local;
                 q.machine = Some(LOCAL.into());
                 q.waiting = None;
                 let j = q.clone();
-                st.local_running
-                    .insert(id.clone(), running(&id, eff, now, g.reserve_mib, g.cores));
+                let mut rj = running(&id, eff, now, g.reserve_mib, g.cores);
+                rj.expected.minutes = e / 60.0;
+                st.local_running.insert(id.clone(), rj);
                 st.last_local_start = Some(now);
                 self.put_job(&j, eff);
                 starts.push(id);
             }
-            Placed::There(name) => self.offer(st, job, eff, &name, now),
+            Placed::There(name, e, warm) => self.offer(st, job, eff, &name, (e, warm), now),
             Placed::Wait(r) => {
                 let why = forseti::place::why_here(job, &cands, &ctx).or(held_off);
                 if keyed {
@@ -1762,12 +1998,40 @@ impl Queue {
         }
     }
 
-    /// Offers JOB to runner NAME: a new attempt with a nonce.
-    fn offer(&self, st: &mut St, job: &Job, eff: Priority, name: &str, now: u64) {
+    /// Offers JOB to runner NAME, where it is expected to take EXPECTED_S (from a WARM start or not): a new attempt
+    /// with a nonce. Until the runner's next `ready`, its budget counts the job's need as taken.
+    fn offer(
+        &self,
+        st: &mut St,
+        job: &Job,
+        eff: Priority,
+        name: &str,
+        (expected_s, warm): (f64, bool),
+        now: u64,
+    ) {
         let id = job.id.0.clone();
-        let Some(grace_s) = st.runners.get(name).map(|r| r.r.grace_s) else {
+        let Some(rr) = st.runners.get_mut(name) else {
             return;
         };
+        let grace_s = rr.grace();
+        let need = need_of(job);
+        if let Some(rd) = rr.ready.as_mut() {
+            rd.budget.mem_mib -= need.mem_mib as i64;
+            rd.budget.cpu -= need.cpu;
+        }
+        st.on.insert(
+            id.clone(),
+            OnMachine {
+                machine: name.into(),
+                since: now,
+                expected_s,
+                reserve_mib: job.spec.mem_mib.min,
+                cores: job.spec.cores.min,
+                priority: eff,
+                restartable: job.spec.restartable,
+                warm,
+            },
+        );
         let q = st.jobs.get_mut(&id).expect("the job");
         q.attempt += 1;
         let r = JobRef {
@@ -1982,9 +2246,11 @@ impl Queue {
                     tracing::warn!("runners: {runner} is benched: its link was lost twice today");
                 }
             }
-            r.state = match r.strikes.benched() {
-                Some(why) => RunnerState::Benched(why.to_string()),
-                None => RunnerState::Unreachable { since: now },
+            r.state = match (r.strikes.benched(), &r.state) {
+                (Some(why), _) => RunnerState::Benched(why.to_string()),
+                // a login the user must do stays the reason until the runner's next hello
+                (None, RunnerState::NeedsLogin(cmd)) => RunnerState::NeedsLogin(cmd.clone()),
+                (None, _) => RunnerState::Unreachable { since: now },
             };
         }
         let effects = st.attempts.step(
@@ -2009,13 +2275,20 @@ impl Queue {
 
     fn frame(&self, st: &mut St, runner: &str, f: Frame, now: u64, out: &mut Vec<Outcome>) {
         let ev = match f {
-            Frame::HelloOk { attempts, .. } => {
+            Frame::HelloOk {
+                attempts, linger, ..
+            } => {
                 if let Some(r) = st.runners.get_mut(runner) {
                     // a benched runner stays out of rotation until a check passes or the user unbenches it
                     r.state = match r.strikes.benched() {
                         Some(why) => RunnerState::Benched(why.to_string()),
                         None => RunnerState::Ready,
                     };
+                    // linger is read again at every hello: without it the jobs there end with the login, so their
+                    // attempts have no grace, from now on and for those placed before
+                    r.linger = linger;
+                    let grace = r.grace();
+                    st.attempts.set_grace(runner, grace);
                 }
                 AEvent::Hello {
                     runner: runner.into(),
@@ -2024,6 +2297,11 @@ impl Queue {
             }
             Frame::Admit { r, grant } => {
                 if st.attempts.frame_ok(runner, &r) == Some(false) {
+                    // backfill counts what the runner granted it
+                    if let Some(o) = st.on.get_mut(&r.job) {
+                        o.reserve_mib = grant.reserve_mib;
+                        o.cores = grant.cores;
+                    }
                     // a job with frozen inputs syncs them first; its start follows the last `sync-need`
                     let frozen = st.jobs.get(&r.job).and_then(|j| j.s.inputs.clone());
                     match frozen {
@@ -2103,14 +2381,46 @@ impl Queue {
                     .jobs
                     .get(&r.job)
                     .is_some_and(|j| !j.s.place.keys.is_empty());
-                if keyed && st.attempts.frame_ok(runner, &r) == Some(false) {
+                let current = st.attempts.frame_ok(runner, &r) == Some(false);
+                if keyed && current {
                     st.keyed.entry((r.job.clone(), r.attempt)).or_default();
                     self.send_keys(st, &r.job, r.attempt, now);
                 }
-                AEvent::Started {
-                    runner: runner.into(),
-                    r,
+                // its expected end counts from its start
+                if current && let Some(o) = st.on.get_mut(&r.job) {
+                    o.since = now;
                 }
+                let job = r.job.clone();
+                let effects = st.attempts.step(
+                    now,
+                    AEvent::Started {
+                        runner: runner.into(),
+                        r,
+                    },
+                );
+                self.apply(st, effects, now, out);
+                // the attempt runs: `runtime.db` says so, so a restart reads `running`, never `offered`
+                self.put_attempts(st, &job);
+                return;
+            }
+            Frame::Ready {
+                free_mib,
+                free_cpu,
+                slots,
+                images,
+                ..
+            } => {
+                if let Some(r) = st.runners.get_mut(runner) {
+                    r.ready = Some(ReadyNow {
+                        budget: forseti::Budget {
+                            mem_mib: free_mib,
+                            cpu: free_cpu,
+                        },
+                        slots,
+                        images,
+                    });
+                }
+                return;
             }
             Frame::KeyUse { r, name, at } => {
                 // the runner's word: recorded as runner-reported, for an attempt the hub placed there only
@@ -2260,14 +2570,8 @@ impl Queue {
         });
     }
 
-    /// Starts admitted attempt R on RUNNER, in the job's image (a health check's canary in the runner's own). A keyed
-    /// job's log is redacted from its first byte.
+    /// Starts admitted attempt R on RUNNER ([`Queue::start_frame`]). A keyed job's log is redacted from its first byte.
     fn start(&self, st: &St, runner: &str, r: &JobRef) {
-        let image = if is_canary(&r.job) {
-            st.runners.get(runner).and_then(|rr| rr.r.image.clone())
-        } else {
-            st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
-        };
         let keyed = st
             .jobs
             .get(&r.job)
@@ -2275,22 +2579,38 @@ impl Queue {
         if keyed {
             self.new_redactor(st, r, false);
         }
+        if let Some(rr) = st.runners.get(runner) {
+            rr.session.send(Self::start_frame(st, runner, r));
+        }
+    }
+
+    /// The `start` of attempt R on RUNNER: the job's image (a health check's canary's: the runner's own), the hosts its
+    /// network grant reaches (its proxy there allows those), and the row parser of its suite.
+    fn start_frame(st: &St, runner: &str, r: &JobRef) -> Frame {
+        let image = if is_canary(&r.job) {
+            st.runners.get(runner).and_then(|rr| rr.r.image.clone())
+        } else {
+            st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
+        };
         // a test job's rows come back as `row` frames when its suite names their parser
         let parser = st
             .jobs
             .get(&r.job)
             .and_then(|j| j.s.place.suite.as_ref())
             .map_or_else(|| "exit".to_string(), |s| s.parser.clone());
-        if let Some(rr) = st.runners.get(runner) {
-            rr.session.send(Frame::Start {
-                r: r.clone(),
-                image,
-                env: vec![],
-                net_hosts: vec![],
-                // no network reaches a runner job yet (`net_hosts`), so no names to pin either
-                pins: vec![],
-                parser,
-            });
+        let net_hosts = st
+            .jobs
+            .get(&r.job)
+            .map(|j| j.s.place.net_hosts.clone())
+            .unwrap_or_default();
+        Frame::Start {
+            r: r.clone(),
+            image,
+            env: vec![],
+            net_hosts,
+            // a runner's proxy connects only to public addresses and pins no name
+            pins: vec![],
+            parser,
         }
     }
 
@@ -2361,8 +2681,17 @@ impl Queue {
         let key = (r.job.clone(), r.attempt);
         let s = st.syncs.entry(key.clone()).or_default();
         s.rounds += 1;
-        // a bundle sent before has been taken in, or failed: its file goes, and a new one is made if still needed
-        s.bundle = None;
+        // a bundle sent before has been taken in, or failed: its file goes, and a new one is made if still needed. One
+        // taken in (the runner no longer lacks the commit) times the link: its bytes over the time to this answer
+        let taken = s
+            .bundle
+            .take()
+            .filter(|_| !commit)
+            .map(|b| (b.size, now.saturating_sub(s.sent_at)));
+        if let Some((bytes, secs)) = taken {
+            st.learned.observe_transfer(runner, bytes, secs as f64);
+        }
+        let s = st.syncs.entry(key.clone()).or_default();
         if s.rounds > SYNC_ROUNDS {
             let why = format!("the runner still lacks the inputs after {SYNC_ROUNDS} rounds");
             return Self::give_up(st, runner, r, &why);
@@ -2425,6 +2754,7 @@ impl Queue {
                 Ok(b) => {
                     if let Some(s) = st.syncs.get_mut(&key) {
                         s.bundle = b;
+                        s.sent_at = now;
                     }
                 }
                 Err(why) => Self::give_up(st, runner, r, &why),
@@ -2463,17 +2793,29 @@ impl Queue {
             return Self::sync_have(st, runner, r, &f);
         }
         st.syncs.remove(&key);
+        // the runner holds these inputs now: a later job of them sends it nothing
+        if let Some(rr) = st.runners.get_mut(runner)
+            && !rr.synced.contains(&f.input_key)
+        {
+            rr.synced.push(f.input_key.clone());
+            if rr.synced.len() > SYNCED_KEPT {
+                rr.synced.remove(0);
+            }
+        }
         self.start(st, runner, r);
     }
 
     /// Carries out the attempt state machine's EFFECTS.
     fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
         for e in effects {
-            // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes)
+            let mut was_on = None;
+            // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes), and holds nothing
+            // on its runner as backfill counts it
             if let Effect::Verdict { job, .. }
             | Effect::Requeue { job, .. }
             | Effect::Lost { job } = &e
             {
+                was_on = st.on.remove(job);
                 st.syncs.retain(|(j, _), _| j != job);
                 // and is sent no more keys; what its redactor held back goes with it (it could begin a key)
                 st.keyed.retain(|(j, _), _| j != job);
@@ -2505,11 +2847,18 @@ impl Queue {
                     if let Some(j) = st.jobs.get(&job) {
                         let (spec, suite) = (j.s.spec.clone(), j.s.place.suite.clone());
                         let rows = st.rows.remove(&job).unwrap_or_default();
-                        // a run of only some rows says nothing of the whole job's time
+                        // a run of only some rows says nothing of the whole job's time; a warm start's says so
                         if let Some(r) = &runner
                             && !rows.before(attempt)
                         {
-                            self.record_run(st, &spec, r, &result, now);
+                            let mut ran = result.clone();
+                            if let Some(o) = ran.as_object_mut() {
+                                o.insert(
+                                    "warm".into(),
+                                    was_on.as_ref().is_some_and(|w| w.warm).into(),
+                                );
+                            }
+                            self.record_run(st, &spec, r, &ran, now);
                         }
                         result = merged(&result, &rows, &spec, suite.as_ref());
                     }
@@ -2659,11 +3008,84 @@ impl Drop for Slot {
     }
 }
 
-/// Where a placement put a job.
+/// Where a placement put a job: here with its grant, or on a runner, each with the time it is expected to take there
+/// (and on a runner whether the start is warm); or not yet, and why.
 enum Placed {
-    Here(forseti::Grant),
-    There(String),
+    Here(forseti::Grant, f64),
+    There(String, f64, bool),
     Wait(WaitReason),
+}
+
+/// What a job needs to start, as admission checks it (its minimum memory; its minimum cores, the hub knowing no CPU
+/// history).
+fn need_of(job: &Job) -> forseti::Need {
+    let unknown = Expected {
+        minutes: forseti::history::DEFAULT_MINUTES,
+        cpu: f64::from(job.spec.cores.min),
+        mem_p95_mib: None,
+    };
+    forseti::Need::of(job, &unknown)
+}
+
+/// Whether NEED fits budget B.
+fn fits(need: &forseti::Need, b: &forseti::Budget) -> bool {
+    b.mem_mib >= need.mem_mib as i64 && b.cpu >= need.cpu
+}
+
+/// The bytes of F's overlay and extras: what a runner that never synced these inputs lacks at least.
+fn overlay_bytes(f: &Frozen) -> u64 {
+    f.manifest
+        .iter()
+        .chain(&f.extras)
+        .map(|e| match e {
+            ManifestEntry::File { size, .. } => *size,
+            ManifestEntry::Deleted { .. } => 0,
+        })
+        .sum()
+}
+
+/// Runner NAME as backfill reads it at NOW: what the hub runs there; its budget comes from its `ready`.
+fn runner_state(name: &str, now: u64, running: Vec<RunningJob>) -> forseti::MachineState {
+    forseti::MachineState {
+        name: name.into(),
+        profile: forseti::Profile::Dedicated,
+        now,
+        boot_id: String::new(),
+        mem_total_mib: 0,
+        mem_available_mib: 0,
+        psi: forseti::Psi::default(),
+        disk_free_gb: 0,
+        disk_total_gb: 0,
+        on_ac: true,
+        last_start: None,
+        running,
+        features: vec![],
+        reachable: true,
+        others: vec![],
+    }
+}
+
+impl OnMachine {
+    /// The job ID as a running job of its machine: it holds what it was granted, all in use (the hub can't see its
+    /// memory), and gives it back at its expected end.
+    fn running(&self, id: &str) -> RunningJob {
+        RunningJob {
+            id: JobId(id.into()),
+            priority: self.priority,
+            started: self.since,
+            reserve_mib: self.reserve_mib,
+            current_mib: self.reserve_mib,
+            cores: self.cores,
+            expected: Expected {
+                minutes: self.expected_s / 60.0,
+                cpu: f64::from(self.cores),
+                mem_p95_mib: None,
+            },
+            restartable: self.restartable,
+            evicted_once: false,
+            long_build: false,
+        }
+    }
 }
 
 /// The jobs EFFECTS are about.
@@ -2973,6 +3395,475 @@ mod tests {
         let st = again.lock();
         assert_eq!(st.learned, live);
         assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+    }
+
+    use super::super::transport::{Channel, Channels, LinkError, Login, Transport};
+
+    fn idle() -> Channels {
+        let c = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
+        Channels {
+            control: c(),
+            bulk_in: c(),
+            bulk_out: c(),
+        }
+    }
+
+    const IMG: &str = "img@sha256:aa";
+
+    /// A queue in memory (or on DB), whose one local slot a job holds when BUSY.
+    fn test_queue(
+        dir: &std::path::Path,
+        db: Option<urdr::Handle>,
+        busy: bool,
+    ) -> (Arc<Queue>, mpsc::UnboundedReceiver<LinkEvent>) {
+        let (q, rx) = Queue::new(QueueCfg {
+            hub_id: "h".into(),
+            exec_root: dir.to_path_buf(),
+            local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir),
+            db,
+        });
+        if busy {
+            q.adopt("xbusy", Priority::P1, 100);
+        }
+        (q, rx)
+    }
+
+    fn remote(name: &str, grace_s: u64) -> RemoteRunner {
+        RemoteRunner {
+            name: name.into(),
+            trust: RunnerTrust::Mine,
+            accept: Accept::All,
+            grace_s,
+            image: Some(IMG.into()),
+        }
+    }
+
+    /// Runner NAME on a link that is fed by hand (what it is sent goes nowhere).
+    fn add(q: &Arc<Queue>, name: &str, grace_s: u64) {
+        q.add_runner(
+            remote(name, grace_s),
+            Session::start(name, idle(), q.route(), q.link_events()),
+        );
+    }
+
+    fn frame(q: &Queue, runner: &str, f: Frame, now: u64) -> Vec<Outcome> {
+        q.on_link(
+            LinkEvent::Frame {
+                runner: runner.into(),
+                frame: f,
+            },
+            now,
+        )
+    }
+
+    fn hello(q: &Queue, runner: &str, linger: bool, now: u64) {
+        let f = Frame::HelloOk {
+            version: PROTO_VERSION,
+            bundle: String::new(),
+            hub_id: "h".into(),
+            runner_id: String::new(),
+            boot_id: String::new(),
+            linger,
+            attempts: vec![],
+            missing: vec![],
+        };
+        frame(q, runner, f, now);
+    }
+
+    fn ready(q: &Queue, runner: &str, free_mib: i64, slots: &[String], images: &[&str], now: u64) {
+        let f = Frame::Ready {
+            free_mib,
+            free_cpu: 8.0,
+            psi: Default::default(),
+            running: vec![],
+            slots: slots.to_vec(),
+            images: images.iter().map(|i| i.to_string()).collect(),
+        };
+        frame(q, runner, f, now);
+    }
+
+    /// Job ID (its command `make ID`, so each job has its own history key) of priority OWN needing MEM_MIN MiB; any
+    /// job may leave this machine.
+    fn job(id: &str, own: Priority, mem_min: u64) -> Submit {
+        let mut spec = blank_spec(id);
+        spec.command = vec!["make".into(), id.into()];
+        spec.mem_mib = Range {
+            min: mem_min,
+            max: mem_min.max(4096),
+        };
+        Submit {
+            id: id.into(),
+            session: Some("s1".into()),
+            own,
+            spec,
+            place: Placement {
+                send: SendMode::All,
+                image: Some(IMG.into()),
+                ..Placement::default()
+            },
+            pending: Value::Null,
+            inputs: None,
+        }
+    }
+
+    fn current(q: &Queue, id: &str) -> JobRef {
+        let st = q.lock();
+        let (attempt, a) = st.attempts.current(id).expect("an attempt");
+        JobRef {
+            job: id.into(),
+            attempt,
+            nonce: a.nonce,
+        }
+    }
+
+    fn admitted(q: &Queue, runner: &str, r: &JobRef, reserve_mib: u64, now: u64) {
+        let grant = forseti::Grant {
+            cores: 1,
+            mem_cap_mib: reserve_mib,
+            reserve_mib,
+        };
+        frame(
+            q,
+            runner,
+            Frame::Admit {
+                r: r.clone(),
+                grant,
+            },
+            now,
+        );
+    }
+
+    fn started(q: &Queue, runner: &str, r: &JobRef, now: u64) {
+        let f = Frame::Started {
+            r: r.clone(),
+            unit: "u".into(),
+            at: now,
+        };
+        frame(q, runner, f, now);
+    }
+
+    fn lost(q: &Queue, runner: &str, now: u64) -> Vec<Outcome> {
+        q.on_link(
+            LinkEvent::Lost {
+                runner: runner.into(),
+                why: "test".into(),
+            },
+            now,
+        )
+    }
+
+    // [D] pure (a link fed by hand, runtime.db in a folder): once its runner says `started`, the attempt is kept
+    // `running` in runtime.db, not `offered`
+    #[tokio::test]
+    async fn a_started_attempt_is_kept_running_in_runtime_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+        let (q, _rx) = test_queue(dir.path(), Some(db.clone()), true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        let r = current(&q, "x1");
+        admitted(&q, "r1", &r, 64, 101);
+        started(&q, "r1", &r, 102);
+        q.flush().await;
+        let state: String = db
+            .read(|c| {
+                Ok(c.query_row(
+                    "select state from rq_attempt where job = 'x1' and attempt = 1",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(state, "running");
+    }
+
+    // [D] pure (a link fed by hand): a `hello` without linger says the runner's jobs end with its link, so a lost link
+    // requeues its attempt at once; a later `hello` with linger gives the registry's grace back, and the next lost
+    // link only detaches the attempt
+    #[tokio::test]
+    async fn a_hello_without_linger_ends_its_attempts_with_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", false, 100);
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        let r = current(&q, "x1");
+        started(&q, "r1", &r, 101);
+        lost(&q, "r1", 110);
+        let row = q.row("x1").unwrap();
+        assert_eq!(row.machine, None, "{row:?}");
+        assert_eq!(
+            row.waiting.as_deref(),
+            Some("requeued (infra: runner lost)")
+        );
+        assert!(q.set_session(
+            "r1",
+            Session::start("r1", idle(), q.route(), q.link_events())
+        ));
+        hello(&q, "r1", true, 120);
+        q.tick(120);
+        let r = current(&q, "x1");
+        assert_eq!(r.attempt, 2);
+        started(&q, "r1", &r, 121);
+        lost(&q, "r1", 130);
+        let row = q.row("x1").unwrap();
+        assert_eq!(
+            (row.machine.as_deref(), row.attempt),
+            (Some("r1"), Some(2)),
+            "{row:?}"
+        );
+        let st = q.lock();
+        let a = st.attempts.attempt("x1", 2).unwrap();
+        assert!(
+            matches!(a.state, attempts::AttemptState::Detached { .. }),
+            "{a:?}"
+        );
+    }
+
+    // [D] pure: a runner's job gets the hosts its network grant reaches in its `start`, for its proxy there
+    #[tokio::test]
+    async fn a_runner_job_gets_its_grants_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        let mut s = job("x1", Priority::P3, 64);
+        s.place.net_hosts = vec!["crates.io:443".into()];
+        q.submit(s, 100);
+        q.tick(100);
+        let r = current(&q, "x1");
+        let st = q.lock();
+        let Frame::Start { net_hosts, .. } = Queue::start_frame(&st, "r1", &r) else {
+            panic!("not a start");
+        };
+        assert_eq!(net_hosts, vec!["crates.io:443".to_string()]);
+    }
+
+    /// A transport whose every dial fails with its error.
+    struct Refusing(LinkError);
+
+    impl Transport for Refusing {
+        fn open<'a>(
+            &'a self,
+            _: &'a super::super::RunnerCfg,
+        ) -> mimir::BoxFuture<'a, Result<Channels, LinkError>> {
+            Box::pin(async move { Err(self.0.clone()) })
+        }
+        fn round_trip<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> mimir::BoxFuture<'a, Result<Duration, LinkError>> {
+            Box::pin(async move { Err(LinkError::Lost) })
+        }
+        fn replace_master<'a>(&'a self, _: &'a str) -> mimir::BoxFuture<'a, Result<(), LinkError>> {
+            Box::pin(async move { Err(LinkError::Lost) })
+        }
+        fn stop<'a>(&'a self, _: &'a str) -> mimir::BoxFuture<'a, ()> {
+            Box::pin(async {})
+        }
+    }
+
+    // [D] pure (a transport that refuses): a dial refused for a changed host key, or for a login the user must do,
+    // puts the runner in `needs a login` with the command its card shows, and placement passes it by; a lost link on
+    // its own does not; the runner's next `hello` puts it back
+    #[tokio::test]
+    async fn a_changed_host_key_puts_the_runner_in_needs_login() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        let cfg = super::super::RunnerCfg {
+            name: "r1".into(),
+            host: "r1.example".into(),
+            linger: true,
+            cloud: None,
+            remote: super::super::Remote {
+                control: vec!["serve".into()],
+                bulk_in: vec!["cat".into()],
+                bulk_out: vec!["cat".into()],
+            },
+        };
+        for e in [
+            LinkError::HostKeyChanged,
+            LinkError::NeedsLogin(Login::Passphrase),
+        ] {
+            hello(&q, "r1", true, 100);
+            assert_eq!(
+                q.dial(&Refusing(e.clone()), &cfg, remote("r1", 600)).await,
+                Err(e.clone())
+            );
+            assert_eq!(
+                q.runner("r1").unwrap().state,
+                "needs a login: ssh r1.example true",
+                "{e}"
+            );
+        }
+        q.submit(job("x1", Priority::P3, 64), 100);
+        q.tick(100);
+        assert_eq!(q.row("x1").unwrap().machine, None);
+        hello(&q, "r1", true, 110);
+        assert_eq!(q.runner("r1").unwrap().state, "ready");
+        assert_eq!(
+            q.dial(&Refusing(LinkError::Lost), &cfg, remote("r1", 600))
+                .await,
+            Err(LinkError::Lost)
+        );
+        assert_eq!(q.runner("r1").unwrap().state, "ready");
+    }
+
+    // [D] pure (links fed by hand): the head (priority 1, 3,500 MiB) fits no machine now (r1 has 1,000 MiB free), so
+    // it reserves r1 from when r1's running job is expected to end (+300 s). A priority-4 job expected to take 10
+    // minutes would still run then, and waits for the head; one whose runs took 100 s ends first and backfills r1
+    #[tokio::test]
+    async fn the_head_reserves_a_runner_and_a_short_job_backfills_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        add(&q, "r1", 600);
+        hello(&q, "r1", true, 100);
+        ready(&q, "r1", 8000, &[], &[], 100);
+        q.submit(job("xa", Priority::P4, 3000), 100);
+        q.tick(100);
+        let a = current(&q, "xa");
+        admitted(&q, "r1", &a, 3000, 100);
+        started(&q, "r1", &a, 100);
+        ready(&q, "r1", 1000, &[], &[], 400);
+        let short = job("xs2", Priority::P4, 512);
+        {
+            let mut st = q.lock();
+            let ran = json!({"verdict": "Pass", "wall_s": 100.0});
+            q.record_run(&mut st, &short.spec, "r1", &ran, 50);
+        }
+        q.submit(job("xh", Priority::P1, 3500), 400);
+        q.submit(job("xs", Priority::P4, 512), 400);
+        q.submit(short, 400);
+        q.tick(400);
+        let row = |id: &str| q.row(id).unwrap();
+        assert_eq!(row("xh").machine, None, "{:?}", row("xh"));
+        assert_eq!(row("xs").machine, None, "{:?}", row("xs"));
+        assert_eq!(
+            row("xs").waiting.as_deref(),
+            Some("room is kept for job xh")
+        );
+        assert_eq!(row("xs2").machine.as_deref(), Some("r1"));
+    }
+
+    fn frozen(key: &str, size: u64) -> Frozen {
+        Frozen {
+            worktree: PathBuf::from("/src/p"),
+            repo: "p".into(),
+            commit: "c".repeat(40),
+            tree: "t".repeat(40),
+            manifest: vec![ManifestEntry::File {
+                path: b"big".to_vec(),
+                mode: 0o100644,
+                sha256: Sha256([7; 32]),
+                size,
+            }],
+            extras: vec![],
+            input_key: key.into(),
+            blobs: PathBuf::from("/nonexistent"),
+            origin_url: None,
+            not_on_origin: 0,
+            visibility: sync::Visibility::Private,
+            shared_overlay: false,
+        }
+    }
+
+    fn sync_done(q: &Queue, runner: &str, r: &JobRef, now: u64) {
+        let f = Frame::SyncNeed {
+            r: r.clone(),
+            blobs: vec![],
+            commit: false,
+            refs: vec![],
+        };
+        frame(q, runner, f, now);
+    }
+
+    // [D] pure (links fed by hand): a bundle's answer times the link (10 MiB in 10 s: 1 MiB/s to r1), and a job's
+    // inputs r1 lacks (600 MiB at that rate) count in r1's estimate, so the job goes to r2, which synced them before
+    #[tokio::test]
+    async fn a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        for r in ["r1", "r2"] {
+            add(&q, r, 600);
+            hello(&q, r, true, 100);
+            ready(&q, r, 8000, &[], &[], 100);
+        }
+        let mut j0 = job("x0", Priority::P3, 64);
+        j0.place.machine = Machine::Runner("r2".into());
+        j0.inputs = Some(frozen("K", 600 << 20));
+        q.submit(j0, 100);
+        q.tick(100);
+        let r0 = current(&q, "x0");
+        admitted(&q, "r2", &r0, 64, 100);
+        sync_done(&q, "r2", &r0, 101);
+        let mut j1 = job("x1", Priority::P3, 64);
+        j1.place.machine = Machine::Runner("r1".into());
+        j1.inputs = Some(frozen("K1", 0));
+        q.submit(j1, 102);
+        q.tick(102);
+        let r1 = current(&q, "x1");
+        admitted(&q, "r1", &r1, 64, 102);
+        {
+            let mut st = q.lock();
+            let s = st.syncs.get_mut(&("x1".to_string(), 1)).expect("x1 syncs");
+            s.bundle = Some(sync::BundleFile {
+                path: dir.path().join("x1.bundle"),
+                sha256: [0; 32],
+                size: 10 << 20,
+            });
+            s.sent_at = 110;
+        }
+        sync_done(&q, "r1", &r1, 120);
+        assert_eq!(
+            q.lock().learned.link("r1"),
+            Some((10u64 << 20) as f64 / 10.0)
+        );
+        let mut j2 = job("x2", Priority::P3, 64);
+        j2.inputs = Some(frozen("K", 600 << 20));
+        q.submit(j2, 130);
+        q.tick(130);
+        assert_eq!(q.row("x2").unwrap().machine.as_deref(), Some("r2"));
+    }
+
+    // [D] pure (links fed by hand): r2's `ready` lists the job's slot and image, r1's nothing; otherwise equal, the
+    // warm start wins (by name alone it would be r1)
+    #[tokio::test]
+    async fn a_runner_with_the_jobs_slot_and_image_wins_a_tie() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        let j = job("x1", Priority::P3, 64);
+        let slot = sleipnir::sync::slot::SlotKey::of(&j.spec).id();
+        for r in ["r1", "r2"] {
+            add(&q, r, 600);
+            hello(&q, r, true, 100);
+        }
+        ready(&q, "r1", 8000, &[], &[], 100);
+        ready(&q, "r2", 8000, &[slot], &[IMG], 100);
+        q.submit(j, 100);
+        q.tick(100);
+        assert_eq!(q.row("x1").unwrap().machine.as_deref(), Some("r2"));
+    }
+
+    // [D] pure: a job that ran here is history placement learns from, as this machine's run
+    #[tokio::test]
+    async fn a_run_here_is_this_machines_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, false);
+        let j = job("x1", Priority::P3, 64);
+        let key = forseti::history_key(&j.spec);
+        q.submit(j, 100);
+        assert_eq!(q.tick(100).starts, vec!["x1".to_string()]);
+        q.ran_here("x1", &json!({"verdict": "Pass", "wall_s": 42.0}), 150);
+        let st = q.lock();
+        let rows = st.history_of(&key);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!((rows[0].machine.as_str(), rows[0].wall_s), (LOCAL, 42.0));
     }
 
     // [D] pure: the design's table, row by row

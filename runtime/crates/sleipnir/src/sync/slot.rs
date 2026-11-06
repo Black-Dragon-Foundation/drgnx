@@ -78,6 +78,17 @@ pub enum CopyKind {
 }
 
 impl SlotKey {
+    /// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now. The runner names a
+    /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
+    pub fn of(spec: &forseti::JobSpec) -> SlotKey {
+        SlotKey {
+            project: spec.project.clone(),
+            worktree: spec.tree.display().to_string(),
+            trust: spec.trust,
+            toolchain: String::new(),
+        }
+    }
+
     /// The slot's directory name: 32 hex digits of sha256 over the four words (the trust as the design's word),
     /// each length-prefixed.
     pub fn id(&self) -> String {
@@ -102,6 +113,20 @@ pub(crate) fn trust_word(t: JobTrust) -> &'static str {
         JobTrust::Private => "private",
         JobTrust::PrivateKeys => "private+keys",
     }
+}
+
+/// The ids of the slots under the runner folder `root`, sorted (what `ready` lists as present).
+pub fn present(root: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = fs::read_dir(root.join("slots"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids
 }
 
 /// The slot's directories under the runner folder `root`.
@@ -875,5 +900,21 @@ mod tests {
         assert_eq!(a.slot.parent().unwrap(), root.join("slots"));
         assert_eq!(a.git_dir.parent().unwrap(), root.join("slots-git"));
         assert_eq!(a.target.parent().unwrap(), root.join("slots-target"));
+    }
+
+    // [D] pure (a folder): the slots present are the folders under `slots/`, by id; a stray file is none, and a root
+    // with no slots has none
+    #[test]
+    fn present_lists_the_slot_folders() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(present(d.path()).is_empty());
+        let (a, b) = (paths(d.path(), &key("w")), paths(d.path(), &key("w2")));
+        for p in [&b, &a] {
+            fs::create_dir_all(&p.slot).unwrap();
+        }
+        fs::write(d.path().join("slots/stray"), b"").unwrap();
+        let mut want = vec![key("w").id(), key("w2").id()];
+        want.sort();
+        assert_eq!(present(d.path()), want);
     }
 }

@@ -33,7 +33,8 @@ terminal". That covers:
 - a host whose key you haven't accepted yet: check it and accept it in that terminal.
 
 **A changed host key is never accepted.** The runner stops until you have found out why the key changed and fixed your
-`known_hosts` yourself.
+`known_hosts` yourself. Either way the runner list shows it as `needs a login: ssh desktop true`, and no job is placed
+there until it answers again.
 
 ## Adding and removing a machine
 
@@ -175,7 +176,9 @@ started is stopped and ends as "disk", not as a failure.
 ## Which jobs go where
 
 All jobs wait in one queue, this machine's and your runners' alike, and each goes to the allowed machine that finishes
-it first (ties stay here). A job you start has priority 1; an agent's has 3, or 5 when it marks it `background`; only
+it first (ties stay here; then a runner that already holds the job's checkout and image). The first job of the
+highest priority that fits nowhere yet keeps room on the machine where it can start soonest: other jobs still start
+there only if they end before it does, so a large job isn't passed by small ones forever. A job you start has priority 1; an agent's has 3, or 5 when it marks it `background`; only
 you can set or bump a priority. A job's row says where it runs and, while it waits, why. Each project chooses, in its
 settings:
 
@@ -264,7 +267,9 @@ checked it:
 ## When a machine fails
 
 A lost link is never a job's result: a job on a runner whose link drops is *detached*, and comes back when the runner
-answers again (a runner that lingers keeps its jobs for 10 minutes), or goes back to the queue. A test job whose suite
+answers again (a runner that lingers keeps its jobs for 10 minutes; drgnx asks again at every connection, so a job on
+a runner whose linger was turned off goes back to the queue as soon as its link drops), or goes back to the queue. A
+test job whose suite
 can select rows then runs only the rows that have no result yet, and its old attempt is stopped when its runner answers
 again; the result counts every row once, from its latest attempt, and its summary says where they ran: "rows 1–212 on
 desktop (attempt 1), 213–240 on laptop (attempt 2)". A **strike** is a
@@ -290,14 +295,17 @@ rootless podman, reached over real SSH by the hub's own transport and a real `sl
 mocked. On that fake fleet, the **link drills** run every row 5 times and break the link the ways the world does:
 
 - the hub's SSH master told to stop (`-O stop`) while a job runs;
-- the network cut for 3 minutes under a job that holds a key;
+- the network cut for 3 minutes under a job that holds a key and may reach one host (its proxy still refuses every
+  other);
+- linger turned off on the runner while a job runs there;
 - `serve` stopped for 5 minutes, as a suspended machine;
 - the hub restarted, with the editor connected and without it;
 - the runner's host key changed: refused, never accepted, until you accept it;
 - the disk falling below its floor, and the memory ladder stopping a job;
 - four jobs at once over one machine that allows 3 SSH sessions.
 
-Each must end with the job's own verdict, never a red, crash or `infra` verdict from the link; the job reattached
+Each must end with the job's own verdict (the linger drill: back in the queue at once, with no verdict), never a red,
+crash or `infra` verdict from the link; the job reattached
 by its nonce rather than run again; the hub's copy of its log equal to the runner's byte for byte; no more than 3
 sessions on one connection; and, for a job with keys, the key sent once and never written on the runner. The time a
 cut or a suspend lasts is moved on the queue's clock, so a drill takes the time its link needs to be called lost (45
