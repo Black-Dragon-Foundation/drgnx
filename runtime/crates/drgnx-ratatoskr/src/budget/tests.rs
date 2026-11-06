@@ -165,6 +165,23 @@ fn state_survives_a_save() {
     assert_eq!(left(&c, &w, Unit::Usd), Some(3.0));
 }
 
+/// Pure (D): joint dollar limits count both units summed, survive a save, and a plain `set` makes them apart again.
+#[test]
+fn joint_dollar_limits_bind_the_sum_and_survive_a_save() {
+    let b = Budgets::default();
+    let p = sc(json!({"plan": "plan:p"}));
+    b.set_joint(&p, vec![lim(10.0, Unit::Usd), lim(10.0, Unit::UsdEst)]);
+    b.spend(&p, Unit::Usd, 4.0);
+    b.spend(&p, Unit::UsdEst, 3.0);
+    assert_eq!(left(&b, &p, Unit::Usd), Some(3.0));
+    assert_eq!(left(&b, &p, Unit::Tokens), None);
+    let c = Budgets::default();
+    c.restore(serde_json::from_str(&serde_json::to_string(&b.saved()).unwrap()).unwrap());
+    assert_eq!(left(&c, &p, Unit::UsdEst), Some(3.0));
+    c.set(&p, vec![lim(10.0, Unit::Usd), lim(10.0, Unit::UsdEst)]);
+    assert_eq!(left(&c, &p, Unit::Usd), Some(6.0));
+}
+
 /// Pure (D): a session's agent that starts a new conversation under the same session (a manager's rotation, a fresh
 /// start after a restart) reports its cumulative cost from zero again; that is spent too.
 #[test]

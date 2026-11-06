@@ -261,10 +261,14 @@ pub(crate) fn set_budget(front: &Front, job: &Job, usd: f64, bind: bool) {
     let scope = BudgetScope::Plan(Bounded(plan));
     let b = &front.core.budgets;
     b.enroll(&scope);
-    let hits = b.set(
-        &scope,
-        super::budget_limits(usd, super::has_subscription_profile(front, job)),
-    );
+    // with a subscription the two limits bind the measured and the estimated dollars together: one cap
+    let subscription = super::has_subscription_profile(front, job);
+    let limits = super::budget_limits(usd, subscription);
+    let hits = if subscription {
+        b.set_joint(&scope, limits)
+    } else {
+        b.set(&scope, limits)
+    };
     if bind {
         b.bind_job(&job.id, &scope);
     }

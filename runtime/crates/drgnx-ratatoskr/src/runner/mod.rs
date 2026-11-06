@@ -195,27 +195,36 @@ pub(crate) fn estimate_of(f: Option<&Forecast>, tasks: usize) -> Value {
     })
 }
 
-/// A warning for each cost whose p90 is over BUDGET dollars.  The user decides; nothing is refused.
+/// A warning when the plan's p90 in dollars, `usd` and `usd-est` summed as the budget binds them, is over BUDGET.
+/// The user decides; nothing is refused.
 pub(crate) fn budget_warnings(f: &Forecast, budget: Option<f64>) -> Vec<String> {
     let Some(budget) = budget else {
         return Vec::new();
     };
-    f.cost
+    let dollars: Vec<_> = f
+        .cost
         .iter()
-        .filter(|c| c.p90 > budget)
-        .map(|c| {
-            format!(
-                "the plan's p90 cost, {} USD{}, is over the budget of {} USD",
-                money_text(c.p90),
-                if c.estimate { " (estimate)" } else { "" },
-                money_text(budget)
-            )
-        })
-        .collect()
+        .filter(|c| matches!(c.unit, Unit::Usd | Unit::UsdEst))
+        .collect();
+    let p90: f64 = dollars.iter().map(|c| c.p90).sum();
+    if dollars.is_empty() || p90 <= budget {
+        return Vec::new();
+    }
+    vec![format!(
+        "the plan's p90 cost, {} USD{}, is over the budget of {} USD",
+        money_text(p90),
+        if dollars.iter().any(|c| c.estimate) {
+            " (estimate)"
+        } else {
+            ""
+        },
+        money_text(budget)
+    )]
 }
 
 /// The limits a dollar budget of USD sets: `usd` (what the gateway measures), and for a plan with a subscription
-/// profile `usd-est` too, because a subscription's spend lands there and a `usd` limit would never fire.
+/// profile `usd-est` too, because a subscription's spend lands there and a `usd` limit would never fire; the two then
+/// bind together ([`crate::budget::Budgets::set_joint`]), so the plan's dollars are capped once.
 pub(crate) fn budget_limits(usd: f64, subscription: bool) -> Vec<Limit> {
     let mut limits = vec![Limit {
         amount: usd,

@@ -259,7 +259,10 @@ After the run, each step, task and plan shows what it really used (`timeline/get
 the step records, what `budget/get` booked, and, for a gateway task, the gateway's own spend.
 
 A dollar budget on a plan that has a subscription profile also sets a limit of the same amount in `usd-est`, because a
-subscription's spend lands there; without it the dollar limit would never fire. The budget view says both.
+subscription's spend lands there; without it the dollar limit would never fire. The two limits bind together: each
+counts the gateway's measured dollars and the subscription's estimated ones summed, so a plan with tasks on both is
+capped once at the budget (not at the budget in each unit), and the proposal's warning reads the two p90s summed. The
+budget view says both limits, and the card when the budget is reached says it is an estimate.
 
 **Only job-safe profiles run a job's agents.** A job's agent works unwatched in a repository you may not have
 written, and that repository's own settings (`.claude/settings.json`, a `.gemini/` folder, …) could let its agent act

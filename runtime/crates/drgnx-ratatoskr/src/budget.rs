@@ -5,7 +5,9 @@
 //!
 //! - **Units never mix.**  A limit in one unit is only ever reduced by spend in that unit (`usd` is what the gateway
 //!   measured, `usd-est` what an agent reported at API prices, `limit-share` a subscription window's share, `tokens`,
-//!   `count`); nothing is converted.  `usd-est` and `limit-share` are estimates and are labelled so.
+//!   `count`); nothing is converted.  `usd-est` and `limit-share` are estimates and are labelled so.  The one join:
+//!   a plan's dollar budget on a plan with a subscription profile ([`Budgets::set_joint`]) binds `usd` and `usd-est`
+//!   summed, one limit, reported as an estimate.
 //! - **Nesting.**  A spend counts against the spending scope and every ancestor (`link`: worker under manager, manager
 //!   or worker under plan, plan under project); what remains is the least over the chain.  A session is a scope from
 //!   its start; the plan runner (Task 16a) and the manager role (Task 25) link the upper levels.
@@ -198,6 +200,8 @@ struct St {
     /// The last cumulative reading per `(session, what)`: a spend is the rise since.
     seen: BTreeMap<(Key, String), f64>,
     meters: BTreeMap<String, Meter>,
+    /// The scopes whose `usd` and `usd-est` limits bind together ([`Budgets::set_joint`]).
+    joint: BTreeSet<Key>,
 }
 
 /// What `runtime.db` keeps.
@@ -209,6 +213,9 @@ struct Saved {
     /// The meters' thinned histories; a row saved before they were kept has none.
     #[serde(default)]
     meters: Vec<SavedMeter>,
+    /// The scopes whose dollar limits bind together; a row saved before has none.
+    #[serde(default)]
+    joint: Vec<BudgetScope>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -259,16 +266,32 @@ fn chain(st: &St, key: &str) -> Vec<Key> {
     out
 }
 
+fn is_dollars(unit: Unit) -> bool {
+    matches!(unit, Unit::Usd | Unit::UsdEst)
+}
+
+/// What KEY spent against a limit in UNIT: that unit's spend, or for a joint scope's dollar limit the measured and
+/// the estimated dollars together.
+fn spent_against(st: &St, key: &str, unit: Unit) -> f64 {
+    let spent = |u: Unit| {
+        st.spent
+            .get(key)
+            .and_then(|m| m.get(&u))
+            .copied()
+            .unwrap_or(0.0)
+    };
+    if is_dollars(unit) && st.joint.contains(key) {
+        spent(Unit::Usd) + spent(Unit::UsdEst)
+    } else {
+        spent(unit)
+    }
+}
+
 fn remaining_of(st: &St, key: &str) -> Vec<(Unit, f64)> {
     let mut least: BTreeMap<Unit, f64> = BTreeMap::new();
     for k in chain(st, key) {
         for l in st.limits.get(&k).into_iter().flatten() {
-            let spent = st
-                .spent
-                .get(&k)
-                .and_then(|m| m.get(&l.unit))
-                .copied()
-                .unwrap_or(0.0);
+            let spent = spent_against(st, &k, l.unit);
             let left = (l.amount - spent).max(0.0);
             least
                 .entry(l.unit)
@@ -279,26 +302,38 @@ fn remaining_of(st: &St, key: &str) -> Vec<(Unit, f64)> {
     least.into_iter().collect()
 }
 
-/// The limits KEY has that its spend has reached and that were not reported yet.
+/// The limits KEY has that its spend has reached and that were not reported yet.  A joint scope's two dollar limits
+/// are one: reported once, in `usd-est` (an estimate) when any of the spend was estimated.
 fn reached(st: &mut St, key: &str, only: Option<Unit>) -> Vec<Hit> {
+    let joint = st.joint.contains(key);
     let mut hits = Vec::new();
     for l in st.limits.get(key).cloned().into_iter().flatten() {
-        if only.is_some_and(|u| u != l.unit) {
+        if only.is_some_and(|u| u != l.unit && !(joint && is_dollars(u) && is_dollars(l.unit))) {
             continue;
         }
-        let spent = st
-            .spent
-            .get(key)
-            .and_then(|m| m.get(&l.unit))
-            .copied()
-            .unwrap_or(0.0);
+        let spent = spent_against(st, key, l.unit);
+        let unit = if joint && is_dollars(l.unit) {
+            let estimated = st
+                .spent
+                .get(key)
+                .and_then(|m| m.get(&Unit::UsdEst))
+                .is_some_and(|a| *a > 0.0);
+            if estimated { Unit::UsdEst } else { Unit::Usd }
+        } else {
+            l.unit
+        };
         if spent >= l.amount
             && let Some(scope) = st.scopes.get(key).cloned()
-            && st.hit.insert((key.to_string(), l.unit))
+            && !st.hit.contains(&(key.to_string(), l.unit))
         {
+            st.hit.insert((key.to_string(), l.unit));
+            if joint && is_dollars(l.unit) {
+                st.hit.insert((key.to_string(), Unit::Usd));
+                st.hit.insert((key.to_string(), Unit::UsdEst));
+            }
             hits.push(Hit {
                 scope,
-                unit: l.unit,
+                unit,
                 limit: l.amount,
                 spent,
             });
@@ -354,6 +389,11 @@ impl Budgets {
             st.scopes.insert(pk.clone(), p);
             st.parent.insert(ck, pk);
         }
+        for scope in s.joint {
+            let k = key(&scope);
+            st.scopes.insert(k.clone(), scope);
+            st.joint.insert(k);
+        }
         // the readings are replayed, so the 24 h window of the pace is rebuilt from the history
         for m in s.meters {
             let mut meter = Meter::default();
@@ -402,6 +442,7 @@ impl Budgets {
                     resets_at: m.resets_at,
                 })
                 .collect(),
+            joint: st.joint.iter().filter_map(scope).collect(),
         }
     }
 
@@ -418,9 +459,25 @@ impl Budgets {
 
     /// SCOPE's limits are LIMITS (empty clears); the limits already reached are reported again.
     pub fn set(&self, scope: &BudgetScope, limits: Vec<Limit>) -> Vec<Hit> {
+        self.set_limits(scope, limits, false)
+    }
+
+    /// [`Budgets::set`], with SCOPE's `usd` and `usd-est` limits binding together: each counts what the gateway
+    /// measured and what agents estimated, summed, so a plan whose tasks run on a subscription and on a gateway is
+    /// capped once, and what the gateway may still spend is what that sum leaves.  Reached, the two are one limit.
+    pub fn set_joint(&self, scope: &BudgetScope, limits: Vec<Limit>) -> Vec<Hit> {
+        self.set_limits(scope, limits, true)
+    }
+
+    fn set_limits(&self, scope: &BudgetScope, limits: Vec<Limit>, joint: bool) -> Vec<Hit> {
         let k = key(scope);
         let mut st = self.st();
         st.scopes.insert(k.clone(), scope.clone());
+        if joint {
+            st.joint.insert(k.clone());
+        } else {
+            st.joint.remove(&k);
+        }
         st.hit.retain(|(hk, _)| *hk != k);
         if limits.is_empty() {
             st.limits.remove(&k);
