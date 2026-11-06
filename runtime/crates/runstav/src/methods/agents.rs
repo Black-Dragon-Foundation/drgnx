@@ -162,6 +162,19 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)
+    /// until a write of that file applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<Waiting>,
+}
+
+/// The file (and the user's lines in it) a paired chat waits on.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Waiting {
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<[u64; 2]>,
 }
 
 /// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).

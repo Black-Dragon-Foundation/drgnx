@@ -1129,6 +1129,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
 | `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
@@ -1270,9 +1272,38 @@ result is (`event(NAME).check`):
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
+| `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
+| `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
+
+## Pair mode
+
+A chat in a project edits your checkout only through the hub's door (`src/pair/`; user guide:
+[pair-mode.md](../guide/pair-mode.md); per agent: [pair-routing.md](pair-routing.md)). The sandbox still binds the
+checkout read-only for it.
+
+- **Its tools.** Every chat in a project gets `read_file {path}`, `edit_file {path, old, new}` and `write_file {path,
+  content}` on its `mcp.sock` (`norn::tools::pair`, through `Hub::pair_read` / `Hub::pair_write`); a Claude chat also
+  starts with `disallowedTools` = `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`lock::LaunchPlan::with_project_chat`;
+  its `Read` stays). A chat's ACP `fs/read_text_file` and `fs/write_text_file` inside the project go to the same door,
+  on a task of their own so the session's reader loop never waits on an editor; every other session keeps the fence.
+- **The gates.** `pair::gate`: `chat.project-edit` decides (never: refused; ask: the Pair toggle is the user's;
+  allow: paired from the start), never the chat's `code.edit`; `chat.project-read` too; an absolute path inside the
+  checkout, links resolved, never `.git/`, the protected agent-config paths, a CI or build file or a credential file.
+  `pair::read_gate` (every hub-served read): `chat.project-read`, inside the checkout, never a credential file.
+- **A write** goes to the editor as `pair-apply` with a relative `ttl_ms` (2000) the editor counts from its arrival.
+  `edit_file` travels as it is (the editor needs one match at apply time); `write_file` of an existing file needs a
+  read the editor served to that session (`read_file`, `fs/read_text_file`), and is diffed into line hunks against it
+  at its version; a new file needs none. One file's writes go one at a time, in order (`pair::writes::FileQueue`).
+- **The verdict is the editor's** (`pair/answer {write, result: applied | refused | dropped, version?, reason?, lines?,
+  saved?, not_saved?}`), from the connection the write went to. At `ttl_ms` plus a second with no answer the hub sends
+  `pair-reconcile`, which the editor answers from what it applied; the hub's timer never refuses. An editor that goes
+  away leaves a write in flight unknown ("read it with read_file to see"), never refused.
+- **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
+  them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
 
 ## Per-session sockets
 

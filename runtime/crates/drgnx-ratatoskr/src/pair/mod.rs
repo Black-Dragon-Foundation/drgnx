@@ -9,6 +9,9 @@
 //! - [`read_gate`]: `chat.project-read`; a path inside the checkout and never a file the sandbox hides from the agent
 //!   (Gleipnir's hide list and the secrets table), so a hub-served read never hands over what the sandbox hides.
 
+pub mod door;
+pub mod writes;
+
 use norn::matrix::{Action, Effective, Verdict, decide};
 use std::path::{Path, PathBuf};
 

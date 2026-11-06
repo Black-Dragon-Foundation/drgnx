@@ -187,6 +187,11 @@ impl Editors {
         false
     }
 
+    /// The oldest editor connection, if any.
+    pub fn first(&self) -> Option<u64> {
+        lock(&self.subscribers).keys().next().copied()
+    }
+
     /// Whether an editor is connected.
     pub fn present(&self) -> bool {
         !lock(&self.subscribers).is_empty()

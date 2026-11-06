@@ -98,6 +98,8 @@
   "messages/retract": ["user"],
   "messages/send": ["user"],
   "pace/get": ["user"],
+  "pair/answer": ["user"],
+  "pair/read-answer": ["user"],
   "ping": ["user", "agent", "service"],
   "plans/get": ["user"],
   "plans/write": ["user"],

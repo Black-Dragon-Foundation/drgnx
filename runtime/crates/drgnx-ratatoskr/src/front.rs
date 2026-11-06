@@ -79,6 +79,8 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a paired chat's reads and writes of your checkout, through the editor ([`crate::pair`]).
+    pub pair: Arc<crate::pair::door::Door>,
     /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
     pub search: crate::search::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
@@ -151,6 +153,7 @@ impl Front {
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
+        let pair = crate::pair::door::Door::new(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -166,6 +169,7 @@ impl Front {
             gate,
             settings,
             editors,
+            pair,
             search: crate::search::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
@@ -288,6 +292,7 @@ impl Front {
     pub fn gone(&self, conn: u64) {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
+        self.pair.editor_gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
     }
@@ -606,6 +611,9 @@ impl Front {
                     .collect();
                 Ok(json!(self.editors.explained(p.req, rows)))
             }
+            // the pair door: the editor's answers to pair-apply, pair-reconcile and pair-read (crate::pair::door)
+            Params::PairAnswer(p) => Ok(json!(self.pair.answer(s.conn, p))),
+            Params::PairReadAnswer(p) => Ok(json!(self.pair.read_answer(s.conn, p))),
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)

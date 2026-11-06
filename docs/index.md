@@ -30,6 +30,7 @@ Using drgnx.
 - [Live view](guide/live.md): the view of an agent's browser, waiting for a later update; the host-launched browser for agents is gone.
 - [Remote editing](guide/remote.md): Open Remote… (ssh hosts, podman containers), the status-line segment, Reconnect, language servers on the host.
 - [Keyboard Shortcuts editor](guide/shortcuts.md): every command with its keys; record new ones, see conflicts, filter, undo.
+- [Pair mode](guide/pair-mode.md): a chat edits your own checkout live, through your editor — the `chat.project-edit` row, the drgnx edit tools, writes applied whole or refused whole, the files it never writes.
 - [Agent settings](guide/agent-settings.md): one page per agent (Claude Code, Codex, Gemini, Kimi Code) — routes and billing, MCP servers, hooks and skills; add, edit, remove, Test.
 - [The face](guide/face.md): no light menu bar or scroll bar, thin themed dividers, line numbers in code that never shift sideways, problems at the end of their line, a top line (project, branch, the three keys that open everything), a status bar built from segments you can reorder, drop or add to, a dark title bar that follows the theme, glyphs with an ASCII form, quick help in a card beside the symbol (a strip in terminals), a × and Esc/q that close every help pane, popup and side pane, a start page in an empty editor; every choice a setting.
 - [The look](guide/look.md): drgnx Dark, Light and High Contrast, generated from one table of colours; what a theme paints, the terminal tier, the faces a theme author sets.
