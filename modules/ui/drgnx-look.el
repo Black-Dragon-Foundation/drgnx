@@ -10,6 +10,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'face-remap)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-wb)
@@ -43,10 +44,11 @@ No colours: the shadow takes the `child-frame-shadow' face, the border what the 
   :type 'sexp :group 'drgnx-face)
 
 (defcustom drgnx-look-palette
-  '((corner-radius . 12) (shadow . (:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6))
-    (alpha-background . 0.82) (backdrop-blur . 10) (transition . pop))
-  "The floating command palette's child frame parameters under Glitnir, in logical pixels.
-The 0.82 is a placeholder the look session tunes.  No colours: the shadow takes the `child-frame-shadow' face."
+  '((corner-radius . 12) (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5))
+    (alpha-background . 0.90) (backdrop-blur . 12) (transition . pop))
+  "The floating command palette's child frame parameters under Glitnir, in logical pixels: radius 12, alpha 0.90,
+blur 12, shadow `0 16 48' at 50 % (the dark value; the light one is 22 %).  No colours: the shadow takes the
+`child-frame-shadow' face."
   :type 'sexp :group 'drgnx-face)
 
 (defvar child-frame-chrome)
@@ -188,6 +190,7 @@ loaded since.  Its teardown gives the previous ones back.")
   "Zen mode off; the themes the module loaded off, the ones enabled before its setup on again (a theme someone
 else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
+  (drgnx-look-echo-area-off)
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
   (drgnx-look-derive-off)
@@ -222,6 +225,42 @@ refuses (`drgnx-settings-refused') before the theme changes."
   "Pick the colour theme (remembered for the next start)."
   (interactive (list (intern (completing-read "Color theme: " (mapcar #'symbol-name (custom-available-themes)) nil t))))
   (drgnx-look-load-theme theme))
+
+;;;; The echo area on the gap
+
+(defconst drgnx-look--echo-buffers '(" *Echo Area 0*" " *Echo Area 1*" " *Minibuf-0*")
+  "The echo area's buffers: the two Emacs shows messages in, and the minibuffer window's own while no prompt is open.")
+
+(defvar-local drgnx-look--gap-cookie nil "The cookie of the remap that puts this buffer on the gap surface.")
+
+(defun drgnx-look--gap-on ()
+  "Draw `default' as the gap surface in the current buffer (once)."
+  (unless drgnx-look--gap-cookie
+    (setq drgnx-look--gap-cookie (face-remap-add-relative 'default 'drgnx-surface-gap))))
+
+(defun drgnx-look--gap-off ()
+  "Take the gap surface off the current buffer."
+  (when drgnx-look--gap-cookie
+    (face-remap-remove-relative drgnx-look--gap-cookie)
+    (setq drgnx-look--gap-cookie nil)
+    (when (member (assq 'default face-remapping-alist) '((default) (default default)))
+      (setq face-remapping-alist (assq-delete-all 'default face-remapping-alist)))))
+
+(defun drgnx-look--minibuffer-gap ()
+  "On `minibuffer-setup-hook': the minibuffer is on the gap surface, like the echo area."
+  (drgnx-look--gap-on))
+
+(defun drgnx-look-echo-area-on ()
+  "The echo area and every minibuffer on the gap surface."
+  (add-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (dolist (name drgnx-look--echo-buffers)
+    (when-let* ((b (get-buffer name))) (with-current-buffer b (drgnx-look--gap-on)))))
+
+(defun drgnx-look-echo-area-off ()
+  "Undo `drgnx-look-echo-area-on'."
+  (remove-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (dolist (b (buffer-list))
+    (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
 ;;;; Zoom
 
@@ -282,6 +321,7 @@ refuses (`drgnx-settings-refused') before the theme changes."
                        (drgnx-look-derive-on)
                        (drgnx-look-fonts-on)
                        (drgnx-look-density-on)
+                       (drgnx-look-echo-area-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
