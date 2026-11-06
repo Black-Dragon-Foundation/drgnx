@@ -10,8 +10,9 @@ restart.
 **How the dock looks.** The three sections are headed **Open** (the Buffers panel), **Files** (the Explorer) and
 **Outline**, in the heading face with a chevron, in sentence case. Their rows are drawn in the UI font at the density's
 row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
-indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a pixel position that
-is the same on every row: `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
+indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
+is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
+`⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
 failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer. The `⋯` (and the Buffers panel's `×`)
 is drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
 and so does every row on a terminal. The row at point is the selection: with the focus ring while the panel has the
@@ -438,8 +439,7 @@ While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and 
 1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
 ([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
 and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
-`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).
-The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
+`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
 number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
 frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.

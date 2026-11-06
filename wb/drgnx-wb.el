@@ -96,8 +96,8 @@ space before it keeps it off the frame's edge."
 
 (defvar drgnx-wb--mark-measures 0 "How many times the tail's geometry was measured (tests read it).")
 (defvar drgnx-wb--tail-memo (make-hash-table :test #'equal)
-  "(GENERATION CHAR-WIDTH CHAR-HEIGHT SCALE) → the tail's geometry (DOTS-PX MARK-PX GAP-PX PAD-PX).  Bounded: cleared
-beyond 16 entries (a zoom or a font change adds one).")
+  "(GENERATION CHAR-WIDTH CHAR-HEIGHT SCALE GRAPHIC) → the tail's geometry (DOTS-PX MARK-PX GAP-PX PAD-PX CELL-PX).
+Bounded: cleared beyond 16 entries (a zoom or a font change adds one).")
 
 (defun drgnx-wb-mark-memo-clear ()
   "Forget the measured geometry of the rows' right edge (tests, and a theme change)."
@@ -105,17 +105,22 @@ beyond 16 entries (a zoom or a font change adds one).")
   (setq drgnx-wb--mark-measures 0))
 
 (defun drgnx-wb--tail-geometry ()
-  "(DOTS MARK GAP PAD): the widths in pixels of the ⋯, of a git mark in the small code face, of the gap between them
-and of the padding at the edge.  Measured when the fonts, the character cell or the scale change, not per row."
-  (let ((key (list drgnx-pixels-generation (frame-char-width) (frame-char-height) (drgnx-pixels-scale))))
+  "(DOTS MARK GAP PAD CELL): the widths in pixels of the ⋯, of a git mark in the small code face, of the gap between
+them, of the padding at the edge and of the frame's column.  Measured when the fonts, the character cell or the scale
+change, not per row.  Painted from a terminal (no pixels finer than a cell): one column each for the ⋯ and the mark,
+no gap or padding."
+  (let* ((graphic (display-graphic-p))
+         (key (list drgnx-pixels-generation (frame-char-width) (frame-char-height) (drgnx-pixels-scale) graphic)))
     (or (gethash key drgnx-wb--tail-memo)
         (progn
           (cl-incf drgnx-wb--mark-measures)
           (when (> (hash-table-count drgnx-wb--tail-memo) 16) (clrhash drgnx-wb--tail-memo))
           (let ((scale (drgnx-pixels-scale)))
-            (puthash key (list (drgnx-look-pixel-width drgnx-wb--control 'drgnx-ui-text)
-                               (drgnx-look-pixel-width "M" 'drgnx-code-small)
-                               (round (* 4 scale)) (round (* 8 scale)))
+            (puthash key (if graphic
+                             (list (drgnx-look-pixel-width drgnx-wb--control 'drgnx-ui-text)
+                                   (drgnx-look-pixel-width "M" 'drgnx-code-small)
+                                   (round (* 4 scale)) (round (* 8 scale)) (frame-char-width))
+                           (list (string-width drgnx-wb--control) 1 0 0 1))
                      drgnx-wb--tail-memo))))))
 
 (defun drgnx-wb-git-mark-face (status)
@@ -128,14 +133,23 @@ and of the padding at the edge.  Measured when the fonts, the character cell or 
 
 (defun drgnx-wb-row-tail (mark face shown)
   "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the ⋯ control, SHOWN in
-its real face or hidden until the row is hovered.  Both are placed in pixels from the window's right edge, so
-the marks of all rows line up; the whole string carries the row's mouse face."
-  (pcase-let ((`(,dots ,mark-px ,gap ,pad) (drgnx-wb--tail-geometry)))
-    (propertize (concat (propertize " " 'display `(space :align-to (- right (,(+ pad dots gap mark-px)))))
+its real face or hidden until the row is hovered.  Both are placed from the window's right edge, so the marks of
+all rows line up; the whole string carries the row's mouse face.
+The places are in columns (the measured pixels over the cell), not pixels: the overlay is painted once into a
+buffer that graphical and terminal frames may both show, and each frame reads a column as its own cell, where a
+terminal would read a pixel as a column.  A terminal's last two columns stay free (the last shows the truncation
+`$'), so the tail ends 2 columns in at least, the ⋯ starts 3 in and the mark 4: the same on every frame, whichever
+painted it."
+  (pcase-let* ((`(,dots ,mark-px ,gap ,pad ,cell) (drgnx-wb--tail-geometry))
+               (cell (float cell))
+               (end (max 2.0 (/ pad cell)))
+               (at-dots (max 3.0 (+ end (/ dots cell))))
+               (at-mark (max 4.0 (+ at-dots (/ (+ gap mark-px) cell)))))
+    (propertize (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
                         (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
-                        (propertize " " 'display `(space :align-to (- right (,(+ pad dots)))))
+                        (propertize " " 'display `(space :align-to (- right ,at-dots)))
                         (drgnx-look-hover-control drgnx-wb--control shown)
-                        (propertize " " 'display `(space :width (,pad))))
+                        (propertize " " 'display `(space :align-to (- right ,end))))
                 'mouse-face 'drgnx-hover-row)))
 
 (defun drgnx-wb-row-tail-overlay (eol mark face shown)
