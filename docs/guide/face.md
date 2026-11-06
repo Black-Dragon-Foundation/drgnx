@@ -42,12 +42,14 @@ the dark bar, a light theme for the light one, so changing the theme in Preferen
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-face-title-bar` | `dark` | `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
+| `drgnx-face-title-bar` | `auto` | `auto`: `drgnx` where the desktop suits it, else `dark` (below). `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
 | `drgnx-face-gtk-theme` | `"Adwaita"` | The GTK theme whose dark (or light) variant the bar uses: GTK is started with `GTK_THEME=Adwaita:dark`. Give the name of a GTK theme you have installed, without a variant: drgnx adds `:dark` or `:light`. Letters, digits and `. _ + -` only. |
 
-`drgnx-face-title-bar-default` answers what the setting should be on this desktop: `drgnx` under GNOME's window
-manager when Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
-(`nhwl-toplevel-chrome-p`), else `dark`; never under a tiling window manager.
+`auto` is what `drgnx-face-title-bar-default` answers for each window: `drgnx` under GNOME's window manager when
+Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+(`nhwl-toplevel-chrome-p`), else `dark`; never under a tiling window manager. A window whose title bar drgnx draws on
+Nidhogg's shell gets corners of radius 12 and the popups' shadow of the theme's variant (none in High Contrast), the
+frame parameter `toplevel-chrome`.
 
 What happens depends on where drgnx runs:
 

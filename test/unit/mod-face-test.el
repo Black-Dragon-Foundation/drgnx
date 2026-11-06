@@ -518,7 +518,8 @@ The frame is the batch one; its parameters are put back afterwards."
 (ert-deftest drgnx-face/title-follows-the-theme ()
   (drgnx-face-test--settings
     (drgnx-face-test--frame 'pgtk 'dark
-      (should (eq drgnx-face-title-bar 'dark))
+      (should (eq drgnx-face-title-bar 'auto))                       ; dark here: no Nidhogg shell
+      (should (eq 'dark (drgnx-face--title-bar (selected-frame))))
       (should (eq (drgnx-face-title-variant) 'dark))
       (set-frame-parameter nil 'background-mode 'light)
       (should (eq (drgnx-face-title-variant) 'light))

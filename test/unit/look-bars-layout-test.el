@@ -303,5 +303,31 @@ default bar), the bar is built again when the count changes, and with none waiti
             (should-not (eq two three))
             (should (string-match-p "\\+3" (substring-no-properties three)))))))))
 
+(ert-deftest drgnx-look-bars/title-bar-drawn-by-default-with-corners ()
+  "Pattern D: left at its default, the title bar is drawn by drgnx on a frame under GNOME's window manager whose
+shell keeps an undecorated frame's margins, and that frame gets `toplevel-chrome': radius 12 and the popups' shadow
+of the variant.  Under a tiling window manager the same default is the system's bar, with no `toplevel-chrome'."
+  (let ((frame (selected-frame)) (default (eval (car (get 'drgnx-face-title-bar 'standard-value)) t)))
+    (unwind-protect
+        (let ((drgnx-face-title-bar default))
+          (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+                    ((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk))
+                    ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
+            (drgnx-face--apply-title frame)
+            (should (drgnx-face-drawn-title-p frame))
+            (let ((chrome (frame-parameter frame 'toplevel-chrome)))
+              (should (equal 12 (alist-get 'corner-radius chrome)))
+              (should (equal (and (fboundp 'drgnx-look-chrome-current) (alist-get 'shadow (drgnx-look-chrome-current frame)))
+                             (alist-get 'shadow chrome)))))
+          (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+                    ((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk))
+                    ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'sway)))
+            (drgnx-face--apply-title frame)
+            (should-not (drgnx-face-drawn-title-p frame))
+            (should-not (frame-parameter frame 'toplevel-chrome))))
+      (cl-letf (((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk)))
+        (let ((drgnx-face-title-bar 'system)) (drgnx-face--apply-title frame)))
+      (modify-frame-parameters frame '((toplevel-chrome) (undecorated))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here
