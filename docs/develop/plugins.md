@@ -98,18 +98,22 @@ no store. The hub's points (before a tool call, after an edit, before a commit, 
   `other`, and an `other` named `NotebookEdit` is `edit`. It never returns `drgnx`; only the hub's servers set it.
 - `subscribed(input, rules, plugins)` is the points' fast path: does any rule, or any plugin's hook at the point
   whose `filter` matches, look at this step.
-- `run(input, budget, rules, plugins, host)` runs the matching rules in list order, then each plugin's matching hook
+- `run(input, budget, accepts_change, rules, plugins, host)` runs the matching rules in list order, then each plugin's matching hook
   in plugin order, and returns one `Record {source, verdict, ms, error, advisory}` per match. A deny, or a failure of
   a non-advisory hook, stops the run (later matches are recorded with no verdict and no error: not run). Each hook
   gets `min(deadline_ms, what is left of the point's budget)`, measured on `HookHost::now` (the hub's clock); with
   nothing left it is not run and its record is that failure. A verdict outside the manifest's `verdicts` (`allow` is
-  always allowed) and a change that is not the point's replacement object (`{"arguments": object}`, `{"content":
-  string}`, `{"message": string}`, `{"notes": string}`) are failures. Each hook's input is the point's `detail`
-  object with `v`, `point`, `session`, `step` and `previous` (`[{source, verdict}]`) set, and the last change written
-  in (`tool.input`, `edit.content`, `commit.message`, `review.notes`); matching always uses the input as the point
-  gave it.
+  always allowed), a change where `accepts_change` is false ("change is not accepted here") and a change that is
+  not the point's replacement object (`{"arguments": object}`, `{"content": string}`, `{"message": string}`,
+  `{"notes": string}`) are failures, and such a change is never written in. Each hook's input is the point's
+  `detail` object with `v`, `point`, `session`, `step` and `previous` (`[{source, verdict}]`) set, and the last
+  accepted change written in (`tool.input`, `edit.content`, `commit.message`, `review.notes`). After each accepted
+  change `HookHost::refresh` re-reads the step's matching fields (`paths`, `command`) from it, so a later hook's
+  filter matches the step as it will run, not as the point first gave it. Rules run first, before any change, so
+  they match the step as given.
 - `HookHost` is what `run` calls a hook through: `run_hook(plugin, point, input, deadline)`, which keeps the hook
-  within its deadline, and `now()`. The plugin host implements it with the call's I/O; `HookPlugin` (a manifest and
+  within its deadline; `refresh(&mut input)`, which derives `paths` and `command` from a changed `detail` the way the
+  point derived them from the original (required, so a point cannot forget it); and `now()`. The plugin host implements it with the call's I/O; `HookPlugin` (a manifest and
   its approved hash) is implemented for `brokkr::Installed`.
 - `combine(cell, accepts_change, records) -> Outcome {decision, decided_by, annotations, provenance}`. A `Never`
   cell stays `Deny`; `Ask` stays `Ask` and `Allow` (or `None`: a hub tool whose matrix checks are in its body)

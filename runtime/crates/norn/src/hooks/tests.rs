@@ -109,6 +109,13 @@ impl HookHost for Scripted {
             result
         }
     }
+
+    /// The step's path is its arguments' `path`, as a hub tool's would be.
+    fn refresh(&self, input: &mut HookInput) {
+        if let Some(p) = input.detail["tool"]["input"]["path"].as_str() {
+            input.paths = vec![PathBuf::from(p)];
+        }
+    }
 }
 
 fn budget(point: Point) -> Duration {
@@ -196,7 +203,15 @@ async fn first_deny_wins_and_names_its_source() {
         .with("two", |_| (1, Ok(Verdict::Deny("second".into()))));
     let plugins = [plugin("one", deny.clone()), plugin("two", deny)];
     let input = before_tool("execute", "Bash", &[], Some("rm -rf x"));
-    let records = run(&input, budget(Point::BeforeTool), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
     assert_eq!(records.len(), 2);
     assert_eq!(records[0].verdict, Some(Verdict::Deny("first".into())));
     assert!(records[1].not_run(), "{:?}", records[1]);
@@ -230,7 +245,15 @@ async fn changes_chain_in_order() {
     let plugins = [plugin("one", hook.clone()), plugin("two", hook)];
     let mut input = before_tool("drgnx", "mcp__drgnx__merge", &[], None);
     input.detail["tool"]["input"] = json!({"branch": "b"});
-    let records = run(&input, budget(Point::BeforeTool), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        true,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
 
     let calls = host.calls();
     assert_eq!(calls[0].1["tool"]["input"]["branch"], "b");
@@ -260,7 +283,15 @@ async fn advisory_error_is_annotation() {
     )];
     let mut input = before_tool("edit", "Edit", &["src/a.rs"], None);
     input.point = Point::AfterEdit;
-    let records = run(&input, budget(Point::AfterEdit), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::AfterEdit),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
     assert_eq!(
         records[0].error.as_deref(),
         Some("hook notes failed: trap: unreachable")
@@ -279,7 +310,15 @@ async fn non_advisory_error_denies() {
         json!({"point": "before-tool", "verdicts": ["deny"]}),
     )];
     let input = before_tool("execute", "Bash", &[], Some("ls"));
-    let records = run(&input, budget(Point::BeforeTool), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
     assert!(!records[0].advisory);
     let out = combine(cell(M::Allow), false, &records);
     assert_eq!(
@@ -365,7 +404,15 @@ async fn rules_run_before_plugins() {
         json!({"point": "before-tool", "verdicts": ["deny"]}),
     )];
     let input = before_tool("execute", "Bash", &[], Some("ls"));
-    let records = run(&input, budget(Point::BeforeTool), &rules, &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &rules,
+        &plugins,
+        &host,
+    )
+    .await;
     assert_eq!(records[0].source.to_string(), "rule:0");
     assert_eq!(
         records[0].verdict,
@@ -385,7 +432,15 @@ async fn rules_run_before_plugins() {
         .unwrap(),
     );
     let host = Scripted::default().with("guard", |_| (1, Ok(Verdict::Allow)));
-    let records = run(&input, budget(Point::BeforeTool), &rules, &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &rules,
+        &plugins,
+        &host,
+    )
+    .await;
     assert_eq!(records[1].source.to_string(), "rule:no-shell");
     assert!(records[2].not_run());
     assert!(host.calls().is_empty());
@@ -417,7 +472,15 @@ async fn filter_skips_unmatched_hooks() {
         ),
     ];
     let input = before_tool("execute", "Bash", &["docs/a.md"], Some("cat docs/a.md"));
-    let records = run(&input, budget(Point::BeforeTool), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
     let called: Vec<String> = host.calls().into_iter().map(|c| c.0).collect();
     assert_eq!(called, ["exec", "all"]);
     let named: Vec<String> = records.iter().map(|r| r.source.name()).collect();
@@ -474,7 +537,7 @@ async fn a_change_where_none_is_accepted_is_an_error() {
         "msg",
         json!({"point": "before-commit", "verdicts": ["change"]}),
     )];
-    let records = run(&commit, budget(Point::BeforeCommit), &[], &msg, &host).await;
+    let records = run(&commit, budget(Point::BeforeCommit), true, &[], &msg, &host).await;
     assert_eq!(
         records[0].error.as_deref(),
         Some("hook msg failed: change for before-commit must be {\"message\": string}")
@@ -483,7 +546,15 @@ async fn a_change_where_none_is_accepted_is_an_error() {
         "quiet",
         json!({"point": "before-commit", "verdicts": ["annotate", "deny"]}),
     )];
-    let records = run(&commit, budget(Point::BeforeCommit), &[], &quiet, &host).await;
+    let records = run(
+        &commit,
+        budget(Point::BeforeCommit),
+        true,
+        &[],
+        &quiet,
+        &host,
+    )
+    .await;
     assert_eq!(
         records[0].error.as_deref(),
         Some("hook quiet failed: it answered change, which its manifest does not declare")
@@ -540,7 +611,15 @@ async fn the_points_budget_is_shared() {
         plugin("e", json!({"point": "before-tool", "verdicts": ["deny"]})),
     ];
     let input = before_tool("execute", "Bash", &[], Some("make"));
-    let records = run(&input, budget(Point::BeforeTool), &[], &plugins, &host).await;
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
 
     let deadlines: Vec<u128> = host.calls().iter().map(|c| c.2.as_millis()).collect();
     assert_eq!(deadlines, [500, 1500, 500]);
@@ -621,4 +700,92 @@ fn rule_ids_are_unique() {
     let no_reason = parse_rules(&json!([{"point": "at-review", "verdict": "deny", "reason": ""}]))
         .expect_err("empty reason");
     assert_eq!(no_reason.path, "[0].reason");
+}
+
+/// A hook on the hub's merge tool that may change its arguments to `{"path": PATH}`, and its later neighbours.
+fn merge_hook(verdicts: &[&str], paths: &[&str]) -> Value {
+    json!({"point": "before-tool", "verdicts": verdicts,
+           "filter": {"tool_kinds": ["drgnx"], "tools": ["mcp__drgnx__merge"], "paths": paths}})
+}
+
+fn merge_input(path: &str) -> HookInput {
+    let mut input = before_tool("drgnx", "mcp__drgnx__merge", &[path], None);
+    input.detail["tool"]["input"] = json!({"path": path});
+    input
+}
+
+/// Where a change is not accepted, the refused change never reaches a later hook: it sees the step as it will run.
+#[tokio::test(start_paused = true)]
+async fn a_refused_change_never_reaches_a_later_hook() {
+    let host = Scripted::default()
+        .with("a", |_| {
+            (
+                1,
+                Ok(Verdict::Change(json!({"arguments": {"path": "evil.rs"}}))),
+            )
+        })
+        .with("b", |_| (1, Ok(Verdict::Allow)));
+    // `a` is advisory, so its refused change is a note and the run goes on to `b`.
+    let mut a = merge_hook(&["change"], &[]);
+    a["advisory"] = json!(true);
+    let plugins = [plugin("a", a), plugin("b", merge_hook(&["deny"], &[]))];
+    let input = merge_input("src/a.rs");
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        false,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
+
+    let calls = host.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].1["tool"]["input"]["path"], "src/a.rs");
+    assert_eq!(
+        records[0].error.as_deref(),
+        Some("hook a failed: change is not accepted here")
+    );
+    assert_eq!(records[0].verdict, None);
+    let out = combine(None, false, &records);
+    assert_eq!(out.decision, Decision::Proceed { changed: None });
+    assert_eq!(
+        out.annotations,
+        ["hook a failed: change is not accepted here"]
+    );
+}
+
+/// A later hook's filter matches the step as the accepted changes left it, not as the point first gave it.
+#[tokio::test(start_paused = true)]
+async fn a_later_filter_matches_the_accepted_change() {
+    let host = Scripted::default()
+        .with("a", |_| {
+            (
+                1,
+                Ok(Verdict::Change(json!({"arguments": {"path": "src/x.rs"}}))),
+            )
+        })
+        .with("src", |_| (1, Ok(Verdict::Deny("not in src".into()))))
+        .with("docs", |_| (1, Ok(Verdict::Allow)));
+    let plugins = [
+        plugin("a", merge_hook(&["change"], &[])),
+        plugin("docs", merge_hook(&["deny"], &["docs/**"])),
+        plugin("src", merge_hook(&["deny"], &["src/**"])),
+    ];
+    let input = merge_input("docs/a.md");
+    let records = run(
+        &input,
+        budget(Point::BeforeTool),
+        true,
+        &[],
+        &plugins,
+        &host,
+    )
+    .await;
+
+    let called: Vec<String> = host.calls().into_iter().map(|c| c.0).collect();
+    assert_eq!(called, ["a", "src"]);
+    let out = combine(None, true, &records);
+    assert_eq!(out.decision, Decision::Deny("not in src".into()));
 }

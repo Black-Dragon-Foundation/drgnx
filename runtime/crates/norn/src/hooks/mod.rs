@@ -161,6 +161,10 @@ pub trait HookHost: Sync {
         deadline: Duration,
     ) -> impl Future<Output = Result<Verdict, String>> + Send;
 
+    /// Re-reads INPUT's matching fields (`paths`, `command`) from its `detail` once an accepted change is written in,
+    /// as the point derived them from the original step, so a later hook's filter matches the step that will run.
+    fn refresh(&self, input: &mut HookInput);
+
     /// The clock the point's budget is measured on (the hub's, so its test clock decides).
     fn now(&self) -> tokio::time::Instant {
         tokio::time::Instant::now()
@@ -295,14 +299,17 @@ fn previous(records: &[Record]) -> Value {
 /// - A deny (or a failure of a non-advisory hook) stops the run: the later matches are recorded not run.
 /// - Each hook gets the smaller of its `deadline_ms` and what is left of BUDGET. One that would start with nothing
 ///   left is not run, and its record is that failure.
-/// - Each hook sees the earlier records (`previous`) and the last change: a change is written into the input
+/// - Each hook sees the earlier records (`previous`) and the last accepted change: it is written into the input
 ///   (before-tool: `tool.input`; after-edit: `edit.content`; before-commit: `commit.message`; at-review:
-///   `review.notes`). Matching always uses INPUT as the point gave it.
-/// - A verdict the hook's manifest does not declare (`allow` is always allowed), or a change of the wrong shape, is
-///   that hook's failure.
+///   `review.notes`), then [`HookHost::refresh`] re-reads the matching fields, so later hooks' filters match the
+///   step as it will run. Rules run first, before any change, so they always match INPUT as the point gave it.
+/// - A change where ACCEPTS_CHANGE is false is that hook's failure ("change is not accepted here") and is never
+///   written in; so is a change of the wrong shape, and a verdict the hook's manifest does not declare (`allow` is
+///   always allowed).
 pub async fn run<H: HookHost>(
     input: &HookInput,
     budget: Duration,
+    accepts_change: bool,
     rules: &[Rule],
     plugins: &[Arc<H::Plugin>],
     host: &H,
@@ -332,16 +339,17 @@ pub async fn run<H: HookHost>(
         stopped |= deny;
     }
 
-    let mut doc = match &input.detail {
-        Value::Object(o) => o.clone(),
-        _ => serde_json::Map::new(),
-    };
-    doc.insert("v".into(), json!(1));
-    doc.insert("point".into(), json!(point_word(input.point)));
-    doc.insert("session".into(), json!(input.session));
-    doc.insert("step".into(), json!(input.step));
+    // The step as the accepted changes so far leave it: the hooks see it, and their filters match it.
+    let mut step = input.clone();
+    if !step.detail.is_object() {
+        step.detail = json!({});
+    }
+    step.detail["v"] = json!(1);
+    step.detail["point"] = json!(point_word(input.point));
+    step.detail["session"] = json!(input.session);
+    step.detail["step"] = json!(input.step);
     for plugin in plugins {
-        let Some(hook) = hook_for(&**plugin, input) else {
+        let Some(hook) = hook_for(&**plugin, &step) else {
             continue;
         };
         let m = plugin.manifest();
@@ -374,10 +382,10 @@ pub async fn run<H: HookHost>(
         let deadline = hook
             .deadline_ms
             .map_or(left, |d| left.min(Duration::from_millis(u64::from(d))));
-        doc.insert("previous".into(), previous(&records));
+        step.detail["previous"] = previous(&records);
         let t0 = host.now();
         let answer = host
-            .run_hook(plugin, input.point, Value::Object(doc.clone()), deadline)
+            .run_hook(plugin, input.point, step.detail.clone(), deadline)
             .await;
         record.ms = u32::try_from((host.now() - t0).as_millis()).unwrap_or(u32::MAX);
         let checked = answer.and_then(|v| {
@@ -394,13 +402,18 @@ pub async fn run<H: HookHost>(
                 ));
             }
             if let Verdict::Change(c) = &v {
+                // A refused change is never written in: later hooks see the step that will run.
+                if !accepts_change {
+                    return Err("change is not accepted here".into());
+                }
                 let new = changed_value(input.point, c)?;
                 let (section, field, _, _) = change_slot(input.point);
-                let slot = doc.entry(section).or_insert_with(|| json!({}));
+                let slot = &mut step.detail[section];
                 if !slot.is_object() {
                     *slot = json!({});
                 }
                 slot[field] = new;
+                host.refresh(&mut step);
             }
             Ok(v)
         });
