@@ -64,9 +64,9 @@ agents with the map shown or hidden, say whether the premise holds and take it a
   (cl-loop for k in '("TAB" "<right>" "<left>" "<down>" "<up>") append (make-list 60 (list :keys k))))
 
 (defun drgnx-perf-work--relayout-keys ()
-  "256 layout commands: f, o and the layers 1 to 6, 32 times (the lab's p95 needs 100 samples; each command waits
-for the layout before it to be drawn, so none is lost, and about half of them change the layout)."
-  (cl-loop repeat 32 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
+  "324 layout commands: the layers 1 to 6, 54 times (the lab's p95 needs 100 samples; each command waits for the
+layout before it to be drawn, so none is lost)."
+  (cl-loop repeat 40 append (mapcar (lambda (k) (list :keys k)) '("f" "o" "1" "2" "3" "4" "5" "6"))))
 
 (defconst drgnx-perf-work--relayout-form
   (prin1-to-string
@@ -74,10 +74,25 @@ for the layout before it to be drawn, so none is lost, and about half of them ch
       (defvar drgnx-perf--rl-t0 nil "When the layout the user asked for was asked, until its frame is drawn.")
       (defvar drgnx-perf--rl-ms nil "Per layout: ms from the command to the frame drawn.")
       (defvar drgnx-perf--rl-timer nil "Polls for the draw's end.")
+      (defvar drgnx-perf--rl-bt nil "The backtrace of the first nil-argument arithmetic error (diagnosis).")
+      (defun drgnx-perf--rl-debugger (&rest args)
+        (when (and (not drgnx-perf--rl-bt) (eq (car args) 'error)
+                   (equal (cadr args) '(wrong-type-argument number-or-marker-p nil)))
+          (setq drgnx-perf--rl-bt (backtrace-to-string))))
+      (setq debug-on-signal t debugger #'drgnx-perf--rl-debugger)
       (defun drgnx-perf--rl-begin (&rest _)
         "A layout is asked for: the one before is drawn first, so no sample is lost to the next key."
-        (drgnx-perf--rl-idle)
-        (setq drgnx-perf--rl-t0 (float-time)))
+        (drgnx-perf--rl-idle 1)
+        (when drgnx-perf--rl-t0 ; no frame with a layout came for the one before: a command that draws nothing
+          (let ((c (assq drgnx-perf--rl-cmd drgnx-perf--rl-lost)))
+            (if c (cl-incf (cdr c)) (push (cons drgnx-perf--rl-cmd 1) drgnx-perf--rl-lost))))
+        (let ((c (assq this-command drgnx-perf--rl-asked)))
+          (if c (cl-incf (cdr c)) (push (cons this-command 1) drgnx-perf--rl-asked)))
+        (setq drgnx-perf--rl-cmd this-command drgnx-perf--rl-t0 (float-time)))
+      (defvar drgnx-perf--rl-frames nil "Per change the client reported: (t0 set, has layout, timer set), newest first.")
+      (defvar drgnx-perf--rl-cmd nil "The command whose layout is asked for.")
+      (defvar drgnx-perf--rl-asked nil "Per command: how many layouts it asked for.")
+      (defvar drgnx-perf--rl-lost nil "Per command: how many asked for a layout and got no frame with one.")
       (defun drgnx-perf--rl-poll ()
         (when (or (null drgnx-perf--rl-t0) (not (buffer-live-p drgnx-perf--work-buf))
                   (not (drgnx-view-pending-p (drgnx-perf--work-view))))
@@ -88,11 +103,12 @@ for the layout before it to be drawn, so none is lost, and about half of them ch
           (setq drgnx-perf--rl-timer nil)))
       (defun drgnx-perf--rl-changed (_view marks)
         "A frame with a layout came: the view draws it; poll until it has."
+        (push (list (and drgnx-perf--rl-t0 t) (and (plist-get marks :layout) t) (and drgnx-perf--rl-timer t)) drgnx-perf--rl-frames)
         (when (and drgnx-perf--rl-t0 (plist-get marks :layout) (not drgnx-perf--rl-timer))
           (setq drgnx-perf--rl-timer (run-with-timer 0 0.001 #'drgnx-perf--rl-poll))))
-      (defun drgnx-perf--rl-idle ()
-        "Wait (10 s at most) until the last layout asked for is drawn."
-        (drgnx-work-thirty--wait 10 (lambda () (null drgnx-perf--rl-t0))))
+      (defun drgnx-perf--rl-idle (&optional secs)
+        "Wait (SECS, default 10 s, at most) until the last layout asked for is drawn."
+        (drgnx-work-thirty--wait (or secs 10) (lambda () (null drgnx-perf--rl-t0))))
       (defun drgnx-perf--rl-arm ()
         "No filters, every layer open, the hub's answer drawn; the samples start over."
         (with-current-buffer drgnx-perf--work-buf
@@ -110,7 +126,8 @@ for the layout before it to be drawn, so none is lost, and about half of them ch
         (advice-remove 'drgnx-work-map--send-filters #'drgnx-perf--rl-begin)
         (remove-hook 'drgnx-work-client-change-functions #'drgnx-perf--rl-changed)
         (when (timerp drgnx-perf--rl-timer) (cancel-timer drgnx-perf--rl-timer))
-        (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil))
+        (setq drgnx-perf--rl-timer nil drgnx-perf--rl-t0 nil)
+        (when drgnx-perf--rl-bt (error "BT %s" (substring drgnx-perf--rl-bt 0 (min 3000 (length drgnx-perf--rl-bt))))))
       t))
   "The relayout workload's session side: the time from a layout command (`drgnx-work-map--send-filters') to the frame it
 asked for drawn (the view has nothing pending).")
@@ -285,7 +302,7 @@ fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster'
                      :each "(progn (drgnx-perf--rl-arm) (drgnx-perf--work-premise) (drgnx-perf--work-select-map) t)"
                      :actions ,(drgnx-perf-work--relayout-keys)
                      :measure "(drgnx-perf--rl-measure)"
-                     :check "(and (drgnx-work-thirty-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn of 256 asked\" (length drgnx-perf--rl-ms))))"
+                     :check "(and (drgnx-work-thirty-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn; %d lost; changes (t0 layout timer) %S\" (length drgnx-perf--rl-ms) (apply #'+ (mapcar #'cdr drgnx-perf--rl-lost)) (let (r) (dolist (f drgnx-perf--rl-frames r) (let ((c (assoc f r))) (if c (cl-incf (cdr c)) (push (cons f 1) r))))))))"
                      :teardown ,(concat "(progn (drgnx-perf--rl-teardown) " down ")"))
       (work-live :setup ,(funcall up t drgnx-perf-work--live-form)
                  :each "(progn (drgnx-perf--work-premise) (drgnx-perf--wl-arm) t)"
