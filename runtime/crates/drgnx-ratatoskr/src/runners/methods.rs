@@ -11,6 +11,7 @@ use runstav::methods::runners::{
     Removed, Runner, Runners, SetParams,
 };
 use runstav::wire::{Error, ErrorCode};
+#[cfg(all(unix, not(target_os = "android")))]
 use serde_json::json;
 
 fn error(code: ErrorCode, message: impl Into<String>) -> Error {
@@ -139,9 +140,7 @@ async fn changed(f: &Front) {
     }
 }
 
-#[cfg(not(all(unix, not(target_os = "android"))))]
-async fn changed(_: &Front) {}
-
+#[cfg(all(unix, not(target_os = "android")))]
 macro_rules! reg {
     ($f:expr) => {
         $f.core.runners.get($f)?

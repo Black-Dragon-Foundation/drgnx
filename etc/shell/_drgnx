@@ -68,7 +68,7 @@ case $cmd in
       '--compositor[compositor of the GUI session]:compositor:(mutter sway x11 i3 kwin niri)' '--tty[terminal tests in private tmux servers]' \
       '--config[configuration of the session]:configuration:(drgnx gryphn)' \
       '--bench[the workbench vs treemacs and ibuffer]' '--perf[input latency, redisplay, frames, GC]' \
-      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--ab-env[paired A/B by an environment variable]:VAR=JUDGED,REF:' '--n[samples per side for --ab]:samples:' '--soak[the workloads in a loop]' '--day[the synthetic day]' \
+      '--audit[what each hook function costs]' '--ab[judge wall clock against a git ref]:ref:' '--ab-env[paired A/B by an environment variable]:VAR=JUDGED,REF:' '--n[samples per side for --ab]:samples:' '--aa[run every workload against itself first (the default with --ab-env)]' '--no-aa[skip that A/A run]' '--soak[the workloads in a loop]' '--day[the synthetic day]' \
       '--preflight[the ordering-bug pre-flight]' '--out[with --preflight: the report file]:report:_files' \
       '--seeds[with --preflight: shuffle seeds]:seeds' '--nidhogg-tarball[with --preflight: the Nidhogg tarball]:tarball:_files' \
       '--container[inside a container]' '--install[install.sh in fresh distribution containers]' \
@@ -115,6 +115,8 @@ case $cmd in
       shift words; (( CURRENT-- ))
       _arguments '--json[machine-readable]'
     fi ;;
+  build)
+    _arguments '1:what:(runner-bundle)' '--arch[the bundle'"'"'s architecture]:architecture:(x86_64 aarch64)' ;;
   runtime)
     if (( CURRENT == 2 )); then
       _values 'runtime command' 'build[cargo build of Ratatoskr]' 'install[the built binary into drgnx'"'"'s data folder]'
@@ -169,8 +171,8 @@ case $cmd in
     else
       shift words; (( CURRENT-- ))
       case $sub in
-        index) _arguments '--rebuild[from scratch]' '*:project:_files -/' ;;
-        query) _arguments '-k[number of chunks]:number:' '*:project:_files -/' ;;
+        index) _arguments '--rebuild[from scratch]' '--now[also on battery]' '*:project:_files -/' ;;
+        query) _arguments '-k[number of chunks]:number:' '--scope[what to search]:scope:(code tests docs all)' '*:project:_files -/' ;;
         mcp) _arguments '*:project:_files -/' ;;
       esac
     fi ;;

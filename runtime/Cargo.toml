@@ -8,7 +8,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "GPL-3.0-or-later"
 
 # Library evaluation section 17, nothing else.  Only crates a member uses enter Cargo.lock.
@@ -29,7 +29,7 @@ subtle = "2.6"
 getrandom = "0.4"
 rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
 # hrafn's structural chunker; the grammars arrive with the languages that use them
-tree-sitter = "0.25"   # 0.26 and 0.27 need Rust 1.90; the workspace MSRV is 1.88
+tree-sitter = "0.25"   # 0.26 and 0.27 need Rust 1.90, above the MSRV when this was pinned (1.88); not moved since
 tree-sitter-elisp = "1.7"
 tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
@@ -74,7 +74,9 @@ bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 # hrafn-embed's GPU path. wgpu breaks its API about every 3 months: pinned, moved on purpose
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 pollster = "0.4"
-gemm = "=0.19.0"
+# f32 matmuls only: no `f16` feature, whose gemm-f16 has aarch64 asm that needs FEAT_FP16 (fullfp16), which baseline
+# aarch64 (Linux arm64, Android) doesn't have; the CPU path runs on baseline NEON there
+gemm = { version = "=0.19.0", default-features = false, features = ["std", "rayon"] }
 rayon = "1"
 
 [profile.release]
