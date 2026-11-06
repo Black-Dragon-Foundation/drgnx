@@ -163,4 +163,15 @@
  (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
- (install-overhead (:overhead_ms) 3000 :report-only ext-pass))
+ (install-overhead (:overhead_ms) 3000 :report-only ext-pass)
+ ;; The Work space (design §13; docs/develop/perf.md, "The Work space's workloads"): 30 streaming mock agents in a real
+ ;; hub.  The rules between workloads (the map shown at most 1 ms over hidden; the mirror at most 1 ms over `typing')
+ ;; are `drgnx-perf-run--relative-fails'.  The Rust rows (vegvisir layout, shell parse, trace) are their crates' tests.
+ (work-nav (:input :p95) 16) (work-nav (:frame_kb) 2048) (work-nav (:stalls) 0)
+ (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
+ (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
+ (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
+ (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
+ (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
+ (work-typing-mirror (:input :p95) 16) (work-typing-mirror (:stalls) 0)
+ (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1))

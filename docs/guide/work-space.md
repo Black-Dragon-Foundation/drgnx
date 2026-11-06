@@ -70,6 +70,11 @@ arrives with the files picker.
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
   for, so the hub lays the map out again at once.
+- A layout you asked for **moves**: each card slides from where it was to its new place over 160 ms, cards that leave
+  fade out and new ones fade in. The compositor moves the pixels, so your keys act on the new layout from the first
+  frame and nothing waits for the motion. Nothing else moves the map: agents that arrive or finish change in place.
+  With reduced motion (your desktop's setting, or `drgnx-look-motion` set to `reduced`), in a terminal, and where
+  Nidhogg's compositor does not draw the frame (macOS for now), the map jumps to its new layout instead.
 - `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
 - `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
 - When an agent records a new conclusion, its card shows a **new** chip for four seconds.

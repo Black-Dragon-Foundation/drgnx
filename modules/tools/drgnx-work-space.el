@@ -82,6 +82,7 @@
 (declare-function drgnx-work-map--changed "drgnx-work-map")
 (declare-function drgnx-work-map--edges-update "drgnx-work-map")
 (declare-function drgnx-work-map-theme-changed "drgnx-work-map")
+(declare-function drgnx-work-map-motion-clear "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
 (defvar drgnx-hub--events)
@@ -204,7 +205,8 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
       (max 0 (floor (- px 96) 4)))))
 
 (defun drgnx-work-space--killed ()
-  "`kill-buffer-hook' of a map buffer: its view closes."
+  "`kill-buffer-hook' of a map buffer: its windows lose the layout motion's parameters and its view closes."
+  (drgnx-work-map-motion-clear)
   (when drgnx-work-space--view (drgnx-work-client-close drgnx-work-space--view)))
 
 (defun drgnx-work-space--empty-buffer ()
@@ -500,10 +502,12 @@ follows the windows; the commands."
                         :doc "One block per agent, with why it exists and what it touches; again for the map"))
 
 (defun drgnx-work-space--teardown ()
-  "tools/work-space's `:teardown': the views close (the hub forgets them) and the map buffers go."
+  "tools/work-space's `:teardown': the edit history's tracking stops, the views close (the hub forgets them), the
+windows lose the layout motion's parameters and the map buffers go."
   (drgnx-history-mode -1)
   (drgnx-work-client-close-all)
   (dolist (b (drgnx-work-map-buffers))
+    (drgnx-work-map-motion-clear b)
     (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))
     (kill-buffer b))
   (dolist (b (buffer-list))

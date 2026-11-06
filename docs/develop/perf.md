@@ -731,6 +731,33 @@ DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-pas
   .claude/tmp/perf-exclusive.sh bin/drgnx test --container --perf
 ```
 
+### The Work space's workloads
+
+`harness/drgnx-perf-work.el` (the session side: `test/fixtures/work-space-thirty-fixture.el`). Every workload but
+`work-trail` runs against **30 mock agents streaming in a real hub**: `test/fixtures/work-space/thirty.json`
+(`vegvisir`'s fixture too) built into three git repositories (`org`, `drgnx`, `nidhogg`) and a worktree per agent
+under a temp directory. Each agent is a `ratatoskr-mock acp` of its own profile whose one turn edits the files the
+description names (120 in all), reads one, records a decision where the description has a conclusion, starts a
+subagent where it has a parent, then makes a chunk, a read step and a second of quiet for fifteen minutes. Each
+gets the text of its ask. `$DRGNX_RATATOSKR_BIN` is needed as for the agent workloads. **Setup, `:each` and `:check`
+call the fixture's premise**, which signals when fewer than 30 sessions are busy, when the map holds fewer than 30
+agents, or when the map is not shown (hidden) to the hub and on screen as the workload says: a workload that did not
+get its situation fails instead of measuring something else. Mock agents only; nothing reaches a subscription.
+
+| Workload | What it does | Measured (budget row) |
+|---|---|---|
+| work-nav | 300 map keys (Tab, right, left, down and up, 60 each) with an agent selected | `:input :p95` 16 ms; `:frame_kb` 2048 (`memory-report-object-size` of the client's frame); `:stalls` 0 |
+| work-raster | every band tile of the map's layout rasterised at scale 2 (`image-flush` and `image-size` of a fresh image), passes repeated to 100 tiles; then, for twelve agents, the tiles of the bands that carry that agent's chain, summed | `:raster_ms :p95` 1.5; `:chain_ms :max` 6 |
+| work-relayout | 320 layout commands (`f`, `o`, `1` to `6`, 40 times; only about one in six makes the hub send a frame with a layout, and the lab's p95 needs 100 samples; each command first waits up to a second for the layout before it, which is why the lab's own input p90 reads about 1 s) | `:relayout :p95` 50 ms, from the command to the frame it asked for drawn (the view has nothing pending); `:stalls` 0 |
+| work-live | 30 s with the map shown and the agents streaming (checked: the map got at least 30 deltas) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0 |
+| work-typing-shown, work-typing-hidden | the typing workload's six strings with the map shown in the editor's other window, and with it open but shown nowhere (the hub told: no deltas) | `:input :p95` 16 ms each, `:stalls` 0; the rule between them (shown at most 1 ms over hidden) is `drgnx-perf-run--relative-fails`, judged when both are in the run |
+| work-typing-mirror | the same with the map shown and a transcript of one agent open (the mirror of 30 streaming agents) | `:input :p95` 16 ms, `:stalls` 0; at most 1 ms over `typing` (same rule function) |
+| work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened until its first rows are drawn, then 20 steps appended (each with its draw) | `:draw_ms` 100; `:append_ms :max` 1 |
+
+The timing rows belong on the desktop's perf island (`perf-exclusive.sh` outermost; the relative rules need the shown
+and hidden workloads in one run). Allocation, CPU and rows are not budgeted yet (`drgnx-perf-run-unseeded`). The Rust
+rows (`vegvisir`'s layout and core step, the shell parse, the trace rows) are their crates' tests.
+
 ## Slow frames in another configuration
 
 Start with Show Freezes (the watchdog's report) and the stalls probe above. A new frame under drgnx takes ~66 ms (in a session) and ~190 ms from a daemon (`emacsclient -c`). The 2.1 s

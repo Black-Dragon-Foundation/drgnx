@@ -18,6 +18,7 @@
 (require 'drgnx-perf-settings)
 (require 'drgnx-perf-extensions)
 (require 'drgnx-perf-workloads)
+(require 'drgnx-perf-work)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -825,6 +826,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
       ;; the off-the-main-thread workloads (§17.6): report-only until their step lands (harness/drgnx-perf-workloads.el)
       ,@(drgnx-perf-workers-workloads)
+      ;; the Work space: 30 streaming mock agents, the map shown or hidden (harness/drgnx-perf-work.el)
+      ,@(drgnx-perf-work-workloads (drgnx-perf-run--visit-fixture-form) kill-fixture)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -979,10 +982,22 @@ under :compose (the compose probe)."
 (defun drgnx-perf-run--relative-fails (results)
   "Lines: `typing-evil' input p95 more than 1 ms over `typing' in the same RESULTS (both measured)."
   (let ((plain (drgnx-perf--get results 'typing '(:input :p95)))
-        (evil (drgnx-perf--get results 'typing-evil '(:input :p95))))
-    (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
-      (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
-                    (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))))
+        (evil (drgnx-perf--get results 'typing-evil '(:input :p95)))
+        (hidden (drgnx-perf--get results 'work-typing-hidden '(:input :p95)))
+        (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95)))
+        (mirror (drgnx-perf--get results 'work-typing-mirror '(:input :p95))))
+    (append
+     (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
+       (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
+                     (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))
+     ;; the Work space: the map shown costs at most 1 ms over the same map hidden; with the mirror on for 30
+     ;; streaming agents, at most 1 ms over typing with no agents
+     (when (and (numberp hidden) (numberp shown) (> (- shown hidden) 1.0))
+       (list (format "work-typing-shown input p95 %s ms is %s ms over work-typing-hidden's %s ms (the map may add at most 1 ms)"
+                     (drgnx-perf--round shown) (drgnx-perf--round (- shown hidden)) (drgnx-perf--round hidden))))
+     (when (and (numberp plain) (numberp mirror) (> (- mirror plain) 1.0))
+       (list (format "work-typing-mirror input p95 %s ms is %s ms over typing's %s ms (30 agents streaming may add at most 1 ms)"
+                     (drgnx-perf--round mirror) (drgnx-perf--round (- mirror plain)) (drgnx-perf--round plain)))))))
 
 (defun drgnx-perf-run--relative-note (results)
   "A line saying the 1 ms rule was not judged, when `typing-evil' was measured without `typing' in RESULTS; else nil."
@@ -1203,6 +1218,8 @@ version and the commit, as JSON in FILE."
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               drgnx-perf-workers-names)
+    ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
+              '(work-nav work-relayout work-typing-shown work-typing-hidden work-typing-mirror))
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
