@@ -154,8 +154,35 @@ jobs:
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
         run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
-      # --no-fail-fast: every crate's failures in one run
+      # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
+      # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
+      # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
+      # pinned revision. A same-repository pull request saves it too (950 MB a fetch).
+      - id: models
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: models-${{ hashFiles('.github/ci/models.txt') }}
+          enableCrossOsArchive: true
+      - name: the model files (DRGNX_TEST_MODELS)
+        id: models-fetch
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: |
+          bash .github/ci/models.sh ../test-models
+          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
+      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+          enableCrossOsArchive: true
+      # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
+      # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
+        env:
+          DRGNX_TEST_ADAPTER: llvmpipe
         run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
@@ -889,7 +916,26 @@ jobs:
           xcode-select -p
           sudo xcode-select -s /Library/Developer/CommandLineTools
           xcode-select -p
-      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI)
+      # the model files, as the Fedora 45 job (one cache for both)
+      - id: models
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: models-${{ hashFiles('.github/ci/models.txt') }}
+          enableCrossOsArchive: true
+      - name: the model files (DRGNX_TEST_MODELS)
+        id: models-fetch
+        run: |
+          /bin/bash .github/ci/models.sh ../test-models
+          echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
+      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ../test-models
+          key: ${{ steps.models.outputs.cache-primary-key }}
+          enableCrossOsArchive: true
+      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No DRGNX_TEST_ADAPTER: the
+      # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).

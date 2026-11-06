@@ -2,6 +2,8 @@
 //! through the GPU script. Parity is the test: a wrong sign, window or norm order moves the cosine visibly.
 //! llvmpipe does about 68 tokens/s on gte, so these use the sweep and short texts only, and share one embedder per model:
 //! parallel loads overrun the test container's memory cap. The full 20 chunks are `#[ignore]` rows for a real GPU.
+//! On macOS every row is ignored: CI's Mac is a VM with no GPU in its specs, and Metal parity is a real Mac's to show
+//! (`--ignored` there); the CPU parity (`parity_cpu.rs`) runs on it.
 
 use hrafn_embed::{
     Device, EmbedFail, LoadError, LocalEmbedder, MODELS, ModelSpec, TOKEN_CAP, Tuning, adapters,
@@ -107,16 +109,19 @@ fn length_sweep(model: &mut LocalEmbedder, id: &str) {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn length_sweep_gte() {
     length_sweep(&mut gte(), GTE);
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn length_sweep_granite() {
     length_sweep(&mut granite(), GRANITE);
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn queries_match_the_fixture() {
     for (mut model, id) in [(gte(), GTE), (granite(), GRANITE)] {
         for q in fixture(id)["queries"].as_array().unwrap() {
@@ -131,6 +136,7 @@ fn queries_match_the_fixture() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn batched_equals_alone() {
     let mut model = gte();
     let batch: Vec<Vec<u32>> = sweep(GTE)
@@ -148,6 +154,7 @@ fn batched_equals_alone() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn f32_weights_match_f16() {
     let tuning = Tuning {
         f32_weights: true,
@@ -173,6 +180,7 @@ fn f32_weights_match_f16() {
 
 /// Vectors from both paths land in one index: this is the fallback's premise.
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn cpu_and_gpu_agree() {
     let mut paths = [(GTE, gte()), (GRANITE, granite())];
     for (id, gpu) in &mut paths {
@@ -193,6 +201,7 @@ fn cpu_and_gpu_agree() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn normalised() {
     let mut model = granite();
     let query = model
@@ -209,6 +218,7 @@ fn normalised() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn refuses_an_id_over_vocab() {
     let mut model = granite();
     let vocab = 50368;
@@ -230,6 +240,7 @@ fn refuses_an_id_over_vocab() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn device_loss_is_reported() {
     let mut model = LocalEmbedder::load(spec(GRANITE), &dir(GRANITE), &device()).unwrap();
     model.embed_ids(&[vec![50281, 50282]]).unwrap();
@@ -244,6 +255,7 @@ fn device_loss_is_reported() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn refuses_what_it_cannot_run() {
     let empty = tempfile::tempdir().unwrap();
     assert!(matches!(
@@ -265,6 +277,7 @@ fn refuses_what_it_cannot_run() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "Metal: a real Mac's row")]
 fn names_its_adapter() {
     let want = std::env::var("DRGNX_TEST_ADAPTER").unwrap();
     let all = adapters();

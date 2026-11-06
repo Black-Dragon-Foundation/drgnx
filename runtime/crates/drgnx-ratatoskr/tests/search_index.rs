@@ -2,7 +2,8 @@
 //! (`WorkerEmbedder`), and a project (`Project`: its store, tier 1, tier 2 and their gates).
 //!
 //! The worker loads the real Granite small from the read-only model volume (`DRGNX_TEST_MODELS`) and fails without
-//! it. Worker tests pass `--device cpu` unless they name an adapter (`DRGNX_TEST_ADAPTER`).
+//! it. Worker tests pass `--device cpu` unless they name an adapter (`DRGNX_TEST_ADAPTER`); those are ignored on macOS,
+//! whose CI runner has no GPU (as `hrafn-embed/tests/parity_gpu.rs`).
 //!
 //! test-pattern: handshake (C) for the worker's own tests: the child announces (`ready`, `parked`) and the test acts
 //! on that line. The project's gates are gated (B): the hub clock moves only by `clock::advance` (250 ms at a time),
@@ -189,6 +190,7 @@ fn worker_says_its_device_first() {
 /// Pattern C. `gpu:NAME` (test-hooks) runs on that adapter and destroys its device after the first batch; the next
 /// batch runs again on the CPU path, says so first, and its vectors are interchangeable with the GPU's.
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "a GPU row: CI's Mac has no GPU, Metal is a real Mac's")]
 fn device_loss_requeues_on_cpu() {
     let mut w = Worker::start(&format!("gpu:{}", adapter()), &[]);
     let first = w.line().unwrap();
@@ -238,6 +240,7 @@ fn query_runs_before_the_next_batch() {
 /// its peak resident memory between batches. `--test-rss-cap-mb 1` stands for the 1.5 GiB cap, which any worker is
 /// over: before a batch it answers the request with the reason (and `exit`) and exits, by itself and cleanly.
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "a GPU row: CI's Mac has no GPU, Metal is a real Mac's")]
 fn gpu_worker_exits_over_its_rss_cap() {
     let mut w = Worker::start(&format!("gpu:{}", adapter()), &["--test-rss-cap-mb", "1"]);
     let first = w.line().unwrap();
@@ -257,6 +260,7 @@ fn gpu_worker_exits_over_its_rss_cap() {
 /// Pattern C. The hub sees that exit as the worker's answer, not a crash: no retry, no crash counted, and the next
 /// request starts a fresh worker.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(target_os = "macos", ignore = "a GPU row: CI's Mac has no GPU, Metal is a real Mac's")]
 async fn rss_exit_is_not_a_crash_loop() {
     let (cache, ac) = (tempfile::tempdir().unwrap(), power(true));
     let dev = format!("gpu:{}", adapter());

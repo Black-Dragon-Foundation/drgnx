@@ -164,6 +164,27 @@
     (should private)
     (should (version<= "1.95" private))))
 
+(ert-deftest drgnx-ci/the-rust-test-jobs-have-the-models-and-linux-has-llvmpipe ()
+  ;; the tests that run the built-in model fail without DRGNX_TEST_MODELS, the GPU tests without DRGNX_TEST_ADAPTER
+  ;; (never a skip): both workspace test jobs fetch the pinned files before `cargo test', and the Fedora 45 one runs
+  ;; the shaders on llvmpipe; macOS has no adapter and ignores its GPU rows
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (list (drgnx-ci-test--file ".github/ci/models.txt"))
+         (packages (drgnx-ci-test--file "test/container/rust-packages.sh")))
+    (skip-unless (and rt list packages))
+    (dolist (job '("linux" "macos"))
+      (let* ((text (drgnx-ci-test--job rt job))
+             (fetch (string-search "models.sh ../test-models\n" text))
+             (test (string-search "--no-fail-fast --" text)))
+        (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
+                            "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
+        (should (and fetch test (< fetch test)))
+        (should (string-search "env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true'" text))))
+    (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
+                            (drgnx-ci-test--job rt "linux")))
+    (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
+    (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
+    (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
+
 (ert-deftest drgnx-ci/the-runner-crates-are-checked-for-android-built-static-and-denied ()
   ;; forseti and sleipnir's protocol and sync are what jobq and the Android door take; the runner ships static (musl)
   (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
