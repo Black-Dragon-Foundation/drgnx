@@ -2094,12 +2094,21 @@ prompt on its error output (even when it then exits 0), a failure and empty outp
 in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
 it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`.
 
+**The market** (`market.rs`, design §6.7.3, pure): `Policy {mode}` with `Mode {Spot, OnDemand, SpotThenOnDemand}`
+(`drgnx-runners-cloud-market`, the default the last). `History::record(region, at, Event {Preempted, NoCapacity})`
+keeps only what can still matter (`WINDOW_S` + `FALLBACK_S`). `choose(region, now, history)` is on-demand in a region
+where two events of one kind came within `WINDOW_S` (1 h), for `FALLBACK_S` (6 h) after the second;
+`for_job(restartable, …)` never gives a job that can't be restarted spot (on-demand, or none with `spot` only). A
+runner's `preempting` frame (its watchdog's notice, `docs/develop/sleipnir.md`, "The watchdog") ends its attempts
+`infra: preempted` and requeues them at once (`attempts`, `Event::Preempting`).
+
 **Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
 `_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
 
 Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
-classes, the policy's statements, a prompting credential command), and [B] rows against the mock with its virtual
-clock (`start_describe_end_round_trip`, `a_retry_after_a_crash_returns_the_same_instance`).
+classes, the policy's statements, a prompting credential command, the market's fallback and restartability), and [B]
+rows against the mock with its virtual clock (`start_describe_end_round_trip`,
+`a_retry_after_a_crash_returns_the_same_instance`).
 
 ## Runners: cloud SSH
 

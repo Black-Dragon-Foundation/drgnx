@@ -283,3 +283,28 @@ gives it to an `ssh-agent` of its own, and signs a certificate for it that names
 The machine accepts certificates from that authority and nothing else. Its host keys are read from its console, where
 it prints them at first boot, and pinned: a machine whose console doesn't show them is never connected to, and a host
 key that changes later is refused.
+
+### Spot
+
+Cloud machines are spot machines by default, with on-demand when spot fails (`drgnx-runners-cloud-market`: `spot`,
+`on-demand`, or `spot-then-on-demand`, the default). Spot costs much less, but the provider may take the machine back
+with two minutes' notice (drgnx asks GCP for the same two minutes).
+
+- **A notice** is seen by the machine itself within 5 seconds. The hub stops sending it work, and its jobs go back to
+  the queue at once, to run elsewhere. That is never a strike against the machine and never a red result.
+- **When spot fails in a region** twice within an hour (two notices, or "no spot capacity" twice), drgnx uses
+  on-demand there for the next 6 hours.
+- **A job that can't be restarted** never runs on spot: with `spot-then-on-demand` it gets an on-demand machine, and
+  with `spot` it doesn't go to the cloud.
+
+### When a cloud machine ends itself
+
+Each machine drgnx starts runs a small watchdog of its own, so it ends even when drgnx doesn't come back:
+
+- **Idle:** with no job for the idle time (15 minutes by default), counted from its last job and drgnx's last request
+  for work, an AWS machine powers off, which ends it and its disks. On GCP the machine never powers itself off (a
+  stopped GCP machine still bills its disk); drgnx deletes it instead.
+- **drgnx gone:** its jobs run on to their own time limits and their results wait; 2 hours after drgnx was last in
+  touch (the unattended lifetime) an AWS machine powers off whatever runs.
+- **Lifetime:** at 8 hours an AWS machine powers off whatever runs; a GCP machine is deleted by GCP itself at its
+  deadline, set when it was started.

@@ -74,6 +74,9 @@ pub struct Config {
     pub profile: Profile,
     /// The machine's name in results (its host name).
     pub name: String,
+    /// A cloud machine's watchdog folder (`--watchdog DIR`): `serve` writes the hub's heartbeat for it and sends what
+    /// it notices (`preempting`, `idle`).
+    pub watchdog: Option<PathBuf>,
 }
 
 /// Letters, digits and `-`, not at either end: a prefix and a hub id are parts of unit, slice, container and file
@@ -86,9 +89,10 @@ fn plain(s: &str) -> bool {
 }
 
 impl Config {
-    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation`.
+    /// `--root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]`.
     pub fn parse(args: &[&str]) -> Result<Config, String> {
         let (mut root, mut prefix, mut hub_id, mut profile) = (None, None, None, None);
+        let mut watchdog = None;
         let mut it = args.iter();
         while let Some(a) = it.next() {
             let mut val = || {
@@ -106,6 +110,13 @@ impl Config {
                         "workstation" => Profile::Workstation,
                         p => return Err(format!("--profile is dedicated or workstation, not {p}")),
                     })
+                }
+                "--watchdog" => {
+                    let d = PathBuf::from(val()?);
+                    if !d.is_absolute() {
+                        return Err(format!("--watchdog must be absolute: {}", d.display()));
+                    }
+                    watchdog = Some(d);
                 }
                 other => return Err(format!("unknown option {other}")),
             }
@@ -128,6 +139,7 @@ impl Config {
             hub_id,
             profile: profile.ok_or("--profile is needed")?,
             name,
+            watchdog,
         })
     }
 
@@ -281,6 +293,12 @@ pub struct Serve<W: Write> {
     last_units: Instant,
     /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
     events: Option<mpsc::Sender<Event>>,
+    /// With `--watchdog`: the heartbeat as last written, and when.
+    heartbeat: crate::watchdog::Heartbeat,
+    heartbeat_written: Option<Instant>,
+    /// With `--watchdog`: the notice and the idle time already sent up.
+    sent_preempting: bool,
+    sent_idle: Option<u64>,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
@@ -314,6 +332,7 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
         match rx.recv_timeout(TICK) {
             Ok(Event::Frame(f)) => {
                 s.last_frame = Instant::now();
+                s.heard(&f);
                 if s.handle(f) == Next::Stop {
                     return 0;
                 }
@@ -375,6 +394,10 @@ impl<W: Write> Serve<W> {
             last_frame: now,
             last_units: now,
             events: None,
+            heartbeat: Default::default(),
+            heartbeat_written: None,
+            sent_preempting: false,
+            sent_idle: None,
         };
         s.load_running();
         Ok(s)
@@ -1476,6 +1499,66 @@ impl<W: Write> Serve<W> {
         cleanup::apply(&self.cfg.root, &cleanup::plan(&owner, &seen));
     }
 
+    /// A frame from the hub: with `--watchdog`, the heartbeat the watchdog reads (`contact` at every frame, `offer` at
+    /// every offer), written at most every 5 s unless an offer came.
+    fn heard(&mut self, f: &Frame) {
+        if self.cfg.watchdog.is_none() {
+            return;
+        }
+        let now = now_s();
+        self.heartbeat.contact = now;
+        let offer = matches!(f, Frame::Offer { .. });
+        if offer {
+            self.heartbeat.offer = now;
+        }
+        let due = self
+            .heartbeat_written
+            .is_none_or(|t| t.elapsed() >= crate::watchdog::POLL);
+        if !offer && !due {
+            return;
+        }
+        let path = self.cfg.root.join(crate::watchdog::HEARTBEAT);
+        let tmp = self
+            .cfg
+            .root
+            .join(format!(".{}.tmp", crate::watchdog::HEARTBEAT));
+        let body = serde_json::to_vec(&self.heartbeat).unwrap_or_default();
+        match fs::write(&tmp, body).and_then(|()| fs::rename(&tmp, &path)) {
+            Ok(()) => self.heartbeat_written = Some(Instant::now()),
+            Err(e) => eprintln!("sleipnir serve: the heartbeat {}: {e}", path.display()),
+        }
+    }
+
+    /// With `--watchdog`: what it noticed, sent up once each: the provider's notice as `preempting {at}`, the idle
+    /// time as `idle {since}` (GCP, where the hub ends the machine).
+    fn watchdog_news(&mut self) -> Next {
+        let Some(dir) = self.cfg.watchdog.clone() else {
+            return Next::Go;
+        };
+        let read = |name: &str| -> Option<u64> {
+            crate::watchdog::read_small(&dir.join(name))?
+                .trim()
+                .parse()
+                .ok()
+        };
+        if !self.sent_preempting
+            && let Some(at) = read(crate::watchdog::PREEMPTING)
+        {
+            self.sent_preempting = true;
+            if self.send(&Frame::Preempting { at }) == Next::Stop {
+                return Next::Stop;
+            }
+        }
+        let idle = read(crate::watchdog::IDLE);
+        if idle != self.sent_idle {
+            self.sent_idle = idle;
+            if let Some(since) = idle {
+                return self.send(&Frame::Idle { since });
+            }
+        }
+        Next::Go
+    }
+
     fn tick(&mut self) -> Next {
         if self.last_frame.elapsed() >= LINK_LOST_AFTER {
             eprintln!(
@@ -1496,6 +1579,9 @@ impl<W: Write> Serve<W> {
         let check_units = self.last_units.elapsed() >= READY_EVERY;
         if check_units {
             self.last_units = Instant::now();
+            if self.watchdog_news() == Next::Stop {
+                return Next::Stop;
+            }
         }
         let keys: Vec<(String, u32)> = self.live.keys().cloned().collect();
         let mut ended = false;

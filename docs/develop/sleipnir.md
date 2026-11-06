@@ -519,10 +519,11 @@ and the value is zeroed when the frame drops.
 ## serve
 
 ```
-sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
 ```
 
-The runner's end of the hub's control channel. It lives on stdin and stdout and exits at their end, at `bye`, or
+The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
+watchdog"). It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
@@ -628,6 +629,51 @@ them with its own `memory.max` and `cpu.max`. The result, as JSON on stdout:
 The run is bounded at 120 s, start-up included: past it the bench fails and removes its container. The caps it ran
 under go to stderr.
 
+## The watchdog
+
+```
+sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root RUNNER_ROOT --dir DIR
+```
+
+A cloud machine's own end (design §6.7.6), a system unit in drgnx's image, so it works with the hub gone, asleep or
+without credentials. Every 5 s (`watchdog::POLL`) it looks at three things:
+
+- **the jobs:** the attempt folders under `RUNNER_ROOT/jobs/` without `collected`: running, or a result waiting for the
+  hub. It reads the folder, so it needs no `serve`.
+- **the hub:** `RUNNER_ROOT/heartbeat.json`, `{contact, offer}` in Unix seconds, which `serve --watchdog DIR` writes:
+  `contact` at the hub's frames (at most every 5 s), `offer` at each offer (at once).
+- **the provider's notice:** AWS IMDSv2 (`PUT /latest/api/token`, then `spot/instance-action` with the token; the
+  instance's hop limit of 1 is enough on the machine itself), or GCE's `computeMetadata/v1/instance/preempted` with
+  `Metadata-Flavor: Google`.
+
+What it does is `watchdog::decide(provider, limits, look)`, pure (`Look {now, booted, last_job, jobs, heartbeat}`;
+times before the boot count as the boot):
+
+| | AWS | GCP |
+|---|---|---|
+| no job for the idle time, counted from the last job and the hub's last offer | `systemctl poweroff`, `Why::Idle` | writes `DIR/idle` (since when); `serve` sends `idle {since}` and the hub deletes the machine |
+| the unattended lifetime since the hub's last contact (or the boot), whatever runs | `poweroff`, `Why::Unattended` | nothing: the provider's `terminationTime` |
+| the lifetime since the boot, whatever runs | `poweroff`, `Why::Lifetime` | nothing: the provider's `terminationTime` |
+
+Pings alone never keep an idle machine: the hub stops a machine it has no work for by sending it no offer, so "the
+idle stop through the watchdog" needs no call. It never runs `halt` (that leaves an AWS instance running); a power-off
+of an instance started with `InstanceInitiatedShutdownBehavior=terminate` ends it and its volumes. On GCP a guest stop
+would leave a stopped VM with a billed disk and clear its deadline, so it never powers off. The boot time comes from
+`/proc/uptime`, so a restarted watchdog keeps the lifetime; its idle time counts from its own start (it can't know when
+the last job ended before it). A failed power-off is tried again at the next look; `DIR/poweroff` says why.
+
+A notice is written once to `DIR/preempting` (the time the machine goes, Unix seconds; GCE gives none, so its time is
+the moment it was seen). `serve --watchdog DIR` reads `DIR/preempting` and `DIR/idle` every 2 s and sends
+`preempting {at}` once and `idle {since}` at each new value. The hub stops offering to that runner, and its attempts end
+`infra: preempted` and requeue at once: neither a strike nor an eviction.
+
+It writes only in `DIR`, its own folder (root's in the image), each file by a new temporary file and a rename, and reads
+the runner's files with `O_NOFOLLOW | O_NONBLOCK`, regular files only, at most 64 KiB (`watchdog::read_small`), so a
+job that plants a link or a FIFO there can't steer a root process. The metadata requests are plain HTTP with a 2 s
+limit. A test build adds `--clock-file F` (the time is F's number, and the boot its first reading), `--poweroff-cmd PATH`
+and `--metadata-url URL` (`ratatoskr-mock cloud`'s `/__metadata/<instance>`). Built with `runner` on Linux only; any
+other build refuses the mode.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
@@ -639,7 +685,8 @@ protocol's rows `[D]`: every frame round-trips, unknown fields and frames are ig
 or printed, chunks over 1 MiB are refused, a job frame without its nonce doesn't parse, and a property that the reader
 never panics on any bytes. The default features add `serve`'s rows: admission waits for the admission lock and
 writes the reservation another scheduler then counts (`[B]`, the lock as the gate), the cleanup's plan matches
-prefix and label only (`[D]`), and the bench's readings, speed, result shape and capped argv (`[D]`). The bench's
+prefix and label only (`[D]`), the bench's readings, speed, result shape and capped argv (`[D]`), and the watchdog's
+table on AWS and GCP, its notices, answers and options (`watchdog::`, `[D]`, a test clock). The bench's
 runner-host row (`bench_runs_capped_and_under_2_minutes`, `[C]`) needs the default features: build `runner_host`
 without `--no-default-features` for it.
 
@@ -647,7 +694,10 @@ without `--no-default-features` for it.
 `test/runners/README.md`, "Fleet rows"), every row `[C]`: a new `serve` lists the running attempt after a cut
 channel and reattaches it; `serve` ends at `bye` and at an EOF and leaves nothing enabled, loaded or written outside
 its root; two hubs on one root and prefix never clean each other's; an update keeps the old bundle while its job runs;
-the log after a reconnect comes from the file by offset, byte for byte; linger is reported at every `hello`.
+the log after a reconnect comes from the file by offset, byte for byte; linger is reported at every `hello`. The
+hub's `tests/fleet_runners.rs` `watchdog::a_spot_notice_requeues_at_once_with_no_strike` (`[C]`, `fleet.sh up
+--runners 1 --cloud MOCK`) runs a real watchdog on a fake runner against the mock's metadata for a seeded instance:
+the mock's spot notice reaches the hub as `preempting`, and the parked job's attempt requeues with no strike.
 
 `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman. They are
 `#[ignore = "runner-host"]` and run only inside a fake runner (`test/runners/README.md`), never on a developer's
