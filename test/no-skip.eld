@@ -70,6 +70,8 @@
   "drgnx-agent-pair-hub/a-never-cell-drops-the-queued-writes"
   "drgnx-agent-pair-hub/toggle-reaches-the-hub-and-cancels-nothing"
   "drgnx-agent-pair-hub/module-off-turns-pair-off-and-cancels-nothing"
+  "drgnx-agents-editor-hub/follow-moves-with-the-agent"
+  "drgnx-agents-editor-hub/follow-here-stops-on-navigation"
   "drgnx-search/semantic-goes-through-hub"
   "drgnx-shell-env/a-real-zsh-login"
   "drgnx-shell-rc/a-path-with-dollar-and-quotes-sources-for-real"

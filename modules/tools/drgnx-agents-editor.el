@@ -28,6 +28,10 @@
   (load (expand-file-name "drgnx-agents-editor-line" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agents-editor-here)
   (load (expand-file-name "drgnx-agents-editor-here" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agents-follow)
+  (load (expand-file-name "drgnx-agents-follow" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-agents-follow-setup "drgnx-agents-follow")
+(declare-function drgnx-agents-follow-teardown "drgnx-agents-follow")
 (declare-function drgnx-agents-editor-here-setup "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here-teardown "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-line-setup "drgnx-agents-editor-line")
@@ -203,14 +207,24 @@ a session's identity."
   "Session id → (ORDINAL . LAST-ACTIVE) from the hub's `agent' snapshots.  Bounded by the live sessions: a snapshot
 without an ordinal (the session ended) removes its session.")
 
+(defvar drgnx-agents-editor--facts (make-hash-table :test 'equal)
+  "Session id → (:paired :held_by) from the hub's `agent' snapshots.  Dropped with the session's identity.")
+
+(defun drgnx-agents-editor-fact (session key)
+  "KEY (`:paired' or `:held_by') of SESSION's last snapshot, or nil."
+  (plist-get (gethash session drgnx-agents-editor--facts) key))
+
 (defun drgnx-agents-editor--note-snapshot (id snap)
   "Keep session ID's ordinal and last activity from its snapshot SNAP; the who-is-here marks follow a change."
   (when id
     (let ((old (car (gethash id drgnx-agents-editor--identities)))
           (ord (plist-get snap :ordinal)))
       (if ord
-          (puthash id (cons ord (or (plist-get snap :last_active) 0)) drgnx-agents-editor--identities)
-        (remhash id drgnx-agents-editor--identities))
+          (progn (puthash id (cons ord (or (plist-get snap :last_active) 0)) drgnx-agents-editor--identities)
+                 (puthash id (list :paired (plist-get snap :paired) :held_by (plist-get snap :held_by))
+                          drgnx-agents-editor--facts))
+        (remhash id drgnx-agents-editor--identities)
+        (remhash id drgnx-agents-editor--facts))
       (unless (eql old ord) (drgnx-agents-editor-here-identities-changed)))))
 
 (defun drgnx-agents-editor-ordinal (session)
@@ -259,6 +273,7 @@ without an ordinal (the session ended) removes its session.")
   (drgnx-agents-editor-draw-setup)
   (drgnx-agents-editor-line-setup)
   (drgnx-agents-editor-here-setup)
+  (drgnx-agents-follow-setup)
   (drgnx-module-hook 'drgnx-hub-event-functions event (event data) (drgnx-agents-editor--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions rewatch () (drgnx-agents-editor--rewatch))
   (drgnx-module-hook 'window-buffer-change-functions windows (frame) (drgnx-agents-editor-sync-windows frame))
@@ -274,6 +289,8 @@ without an ordinal (the session ended) removes its session.")
   (when (eq drgnx-agents-editor-here-ordinal-function #'drgnx-agents-editor-ordinal)
     (setq drgnx-agents-editor-here-ordinal-function nil))
   (clrhash drgnx-agents-editor--identities)
+  (clrhash drgnx-agents-editor--facts)
+  (drgnx-agents-follow-teardown)
   (maphash (lambda (view b) (drgnx-agents-editor--unwatch view b)) (copy-hash-table drgnx-agents-editor--views))
   (clrhash drgnx-agents-editor--states)
   (clrhash drgnx-agents-editor--views)

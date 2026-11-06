@@ -977,6 +977,7 @@ The commands of modules that need no installed package are in it, the later stag
                               settings-page-reset settings-page-history settings-page-open-source settings-page-convert
                               agents-follow       ; part 3: the agent line's follow key
                               agents-here-follow agents-here-panel agents-here-quit   ; part 3: the who-is-here list
+                              agents-follow-here agents-follow-resume agents-follow-stop agents-follow-panel   ; part 3: the follow window
                               agents-panel agents-panel-toggle agents-panel-older agents-panel-toggle-type
                               agents-panel-preset-1 agents-panel-preset-2 agents-panel-preset-3 agents-panel-make-default
                               agents-panel-send agents-panel-stop agents-panel-pause agents-panel-resume

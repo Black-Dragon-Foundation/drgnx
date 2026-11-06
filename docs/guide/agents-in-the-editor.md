@@ -39,8 +39,8 @@ part that exists so far: which buffers are watched.
 - The header, after the file's name, shows one line for the agent nearest your cursor: its mark, its name, what it is
   doing, the symbol it is in, and the step or plan entry it is on in quotes ("◆ Opus 2 · editing · parse_frame \"Wire
   the retry\""). With more agents in the file, "+N" says how many; clicking it opens who is in this file.
-- "F follow" (or the command **Follow Agent**) keeps that agent's name tag on in your buffer; again, or with no agent
-  near, stops.
+- "F follow" (or the command **Follow Agent**) follows that agent in a window of its own (see below) and keeps its
+  name tag on in your buffer; again, or with no agent near, stops.
 - While the line shows, the breadcrumb shortens to the file name so both fit. A large file's header and sticky
   scroll's scopes come first and are never replaced.
 
@@ -55,5 +55,21 @@ part that exists so far: which buffers are watched.
   name, what it does, file and line). On a row, RET opens the agent's file at its line and follows it, `o` opens the
   agent's panel, and `q` closes the list. (The keys are the profiles' rows for **Follow the Agent on the Row**, **Open
   the Agent's Panel from the Row** and **Close Who Is Here**.) **Who Is in This File** (`C-k h` in VS Code, `C-c w h`
-  in Emacs, `SPC a h` in Vim) lists the agents in the current file the same way. **Follow Agent** (`agents-follow`, `C-c w f` in the Emacs profile, `C-k f` in VS Code, `SPC a f` in Vim)
-  follows the agent nearest your cursor.
+  in Emacs, `SPC a h` in Vim) lists the agents in the current file the same way.
+
+## Following an agent
+
+**Follow Agent** (`agents-follow`: `C-c w f` in the Emacs profile, `C-k f` in VS Code, `SPC a f` in Vim) follows the
+agent nearest your cursor in a window on the right. The window shows the agent's file in its worktree, read-only, with
+point on the agent's cursor; the window scrolls only when that leaves its middle third. Its header line says "Following NAME · reading parse_frame — 'the agent's own step or plan entry'"
+with "Esc stop · W take the wheel · o panel". A file the agent changes is read again in place, so the text you are
+looking at stays put. The file is opened with only safe local variables (a `.dir-locals.el` an agent wrote asks
+nothing and runs nothing), no large-file question and no language server.
+
+- Moving about in the window (scrolling, a motion, a click, a search) pauses following: the header says "Paused
+  following · F resumes", and `F` jumps back to the agent.
+- Typing in the window does nothing but say "W takes the wheel from NAME".
+- `Esc` or `q` ends following and closes the window; `o` opens the agent's panel. When the agent finishes, the header
+  says so and the window stays until you close it.
+- **Follow in This Window** (`agents-follow-here`, in the palette) follows in the window you are working in instead;
+  any command there stops it at once.

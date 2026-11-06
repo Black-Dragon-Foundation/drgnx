@@ -24,9 +24,8 @@
 (declare-function drgnx-chrome-apply "drgnx-chrome")
 (declare-function drgnx-agents-editor-draw--line-pos "drgnx-agents-editor-draw")
 (declare-function drgnx-work-who-is-here "drgnx-work-code")
-(declare-function drgnx-agents-editor-draw--apply "drgnx-agents-editor-draw")
-(declare-function drgnx-agents-editor-frame "drgnx-agents-editor")
-(declare-function drgnx-agents-editor-watched-buffers "drgnx-agents-editor")
+(declare-function drgnx-agents-follow-start "drgnx-agents-follow")
+(declare-function drgnx-agents-follow-stop "drgnx-agents-follow")
 (defvar drgnx-chrome-mode)
 (defvar drgnx-agents-editor-apply-functions)
 (defvar drgnx-agents-editor-unwatch-functions)
@@ -143,13 +142,14 @@
           ('follow (drgnx-agents-editor-follow)))))))
 
 (defun drgnx-agents-editor-follow ()
-  "Follow the agent nearest point in this buffer (keeps its name tag on); again, or with none, stops following."
+  "Follow the agent nearest point in this buffer in a window of its own (its name tag stays on); again, or with none,
+stops following."
   (interactive)
   (let* ((e (drgnx-agents-editor-line--nearest drgnx-agents-editor-line--entries (point)))
          (session (and e (nth 2 e))))
-    (setq drgnx-agents-editor-followed (and session (not (equal session drgnx-agents-editor-followed)) session))
-    (dolist (b (drgnx-agents-editor-watched-buffers))
-      (when-let* ((f (drgnx-agents-editor-frame b))) (drgnx-agents-editor-draw--apply b f)))
+    (if (and session (not (equal session drgnx-agents-editor-followed)))
+        (drgnx-agents-follow-start session)
+      (drgnx-agents-follow-stop))
     (message (if drgnx-agents-editor-followed "Following %s" "Not following an agent")
              (or (and drgnx-agents-editor-followed (drgnx-agents-editor-line--handle e)) ""))))
 
