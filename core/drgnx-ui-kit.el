@@ -18,13 +18,34 @@
 (require 'drgnx-surfaces)
 (require 'drgnx-faces)
 
+(defconst drgnx-ui--icon-glyphs
+  ;; one per icon of etc/icons (`drgnx-look-icon'): the glyph a terminal frame or the setting `glyphs' shows
+  '((file-code "‹›" . "<>") (file-text "≡" . "=") (file-cog "⚙" . "*") (file-image "▣" . "#") (file-archive "▥" . "z")
+    (file "▯" . "-") (folder "▪" . "/") (folder-open "▫" . "/") (folder-git-2 "▪" . "/")
+    (chevron-right "›" . ">") (chevron-left "‹" . "<") (chevron-down "⌄" . "v") (chevron-up "⌃" . "^")
+    (plus "+" . "+") (minus "−" . "-") (ellipsis "…" . "...") (x "×" . "x") (check "✓" . "+")
+    (git-branch "⑂" . "Y") (git-merge "⑃" . "Y") (git-pull-request "⇄" . "<>") (git-commit-horizontal "○" . "o")
+    (circle-x "✕" . "X") (triangle-alert "⚠" . "!") (circle-check "✓" . "+") (circle-alert "!" . "!")
+    (layers "☰" . "=") (grip-vertical "⠿" . "::") (maximize-2 "▢" . "[]") (minimize-2 "–" . "-")
+    (message-square "▭" . "m") (scroll-text "≣" . "=") (list-checks "☑" . "x")
+    (monitor "▭" . "M") (laptop "▭" . "L") (server "☰" . "S") (globe "◍" . "@") (brain "◉" . "B")
+    (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
+    (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (square "■" . "#") (refresh-cw "↻" . "r")
+    (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
+    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#"))
+  "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
+that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already
+\(`circle', `search', `info', `flag') are in the table below.")
+
 (defconst drgnx-ui--default-glyphs
-  '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
-    (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
-    (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
-    (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
-    (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
-    (info "ℹ" . "i") (warn "⚠" . "!"))
+  (append
+   '((handle "⠿" . "::") (close "×" . "x") (branch "⑂" . "Y") (warning "⚠" . "!") (ok "✓" . "+")
+     (busy "◎" . "@") (waiting "◐" . "?") (paused "⏸" . "||") (ahead "↑" . "^") (behind "↓" . "v")
+     (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
+     (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
+     (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
+     (info "ℹ" . "i") (warn "⚠" . "!"))
+   drgnx-ui--icon-glyphs)
   "The standard glyph table: the default of `drgnx-face-glyphs', and where a name the option lacks is found.")
 
 (defcustom drgnx-face-glyphs drgnx-ui--default-glyphs

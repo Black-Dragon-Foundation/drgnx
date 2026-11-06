@@ -908,6 +908,25 @@ The font of panel titles and section heads.  `:family ui' is the UI font.  A cha
 | `:agents` | `never` |
 | `:schema` | `(or (enum follow-desktop) (plist (:family (or string (enum ui code)) "A family name, or ui / code for the same as that role") (:fallback (list-of string) "Families to try when the family is not installed") (:size number "A ratio to the code size (1.0 is the code size)") (:weight symbol "regular, semibold, bold, ...") (:line-height integer "Pixels per line (logical)") (:ligatures boolean "Ligatures on")))` |
 
+## drgnx-look-icons
+
+How the look draws its icons: `svg' (Lucide line icons in the text colour, on graphical frames) or `glyphs' (the
+characters of `drgnx-face-glyphs').  Terminal frames always show glyphs.  A change applies to the icons drawn from
+then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `svg` |
+| Type | `(choice (const :tag "Line icons" svg) (const :tag "Glyphs" glyphs))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-icons-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum svg glyphs)` |
+
 ## drgnx-look-theme
 
 The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
