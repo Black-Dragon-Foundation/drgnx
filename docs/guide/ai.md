@@ -396,6 +396,14 @@ it is never a setting, so your everyday hub records nothing. On replay the hub, 
 usual, and every provider is answered from the recording; a request that differs from what was recorded is refused
 with a `replay_miss` error that says where it differs ("re-record"), never answered by a guess.
 
+Outside agents (Claude Code, Codex, Gemini) are recorded too: what the hub and the agent said to each other, the
+agent's calls of drgnx's own tools (its decisions), the files and commits its own tools made in the session's
+worktree, and the model calls it made through the gateway. On replay a stand-in plays the agent from the recording:
+it answers as the agent did, makes the same tool calls, writes the same files and commits (with the same hashes) just
+before it reports them, and sends its model calls through your gateway again, so budgets and spend rows are real.
+If you prompt it differently, or answer a permission differently, the agent's session ends with a "replay miss"
+error instead.
+
 What is written never holds a key or a token: the gateway's keys and the tokens it issues are replaced by `$SECRET`
 before anything reaches the disk, no authorization header is stored, and a lint checks every file of a run. Live
 recordings stay on your machine; drgnx's own repository holds only recordings made from its scripted mock providers.

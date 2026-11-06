@@ -4,7 +4,9 @@
 use hermod::schema::v1::{
     PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse, SessionUpdate,
 };
-use hermod::{ClientCaps, Conn, ConnOpts, Error, Event, ForkInto, ForkPoint, Incoming};
+use hermod::{
+    ClientCaps, Conn, ConnOpts, Dir, Error, Event, ForkInto, ForkPoint, Incoming, LineTap,
+};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -47,6 +49,7 @@ fn opts() -> ConnOpts {
     ConnOpts {
         deadline: Duration::from_secs(10),
         stderr_tail: 4000,
+        ..ConnOpts::default()
     }
 }
 
@@ -240,6 +243,76 @@ async fn a_deadline_fails_the_call_not_the_conn() {
         .await
         .unwrap();
     assert_eq!(&*sid.0, "s9");
+}
+
+/// A line tap that keeps what it sees: each line with its direction and instant, and the exit.
+#[derive(Default)]
+struct Kept {
+    lines: std::sync::Mutex<Vec<(Dir, String, std::time::Instant)>>,
+    exits: std::sync::Mutex<Vec<(Option<i32>, String)>>,
+}
+
+impl LineTap for Kept {
+    fn line(&self, dir: Dir, line: &str, at: std::time::Instant) {
+        self.lines.lock().unwrap().push((dir, line.to_owned(), at));
+    }
+    fn exit(&self, code: Option<i32>, _signal: Option<i32>, stderr: &str) {
+        self.exits.lock().unwrap().push((code, stderr.to_owned()));
+    }
+}
+
+// Pattern C (handshake): every line the tap is asked about was answered or seen as an event first, and the exit comes
+// after the child's own Exit event.
+#[tokio::test]
+async fn a_tap_sees_both_directions_in_order() {
+    let tap = std::sync::Arc::new(Kept::default());
+    let o = ConnOpts {
+        tap: Some(tap.clone()),
+        ..opts()
+    };
+    let rest = format!(
+        "printf '%s\\n' '{}'; read p; echo tapped >&2; exit 0",
+        chunk("a", None)
+    );
+    let (conn, mut rx) = start(&script(&rest), o).await;
+    open(&conn).await;
+    while !matches!(next(&mut rx).await, Event::Update { .. }) {}
+    conn.cancel(&hermod::SessionId::new("s1")).unwrap();
+    let Event::Exit { code, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert_eq!(code, Some(0));
+    let lines = tap.lines.lock().unwrap().clone();
+    let seen: Vec<(Dir, String)> = lines
+        .iter()
+        .map(|(d, l, _)| {
+            let v: Value = serde_json::from_str(l).expect("a JSON line");
+            let what = v["method"]
+                .as_str()
+                .map_or_else(|| format!("answer {}", v["id"]), str::to_owned);
+            (*d, what)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (Dir::In, "initialize".to_string()),
+            (Dir::Out, "answer 1".to_string()),
+            (Dir::In, "session/new".to_string()),
+            (Dir::Out, "answer 2".to_string()),
+            (Dir::Out, "session/update".to_string()),
+            (Dir::In, "session/cancel".to_string()),
+        ]
+    );
+    assert!(
+        lines.windows(2).all(|w| w[0].2 <= w[1].2),
+        "the instants never go back"
+    );
+    let exits = tap.exits.lock().unwrap().clone();
+    assert!(
+        matches!(&exits[..], [(Some(0), stderr)] if stderr.contains("tapped")),
+        "{exits:?}"
+    );
 }
 
 fn fork_of(source: &hermod::SessionId, cwd: &str, at: Option<&str>) -> ForkInto {

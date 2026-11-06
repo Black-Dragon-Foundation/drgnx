@@ -165,9 +165,13 @@ It is generic (no drgnx type) and sits on `agent-client-protocol-schema` (the ty
 tail). There is no SDK role framework.
 
 - **Tasks.** A connection is one child, a writer task (lines to its stdin), a reader task (lines from its stdout) and
-  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail })` returns the `Conn`
+  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail, tap })` returns the `Conn`
   (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
   (1024 events buffer).
+- **The line tap** (`ConnOpts::tap`, a `LineTap`; a recording's, [recordings.md](recordings.md)): `line(Dir, line,
+  instant)` for every line, `In` on the writer task before it is written, `Out` on the reader task before it is
+  handled, so each direction keeps the wire's order and an answer is never seen before its request; `exit(code,
+  signal, stderr)` once, after the last line, with the tail `Exit` carries. `ConnOpts` is `Clone`, no longer `Copy`.
 - **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
   `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork_into`. Every
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
@@ -677,10 +681,17 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
-  to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
+  to a `ratatoskr-mock llm` once per turn, so its log counts requests; `--llm env` POSTs to the agent's own gateway
+  instead (`$ANTHROPIC_BASE_URL/v1/messages`, bearer `$ANTHROPIC_AUTH_TOKEN`, as Claude Code on a gateway profile).
+  `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
   fork's log line names `from`, `level`, `messageId`, `kept`, `turns`, `cwd`, `mcpServers` and `claude_options`.
+- `acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots JSON] [--strict]` is an outside agent replayed
+  from a recording's `acp/<n>.jsonl` (`mock_acp/replay.rs`, [recordings.md](recordings.md#the-acp-replayer)): it
+  claims a recorded connection, waits for each line the hub sent live, answers as the agent did, makes its MCP calls,
+  lands its worktree changes and re-sends its model calls through the gateway; anything else is a miss (-32099, a
+  line in FILE, exit 3). A hub started with `DRGNX_REPLAY` gives every agent profile this command.
 - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
   and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
   host's loopback.

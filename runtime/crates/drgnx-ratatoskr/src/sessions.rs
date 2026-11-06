@@ -82,8 +82,14 @@ impl Tool<Ctx> for AfterTool {
         args: serde_json::Value,
     ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
         Box::pin(async move {
+            // while recording, the call goes into its session's stream: an outside agent's MCP calls never cross
+            // the ACP pipe
+            let recorded = crate::recording::is_recording().then(|| args.clone());
             let r = self.0.call(ctx, args).await;
             if let Identity::Session { sid, .. } = &ctx.1 {
+                if let Some(args) = &recorded {
+                    crate::recording::mcp(sid, self.0.name(), args, &r);
+                }
                 ctx.0.hub().after_tool(sid, self.0.name()).await;
             }
             r

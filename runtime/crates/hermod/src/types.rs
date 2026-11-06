@@ -4,7 +4,8 @@ use crate::incoming::Incoming;
 use crate::schema::v1;
 use serde_json::Value;
 use std::fmt;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub use v1::{
     AgentCapabilities, AuthMethod, ClientCapabilities as ClientCaps, ContentBlock, McpServer,
@@ -12,11 +13,13 @@ pub use v1::{
 };
 
 /// How a connection behaves.  `deadline` bounds every call but `prompt` (a turn ends by its response, `cancel` or
-/// the child's exit); `stderr_tail` is how many characters of the child's stderr [`Event::Exit`] carries.
-#[derive(Clone, Copy, Debug)]
+/// the child's exit); `stderr_tail` is how many characters of the child's stderr [`Event::Exit`] carries; `tap`, when
+/// set, is told every line in both directions and the exit ([`LineTap`]).
+#[derive(Clone)]
 pub struct ConnOpts {
     pub deadline: Duration,
     pub stderr_tail: usize,
+    pub tap: Option<Arc<dyn LineTap>>,
 }
 
 impl Default for ConnOpts {
@@ -24,7 +27,36 @@ impl Default for ConnOpts {
         ConnOpts {
             deadline: Duration::from_secs(30),
             stderr_tail: 4000,
+            tap: None,
         }
+    }
+}
+
+impl fmt::Debug for ConnOpts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnOpts")
+            .field("deadline", &self.deadline)
+            .field("stderr_tail", &self.stderr_tail)
+            .field("tap", &self.tap.is_some())
+            .finish()
+    }
+}
+
+/// Which way a line went: `In` to the agent (written to its stdin), `Out` from it (read from its stdout).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dir {
+    In,
+    Out,
+}
+
+/// Sees a connection's lines as they pass (a recording).  `line` runs on the connection's own writer or reader task,
+/// before the line is written or handled, so the order of one direction is the wire's and an answer is never seen
+/// before its request; it must not wait long.  `exit` runs once, after the last line, with the child's status and
+/// the stderr tail that [`Event::Exit`] carries.
+pub trait LineTap: Send + Sync {
+    fn line(&self, dir: Dir, line: &str, at: Instant);
+    fn exit(&self, code: Option<i32>, signal: Option<i32>, stderr: &str) {
+        let _ = (code, signal, stderr);
     }
 }
 

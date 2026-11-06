@@ -1,0 +1,54 @@
+{"scenario": "recording/acp-round-trip", "requires": ["v1", "test-hooks"], "doc": "Pattern B (gates on the permission card, the transcript's entries and the session going idle). A mock Claude session is recorded (DRGNX_RECORD): its turn edits hello.txt, asks for an edit permission the user allows, records a decision through the hub's MCP tool and commits. acp/1.jsonl holds both directions, the MCP call and the worktree's effects; the manifest names the connection. Then the worktree and work.db go back to where the run started and a second hub replays it (DRGNX_REPLAY: the profile's command becomes ratatoskr-mock acp --replay): the same prompt and answer give the same transcript, the same decision row, the same file and the same commit hash, and no miss is written."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q && echo hello > hello.txt && git add hello.txt && GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z git -c user.name=t -c user.email=t@example.invalid commit -q -m base && cp -a $ROOT/work $ROOT/base"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do": "connect", "conn": "e", "hub": "live"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "tool:edit hello.txt\nask:permission edit\ncall:record_decision {\"kind\": \"build\", \"subject\": \"smoke ok\", \"reason\": \"the smoke\", \"seen_version\": 0}\ncommit smoke"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"permissions": {"$contains": [{"id": "$capture:req", "options": "$any"}]}}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid", "request": "$req", "option": "allow_once"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "agent", "text": "permission: allow_oncecall: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"stopReason\"", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"in\""}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"out\""}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"mcp\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"tool\":\"record_decision\"", "count": 1, "at_most": 1}
+{"do": "file", "path": "$ROOT/rec/acp/1.jsonl", "contains": "\"dir\":\"effect\"", "count": 2, "at_most": 2}
+{"do": "file", "path": "$ROOT/rec/manifest.json", "json": {"connections": [{"n": 1, "profile": "mock-claude", "opens_with": "session/new"}]}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "ls $ROOT/rec/effects/*/files/hello.txt && ls $ROOT/rec/effects/*/commits.bundle && git -C $ROOT/work rev-parse HEAD > $ROOT/live-head && git -C $ROOT/work log --format=%s -1 | grep -qx smoke"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select kind, subject from decision", "rows": [["build", "smoke ok"]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}, "within_ms": 10000}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mv $ROOT/work $ROOT/work-live && cp -a $ROOT/base $ROOT/work && mv $DATA/work.db $ROOT/live.db && rm -f $DATA/work.db-wal $DATA/work.db-shm"], "expect_code": 0}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/rec"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do": "connect", "conn": "f", "hub": "replay"}
+{"do": "send", "conn": "f", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "f", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "r", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "r", "json": {"id": 1, "result": {"id": "$capture:sid2", "name": "$string"}}}
+{"do": "send", "conn": "f", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid2"}}}
+{"do": "expect", "conn": "f", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid2", "text": "tool:edit hello.txt\nask:permission edit\ncall:record_decision {\"kind\": \"build\", \"subject\": \"smoke ok\", \"reason\": \"the smoke\", \"seen_version\": 0}\ncommit smoke"}}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"permissions": {"$contains": [{"id": "$capture:req2", "options": "$any"}]}}}}, "within_ms": 15000}
+{"do": "send", "conn": "r", "json": {"id": 3, "method": "agents/permission", "params": {"id": "$sid2", "request": "$req2", "option": "allow_once"}}}
+{"do": "expect", "conn": "r", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "f", "json": {"event": "agent-entries", "data": {"id": "$sid2", "entries": {"$contains": [["$any", {"type": "agent", "text": "permission: allow_oncecall: {\"ok\":true,\"n\":1,\"status\":\"proposed\",\"version\":1}committed: smoke"}]]}}}, "within_ms": 15000}
+{"do": "expect", "conn": "f", "json": {"event": "agent", "data": {"id": "$sid2", "session": {"status": "idle"}}}, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select kind, subject from decision", "rows": [["build", "smoke ok"]]}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(git -C $ROOT/work rev-parse HEAD)\" = \"$(cat $ROOT/live-head)\" && cmp $ROOT/work/hello.txt $ROOT/work-live/hello.txt && test -z \"$(git -C $ROOT/work status --porcelain)\""], "expect_code": 0}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "exists": false}

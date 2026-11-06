@@ -24,7 +24,10 @@
 //! `--script FILE`: its non-empty lines are programs (a literal `\n` in a line is a line break: several words); the n-th prompt of the process runs line n (a prompt after
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
 //! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
-//! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
+//! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn; `--llm env` POSTs
+//! it to the agent's own gateway (`$ANTHROPIC_BASE_URL/v1/messages`, `$ANTHROPIC_AUTH_TOKEN` as its bearer).
+//!
+//! `--replay DIR` makes it the ACP replayer of a recorded run instead (`replay.rs`; docs/develop/recordings.md).
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
 //! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
 //! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
@@ -38,6 +41,7 @@
 mod claude;
 mod codex;
 mod gemini;
+mod replay;
 
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -91,6 +95,9 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 pub fn run(args: &[String]) -> ! {
+    if args.iter().any(|a| a == "--replay") {
+        replay::run(args);
+    }
     let kind = match flag(args, "--as").as_deref() {
         Some("claude") => Kind::Claude,
         Some("codex") => Kind::Codex,
@@ -835,87 +842,92 @@ impl Agent {
 
     /// Call `tool` on the first stdio server of the session's `mcpServers`; its text, or why not.
     fn mcp(&mut self, sid: &str, tool: &str, args: &str) -> String {
-        let Some(spec) = self.sessions[sid].mcp.first().cloned() else {
-            return "no mcpServers".into();
-        };
-        let mut cmd = Command::new(spec["command"].as_str().unwrap_or("false"));
-        for a in spec["args"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            cmd.arg(a);
-        }
-        for e in spec["env"].as_array().into_iter().flatten() {
-            if let (Some(n), Some(v)) = (e["name"].as_str(), e["value"].as_str()) {
-                cmd.env(n, v);
-            }
-        }
-        let Ok(mut child) = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            return "cannot start the MCP server".into();
-        };
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            for l in std::io::BufReader::new(stdout)
-                .lines()
-                .map_while(Result::ok)
-            {
-                if let Ok(v) = serde_json::from_str::<Value>(&l) {
-                    let _ = tx.send(v);
-                }
-            }
-        });
-        let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
-        let _ = stdin.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ratatoskr-mock", "version": "0.1.0"}}})).as_bytes());
-        let _ = stdin.write_all(
-            format!(
-                "{}\n",
-                json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            )
-            .as_bytes(),
-        );
-        let _ = stdin.write_all(
-            format!(
-                "{}\n",
-                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": tool, "arguments": args}})
-            )
-            .as_bytes(),
-        );
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut out = "no answer".to_string();
-        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            match rx.recv_timeout(left) {
-                Ok(v) if v["id"] == 2 => {
-                    out = v["result"]["content"][0]["text"]
-                        .as_str()
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            v["error"]["message"]
-                                .as_str()
-                                .unwrap_or("no text")
-                                .to_string()
-                        });
-                    break;
-                }
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
-        drop(stdin);
-        let _ = child.kill();
-        let _ = child.wait();
-        out
+        mcp_call(self.sessions[sid].mcp.first(), tool, args)
     }
+}
+
+/// Call `tool` with ARGS (JSON text) on the stdio MCP server SPEC (an `mcpServers` entry); its text, or why not.
+fn mcp_call(spec: Option<&Value>, tool: &str, args: &str) -> String {
+    let Some(spec) = spec else {
+        return "no mcpServers".into();
+    };
+    let mut cmd = Command::new(spec["command"].as_str().unwrap_or("false"));
+    for a in spec["args"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        cmd.arg(a);
+    }
+    for e in spec["env"].as_array().into_iter().flatten() {
+        if let (Some(n), Some(v)) = (e["name"].as_str(), e["value"].as_str()) {
+            cmd.env(n, v);
+        }
+    }
+    let Ok(mut child) = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return "cannot start the MCP server".into();
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        for l in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Ok(v) = serde_json::from_str::<Value>(&l) {
+                let _ = tx.send(v);
+            }
+        }
+    });
+    let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
+    let _ = stdin.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ratatoskr-mock", "version": "0.1.0"}}})).as_bytes());
+    let _ = stdin.write_all(
+        format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        )
+        .as_bytes(),
+    );
+    let _ = stdin.write_all(
+        format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}})
+        )
+        .as_bytes(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut out = "no answer".to_string();
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(v) if v["id"] == 2 => {
+                out = v["result"]["content"][0]["text"]
+                    .as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| {
+                        v["error"]["message"]
+                            .as_str()
+                            .unwrap_or("no text")
+                            .to_string()
+                    });
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    out
 }
 
 fn sh(cwd: &PathBuf, cmd: &str) -> String {
@@ -935,8 +947,22 @@ fn sh(cwd: &PathBuf, cmd: &str) -> String {
     }
 }
 
-/// POST a small body to URL (`http://HOST:PORT/PATH`); the status line's code, or 0.
+/// POST a small body to URL (`http://HOST:PORT/PATH`); the status line's code, or 0.  URL `env` is the agent's own
+/// gateway, as Claude Code reaches it: `$ANTHROPIC_BASE_URL/v1/messages` with `$ANTHROPIC_AUTH_TOKEN` as its bearer.
 fn llm_call(url: &str, prompt: &str) -> u16 {
+    let (url, auth) = if url == "env" {
+        let Ok(base) = std::env::var("ANTHROPIC_BASE_URL") else {
+            return 0;
+        };
+        let token = std::env::var("ANTHROPIC_AUTH_TOKEN").unwrap_or_default();
+        (
+            format!("{}/v1/messages", base.trim_end_matches('/')),
+            format!("Authorization: Bearer {token}\r\nanthropic-version: 2023-06-01\r\n"),
+        )
+    } else {
+        (url.to_owned(), String::new())
+    };
+    let url = url.as_str();
     let rest = url.strip_prefix("http://").unwrap_or(url);
     let (hostport, path) = match rest.split_once('/') {
         Some((h, p)) => (h, format!("/{p}")),
@@ -949,7 +975,7 @@ fn llm_call(url: &str, prompt: &str) -> u16 {
     };
     let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     if s.write_all(req.as_bytes()).is_err() {

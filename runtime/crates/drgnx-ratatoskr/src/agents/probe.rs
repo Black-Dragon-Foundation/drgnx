@@ -85,6 +85,7 @@ async fn run(
     let opts = ConnOpts {
         deadline: wait,
         stderr_tail: STDERR_MAX,
+        tap: crate::recording::acp_tap(sid, None, &profile.name, &prep.spec, cwd),
     };
     let (conn, mut events) = match Conn::spawn(prep.spec, opts).await {
         Ok(c) => c,
