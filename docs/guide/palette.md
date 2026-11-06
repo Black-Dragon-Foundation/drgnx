@@ -34,3 +34,16 @@ open: when you have answered, the palette is there as you left it.
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction
 of the frame's height above the box) place it. No colours are set here: the theme's faces colour everything.
+
+## Rows
+
+Rows are in the UI font, 32 logical pixels high in the floating palette and 24 in the minibuffer. The letters you
+typed are in the accent colour, semibold; the current row is the selection colour. Each row shows its key as keycaps
+(`Ctrl` `Shift` `P`), from the key profile you use, and, for a command you ran lately, when ("used 2 min ago").
+The commands you ran from the palette come first, newest first, then the rest in their usual order; the list is grouped
+Commands, Files and Agents, and is kept in `palette-history.eld` in drgnx's state folder (200 commands at most).
+
+## The echo area
+
+With `ui/look` on, the echo area and the minibuffer are drawn on the same surface as the gap between the cards, and the
+prompt is in the accent colour.

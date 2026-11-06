@@ -12,6 +12,7 @@
 ;;; Code:
 (require 'seq)
 (require 'subr-x)
+(require 'hl-line)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-face-state)
@@ -346,6 +347,48 @@ On `after-change-major-mode-hook'."
              (setq drgnx-face--numbers-p nil)
              (display-line-numbers-mode -1))))))
 
+;;;; The editor: cursor, current line, inlay hints
+
+(defconst drgnx-face-editor-cursor '(bar . 2) "The cursor of a code buffer: a bar two pixels wide.")
+
+(defvar-local drgnx-face--editor-p nil "Non-nil in a buffer this module gave the editor's cursor and current line.")
+
+(defun drgnx-face-editor-maybe ()
+  "In a code buffer (the buffers that get line numbers): the bar cursor, unless a mode set one (the modal box), and
+the current line across the full width.  On `after-change-major-mode-hook'."
+  (when (and (not drgnx-face--editor-p) (drgnx-face--numbers-wanted-p))
+    (setq drgnx-face--editor-p t)
+    (when (eq cursor-type t) (setq-local cursor-type drgnx-face-editor-cursor))
+    (hl-line-mode 1)))
+
+(defun drgnx-face-editor-clear ()
+  "Give the current buffer its cursor and current line back, when this module set them."
+  (when drgnx-face--editor-p
+    (setq drgnx-face--editor-p nil)
+    (when (equal cursor-type drgnx-face-editor-cursor) (kill-local-variable 'cursor-type))
+    (hl-line-mode -1)))
+
+(defun drgnx-face--apply-editor (fn)
+  "Call FN in every open buffer."
+  (dolist (b (buffer-list)) (with-current-buffer b (funcall fn))))
+
+(defface drgnx-inlay-hint '((t :inherit (drgnx-ui-caption drgnx-text-subtle drgnx-selected-quiet)))
+  "An inlay hint: the caption face and the subtle text on the quiet selection."
+  :group 'drgnx-face)
+
+(defvar drgnx-face--eglot-waiting nil "Non-nil while one after-load hook waits for eglot.")
+
+(defun drgnx-face--apply-inlay-hints ()
+  "Give `eglot-inlay-hint-face' its spec: now when eglot is loaded, else once it loads."
+  (cond ((facep 'eglot-inlay-hint-face)
+         (drgnx-module-face-spec 'eglot-inlay-hint-face '((t :inherit drgnx-inlay-hint))))
+        ((not drgnx-face--eglot-waiting)
+         (setq drgnx-face--eglot-waiting t)
+         (eval-after-load 'eglot
+           (drgnx-modules-with-owner
+             (setq drgnx-face--eglot-waiting nil)
+             (when (facep 'eglot-inlay-hint-face) (drgnx-face--apply-inlay-hints)))))))
+
 (defvar drgnx-face--flymake-waiting nil
   "Non-nil while one after-load hook waits for flymake (so a setting changed often adds only one).")
 
@@ -492,6 +535,7 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (add-hook 'after-make-frame-functions #'drgnx-face-apply-frame)
   (add-hook 'enable-theme-functions #'drgnx-face--on-theme)
   (add-hook 'after-change-major-mode-hook #'drgnx-face-line-numbers-maybe)
+  (add-hook 'after-change-major-mode-hook #'drgnx-face-editor-maybe)
   ;; first on the stack, so last to run: the open frames go back once `default-frame-alist' has
   (let ((had (drgnx-face--frames-then)))
     (drgnx-modules-push-undo "ui/face open frames" (lambda () (drgnx-face--restore-frames had))))
@@ -501,6 +545,8 @@ F10's `menu-bar-open' has no menu to open on a toolkit frame whose bar is hidden
   (drgnx-face--sync-state)
   (drgnx-face--apply-dividers)
   (drgnx-face--apply-line-numbers)
+  (drgnx-face--apply-editor #'drgnx-face-editor-maybe)
+  (drgnx-face--apply-inlay-hints)
   (drgnx-face--apply-inline-problems)
   (drgnx-face--apply-line-spacing)
   (drgnx-face--apply-line-wrap)
@@ -513,7 +559,8 @@ open buffers, and the defaults it keeps a saved value of (line spacing, line wra
 puts back its options, `default-frame-alist' keys, face specs, the F10 remap, hooks and modes, the open frames' menu
 bar and scroll bars, and the status bar's segments and commands.  Idempotent."
   (setq drgnx-face--active nil drgnx-face--as-module nil drgnx-face--flymake-waiting nil
-        drgnx-topline--active nil)
+        drgnx-face--eglot-waiting nil drgnx-topline--active nil)
+  (drgnx-face--apply-editor #'drgnx-face-editor-clear)
   (drgnx-topline--off)
   (drgnx-quickhelp-off)
   (drgnx-start-teardown)
