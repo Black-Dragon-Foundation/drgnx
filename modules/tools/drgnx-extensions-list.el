@@ -380,6 +380,7 @@ ticket (an integer) has no row, nil."
                                   (if (plist-get st :since) (max 0 (floor (- (float-time) (float-time (plist-get st :since))))) 0))
                           'face 'drgnx-status-info))
        ('queued (propertize "queued" 'face 'shadow))
+       ('refused (propertize (or (plist-get st :error) "busy, try again") 'face 'drgnx-status-warn))
        ('failed (propertize (format "%s %s" (drgnx-face-glyph 'fail) (or (plist-get st :error) "failed with the batch"))
                             'face 'drgnx-status-fail))
        ('stopped (propertize "stopped" 'face 'shadow))

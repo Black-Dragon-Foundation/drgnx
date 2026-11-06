@@ -65,7 +65,8 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   sync lock and names the tickets in its `start` step. At the first step seen of each run and at each run's end the
   layer compares the queue with what the runs took, and a ticket still there (clicked after the run took the queue)
   gets one new run, so no click is stranded. When another drgnx holds `pending.eld` the click is not queued: the
-  row is `busy` with the hint "busy, try again" in `:error`, a refusal for now and never `failed`. `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
+  row is `refused` with the hint "busy, try again" in `:error` (shown in the warning face): a refusal for now, neither
+  a running job (no elapsed-time tick) nor `failed`; the next click replaces it. `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
   job by its id.
 - **Other jobs.** `(drgnx-extensions-jobs-run KIND ARGS… :callback FN)`: `upgrade` NAMES (`:stage`, `:staged`),
   `upgrade-all`, `rollback` N, `refresh`, `fetch-readme` ARCHIVE NAME, `plugin-install` PATH (`:replace`),
@@ -85,7 +86,7 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   (the names, or t with `:staged`), `upgrade-all` and `rollback` (t), and every queue run (the names of the clicks it
   takes, including a click that joins a waiting run) — runs `drgnx-extensions-jobs-before-functions` with (NAMES
   PLAN-FILE) before it starts.
-- **Rows.** `(drgnx-extensions-jobs-state ID)`, ID a package or a ticket, is a cache read: `(:status queued|busy|done|failed|stopped
+- **Rows.** `(drgnx-extensions-jobs-state ID)`, ID a package or a ticket, is a cache read: `(:status queued|busy|refused|done|failed|stopped
   :step :pkg :i :n :since :error :warnings :job :tickets)`. `drgnx-extensions-jobs-changed-functions` get the ids that
   changed; `drgnx-extensions-jobs-done-functions` get each ended job's id and result (`:status`, `:kind`, and `:plan`,
   its plan file's name).
