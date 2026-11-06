@@ -399,22 +399,30 @@ on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snaps
 ## The browser rows in a VM
 
 The agent browser's layer needs Landlock ABI 9 (Linux 7.1) on both sandbox tiers, and GitHub's Ubuntu runners, 24.04
-and 26.04 alike, boot Linux 7.0 (ABI 8). So each leg of `runtime.yml`'s `escape-host` runs the browser rows
+and 26.04 alike, boot Linux 7.0 (ABI 8). So the x64 legs of `runtime.yml`'s `escape-host` run the browser rows
 (`tests/browser_sandboxed.rs`) in a Fedora 45 VM, whose kernel has ABI 9 or later as the Fedora hosts drgnx supports
-do, right after its own sandbox lane, which leaves out exactly those rows (the names the test binary lists with
-`--list --ignored`). `.github/ci/browser-vm.sh`:
+do, right after their own sandbox lane, which leaves out exactly those rows (the names the test binary lists with
+`--list --ignored`). Under KVM the guest answers ssh about 20 s after QEMU starts.
 
-- `up DIR` installs QEMU and cloud-image-utils from apt, fetches the pinned Fedora Cloud image of the runner's
-  architecture and checks its sha256, and boots an overlay of it: KVM where the runner gives it (`/dev/kvm` is
-  opened to the runner's user), emulation otherwise. cloud-init makes a user `runner` with passwordless sudo and a key
-  made for the run; the script waits for ssh on a forwarded loopback port, at most 20 minutes.
+The arm64 legs skip the rows with a notice that says why. Those runners have no `/dev/kvm`, and an emulated (TCG)
+guest never answered ssh within 20 minutes (on 24.04 it reached emergency mode; on 26.04 the console showed nothing
+past the firmware's banner). The rows' only arm64-specific part is the browser host's seccomp filter, and the arm legs install that for real
+in gleipnir's own tests (`installed_filter_denies`, its `browser-` cases). The rest is the same code on both
+architectures, so the x64 VM covers it.
+
+`.github/ci/browser-vm.sh`:
+
+- `up DIR` installs QEMU and cloud-image-utils from apt, fetches the pinned x86_64 Fedora Cloud image and checks
+  its sha256, and boots an overlay of it: KVM where the runner gives it (`/dev/kvm` is opened to the runner's user),
+  emulation otherwise. cloud-init makes a user `runner` with passwordless sudo and a key made for the run; the script
+  waits for ssh on a forwarded loopback port, at most 20 minutes.
 - `put DIR PATH...` copies the job's `/usr/bin/bwrap` (bubblewrap 0.12.0; root's, as Gleipnir requires), `ratatoskr`,
   `gleipnir-probe`, `ratatoskr-mock`, the crate's `tests/data` and the test binary to the same paths in the VM:
   the binary names its data and its hub by absolute path. glibc builds of the runner run on Fedora's newer glibc.
 - `run DIR CMD` runs the rows (`--ignored --test-threads 1`) as `runner`; their exit is the step's.
 
-To bump the image, change its name and sha256 for both architectures (the `CHECKSUM` file beside the image, signed by
-Fedora's key); `drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm` holds the pins and the step order.
+To bump the image, change its name and sha256 (the `CHECKSUM` file beside the image, signed by Fedora's key);
+`drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm` holds the pin, the step order and the arm64 skip.
 
 ## What is cached
 
