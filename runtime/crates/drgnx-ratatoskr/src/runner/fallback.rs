@@ -9,13 +9,13 @@
 //!   USD budget) sets it running and lets the paused sessions go on.
 
 use super::{
-    Caller, Error, Loaded, changed, data_of, invalid, load, now, raise_card, route, service,
+    Caller, Error, Loaded, changed, invalid, load, now, raise_card, route, service,
     settle_cards, summary, tick,
 };
 use crate::front::Front;
 use norn::read::jobs::Job;
 use norn::read::tasks::Task;
-use norn::write::jobs::job_set;
+use norn::write::jobs::{pause_running, resume_job};
 use norn::write::tasks::force_status;
 use runstav::methods::agents::{AgentOp, DoParams, EntryType, SessionStatus, Snapshot, Transcript};
 use runstav::methods::jobs::{JobSummary, WithBudget};
@@ -233,20 +233,21 @@ pub(crate) async fn worker(
 /// A budget limit was reached below job JOB: the running job pauses and its `budget` card is made (its id; none when
 /// the job was not running).
 pub async fn pause_job(front: &Front, job: &str, title: &str, data: Value) -> Option<i64> {
-    let l = load(front, job, false).await.ok().flatten()?;
-    if l.job.status.as_deref() != Some("running") {
-        return None;
-    }
+    // only while it runs, read in the write: a job the user stopped a moment before stays stopped
     let jid = job.to_owned();
     let paused = front
         .writer
         .write(&service(), "coord/job-set", move |tx| {
-            job_set(tx, &jid, Some("paused"), None, now())
+            pause_running(tx, &jid, now())
         })
         .await;
-    if let Err(e) = paused {
-        tracing::warn!("plan run {job}: not paused: {e:?}");
-        return None;
+    match paused {
+        Ok(true) => {}
+        Ok(false) => return None,
+        Err(e) => {
+            tracing::warn!("plan run {job}: not paused: {e:?}");
+            return None;
+        }
     }
     let card = raise_card(front, &service(), job, None, "budget", title, data).await;
     changed(front, job).await;
@@ -283,34 +284,21 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
     let l: Loaded = load(front, id, false)
         .await?
         .ok_or_else(|| invalid(format!("No job {id}")))?;
-    let status = l.job.status.clone().unwrap_or_default();
-    if !matches!(status.as_str(), "paused" | "stopped") {
-        return Err(invalid(format!("Job {id} is {status}, not paused")));
-    }
-    let mut data = data_of(&l.job);
-    if data.contains_key(super::NEVER_APPROVED) {
-        return Err(invalid(format!(
-            "Job {id} was never approved: propose the plan again"
-        )));
-    }
-    if let Some(b) = p.budget.map(|b| b.get()) {
-        data.insert("budget".into(), json!(b));
-        set_budget(front, &l.job, b, false);
-    }
+    // the status, the never-approved mark and the data are read in the write itself, so a stop, a withdrawal or a
+    // pause that lands between is never undone with what was read before it
+    let budget = p.budget.map(|b| b.get());
     let jid = id.to_owned();
     front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            job_set(
-                tx,
-                &jid,
-                Some("running"),
-                Some(&Value::Object(data.clone())),
-                now(),
-            )
+            resume_job(tx, &jid, super::NEVER_APPROVED, budget, now())
         })
         .await
-        .map_err(crate::coord::fail)?;
+        .map_err(crate::coord::fail)?
+        .map_err(invalid)?;
+    if let Some(b) = budget {
+        set_budget(front, &l.job, b, false);
+    }
     settle_cards(front, caller, id, |c| {
         (c.kind.as_deref() == Some("budget")).then_some("resume")
     })

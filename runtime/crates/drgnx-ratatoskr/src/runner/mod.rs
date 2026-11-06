@@ -1573,24 +1573,24 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
     let l = load(front, id, false)
         .await?
         .ok_or_else(|| invalid(format!("No job {id}")))?;
-    settle_cards(front, caller, id, |c| {
-        (c.kind.as_deref() == Some("proposal")).then_some("reject")
-    })
-    .await?;
-    // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it
-    let rejected = (l.job.status.as_deref() == Some("proposed")).then(|| {
-        let mut data = data_of(&l.job);
-        data.insert(NEVER_APPROVED.into(), json!(true));
-        Value::Object(data)
-    });
+    // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it.
+    // Whether it still is one is read in the write itself: an approval that landed first is stopped like any running
+    // job, never marked, so its work can be resumed
     let jid = id.to_owned();
-    front
+    let withdrawn = front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::job_set(tx, &jid, Some("stopped"), rejected.as_ref(), now())
+            write_jobs::stop_job(tx, &jid, NEVER_APPROVED, now())
         })
         .await
         .map_err(fail)?;
+    // the proposal card is settled by whichever won: the approval's own settle says `approve`
+    if withdrawn {
+        settle_cards(front, caller, id, |c| {
+            (c.kind.as_deref() == Some("proposal")).then_some("reject")
+        })
+        .await?;
+    }
     for t in &l.tasks {
         front.core.runs.set_busy(&t.row.id, None);
     }

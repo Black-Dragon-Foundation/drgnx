@@ -2647,7 +2647,10 @@ waits for it and replaces what it would have done; a revision of a standing prop
 again only when it was withdrawn (or the user had rejected it). The withdrawal and `job/approve` each decide in their
 own store write whether the job is still `proposed` (`norn::write::jobs::withdraw_proposal`, `approve_proposal`), and
 the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
-and the withdrawal runs on, never stopped (every order tested). A say has at
+and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
+decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
+stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+`job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
 their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that

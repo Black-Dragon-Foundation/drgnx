@@ -169,7 +169,10 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 `--json` on `status` gives the same as JSON (an empty list is `[]`); `status` without an id lists every job.
 `--budget` wants a number of USD (`5`, `.5`), nothing else. `propose --auto` starts at once, with no proposal card;
 `--repo DIR` names the repository when the plan is not inside it. `resume` of a proposal you rejected (stopped before you approved it) is refused with "Job ID was
-never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. In Emacs: **Start Job from Plan…** (the
+never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. Whether
+a stopped job was still a proposal is decided in the hub's one write of the stop: reject a proposal in one place while
+you approve it in another, and the approval that lands first runs and is then stopped like any job (its work resumes);
+a budget pause never turns a job you just stopped back into a paused one. In Emacs: **Start Job from Plan…** (the
 proposal, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
 Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
 
