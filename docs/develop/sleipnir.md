@@ -415,9 +415,9 @@ blobs the hub must send (each once); `put(sha, bytes)` keeps a blob only when it
 aside and renamed. It is the `Blobs` a slot update reads.
 
 **The frames** (`sync-have`, `sync-need`, `blob`, `bundle {offset}`, `origin-fetch`) map onto these calls:
-`Store::missing` and `Mirror::has_commit` answer a `sync-have`, `Receiver::offset` and `append` take a `bundle`, and
-`fetch_origin` serves an `origin-fetch`. Until `serve` handles them, `sleipnir sync-bundle` (`test-hooks` only) takes
-one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
+`Store::missing`, `Mirror::has_commit` and `Mirror::ref_tips` answer a `sync-have`, `Receiver::offset` and `append`
+take a `bundle`, and `fetch_origin` serves an `origin-fetch` ("serve" below). `sleipnir sync-bundle` (`test-hooks`
+only) takes one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
 
 ## Disk and caches
 
@@ -498,7 +498,7 @@ does not parse.
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
-| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit; a blob; a bundle chunk at its offset (the last with the bundle's hash); a fetch from the project's origin |
+| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
 | `row` | runner → hub | a test row's name and verdict |
@@ -536,7 +536,8 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
 | `helper.sock`, `key.sock`, `proxy.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
 | `drgnx-key`, `drgnx-fwd`, `net-allow`, `key-use.sent` | the job's own copies of the bundle's binaries, the hub's allow-list, the `key-use` lines sent |
-| `src/`, `target/` | the job's source (mounted `ro,z`) and target dir, until slots come from sync |
+| `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
+| `tree/` | a synced job that writes its tree: its private copy of the slot |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
 
 **`hello`** must come first; a hub id other than `--hub-id` gets `bye`. Each `hello` re-probes the runner contract
@@ -551,9 +552,26 @@ reservation (`drgnx-<hub id>`, job `<id>-<attempt>`) before it lets go, so two s
 memory. The answer is `admit {grant}` or `refuse {why, reason}`. An offer whose folder exists is answered again from
 it when it is the same placement (hub and nonce), and refused otherwise. While the memory ladder is above normal, no
 offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
-holds across `serve` processes.
+holds across `serve` processes. An offer whose slot (`SlotKey` of its project, the hub's worktree and its trust) a
+running job reads at another input key is refused: a slot moves only between jobs (a job that writes the tree reads
+its own copy).
 
-**`start`** writes `job.json` (the shared podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
+**Sync.** Between `admit` and `start` the hub sends `sync-have`: the repository's mirror id, the commit and the overlay
+the runner's trust may get. `serve` answers `sync-need` with the overlay's blobs the store lacks, whether the mirror
+lacks the commit, and the mirror's ref tips (what a bundle may leave out). The hub sends blobs (chunks of at most
+1 MiB at an offset of the total; one is kept only whole and hashing to its name), a bundle (`bundle::Receiver`: a
+chunk past what is held is dropped, an overlap is skipped; at its total it is checked and fetched into the mirror) or
+`origin-fetch` (`Mirror::fetch_origin` in a thread of its own, so pings go on; its end comes back to the loop), and
+`serve` answers `sync-need` again after each. An `origin-fetch` with `cred` names the deploy key or token the hub sent
+just before in a `key` frame of the attempt: a `key` frame for a syncing attempt that hasn't started is held in memory
+for that fetch only (`Live::origin_cred`), never handed to the job, and goes to `fetch_origin` as `OriginCred::Https`
+for an `http(s)://` origin or `OriginCred::SshKey` otherwise; a fetch naming a key that didn't come fails the sync. A sync that fails (a bad repository id, a bundle that doesn't check, a
+fetch that fails) ends the attempt `infra: setup`, with why in its log.
+
+**`start`** of a synced attempt first moves its slot to the inputs (`slot::update` under the slot's update lock: the
+mirror's commit, then the overlay from the blob store) and runs the job on the slot, or on `slot::private_copy` in
+`tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
+podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed

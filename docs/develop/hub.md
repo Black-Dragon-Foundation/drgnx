@@ -964,6 +964,134 @@ else (Gemini, an agent without the capability) `summary`.
   `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
   sends the two events.
 
+## Revert to here
+
+A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
+
+- **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
+  card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
+  revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
+  `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
+  `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
+  restart, and is taken once on apply (`take_preview`, from whichever project holds it).
+  `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
+  Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
+  preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
+  `busy` (a revert of the tree runs).
+- **The user's work is never lost.** Each path the checkpoint and the files now differ in is the agent's alone when
+  it equals the agent's newest checkpoint (restored from the step's checkpoint), else the user's: a text file whose
+  edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
+  theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
+  user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
+  `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
+- **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
+  after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
+  none; the pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
+  revert from the files on.
+
+- **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
+  hub record after the step began, listed first on the card: the session's commits a remote already has (remote
+  tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
+  `acted` on, its decisions after the step that another decision depends on (`decisions/effects`' computed
+  dependents), the tasks it filed and the settings it changed (txs of the session; a setting through
+  `mcp:settings_change`), its commits already merged into its job's `job/<job>` branch, what the steps after it spent
+  (cost by unit and tokens), and its jobs that run or wait: the hub's own (`exec::Live`), then the runners queue's
+  queued rows and remote attempts (`runtime.db`'s `rq_job` and `rq_attempt`), each named with where it runs.
+- **When it must become a fork** (`timeline::effects::blocked(front, dependents, sid)` → `[Blocked {decision, commit,
+  session, branch}]`): a dependent commit of another session that the integration branch already holds (`git
+  merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
+  with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
+  them too.
+- **Writing into an agent's tree** (`history::tree`, `timeline::snapshot`). `tree::restorable(rel, extra)` refuses
+  the lock's `NEVER_RESTORED` (`PROTECTED_RO`: `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`; the same list a runner's returned patch is refused by) at any depth, any `.git` component, and the
+  secret files a snapshot leaves out (`snapshot::excludes`, with the settings' extra paths), component by component
+  (case-folded on macOS). `snapshot::restore_into(root, source, target, tree, only, extra)` makes a tree equal to a
+  checkpoint: what it holds now is written as a tree into the source's shadow repository, `snapshot::changed`
+  (`diff-tree -r -z --raw`, both sides' git modes) lists what differs, and each path is written by mode through
+  `eitri`: `100644`/`100755` with `write_regular` and the mode, `120000` with `symlink_beneath` (the target as
+  bytes), a path the checkpoint lacks with `remove_beneath`; a gitlink (`160000`) and a refused path are skipped and
+  listed. Nothing is chmodded through a path. `snapshot::tree_at(root, worktree, sid, seq)` is the nearest snapshot
+  at or below a step.
+- **The forward commit** (`tree::commit_in_sandbox(front, sid, cwd, paths, subject)`), as `git commit --only` but
+  quiet about a path neither side has (a deletion committed before a crash, a file never added): HEAD is read into
+  the commit's own index (`GIT_INDEX_FILE=.git/drgnx-commit-index`), the paths updated there (`update-index --add
+  --remove`), the index compared with HEAD (`diff-index --cached --quiet`: equal is nothing to commit), committed
+  (`commit --no-verify`, `core.hooksPath=/dev/null`, no signing), and the same paths updated in the worktree's own
+  index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
+  (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
+  (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
+  read-only, the provider's relay only), and the placeholders that launch made to pin absent protected files
+  (`.envrc`, `mise.toml`) are removed when it ends (`sandbox::remove_stubs_since`: only the ones after the mark it
+  took, so the session's own stubs stay bound); elsewhere with plain git. The commit is read from the ref files after
+  (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
+  crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
+  the common folder and fails.
+- **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
+  turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
+  the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
+  it is written: the checkpoint's blob, or the blob of the merged or edited text hashed as the watcher hashes what it
+  reads, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told: a worker's manager
+  (its row's `parent`) gets a message from the hub naming the worker, the step, the conversation and the commit. A
+  failure before
+  `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
+  a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
+  pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
+  held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
+  on its job, never applied: the returned-patch path asks `history::revert::patch_returned(front, sid, job)` first,
+  which is true while the session's revert runs, and the job is listed in `Applied.kept_patches`. Every order of these
+  is tested with skuld, composed with the turn and origin cores; the steps on a live session of the mock agent, a
+  hub stopped after a step and a second one finishing, are tested with a park hook (test builds only).
+- **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
+  base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
+  and `base` the step's head when that commit verifies there (a snapshot task's branch, named by its `.git/HEAD`, is
+  brought into the repository through its bundle first, `RunGit::import`: verified, fsck'd, written
+  compare-and-swap), else the worktree's recorded `base_commit`; the
+  checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
+  touched.
+
+## Fork from here
+
+A fork starts a second agent from one of a session's steps, in its own tree, while the source runs on
+(`history::branches`, user only, a direct act of the user's: no task, no job, no `job/propose`, no approval card, no
+budget chain; the forecast line the user saw is the editor's).
+
+- **`history/fork {session, seq, message, profile?}`** answers `Forked {id, branch, source_branch, path, level}`. In
+  order: the tree (`tree::fork_tree`, above), then the fork's history branch, then the conversation
+  (`rewind::fork_conversation` with the new session id the tree was named for, told the user's `message`, which is
+  required). The branch is named for the fork's tree (`wt/<id>`), so the tree's later changes land on it; it holds
+  the source tree's documents as they were at the step: `History::fork` at the record the step anchors
+  (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
+  the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
+  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
+- **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
+  tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
+  repository the fork was made from, never git in the tree, then what is left with `remove_dir_all`, which follows no
+  link), its history branch frozen. The branch is kept for compare and expires 90 days later as a frozen worktree does
+  (`History::expire`); its git branch stays.
+- **`history/compare {a, b}`** (two branch names, from `Forked`): the hunks B has that A does not, per file, each
+  with who wrote B's text (the peer's author), the record and the session and step that record names
+  (`History::compare`), from whichever project's history holds both.
+- **`history/take {from, worktree, hunks}`**: whole hunks of branch FROM (a hunk's `theirs_start`/`theirs_end` from
+  compare) into the worktree's branch as the user's new text, one `merge` record whose provenance is the source
+  element ids (`History::take`; part of a hunk is refused and nothing changes), then the files written through
+  `eitri`, each announced to the origin core first. A file whose disk differs from what its history holds is refused
+  (`stale`), so the user's unsaved or unrecorded work is never overwritten; a protected path is refused.
+- **`history/redo {session, op}`**: the revert OP put back. Each path the revert changed (the step's checkpoint
+  against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
+  since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
+  user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
+  revert, one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  hub: its conversation is not restored.
+- The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
+  session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
@@ -1123,6 +1251,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
+| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
@@ -1148,6 +1279,17 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
+| `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
+| `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
@@ -1163,7 +1305,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1174,7 +1316,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
 | `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
@@ -1184,13 +1326,19 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
+| `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
 | `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
+| `say/end` | user | `{id: Id}` | `boolean` | yes |
+| `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
+| `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2157,7 +2305,7 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight}` and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+image, weight, visibility, shared_overlay}`, its frozen inputs (below) and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
 honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
 `exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
@@ -2200,6 +2348,116 @@ runner's `hello` lists them, and jobs running here are adopted by the job layer,
 Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
+
+## Runners: sync and job trust
+
+`runners/sync.rs` (design §6.2, §6.6). **Inputs are frozen at submit**: when the queue knows a runner and the job may
+leave this machine (`Placement::may_leave`), `submit_of` calls `sync::freeze(tree, extras, visibility, shared_overlay,
+store)`: sleipnir's `capture` (the commit, its tree, the overlay against it, the input key), the origin's URL and the
+commits its `refs/remotes/origin/*` reach, how many commits of the job's are on none of them (`not_on`), and each
+overlay file's bytes copied into the hub's blob store (`<state>/runner-store/blobs/<sha256>`, sleipnir's `Store`). A file
+that changes while it is read refuses the freeze; a worktree that can't be frozen (not git, a submodule's change)
+makes the job `local_only`, logged. The frozen inputs (`Frozen`) go in the `rq_job` spec as `inputs`, and `rq_input`
+gets the manifest by input key (`rq_job.input_key`). No new migration: both came with runtime.db 9.
+
+**Job trust** (`job_trust(visibility, not_on_origin, keys)`): `private+keys` when the job names keys, `public` when
+`drgnx-runners-project-visibility` is `public` and every commit is on the origin, `private` otherwise. Placement gets
+`commits_not_on_origin` for a public project, so `forseti::why_here` says "runs here: N commits not on origin".
+
+**The overlay** (`overlay_for(job, runner trust)`): the lock's protected files (`agents::lock::PROTECTED_RO`) are left
+out for every runner: worktrees carry stub `.envrc` and `mise.toml` routinely, and the runner gets their committed
+versions. A shared runner gets an overlay only with `drgnx-runners-shared-overlay` on and every file passing
+`runstav::secrets::looks_like_secret`; otherwise the queue keeps the job off shared runners and says why
+(`QJob::shared_why`).
+
+**The sync** (`Queue::sync_have`, `sync_need`): an `admit` of an attempt with inputs is answered with `sync-have`
+(the repository's mirror id, `repo_id`; the commit, the tree, the overlay for that runner's trust) instead of `start`.
+The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, origin key)`:
+
+| Case | What the hub does |
+|---|---|
+| public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | the key in a `key` frame (recorded as `key_sent`), then `origin-fetch` naming it (`cred`); the key is `drgnx-runners-origin-key`, taken only while the hub holds it (else asked for, and the commit goes another way) |
+| over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
+| a small gap | a push; for now a bundle too |
+| a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
+
+then the blobs it lacks (only those of its own overlay, `send_blob` in 1 MiB chunks), and asks again; an empty answer
+starts the attempt. Past 6 rounds, or when a step fails, the attempt is cancelled with why logged (`give_up`). A
+verdict, requeue or loss drops the attempt's sync and its bundle file.
+
+Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
+bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
+shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
+
+## Runners: keys
+
+`runners/keys.rs` and `runners/redact.rs` (design §6.3, §6.6; the user's side is docs/guide/runners.md, "Keys").
+
+**Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
+(`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
+matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
+in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+
+**The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
+`gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
+value and more than 32 keys, naming the key, never the value). `runners/keys-held` answers the names. When an attempt
+needs a key the hub doesn't hold, `runners/need-keys {names}` goes to the user's connections; nothing answers it but a
+command the user runs.
+
+**Sending.** On a keyed attempt's `started` (never before), `Queue::send_keys` sends each held key it hasn't sent yet in
+its own `key` frame, only where `keys::trust_ok` (never `shared`; `my-cloud` only its list, empty until cloud runners
+come); each is a `key_sent` row. Keys taken later go to the started attempts still missing them. A `key-use` frame
+from an attempt the hub placed there becomes a `key_use` row, `runner_reported: true`. Rows go to memory (the last
+10 000) and to the graph (norn kind `key_sent` / `key_use`, written as `("hub", System)`); `runners/audit {job?, key?}`
+reads the graph, or memory when the graph can't be read.
+
+**Redaction.** `QRoute::write_log` (the link's `Route` hook for `log` frames) runs a keyed attempt's chunks through its
+`Redactor` before they reach the hub's copy: every value sent masked in its raw, base64 (both alphabets, padded or not)
+and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
+form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
+`start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
+its keys are held again (`runners/keys`), then it is attached from the copy's end. At `finished` the held tail is
+written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
+secret, never masking it.
+
+Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the-log-or-any-reply` [B] (conformance);
+`tests/fleet_keys.rs` [C] (one frame and one `key_sent` per key and one `key_use` per read, no key bytes on the runner;
+the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
+only and `memory.swap.max` 0).
+
+## Runners: returned data
+
+`runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
+wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+
+- `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
+  or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
+  `build.ninja`, `.ninja_log`, `.ninja_deps`, `config.status`) or an image (`oci-layout`; `.oci`, `.qcow2`, `.vmdk`,
+  `.vdi`, `.iso`, `.img`), by name, whatever a job declared.
+- `write(job_dir_fd, rel, bytes)`: both checks, then each folder on the way opened with `eitri::open_beneath` (a link
+  is refused) or made with `mkdirat` beneath the last one, then `eitri::write_regular` (0644; a link at the name is
+  replaced, never followed).
+- `archive_ok(tar)`: ustar (checksums checked; a ustar prefix, a GNU long name and a pax `path` taken; a global pax
+  `path` refused) holding only regular files and folders, every name through both checks; a link, device, FIFO,
+  any other type, a truncated entry or a missing end is refused.
+- `Patch::parse(from, bytes)` reads `git diff --full-index --binary` output: per file the paths before and after
+  (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
+  text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
+  attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
+  segment, `**` any segments, `dir/` the folder), a protected name (`lock::NEVER_RESTORED`, the list a revert never writes either) or `.git` at any depth, a bad path,
+  a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
+  hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
+  than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
+- **`shared`:** `Queue::apply` gives `Outcome::Done` the runner's name when its trust is `shared`; the job layer writes
+  it to the job's `shared` file, `finish` starts the summary with `shared_label` ("output from runner NAME (shared)"),
+  so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
+  (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
+
+Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
+`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
 
 ## Runners: health
 
@@ -2310,9 +2568,15 @@ a job use the same key. Rows written before this keep their old key.
 (`forecast.rs`, `norn::forecast::sample`), and so does a finished job's manager (`JOB#manager`). The sweep runs once
 at hub start, which backfills the history of earlier runs, and at the end of each runner tick; it takes what is due in
 pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
-second sweep and a task reopened after review are all the same query and leave one row per task. Every step with the
+second sweep and a task reopened after review are all the same query and leave one row per task. Because it runs
+every tick, the query reads no whole table of the graph: a finished job's manager sessions are found through the
+partial expression index `entity_manager_job` (work.db migration 11: live sessions whose `data.role` is `manager`, by
+`data.job`), compared as `+j.id` so the index is searched, and their steps through `step_session`. Every step with the
 task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
-A session with no task (a chat, a fork) makes no sample. The row's profile is the last session's, its model comes
+A session with no task (a chat, a fork) makes no sample. The row's profile and provider are those of the last session
+that is no review: the runner marks a task's reviewer session (`review` in its record), whose steps count on the task
+but whose profile is not the task's class (else the next proposal would find the worker's class empty and fall to
+the role). Its model comes
 from the profile's setting, a wake is a job wait and a cold one is longer than the cache TTL (assumed 300 s).
 
 ## The CDP broker
@@ -2589,3 +2853,132 @@ covers the next run at least 9 times in 10, provided past and future runs are ex
 breaks; hence the model in the key and a recent window. Keep the p90 of each pair as it stood before calibration:
 ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
 1, so the caller holds a scaled p90 at its p50 or above.
+
+**Prices and the hub's side** (`drgnx_ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
+cost. `rates_for` takes the rates of a profile from the setting `drgnx-agents-model-prices` (US dollars per million
+tokens, shipped dated `2026-11-01`; a cache price left out is the input price): the row with the longest key that is a
+prefix of the profile's model id; else, for a gateway profile, the provider's `:price (IN . OUT)` with every cache token
+at the input rate; else the row named for the profile's CLI (`claude`, for a Claude profile with no model set). No
+rate: the task is unpriced, and its cost is empty, never zero; a sample's own recorded cost serves only on the same
+profile. `prices_as_of` is the oldest date of a row. The cost unit is `usd` for a gateway profile and `usd-est` for a
+subscription's, which is an estimate.
+
+`ttl_of` is the prompt cache time to live of a profile in a role: 3600 s for a Claude subscription in any role and for a
+gateway Claude worker or manager (the lock asks for `LONG_CACHE_TTL`, `agents/lock.rs`), 300 s for everything else. The
+sweep passes it to `gather`, so a sample's cold wakes use the TTL its session had.
+
+`for_tasks` reads the newest 5000 samples, forms each task's class, simulates on `runner::agent_slots` slots (the number
+the tick starts at once) with a seed from the job key and every want's fields, widens each task by its class's size and
+the plan's totals by the smallest class's, and scales a task's p90 by its class's calibration factor when it has one.
+The plan's total has its own factor (a task's holds for that task alone and says nothing of a sum's p90): split
+conformal over whole plans, from `sample::plan_pairs`, the job's own `forecast_made` row (its total's tokens p90 before
+calibration) against what its tasks used, summed, managers apart, for `done` jobs whose every task that ran has its
+sample; the latest 200, at least 9. It scales the total's p90 of tokens, time and every cost unit, and the pace's
+added share, so the Autonomous rule's spend and week checks read the calibrated total; a session's forecast
+(`forecast/session`) has none. `forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows
+to keep). The wake line is a
+second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
+write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+**The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
+meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,
+at most 768 a provider, saved with the budgets in `runtime.db` (the `meters` field of the `budgets` row; a row saved
+before has none) and replayed when the hub starts, so a restart keeps the pace. `pace/get`'s rate still reads only the
+last 24 hours. A fall in the meter is a reset, a new segment: only rises count (`budget::rise_total`).
+`share_per_usd` is the rises over the `usd-est` that the provider's steps booked since the first kept reading; the
+account's meter includes use outside drgnx, so it is an estimate, high if anything. The plan's `added_share` is the
+plan's own `usd-est` draws on that provider (a second simulation with the same seed) times that ratio. `runs_out_p90`
+is true when the used share, the plan's p90 share and what the current rate adds before the reset reach 1; the
+forecast then warns, and the Autonomous preset's auto-start waits. `window` is `week` when the reset is more than a
+day off, else `short` ("this window"). No spend or no rise: no `added_share`, and the view says "no pace yet".
+
+| Method | Class | Answer |
+|---|---|---|
+| `forecast/get` | user | the forecast of a job, from its data as proposed |
+| `forecast/session` | user | one more run like a session: one task of its role and profile, nothing recorded |
+| `forecast/accuracy` | user | per role and profile, the share of finished tasks that took no more than their p90, and the median of actual over p50 |
+
+End to end, on mocks: `system/a-forecast-before-dispatch` proposes a plan on a subscription Claude mock and a gateway
+profile with a provider price, checks the card's range and the prior's basis before any worker exists, runs it to the
+end, and checks that each task's and the plan's rollup equal the step table summed in SQL, that the plan's `usd-est`
+equals what `budget/get` booked, that the gateway task's `usd` equals its spend rows, that `forecast/accuracy` has a
+row per role, and that the next proposal's implement task is forecast from its class of five. The rows wait on a
+condition with a deadline (`poll`), never a quiet period. `system/say-it-survives-a-restart` keeps a Say proposal,
+its card and its forecast across a second hub on the same root, where `say/revise` on the old planning session says
+the planning stopped. `system/mixed-providers-lease-clash-review-spend` checks cost per session, task and plan.
+
+## Say it
+
+One prompt becomes a proposed plan (`say.rs`). `say/start {text, repo, project?, profile?}` starts a planning session:
+a chat on `profile`, else the `say` route's first profile, which is the first `implement` route's when `say` has none
+(`runner::route`). It runs in a scratch folder of its own (no `cwd`: `spawn_plain`), with no repository, no task and
+no graph, so repository and graph text, the injection surface, never reach the session that shapes the plan. Its
+first prompt (origin `hub`) is the fixed instructions with the one block form, a digest of the profiles a task may
+name (those a job may run on), each role's route, the roles and the project's id (`say::digest`: settings only), and
+the user's words.
+
+The session's turn ends at the shell's `PromptDone` handling (`agents/session.rs`, where the last message is already
+read for `drgnx-report`): when its id is a planning session's (one set lookup), `(sid, message)` goes to `say::run`.
+A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block
+ends at the first line that is only "```" (a JSON string holds no raw line break, so a fenced command inside a task's
+body is never that line), and is parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
+`tasks` of `{n, title, role, profile?, deps, body}`, `budget` and `gate` only), and more than one block is refused.
+`say::check` then refuses, all at once: no title, no tasks or more than 32, a role other than `implement`, `test`,
+`docs`, `review` and `review-long`, a profile the settings do not have or a job may not run on
+(`runner::review::profile_refusal`), a body over 16 KiB, a dependency that is not there or goes round
+(`plan::check`), and a budget that is not a positive amount in `usd` or `usd-est`. A block that does not hold is
+answered with the reasons, twice at most; the third is `say-failed {id, why}` and the session is stopped. A block
+that holds is written as a graph plan as the user would (`plans/write`: each task's `role`, `profile` and `body`)
+and proposed with the repository `say/start` named, the smallest dollar budget of the block and its gate
+(`runner::propose_graph`): the job is `proposed` with its proposal card, whose title is the hub's (`card_title`),
+never the block's, and `say-proposal {id, job, started}` names it (`started`: the Autonomous preset started it at
+once, so nothing waits for an OK and the editor says so). The planning session's own use is the job's
+`data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
+
+A Say proposal waits for the user's OK (`job/approve`, a user-class method: an agent's connection is refused, and
+no word of the user's prompt or of the block is read for an OK) unless the Autonomous rule holds
+(`say::rule`, called from `runner::propose_job` before the job is written). All of these must hold, read with the
+manager's column (`MatrixGate::dry`, the project's and the plan's layers applied); the first that fails is why it
+waits, kept in the job's `data.waits`:
+
+1. the active preset is Autonomous (time presets and the away flag applied);
+2. `agents.start` with the number of tasks is Allow (Autonomous: up to 8);
+3. `spend` with the plan's p90 in `usd` plus its p90 in `usd-est`, the estimate counted as dollars, is Allow
+   (Autonomous: up to $150);
+4. nothing is unpriced;
+5. no meter would run out at the plan's p90 before it resets (`runs_out_p90`), whatever its `window`: Claude's one
+   meter blends the week with its 5 h window, the week's last day reads as `short`, and a meter with no reset known
+   is `short` too, so every window is checked and the reason names the one that would run out; and every
+   subscription a task runs on (a profile with no API key) has a pace with the plan's share known: a subscription
+   with no meter reading yet never starts alone.
+
+When it holds, the job is approved as the user's preset decided (`approve_job`, no proposal card) and a decision
+records it: kind `build`, author `user`, reason "started by the Autonomous preset within its cells".
+
+The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
+is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
+waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first and prompts
+again only when it was withdrawn (or the user had rejected it). The withdrawal and `job/approve` each decide in their
+own store write whether the job is still `proposed` (`norn::write::jobs::withdraw_proposal`, `approve_proposal`), and
+the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
+and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
+decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
+stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+`job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
+most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
+withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
+their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that
+was waiting is answered `say-failed` with that reason. A revision never stops a running job. The job's start is
+recorded before `say-proposal` goes out, so a revision the event prompts is refused at once. `agents/stop` or
+`agents/kill` of a planning session stops its planning: nothing
+more is prompted or proposed, and a proposal of it still proposed is stopped. `say/end {id}` stops the session and
+forgets it; its proposal is a job and stays. Say's state is memory only: after a restart `say/revise` answers "the
+planning stopped: say it again", and a proposal it made stays a job with its card.
+
+| Method | Class | Answer |
+|---|---|---|
+| `say/start` | user | the planning session's id |
+| `say/revise` | user | true (refused for a planning session the hub no longer holds, or whose job has started) |
+| `say/end` | user | true, or false for a session that is not a planning session |
+
+Events: `say-proposal {id, job, started}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.

@@ -149,6 +149,8 @@ pub struct DocUpdate {
 pub struct History {
     pub(crate) conn: rusqlite::Connection,
     pub(crate) active: crate::docs::Active,
+    /// The folder `history.db` is in.
+    pub(crate) dir: std::path::PathBuf,
 }
 
 impl History {
@@ -177,6 +179,7 @@ impl History {
         Ok(History {
             conn,
             active: Default::default(),
+            dir: dir.to_path_buf(),
         })
     }
 
@@ -242,6 +245,17 @@ impl History {
             params![name, kind.as_str(), base_commit],
         )?;
         Ok(BranchId(self.conn.last_insert_rowid()))
+    }
+
+    /// The branch NAME, when there is one (none made).
+    pub fn find_branch(&self, name: &str) -> Result<Option<BranchId>> {
+        Ok(self
+            .conn
+            .query_row("select id from branch where name = ?1", [name], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .map(BranchId))
     }
 
     /// BRANCH's base commit.
@@ -379,6 +393,9 @@ impl History {
             "branch",
             "pending",
             "preview",
+            "provenance",
+            "anchor",
+            "doc_cut",
         ];
         if !TABLES.contains(&table) {
             return Err(Error::Refused(format!("no table {table}")));

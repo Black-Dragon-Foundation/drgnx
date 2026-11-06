@@ -165,6 +165,32 @@ fn is_alive(s: &Snapshot) -> bool {
     s.status != Some(SessionStatus::Exited)
 }
 
+/// Session SID reviews a task: its record says so (`review`), so the task's forecast sample takes its worker's
+/// profile, not the reviewer's.  Best effort, as the session's own record is.
+async fn mark_review(front: &Front, sid: &str) {
+    use urdr::graph::entity::{self, Changes};
+    let id = format!("session:{sid}");
+    let refused = |e: urdr::graph::WriteError| norn::store::CoordError::Refused(e.to_string());
+    let r = front
+        .writer
+        .write(&user(), "agents/start", move |tx| {
+            let found = entity::by_id(tx.sql(), &id)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+            if let Some(e) = found.filter(|e| e.retired_tx.is_none()) {
+                let patch = Changes {
+                    data_patch: Some(json!({"review": true})),
+                    ..Changes::default()
+                };
+                entity::update(tx, e.n, None, patch).map_err(refused)?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid, "the reviewer's session is not marked: {e}");
+    }
+}
+
 fn count(data: &Map<String, Value>, bucket: &str, task: &str) -> i64 {
     data_for(data, bucket, task)
         .and_then(Value::as_i64)
@@ -634,6 +660,7 @@ impl PlanHooks {
         self.st()
             .reviewers
             .insert(tid.to_owned(), Reviewer { sid: sid.clone() });
+        mark_review(front, &sid).await;
         let prompt = format!(
             "[drgnx review {tid}] {}\n\nReview the changes: git diff job/{job}...HEAD.  Answer with a last line \
              VERDICT: pass, or VERDICT: fail: what to change.",

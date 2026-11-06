@@ -28,5 +28,25 @@ create table preview(
   json text not null, at real not null);
 ";
 
+/// Schema 2: where text applied by diff came from (the source's element ids), per record.
+const V2: &str = "
+create table provenance(op integer primary key references op(id), spans_blob blob not null);
+";
+
+/// Schema 3: anchors (a cursor on an element id, the version it was made at, who asked).  `op` is the newest record
+/// then (0: none), the oldest history the anchor still needs.
+const V3: &str = "
+create table anchor(
+  id integer primary key, doc integer not null references doc(id), branch integer not null references branch(id),
+  cursor_blob blob not null, frontier_blob blob not null, op integer not null, owner text not null);
+";
+
+/// Schema 4: where compaction cut a document's history on a branch: records up to and including `op` are past it.
+const V4: &str = "
+create table doc_cut(
+  doc integer not null references doc(id), branch integer not null references branch(id), op integer not null,
+  primary key (doc, branch)) without rowid;
+";
+
 /// Every migration, oldest first.
-pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1)];
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];

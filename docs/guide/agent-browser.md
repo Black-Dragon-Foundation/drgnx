@@ -21,6 +21,18 @@ With no card and no grant the browser reaches only the agent's own local servers
 a browser starts the session without one, says why in `agents/get` and shows one notice with the fix: no full
 sandbox tier, a kernel below Landlock ABI 9, or no browser found.
 
+## What your computer needs
+
+- **The full sandbox tier:** bubblewrap 0.12 or later with user namespaces, as for every agent job
+  ([agents.md](agents.md)). On Ubuntu 23.10 and later, AppArmor stops bwrap from making them until Ubuntu's
+  `bwrap-userns-restrict` profile is loaded; the doctor gives the command.
+- **Linux 7.1 or later** (Landlock ABI 9). Only ABI 9 lets the browser's layer refuse every Unix socket, so that a
+  compromised page cannot reach the agent's hub or MCP socket; below it a session gets no browser at all, on either
+  sandbox tier. Fedora 45 has it. Ubuntu 24.04 and 26.04 boot Linux 7.0 (ABI 8): there the browser needs a newer kernel
+  (a hardware-enablement or mainline kernel of 7.1 or later), and a sysctl or an AppArmor profile does not help.
+  `ratatoskr sandbox check` and the doctor's `agent-browser` line print the ABI this kernel has.
+- **A browser** (see [Which browser](#which-browser)), and a user systemd for the memory cap.
+
 ## What it can reach, and what a grant really gives
 
 | Target | Needs | Notes |

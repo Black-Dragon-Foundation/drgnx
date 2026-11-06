@@ -69,6 +69,26 @@ pub struct Made {
 
 const MANAGER: &str = "#manager";
 
+/// The finished jobs whose manager steps no sample covers yet, `?1` at most.  The sweep runs it every tick, so each
+/// job's managers are looked up through `entity_manager_job` (migration 11): the terms are the index's own, and the
+/// job id is compared as `+j.id`, with no affinity, which an expression index needs to be searched; then their steps
+/// through `step_session`.  Nothing reads the whole entity table.
+const MANAGER_DUE: &str = "select j.id || '#manager' from job j \
+     where j.status in ('done', 'stopped') \
+       and exists (select 1 from entity e join step s on s.session = e.id \
+                   where json_extract(e.data, '$.job') = +j.id \
+                     and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null \
+                     and s.turn_id is not null) \
+       and not exists (select 1 from entity e join step s on s.session = e.id \
+                       where json_extract(e.data, '$.job') = +j.id \
+                         and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null \
+                         and s.end is null) \
+       and coalesce((select max(s.id) from entity e join step s on s.session = e.id \
+                     where json_extract(e.data, '$.job') = +j.id \
+                       and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null), 0) \
+           > coalesce((select f.last_step from forecast_sample f where f.task = j.id || '#manager'), 0) \
+     order by j.id limit ?1";
+
 /// Up to LIMIT keys to (re)sample: finished tasks with closed steps and no sample covering their newest step, and
 /// finished jobs whose manager steps are not covered.
 pub fn due(conn: &Tx, limit: i64) -> Result<Vec<String>, CoordError> {
@@ -87,23 +107,7 @@ pub fn due(conn: &Tx, limit: i64) -> Result<Vec<String>, CoordError> {
     };
     let room = limit - i64::try_from(out.len()).unwrap_or(limit);
     if room > 0 {
-        let mut st = conn.prepare(
-            "select j.id || '#manager' from job j \
-             where j.status in ('done', 'stopped') \
-               and exists (select 1 from step s join entity e on e.id = s.session \
-                           where s.turn_id is not null and e.retired_tx is null \
-                             and json_extract(e.data, '$.role') = 'manager' \
-                             and json_extract(e.data, '$.job') = j.id) \
-               and not exists (select 1 from step s join entity e on e.id = s.session \
-                               where s.end is null and e.retired_tx is null \
-                                 and json_extract(e.data, '$.role') = 'manager' \
-                                 and json_extract(e.data, '$.job') = j.id) \
-               and coalesce((select max(s.id) from step s join entity e on e.id = s.session \
-                             where e.retired_tx is null and json_extract(e.data, '$.role') = 'manager' \
-                               and json_extract(e.data, '$.job') = j.id), 0) \
-                   > coalesce((select f.last_step from forecast_sample f where f.task = j.id || '#manager'), 0) \
-             order by j.id limit ?1",
-        )?;
+        let mut st = conn.prepare(MANAGER_DUE)?;
         let rows = st.query_map([room], |r| r.get::<_, String>(0))?;
         for r in rows {
             out.push(r?);
@@ -158,15 +162,33 @@ fn steps_where(conn: &Tx, filter: &str, key: &str) -> Result<Vec<S>, CoordError>
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// `(profile, role)` of session entity ID.
-fn session_facts(conn: &Tx, id: &str) -> Result<(Option<String>, Option<String>), CoordError> {
+/// `(profile, review)` of session entity ID: its profile, and whether it reviews the task (the runner marks it).
+fn session_facts(conn: &Tx, id: &str) -> Result<(Option<String>, bool), CoordError> {
     Ok(opt(conn.query_row(
-        "select json_extract(data, '$.profile'), json_extract(data, '$.role') from entity \
+        "select json_extract(data, '$.profile'), coalesce(json_extract(data, '$.review'), 0) from entity \
          where id = ?1 and retired_tx is null",
         [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
     ))?
-    .unwrap_or((None, None)))
+    .unwrap_or((None, false)))
+}
+
+/// The step of STEPS whose session did the task: the last one of a session that is no review (a reviewer's steps
+/// count on the task, but the task's class is its worker's), else the last.
+fn worker_step<'a>(conn: &Tx, steps: &'a [S]) -> Result<(&'a S, Option<String>), CoordError> {
+    let mut seen: Option<&str> = None;
+    for s in steps.iter().rev() {
+        if seen == Some(s.session.as_str()) {
+            continue;
+        }
+        seen = Some(&s.session);
+        let (profile, review) = session_facts(conn, &s.session)?;
+        if !review {
+            return Ok((s, profile));
+        }
+    }
+    let last = steps.last().expect("a task with steps");
+    Ok((last, session_facts(conn, &last.session)?.0))
 }
 
 /// The sample of TASK (`JOB#N`, or `JOB#manager`) from its steps and the gateway's spend; `None` when it has no
@@ -226,7 +248,7 @@ pub fn gather(
     if turns == 0 {
         return Ok(None);
     }
-    let (profile, _) = session_facts(conn, &last.session)?;
+    let (worker, profile) = worker_step(conn, &steps)?;
     let f = facts(profile.as_deref(), &role);
     let secs = |s: &S| s.end.map_or(0.0, |e| (e - s.start).max(0.0));
     let sum_class = |classes: &[&str]| -> f64 {
@@ -275,7 +297,7 @@ pub fn gather(
         project: last.project.clone(),
         role,
         profile,
-        provider: last.provider.clone(),
+        provider: worker.provider.clone(),
         model: f.model,
         brief_bytes,
         tasks,
@@ -449,6 +471,29 @@ pub fn made_pairs(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// The latest LIMIT (p90, actual) pairs of whole plans, newest first: what a job's forecast said of its total tokens
+/// (`forecast_made`'s row for the job itself, before calibration) and what its tasks used, summed (managers apart).
+/// Only a `done` job whose every task that ran has its sample counts, so a sweep that has not caught up never reads
+/// as a plan that used less.
+pub fn plan_pairs(conn: &Tx, limit: i64) -> Result<Vec<(f64, f64)>, CoordError> {
+    let mut st = conn.prepare(
+        "select m.tokens_p90, \
+           (select sum(s.tokens_in + s.tokens_out + s.cache_read + s.cache_write) from forecast_sample s \
+            where s.job = m.job and s.role <> 'manager') \
+         from forecast_made m join job j on j.id = m.job \
+         where m.task = m.job and j.status = 'done' \
+           and exists (select 1 from forecast_sample s where s.job = m.job and s.role <> 'manager') \
+           and not exists (select 1 from jtask t where t.job = m.job \
+                           and exists (select 1 from step st where st.task = t.id) \
+                           and not exists (select 1 from forecast_sample s where s.task = t.id)) \
+         order by m.made_at desc, m.rowid desc limit ?1",
+    )?;
+    let rows = st.query_map([limit], |r| {
+        Ok((r.get::<_, f64>(0)?, r.get::<_, i64>(1)? as f64))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -610,6 +655,55 @@ mod tests {
         put(&mut tx, &row).unwrap();
         put(&mut tx, &row).unwrap();
         assert_eq!(all(tx.sql(), 10).unwrap().len(), 1);
+    }
+
+    /// Pattern D. The reviewer's steps come last and count on the task, but the task's class is its worker's: the
+    /// sample takes the profile of the last session that is no review (a review session is marked `review`).
+    #[test]
+    fn a_reviewers_profile_is_not_the_tasks() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        job(&mut tx, "J", 1);
+        session(&mut tx, "w", "p1", "worker", "J");
+        entity::create(
+            &mut tx,
+            EntityNew {
+                id: "session:r".into(),
+                kind: "session".into(),
+                project: None,
+                title: Some("r".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"profile": "p2", "role": "worker", "job": "J", "review": true}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )
+        .unwrap();
+        step(
+            &tx,
+            "w",
+            Some("J#1"),
+            StepClass::Think,
+            (0.0, 4.0),
+            10,
+            Some("t1"),
+        );
+        step(
+            &tx,
+            "r",
+            Some("J#1"),
+            StepClass::Think,
+            (5.0, 9.0),
+            20,
+            Some("t2"),
+        );
+        finish(&mut tx, "J#1", "done");
+        let row = gather(tx.sql(), "J#1", &facts).unwrap().unwrap();
+        assert_eq!(row.tokens_in, 30);
+        assert_eq!(row.profile.as_deref(), Some("p1"));
     }
 
     /// Pattern D. A reviewer's steps carry the task they review and count on it.
@@ -1007,6 +1101,34 @@ mod tests {
         assert!(due(tx.sql(), 100).unwrap().is_empty());
     }
 
+    /// Pattern D. The sweep asks for its managers every tick: each finished job's manager sessions are found through
+    /// an index by the job, so the query never reads the whole entity table.
+    #[test]
+    fn the_manager_query_reads_no_whole_table() {
+        let c = db7();
+        let mut st = c
+            .prepare(&format!("explain query plan {MANAGER_DUE}"))
+            .unwrap();
+        let plan: Vec<String> = st
+            .query_map([100], |r| r.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            !plan
+                .iter()
+                .any(|d| d == "SCAN e" || d.starts_with("SCAN e USING")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter()
+                .filter(|d| d.starts_with("SEARCH e USING INDEX entity_manager_job"))
+                .count()
+                == 3,
+            "{plan:#?}"
+        );
+    }
+
     /// Pattern D. The tables have the numeric and id columns and nothing that could hold a brief; the brief is a length.
     #[test]
     fn the_tables_hold_no_text_from_a_brief() {
@@ -1101,5 +1223,66 @@ mod tests {
             made_pairs(tx.sql(), "implement", "p1", Some("opus"), 10).unwrap(),
             [(40.0, 10.0 + 1.0 + 10.0 + 2.0)]
         );
+    }
+
+    /// Pattern D. A whole plan pairs its total's p90 with what its tasks used, once the job is done and every task
+    /// that ran is sampled: a task still unsampled keeps the plan out.
+    #[test]
+    fn a_done_plan_pairs_its_total_with_its_tasks_summed() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        job(&mut tx, "J", 2);
+        session(&mut tx, "s1", "p1", "worker", "J");
+        for t in ["J#1", "J#2"] {
+            step(
+                &tx,
+                "s1",
+                Some(t),
+                StepClass::Think,
+                (0.0, 4.0),
+                10,
+                Some("t1"),
+            );
+            finish(&mut tx, t, "done");
+        }
+        let plan = Made {
+            job: "J".into(),
+            task: "J".into(),
+            made_at: 1.0,
+            role: None,
+            profile: None,
+            model: None,
+            tokens_p50: 20.0,
+            tokens_p90: 80.0,
+            secs_p50: 1.0,
+            secs_p90: 2.0,
+            cost_p50: None,
+            cost_p90: None,
+            cost_unit: None,
+            basis: "2 tasks".into(),
+            n: 0,
+        };
+        record_made(&mut tx, std::slice::from_ref(&plan)).unwrap();
+        crate::write::jobs::job_set(&mut tx, "J", Some("done"), None, 5.0).unwrap();
+        let one = gather(tx.sql(), "J#1", &facts).unwrap().unwrap();
+        put(&mut tx, &one).unwrap();
+        assert!(
+            plan_pairs(tx.sql(), 10).unwrap().is_empty(),
+            "J#2 not sampled yet"
+        );
+        let two = gather(tx.sql(), "J#2", &facts).unwrap().unwrap();
+        put(&mut tx, &two).unwrap();
+        let used = (one.tokens_in
+            + one.tokens_out
+            + one.cache_read
+            + one.cache_write
+            + two.tokens_in
+            + two.tokens_out
+            + two.cache_read
+            + two.cache_write) as f64;
+        assert_eq!(plan_pairs(tx.sql(), 10).unwrap(), [(80.0, used)]);
+        // a job that is not done is no plan pair
+        crate::write::jobs::job_set(&mut tx, "J", Some("stopped"), None, 6.0).unwrap();
+        assert!(plan_pairs(tx.sql(), 10).unwrap().is_empty());
     }
 }

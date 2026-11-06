@@ -53,9 +53,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/ci/changes.sh .github/ci/paths.txt | tee -a "$GITHUB_OUTPUT"
 
+  # The prebuilt images of this checkout's inputs, as ci.yml's job: each missing tag built once before the tiers pull
+  # it; this repository's own runs only (a fork's tiers build their own, and the gate lets this be skipped there)
+  images:
+    name: Test images
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
+
+  # after the images, whatever they did (`!cancelled()`: a job without its image builds it)
   tiers:
     name: Tiers
-    needs: changes
+    needs: [changes, images]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.tiers != '') }}
     permissions:
       contents: read
@@ -71,7 +82,7 @@ jobs:
   gate:
     name: GUI tier gate
     if: always()
-    needs: [changes, tiers]
+    needs: [changes, images, tiers]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -83,4 +94,6 @@ jobs:
       - uses: ./.github/actions/gate
         with:
           needs: ${{ toJSON(needs) }}
-          allow-skipped: ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}
+          allow-skipped: >-
+            ${{ needs.changes.result == 'success' && needs.changes.outputs.tiers == '' && 'tiers' || '' }}
+            ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}

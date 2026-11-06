@@ -1,12 +1,8 @@
 //! Rewinding and forking an agent's conversation at a step (`docs/develop/hub.md`, "Rewind and fork"): the level a
 //! provider can restore ([`expected_level`]) and the point a conversation is cut at for a step ([`point_for`]).  A
 //! fork always runs in a fresh process (`session::Attach::Fork`), so the lock is applied and verified at launch.
-//! [`rewind_conversation`] and [`fork_conversation`] are the conversation half of a revert and a fork; the history
-//! methods that call them come with the revert.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the revert and the fork methods")
-)]
+//! [`rewind_conversation`] and [`fork_conversation`] are the conversation half of a revert and a fork
+//! (`history::revert`, `history::branches`).
 
 use super::session::{self, Again, Attach};
 use super::{Hub, Origin, handoff};
@@ -234,7 +230,7 @@ fn needs_message() -> Error {
 
 /// The level PROVIDER's agent would restore: from CAPS when its agent is running, else as if it can fork (a fork it
 /// cannot do lands at Summary at the launch, which says so).
-fn planned_level(provider: Option<Provider>, caps: Option<&Value>) -> RestoreLevel {
+pub(crate) fn planned_level(provider: Option<Provider>, caps: Option<&Value>) -> RestoreLevel {
     let assumed = serde_json::json!({"sessionCapabilities": {"fork": {}}});
     expected_level(provider, Some(caps.unwrap_or(&assumed)))
 }
@@ -313,7 +309,7 @@ pub(crate) async fn rewind_conversation(
 }
 
 /// Who a session was, from its row or, for a finished one, its `session:<sid>` entity: profile, cwd and task.
-async fn source_of(
+pub(crate) async fn source_of(
     hub: &Hub,
     front: &Front,
     sid: &str,
@@ -339,7 +335,9 @@ async fn source_of(
 /// A new session from step T.seq of hub session T.sid, in CWD, on PROFILE (none: the source's), told FIRST (the
 /// user's message): the source keeps running.  The same provider forks the conversation the step ran in, at the cut;
 /// another provider starts a new conversation told the labelled summary.  A finished source is read from its entity.
-/// The new session is linked `forked_from` its source with `{seq, level}`.
+/// The new session is linked `forked_from` its source with `{seq, level}`.  SID is its id when the caller made one
+/// first (the fork's tree is named for it), else a new one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn fork_conversation(
     hub: &Hub,
     front: &Front,
@@ -348,6 +346,7 @@ pub(crate) async fn fork_conversation(
     cwd: &Path,
     profile: Option<&str>,
     first: String,
+    sid: Option<String>,
 ) -> Result<(Started, RestoreLevel), Error> {
     let (src_profile, src_cwd, task) = source_of(hub, front, &t.sid).await?;
     let name = profile.unwrap_or(&src_profile).to_owned();
@@ -381,7 +380,7 @@ pub(crate) async fn fork_conversation(
     let told = first_text(point.level, &point, front, t, ctx, Some(first.clone())).await?;
     let p: StartParams = serde_json::from_value(serde_json::json!({"profile": name, "cwd": cwd}))
         .map_err(|e| session::invalid("cwd", e.to_string()))?;
-    let (started, landed) = session::open_with(hub, front, p, caller, None, None, &attach).await?;
+    let (started, landed) = session::open_with(hub, front, p, caller, None, sid, &attach).await?;
     let level = landed.unwrap_or(RestoreLevel::Summary);
     let text = if level == point.level {
         told.unwrap_or(first)

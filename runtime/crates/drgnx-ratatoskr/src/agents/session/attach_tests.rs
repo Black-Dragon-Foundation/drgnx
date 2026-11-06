@@ -6,8 +6,8 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 /// A front whose settings hold the mock profiles, in a folder of its own: `mock-claude` (log `a.log`) and
-/// `mock-claude-refusing` (its `default` mode refused, log `b.log`) on one `--state` folder, and `mock-gemini`
-/// (log `g.log`).  Its hub records sessions in `runtime.db` and keeps transcripts and queues in `hub/`.
+/// `mock-claude-refusing` (its `default` mode refused, log `b.log`) on one `--state` folder, `mock-gemini`
+/// (log `g.log`) and `mock-codex` (log `c.log`).  Its hub records sessions in `runtime.db` and keeps transcripts and queues in `hub/`.
 pub(crate) struct Fx {
     pub dir: tempfile::TempDir,
     pub front: Front,
@@ -67,6 +67,7 @@ impl Fx {
                 cmd("claude", "b.log", " \"--refuse-mode\" \"default\""),
             ),
             ("mock-gemini", "gemini", cmd("gemini", "g.log", "")),
+            ("mock-codex", "codex", cmd("codex", "c.log", "")),
         ];
         let list: Vec<String> = profiles
             .iter()

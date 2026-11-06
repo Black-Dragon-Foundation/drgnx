@@ -18,6 +18,8 @@
 //! | `brief/*` | [`crate::brief`] |
 //! | `timeline/get` | [`crate::timeline`] |
 //! | `budget/*`, `pace/get` | [`crate::budget`] |
+//! | `forecast/*` | [`crate::forecast`] |
+//! | `say/*` | [`crate::say`] |
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
@@ -63,6 +65,8 @@ pub struct Core {
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
     /// The edit history of each open project ([`crate::history`]).
     pub history: crate::history::wire::Hubs,
+    /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
+    pub say: crate::say::Say,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -76,7 +80,8 @@ pub async fn serve(
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
     use crate::{
-        agents, brief, budget, exec, manager, matrix_gate, records, runner, runners, timeline, work,
+        agents, brief, budget, exec, forecast, manager, matrix_gate, records, runner, runners, say,
+        timeline, work,
     };
     let (f, c) = (front, caller);
     Ok(match p {
@@ -131,6 +136,12 @@ pub async fn serve(
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
+        Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
+        Params::ForecastSession(p) => answer(forecast::session(f, p).await),
+        Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
+        Params::SayStart(p) => answer(say::start(f, c, p).await),
+        Params::SayRevise(p) => answer(say::revise(f, c, p).await),
+        Params::SayEnd(p) => answer(say::end(f, c, p).await),
         Params::RecordsImport(p) => answer(records::import(f, c, p).await),
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
@@ -147,8 +158,18 @@ pub async fn serve(
         Params::HistoryBatch(p) => answer(crate::history::wire::batch(f, c, p).await),
         Params::HistoryResync(p) => answer(crate::history::wire::resync(f, c, p).await),
         Params::HistoryUnregister(p) => answer(crate::history::wire::unregister(f, c, p).await),
+        Params::HistoryRevertPreview(p) => answer(crate::history::revert::preview(f, c, p).await),
+        Params::HistoryRevertApply(p) => answer(crate::history::revert::apply(f, c, p).await),
+        Params::HistoryFork(p) => answer(crate::history::branches::fork(f, c, p).await),
+        Params::HistoryForkDrop(p) => answer(crate::history::branches::drop_fork(f, c, p).await),
+        Params::HistoryCompare(p) => answer(crate::history::branches::compare(f, c, p).await),
+        Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
+        Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
+        Params::RunnersKeys(p) => answer(runners::methods::keys(f, c, p).await),
+        Params::RunnersKeysHeld(p) => answer(runners::methods::keys_held(f, c, p).await),
+        Params::RunnersAudit(p) => answer(runners::methods::audit(f, c, p).await),
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),

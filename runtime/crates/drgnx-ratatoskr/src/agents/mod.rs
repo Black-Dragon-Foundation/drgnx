@@ -220,6 +220,8 @@ impl Hub {
 
     /// After a restart: the recorded sessions resumed, their queued prompts delivered.
     pub async fn resume_all(&self, front: &Front) {
+        // a revert a crash cut short is finished before its session resumes
+        crate::history::revert::finish_pending(front).await;
         session::resume_all(self, front).await;
     }
 

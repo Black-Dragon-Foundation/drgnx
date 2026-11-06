@@ -4,9 +4,9 @@
 //! [`super::Hooks`].
 
 use super::{
-    GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in, raise_card,
-    service, settle_cards, update_data, user,
+    GitError, GitFuture, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, agent_slots,
+    changed, clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in,
+    raise_card, service, settle_cards, update_data, user,
 };
 use crate::agents::Origin;
 use crate::coord::fail;
@@ -72,7 +72,7 @@ pub async fn once(front: &Arc<Front>) {
     crate::forecast::sweep(front).await;
 }
 
-/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`MAX_AGENTS`]) in the
+/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`agent_slots`]) in the
 /// run order, the job is done when every task is.
 pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Error> {
     let Some(l) = load(front, id, false).await? else {
@@ -178,7 +178,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
     for t in ordered(&l.tasks, &data) {
         if t.row.status.as_deref() == Some("ready")
             && runs.busy_of(&t.row.id).is_none()
-            && count < MAX_AGENTS
+            && count < agent_slots(front)
             && data_for(&data, "blocked", &t.row.id).is_none()
         {
             runs.set_busy(&t.row.id, Some("starting"));

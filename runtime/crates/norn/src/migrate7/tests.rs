@@ -949,7 +949,7 @@ fn a_fresh_file_is_schema_7() {
     let schema = |c: &Connection| {
         rows(
             c,
-            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' and name not like 'forecast%' and name not in ('decision', 'worktree_base') order by name",
+            "select type, name, tbl_name, sql from sqlite_master where name not like 'sqlite_%' and name not like 'step%' and name not like 'forecast%' and name not in ('decision', 'worktree_base', 'entity_manager_job') order by name",
         )
     };
     let (_m, migrated_conn, _) = migrated();

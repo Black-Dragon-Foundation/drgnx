@@ -4,8 +4,8 @@
 //! recorded since the branch's previous commit; the fallback `drgnx-report` block.
 //!
 //! A plan in the graph is a `plan` entity whose tasks are `task` entities under it (`parent_of`), each with
-//! `data.{number, model, interfaces, steps, role}`; a task waits on the tasks that `block` it.  Git runs in blocking
-//! tasks (never on the tick).
+//! `data.{number, model, interfaces, steps, role, profile, body}`; a task waits on the tasks that `block` it.  Git runs
+//! in blocking tasks (never on the tick).
 
 use crate::coord::{Writer, fail};
 use crate::dispatch::Caller;
@@ -163,7 +163,10 @@ pub(crate) async fn scope_of(f: &Front, c: &Caller) -> Result<Scope, Error> {
 /// A plan as the graph has it, with what the job needs beyond the view.
 struct Loaded {
     view: PlanView,
+    /// By task number: the role, the profile and the body a task names.
     roles: BTreeMap<String, String>,
+    profiles: BTreeMap<String, String>,
+    bodies: BTreeMap<String, String>,
     repo: Option<String>,
 }
 
@@ -222,7 +225,7 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
         ents.extend(live(conn, n)?.filter(|e| e.kind == "task"));
     }
     let number = |e: &Ent| str_of(e, "number").unwrap_or_else(|| e.id.clone());
-    let mut roles = BTreeMap::new();
+    let (mut roles, mut profiles, mut bodies) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let mut tasks = Vec::new();
     for e in &ents {
         let mut deps = Vec::new();
@@ -247,8 +250,14 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
         let report_interfaces = reports
             .iter()
             .find_map(|r| str_of(r, "interfaces").filter(|s| !s.trim().is_empty()));
-        if let Some(r) = str_of(e, "role") {
-            roles.insert(number(e), r);
+        for (key, map) in [
+            ("role", &mut roles),
+            ("profile", &mut profiles),
+            ("body", &mut bodies),
+        ] {
+            if let Some(v) = str_of(e, key) {
+                map.insert(number(e), v);
+            }
         }
         tasks.push(PlanTask {
             id: e.id.clone(),
@@ -273,6 +282,8 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
             tasks,
         },
         roles,
+        profiles,
+        bodies,
         repo: plan
             .data
             .get("repo")
@@ -317,7 +328,12 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
     };
     let mut tasks = Vec::new();
     for t in &loaded.view.tasks {
-        let mut body = String::new();
+        // the task's own prose first, then its steps and interfaces
+        let mut body = loaded
+            .bodies
+            .get(&t.number)
+            .map(|b| format!("{}\n\n", b.trim()))
+            .unwrap_or_default();
         for s in &t.steps {
             body.push_str(&format!(
                 "- [{}] {}\n",
@@ -338,6 +354,8 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
                 .unwrap_or_else(|| "implement".into()),
             deps: t.deps.iter().map(|d| num(d)).collect::<Result<_, _>>()?,
             body: body.trim().to_owned(),
+            profile: loaded.profiles.get(&t.number).cloned(),
+            model: t.model.clone(),
         });
     }
     let hash = format!("{}:{}", loaded.view.id, loaded.view.version);
@@ -488,8 +506,15 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
         let number = w.number.as_str();
         let mut data = serde_json::Map::new();
         data.insert("number".into(), json!(number));
-        if let Some(m) = &w.model {
-            data.insert("model".into(), json!(m.as_str()));
+        for (key, v) in [
+            ("model", w.model.as_ref().map(|m| m.as_str())),
+            ("role", w.role.as_ref().map(|r| r.as_str())),
+            ("profile", w.profile.as_ref().map(|p| p.as_str())),
+            ("body", w.body.as_ref().map(|b| b.as_str())),
+        ] {
+            if let Some(v) = v {
+                data.insert(key.into(), json!(v));
+            }
         }
         if let Some(i) = &w.interfaces {
             data.insert("interfaces".into(), json!(i.as_str()));
@@ -905,7 +930,7 @@ pub async fn record_conclusion_fallback(
 
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -1515,6 +1540,77 @@ mod tests {
         assert_eq!(ri.as_deref(), Some("fn x()"));
         assert_eq!(status, "in-review");
         assert!(stale);
+    }
+
+    fn front_in(dir: &Path) -> Front {
+        Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+            CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// A plan of TASKS (`TaskWrite`s as JSON), written as the user; its id.
+    async fn written(f: &Front, tasks: Value) -> String {
+        let p: WriteParams = serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap();
+        f.writer
+            .write(&crate::runner::user(), "plans/write", move |tx| {
+                write_plan(tx, &p, &Scope::Anyone)
+            })
+            .await
+            .unwrap()
+            .plan
+    }
+
+    /// Pure (D): a temp store.  A graph task's role, profile and body reach the job's plan.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_graph_task_keeps_its_role_profile_and_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "title": "look", "role": "review", "profile": "opus",
+                    "model": "claude-opus-5-5", "body": "Read the settings code."}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "review");
+        assert_eq!(t.profile.as_deref(), Some("opus"));
+        assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(t.body, "Read the settings code.");
+    }
+
+    /// Pure (D): a temp store.  With a body and steps, the body comes first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_body_comes_first_then_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "body": "Do it.", "steps": [{"done": false, "text": "write"}]}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        assert_eq!(read.tasks[0].body, "Do it.\n\n- [ ] write");
+    }
+
+    /// Pure (D): a temp store.  A task that names none of them reads as it always did.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_task_without_them_reads_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "steps": [{"done": true, "text": "write"}], "interfaces": "fn a()"}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "implement");
+        assert_eq!((t.profile.as_deref(), t.model.as_deref()), (None, None));
+        assert_eq!(t.body, "- [x] write\n\nInterfaces: fn a()");
     }
 
     fn project_entity(tx: &mut WTx<'_>, id: &str) -> Result<(), CoordError> {

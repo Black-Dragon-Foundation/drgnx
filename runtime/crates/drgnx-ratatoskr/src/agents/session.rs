@@ -11,7 +11,7 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
-mod turn_core;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;
@@ -779,6 +779,8 @@ pub struct Session {
     asks: crate::work::asks::AskTx,
     /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
     stamps: Arc<crate::work::conclusions::Stamps>,
+    /// A planning session's turn ends go to Say it ([`crate::say`]).
+    say: crate::say::SayTx,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1981,6 +1983,7 @@ fn assemble(
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
+        say: front.core.say.handle(),
     });
     (s, done_rx)
 }
@@ -3799,8 +3802,9 @@ impl Session {
         self.perform(fx);
     }
 
-    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
-    fn reattach(self: &Arc<Self>, told: Option<String>) {
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.  Also a revert's
+    /// that stopped before anything changed: the same conversation goes on.
+    pub(crate) fn reattach(self: &Arc<Self>, told: Option<String>) {
         let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
         self.perform(fx);
     }
@@ -4030,6 +4034,9 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
+        // a planning session's answer (empty when the turn failed) goes to Say it; any other chat pays one lookup
+        self.say
+            .turn_ended(&self.id, message.as_deref().unwrap_or(""));
         if let Some(m) = message.filter(|m| {
             (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
         }) {
@@ -4258,6 +4265,8 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    // a planning session's planning stops with it (Say it)
+    f.core.say.stopped(p.id.as_str());
     // a turn running is cancelled (the session stays); an idle or starting session is ended: its token and socket go
     let ends = f
         .core
@@ -4318,6 +4327,7 @@ pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.say.stopped(p.id.as_str());
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;

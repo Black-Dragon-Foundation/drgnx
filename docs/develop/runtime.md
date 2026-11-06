@@ -212,6 +212,13 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
   it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
   `NotRegular`. The temporary file is removed on every error.
+- **`remove_beneath(dir, rel)`** opens the parent with `open_beneath` (a link in any component before the leaf is
+  refused) and `unlinkat`s the leaf at the parent's held fd: a leaf that is a link goes as a link, and what it names
+  is never touched. A leaf already gone is done; a directory is `NotRegular`.
+- **`symlink_beneath(dir, rel, target)`** opens the parent the same way, makes the link at `.eitri-<16 hex>` with
+  `symlinkat` (the target copied as bytes, never resolved; empty or with a NUL byte refused) and `renameat`s it over
+  `rel`: an old leaf that is a link or a regular file is replaced, never followed. The same on Linux and macOS (no
+  `openat2` branch).
 - **`trusted_program(candidates)`** returns the first candidate that only root can change, as a `TrustedProgram {
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
@@ -1122,7 +1129,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
   sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
-  of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
+  of 8 missing keys to each embedder that answers: a server whose own address accepts no connection (the default TEI
+  at 127.0.0.1:8080 when it is not running) gets no request in that pass and does not make tier 2 `Failed`, so tier 2
+  ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
   each server that answers, every one filling its own model's `vec` rows.
