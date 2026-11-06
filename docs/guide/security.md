@@ -391,6 +391,10 @@ The store keeps every version of what is written into it. When a secret or a per
 - Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
   after closing it.
+- A **revert honours the lock**: it restores only what the agent could have written itself. The protected paths (`.git`,
+  the provider's configuration folders, `.envrc`, `mise.toml`) and the credential patterns are never restored, a link is
+  restored as a link and never followed, and the restore of a sandboxed agent's tree runs inside its sandbox. A checkpoint
+  can therefore never widen a sandbox. `history.db` is a privacy door like the store: the personal-notes deny-list applies to it.
 - **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
   (`backup/work-pre7-*.db`, `work.db.schema5`, and the `work.db.schema7-*` files a rollback set aside) that still
   hold the text, which you can have deleted; exports, which are

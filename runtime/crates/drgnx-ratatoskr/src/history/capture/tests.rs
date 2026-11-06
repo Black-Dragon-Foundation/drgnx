@@ -101,6 +101,61 @@ fn agent_write_becomes_ops_on_its_branch_with_cause() {
     assert!(!rec.spans.is_empty());
 }
 
+/// A made-up key of a well-known shape.
+fn key() -> String {
+    format!("sk-{}", "q".repeat(30))
+}
+
+#[test]
+fn a_key_in_an_agent_write_is_stored_as_stars_and_not_again() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let body = format!("one\nTOKEN={}\n", key());
+    let v = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", body.as_bytes(), "s1", cause("1"), 10.0)
+        .unwrap();
+    assert_eq!(v.len(), 1);
+    let stored = f.hub.text(&f.tree, "a.txt").unwrap().unwrap();
+    assert_eq!(stored, format!("one\nTOKEN={}\n", "*".repeat(33)));
+    // the file on disk still has the key: the next look at it is no new version
+    let again = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", body.as_bytes(), "s1", cause("2"), 11.0)
+        .unwrap();
+    assert!(again.is_empty(), "{again:?}");
+}
+
+/// What a consumer of the `history/file-version` event (the indexer, the Work space) reads: the frozen JSON shape of a
+/// version, as the subscription delivers it.
+#[test]
+fn a_consumer_of_file_version_reads_the_frozen_shape() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let mut rx = f.hub.subscribe();
+    let v = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", b"one\ntwo\n", "s1", cause("1"), 10.0)
+        .unwrap();
+    let got = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+    let blob = got["blob"].as_str().unwrap().to_owned();
+    assert_eq!(blob.len(), 40, "a git blob id: {got}");
+    assert!(blob.bytes().all(|b| b.is_ascii_hexdigit()), "{got}");
+    assert_eq!(
+        got,
+        serde_json::json!({
+            "worktree": f.tree.id.0,
+            "path": "a.txt",
+            "blob": blob,
+            "op": v[0].op,
+            "class": "text",
+        })
+    );
+    // a file that is gone says so: a null blob
+    std::fs::remove_file(f.repo.path().join("a.txt")).unwrap();
+    f.hub.on_disk_change(&f.tree, "a.txt", 11.0).unwrap();
+    let gone = serde_json::to_value(rx.try_recv().unwrap()).unwrap();
+    assert!(gone["blob"].is_null(), "{gone}");
+}
+
 #[test]
 fn external_change_is_diffed_onto_disk_peer() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);
@@ -160,6 +215,38 @@ fn drgnx_write_is_not_recorded_twice() {
             .is_empty()
     );
     assert_eq!(f.hub.with(|h| h.count("op").unwrap()), 1);
+}
+
+/// The same path with the same bytes in two trees of one project is two files: each tree's write is its own version, and
+/// the watcher's event about one tree's file is not the other's.
+#[test]
+fn the_same_path_in_two_trees_is_two_versions() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let other = fixture(&[("a.txt", "one\n")]);
+    let bytes = b"one\ntwo\n";
+    let first = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", bytes, "s1", cause("1"), 10.0)
+        .unwrap();
+    let second = f
+        .hub
+        .on_agent_write(&other.tree, "a.txt", bytes, "s2", cause("1"), 11.0)
+        .unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        second.len(),
+        1,
+        "the second tree's write is its own version"
+    );
+    assert_eq!(
+        f.hub.text(&other.tree, "a.txt").unwrap().as_deref(),
+        Some("one\ntwo\n")
+    );
+    // an outside change in the second tree after the first tree's write is not mistaken for the first tree's version
+    std::fs::write(other.repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+    let outside = f.hub.on_disk_change(&other.tree, "a.txt", 12.0).unwrap();
+    assert_eq!(outside.len(), 1);
+    assert_eq!(kind(&f, outside[0].op), Kind::External);
 }
 
 #[test]

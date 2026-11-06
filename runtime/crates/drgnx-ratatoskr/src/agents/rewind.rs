@@ -219,6 +219,22 @@ pub(crate) async fn first_text(
     )))
 }
 
+/// Whether the conversation restored to POINT is told a summary, which goes with the user's message: a Summary level,
+/// or steps the cut leaves out (a subagent's step, a step inside a turn).  [`first_text`]'s rule.
+pub(crate) fn tells_a_summary(point: &Point) -> bool {
+    point.level == RestoreLevel::Summary || point.retained.is_some()
+}
+
+/// The cut a rewind of T at LEVEL makes, from the session's steps as they are now: what a revert's card says of it.
+pub(crate) async fn planned_point(
+    front: &Front,
+    t: &Target,
+    level: RestoreLevel,
+) -> Result<Point, Error> {
+    let steps = steps_of(front, &t.sid).await?;
+    cut(&steps, t, level).map(|(p, _)| p)
+}
+
 fn needs_message() -> Error {
     session::invalid(
         "first",

@@ -4,6 +4,7 @@
 //! - [`origin`]: whose version a change is (pure): the hub's write, the watcher's event about it and a rescan are one.
 //! - [`capture`]: reads a file the way an agent's tree must be read (no link followed), routes it to a document or the
 //!   snapshot class, diffs it onto the document and records it.
+//! - [`backup`]: the nightly copy of each project's `history.db`, beside `work.db`'s.
 //! - [`blob`]: git object ids through a git directory the caller names.
 //! - [`methods`]: `register`, `batch`, `resync`, `unregister` on the hub, for the editor's buffers.
 //! - [`watch`]: Hrafn's watcher events into the hub.
@@ -12,9 +13,11 @@
 //! - [`branches`]: fork from here and the branches it makes: `history/fork`, `history/fork/drop`, `history/compare`,
 //!   `history/take`, `history/redo`.
 //! - [`merge`]: a task's branch merged into the job's tree, as the union of their documents.
+//! - [`views`]: `history/blame` and `history/hunks`: who wrote the text, and what a branch changed since a record.
 //! - [`hunk`]: one hunk of an agent's record reverted with later typing kept, and who undid each hunk:
 //!   `history/op/hunks`, `history/revert/hunk`.
 
+pub mod backup;
 pub mod blob;
 pub mod branches;
 mod capture;
@@ -24,14 +27,15 @@ pub mod methods;
 pub mod origin;
 pub mod revert;
 pub(crate) mod revert_core;
-mod timers;
+pub mod timers;
 pub mod tree;
+pub mod views;
 pub mod watch;
 pub mod wire;
 
 pub use methods::{BATCH_MAX, BatchChange, BatchReply, Registered};
 
-use origin::OriginCore;
+use origin::Origins;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -62,6 +66,18 @@ impl Tree {
     pub(crate) fn branch_name(&self) -> String {
         format!("wt/{}", self.id.0)
     }
+
+    /// This worktree's branch in H, made on first use, with the folder it is for (a sweep freezes it when the folder
+    /// is gone).
+    pub(crate) fn branch_in(&self, h: &mut History) -> verdandi::Result<BranchId> {
+        let b = h.branch(
+            &self.branch_name(),
+            verdandi::BranchKind::Worktree,
+            self.base.as_deref(),
+        )?;
+        h.set_root(b, &self.root.to_string_lossy())?;
+        Ok(b)
+    }
 }
 
 /// Where a version's content is kept.
@@ -89,11 +105,14 @@ pub struct FileVersion {
 pub(crate) struct Buffer {
     pub doc: DocId,
     pub branch: BranchId,
+    /// The buffer's own text while it differs from the document's because a key was redacted from it: kept in memory
+    /// only, so the buffer's hash can still be checked; none while the two are the same.
+    pub raw: Option<String>,
 }
 
 pub(crate) struct Inner {
     pub h: History,
-    pub origin: OriginCore,
+    pub origin: Origins,
     pub settler: Settler,
     pub peers: HashMap<(BranchId, String), PeerId>,
     pub buffers: HashMap<String, Buffer>,
@@ -104,6 +123,8 @@ pub(crate) struct Inner {
 pub struct Hub {
     pub(crate) inner: Mutex<Inner>,
     events: tokio::sync::broadcast::Sender<FileVersion>,
+    /// The folder `history.db` is in; the sweep's report is written beside it.
+    pub(crate) dir: std::path::PathBuf,
 }
 
 impl Hub {
@@ -112,12 +133,13 @@ impl Hub {
         Ok(Hub {
             inner: Mutex::new(Inner {
                 h: History::open(dir)?,
-                origin: OriginCore::default(),
+                origin: Origins::default(),
                 settler: Settler::default(),
                 peers: HashMap::new(),
                 buffers: HashMap::new(),
             }),
             events: tokio::sync::broadcast::channel(256).0,
+            dir: dir.to_path_buf(),
         })
     }
 
@@ -149,11 +171,7 @@ impl Hub {
     /// TREE's document of REL as text on the tree's branch; none when it was never tracked.
     pub fn text(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<String>> {
         let mut g = self.lock();
-        let branch = g.h.branch(
-            &tree.branch_name(),
-            verdandi::BranchKind::Worktree,
-            tree.base.as_deref(),
-        )?;
+        let branch = tree.branch_in(&mut g.h)?;
         let doc = g.h.doc_for(rel)?;
         g.h.activate(doc, branch, || {
             Ok(capture::base_text(tree, rel).unwrap_or_default())

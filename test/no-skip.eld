@@ -108,6 +108,8 @@
   "drgnx-say/reject-stops-the-job"
   "drgnx-say/an-unproven-connection-raises-nothing"
   "drgnx-extensions-hub/a-suggestion-card-opens-details-and-has-no-install"
+  "drgnx-history/three-worktrees-keep-their-own-authors"
+  "drgnx-history/a-removed-worktree-is-frozen-and-still-comparable"
   "drgnx-history/card-shows-effects-before-files"
   "drgnx-history/card-keep-mine-and-roll-back"
   "drgnx-history/card-labels-a-summary-and-asks-a-message"

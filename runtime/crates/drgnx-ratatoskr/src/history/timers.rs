@@ -12,8 +12,71 @@ const SETTLE_EVERY: Duration = Duration::from_secs(5);
 const PARK_EVERY: Duration = Duration::from_secs(60);
 /// A document unused this long is parked.
 const IDLE_SECS: f64 = 300.0;
+/// The first sweep comes this long after the hub opens the history, the next ones every [`SWEEP_EVERY`].
+const SWEEP_FIRST: Duration = Duration::from_secs(60);
+const SWEEP_EVERY: Duration = Duration::from_secs(3600);
+/// How many of the biggest pins the report names.
+const PINS_SHOWN: usize = 8;
+/// The file the sweep leaves beside `history.db` for the doctor, which never opens the live database.
+pub const REPORT: &str = "size-report.json";
+
+/// What one sweep did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Swept {
+    /// Set-aside branches removed (older than 90 days, not pinned).
+    pub expired: usize,
+    /// The compaction, when the history was over the cap.
+    pub compacted: Option<verdandi::Compacted>,
+}
+
+fn pin_kind(k: verdandi::PinKind) -> &'static str {
+    match k {
+        verdandi::PinKind::Pinned => "pinned",
+        verdandi::PinKind::Undone => "undone",
+        verdandi::PinKind::Frozen => "frozen",
+        verdandi::PinKind::Anchors => "anchors",
+    }
+}
 
 impl Hub {
+    /// Expire what is 90 days old at NOW, compact when the history is over CAP, and leave the doctor's report
+    /// (`size-report.json`: size, cap, and the biggest things that pin it) beside `history.db`.
+    pub fn sweep(&self, now: f64, cap: u64) -> verdandi::Result<Swept> {
+        let mut g = self.lock();
+        // a worktree whose folder (or its `.git`) is gone is set aside: its branch is kept, frozen, for compare
+        for (branch, root) in g.h.roots()? {
+            if !std::path::Path::new(&root).join(".git").exists() {
+                g.h.freeze(branch, now)?;
+            }
+        }
+        let expired = g.h.expire(now)?.len();
+        let compacted = if g.h.size()? > cap {
+            let author = g.h.peer(
+                &serde_json::json!({"kind": "system", "name": "compaction"}),
+                None,
+            )?;
+            Some(g.h.compact(cap, author, now)?)
+        } else {
+            None
+        };
+        let pins: Vec<_> = g
+            .h
+            .pins()?
+            .into_iter()
+            .take(PINS_SHOWN)
+            .map(
+                |p| serde_json::json!({"kind": pin_kind(p.kind), "name": p.name, "bytes": p.bytes}),
+            )
+            .collect();
+        let report = serde_json::json!({"size": g.h.size()?, "cap": cap, "at": now, "pins": pins});
+        // a copy of the report that cannot be written is no reason to fail the sweep: the doctor says it is missing
+        let tmp = self.dir.join(format!("{REPORT}.tmp"));
+        if std::fs::write(&tmp, report.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, self.dir.join(REPORT));
+        }
+        Ok(Swept { expired, compacted })
+    }
+
     /// The records of typing quiet for 30 s at NOW.
     pub fn settle_due(&self, now: f64) -> verdandi::Result<usize> {
         let mut g = self.lock();
@@ -41,12 +104,27 @@ impl Hub {
                 }
             }
         });
-        crate::clock::spawn("history:park", async move {
+        crate::clock::spawn("history:park", {
+            let weak = weak.clone();
+            async move {
+                loop {
+                    crate::clock::sleep(PARK_EVERY).await;
+                    let Some(hub) = weak.upgrade() else { return };
+                    let now = crate::clock::wall_secs();
+                    let _ = crate::clock::blocking(move || hub.park_idle(now)).await;
+                }
+            }
+        });
+        crate::clock::spawn("history:sweep", async move {
+            let mut wait = SWEEP_FIRST;
             loop {
-                crate::clock::sleep(PARK_EVERY).await;
+                crate::clock::sleep(wait).await;
+                wait = SWEEP_EVERY;
                 let Some(hub) = weak.upgrade() else { return };
                 let now = crate::clock::wall_secs();
-                let _ = crate::clock::blocking(move || hub.park_idle(now)).await;
+                let _ =
+                    crate::clock::blocking(move || hub.sweep(now, verdandi::compact::DEFAULT_CAP))
+                        .await;
             }
         });
     }
@@ -100,6 +178,85 @@ mod tests {
 
     fn ops(hub: &Hub) -> i64 {
         hub.with(|h| h.count("op").unwrap())
+    }
+
+    // pattern: D (now is a parameter)
+    #[test]
+    fn a_sweep_expires_a_set_aside_branch_after_ninety_days() {
+        let (hub, _repo, _hist) = typed();
+        let now = crate::clock::wall_secs();
+        let fork = hub.with(|h| {
+            let b = h
+                .branch("fork-aaaa", verdandi::BranchKind::Fork, None)
+                .unwrap();
+            h.freeze(b, now).unwrap();
+            b
+        });
+        let branches = |hub: &Hub| hub.with(|h| h.count("branch").unwrap());
+        assert_eq!(branches(&hub), 2);
+        let early = hub
+            .sweep(now + 89.0 * 86_400.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!((early.expired, branches(&hub)), (0, 2), "{fork:?}");
+        let late = hub
+            .sweep(now + 91.0 * 86_400.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!((late.expired, branches(&hub)), (1, 1));
+        assert!(late.compacted.is_none(), "under the cap nothing is cut");
+    }
+
+    // pattern: D
+    #[test]
+    fn a_sweep_freezes_the_branch_of_a_worktree_that_is_gone() {
+        let (hub, repo, _hist) = typed();
+        let now = crate::clock::wall_secs();
+        let live = |hub: &Hub| hub.with(|h| h.roots().unwrap().len());
+        assert_eq!(live(&hub), 1, "the worktree's folder was recorded");
+        hub.sweep(now, verdandi::compact::DEFAULT_CAP).unwrap();
+        assert_eq!(live(&hub), 1, "a worktree that is there is not frozen");
+        std::fs::remove_dir_all(repo.path()).unwrap();
+        hub.sweep(now + 1.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!(live(&hub), 0);
+        // frozen, not removed: it is kept for compare until it expires
+        assert_eq!(hub.with(|h| h.count("branch").unwrap()), 1);
+        let late = hub
+            .sweep(now + 92.0 * 86_400.0, verdandi::compact::DEFAULT_CAP)
+            .unwrap();
+        assert_eq!(late.expired, 1);
+    }
+
+    // pattern: D
+    #[test]
+    fn a_sweep_over_the_cap_compacts_and_leaves_a_report() {
+        let (hub, _repo, hist) = typed();
+        let now = crate::clock::wall_secs();
+        hub.settle_due(now + 40.0).unwrap();
+        let swept = hub.sweep(now + 50.0, 0).unwrap();
+        assert!(swept.compacted.is_some(), "{swept:?}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(hist.path().join("size-report.json")).unwrap())
+                .unwrap();
+        assert_eq!(report["cap"], 0);
+        assert!(report["size"].as_u64().unwrap() > 0, "{report}");
+        assert!(report["pins"].is_array(), "{report}");
+    }
+
+    // pattern: B (the hub's clock moved by advance)
+    #[test]
+    fn the_sweep_runs_on_the_hub_clock() {
+        on_virtual(async {
+            let (hub, _repo, hist) = typed();
+            hub.start_timers();
+            advance(Duration::ZERO).await;
+            let report = hist.path().join("size-report.json");
+            advance(Duration::from_secs(50)).await;
+            assert!(!report.exists(), "swept early");
+            advance(Duration::from_secs(20)).await;
+            skuld::wait_until("the first sweep's report", 30, || {
+                report.exists().then_some(())
+            });
+        });
     }
 
     // pattern: B (the hub's clock moved by advance)

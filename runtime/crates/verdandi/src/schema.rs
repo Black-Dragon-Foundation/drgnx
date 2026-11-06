@@ -48,5 +48,10 @@ create table doc_cut(
   primary key (doc, branch)) without rowid;
 ";
 
+/// Schema 5: the folder a worktree's branch was made for, so a sweep can freeze the branch of a worktree that is gone.
+const V5: &str = "
+alter table branch add column root text;
+";
+
 /// Every migration, oldest first.
-pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4), (5, V5)];

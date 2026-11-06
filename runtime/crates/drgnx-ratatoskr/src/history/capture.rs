@@ -170,11 +170,7 @@ pub(crate) fn diff(old: &str, new: &str) -> Vec<Change> {
 
 impl Inner {
     pub(crate) fn branch(&mut self, tree: &Tree) -> Result<BranchId> {
-        self.h.branch(
-            &tree.branch_name(),
-            verdandi::BranchKind::Worktree,
-            tree.base.as_deref(),
-        )
+        tree.branch_in(&mut self.h)
     }
 
     /// The peer of AUTHOR (named KEY) on BRANCH, made on first use.
@@ -204,7 +200,7 @@ impl Inner {
         let (blob, plan, hash) = match seen {
             Seen::Skip => return Ok(None),
             Seen::Gone => {
-                if self.origin.last(rel).is_none() && base_text(tree, rel).is_none() {
+                if self.origin.last(&tree.id.0, rel).is_none() && base_text(tree, rel).is_none() {
                     return Ok(None);
                 }
                 (None, Plan::Text(String::new()), "gone".to_owned())
@@ -238,7 +234,7 @@ impl Inner {
             Src::Watch => OriginEv::Watch { path, hash },
             Src::Rescan => OriginEv::Rescan { path, hash },
         };
-        if self.origin.step(ev).is_none() {
+        if self.origin.step(&tree.id.0, ev).is_none() {
             return Ok(None);
         }
         let Plan::Text(new) = plan else {
@@ -258,7 +254,8 @@ impl Inner {
             .activate(doc, branch, || Ok(base_text(tree, rel).unwrap_or_default()))?;
         let old = ad.text();
         let mut spans = Vec::new();
-        for ch in diff(&old, &new) {
+        // a key in the file is stored as stars (the file keeps it, and the next look at it is no new version)
+        for ch in diff(&old, &verdandi::redact::redact(&new)) {
             spans.extend(ad.apply(peer, &ch)?);
         }
         Ok(Some(Staged {
@@ -413,7 +410,7 @@ impl Hub {
 
     /// A rescan of every path the hub knows a version of.
     pub fn rescan_known(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
-        let rels: Vec<String> = self.lock().origin.paths().cloned().collect();
+        let rels = self.lock().origin.paths(&tree.id.0);
         self.rescan(tree, &rels, now)
     }
 

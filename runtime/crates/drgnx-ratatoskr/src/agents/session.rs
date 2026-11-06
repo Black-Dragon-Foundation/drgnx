@@ -163,6 +163,8 @@ struct State {
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
     closed: Vec<ClosedStep>,
+    /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
+    before: Option<String>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
@@ -227,6 +229,8 @@ struct ClosedStep {
     command: Option<String>,
     /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
     context: Option<i64>,
+    /// On a turn's first step: the tree the worktree held before the prompt went to the agent, its checkpoint.
+    before: Option<String>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -266,6 +270,7 @@ impl State {
             steps_begun: 0,
             mcp_begun: Vec::new(),
             closed: Vec::new(),
+            before: None,
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
@@ -329,6 +334,7 @@ impl State {
                 cache_write: u.cache_write,
                 cost: u.cost,
                 context,
+                before: self.before.take(),
             });
         }
     }
@@ -800,6 +806,8 @@ pub struct Session {
     /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
     /// agent is recorded there (none: the hub has no state folder).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
+    /// Step snapshots: a turn's tree is taken before its prompt goes (none: the hub has no state folder).
+    snap: Option<crate::timeline::Snap>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1981,6 +1989,10 @@ fn assemble(
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
         acp: Some(l.acp.0.to_string()),
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
     };
     tokio::spawn(write_steps(
         rx,
@@ -2081,6 +2093,7 @@ fn assemble(
             .dirs
             .get()
             .map(|d| (front.core.history.clone(), d.hub.clone())),
+        snap: crate::timeline::Snap::of(front),
     });
     (s, done_rx)
 }
@@ -2550,6 +2563,8 @@ struct StepCtx {
     cwd: PathBuf,
     /// The agent conversation its steps run in.
     acp: Option<String>,
+    /// The projects' edit histories and the hub's state folder, to name the record a step anchors (none: a test).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
 
 /// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
@@ -2634,7 +2649,7 @@ async fn write_steps(
             }
         };
         ctx.flow.written.send_modify(|w| *w += 1);
-        let (snapshot, head) = anchor(
+        let (snapshot, head, history_op) = anchor(
             &sink,
             &ctx,
             &caller,
@@ -2642,7 +2657,8 @@ async fn write_steps(
             seq,
             c.turn_id.as_deref(),
             &c.open,
-            turn_start,
+            (turn_start, c.before.as_deref()),
+            c.end,
         )
         .await;
         turn_start = c.turn_id.is_some();
@@ -2673,9 +2689,9 @@ async fn write_steps(
             detail: c.detail.as_ref().map(crate::work::detail::wire),
             acp: ctx.acp.clone(),
             head,
-            history_op: None,
+            history_op: history_op.map(|op| op as u64),
             undone_by: None,
-            revertible: false,
+            revertible: history_op.is_some(),
             hooks: Vec::new(),
         };
         // the files the step was in: the presence model (a shell step's command looked up off the async threads)
@@ -2778,8 +2794,9 @@ async fn write_steps(
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and a snapshot of the worktree after a completed edit and at the turn's first step, with the worktree's
-/// commit then (from its ref files).  Best effort; answers the snapshot and the commit.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step (BEFORE: the tree taken
+/// before the turn's prompt went, else the worktree now), with the worktree's commit then (from its ref files).  Best
+/// effort; answers the snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2789,22 +2806,30 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
-    turn_start: bool,
-) -> (Option<String>, Option<String>) {
+    (turn_start, before): (bool, Option<&str>),
+    end: f64,
+) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
-        return (None, None);
+        return (None, None, None);
     }
     let edit = open.class == StepClass::Tool
         && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let turn_start = turn_start || before.is_some();
+    let history_op = if edit || turn_start {
+        newest_record(ctx, end).await
+    } else {
+        None
+    };
     let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
-            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, &sink.editors)
+            let before = before.filter(|_| !edit);
+            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, before, &sink.editors)
                 .await
         }
         _ => None,
     };
-    if snapshot.is_none() && turn.is_none() {
-        return (None, None);
+    if snapshot.is_none() && turn.is_none() && history_op.is_none() {
+        return (None, None, None);
     }
     let head = match &snapshot {
         Some(_) => {
@@ -2831,6 +2856,9 @@ async fn anchor(
             if let Some(h) = &head_ {
                 norn::write::steps::set_head(tx, id, h)?;
             }
+            if let Some(op) = history_op {
+                norn::write::steps::set_history_op(tx, id, op)?;
+            }
             if let Some(t) = &turn {
                 tx.sql().execute(
                     "update step set turn_id = ?2 where session = ?1 and turn_id is null and id <= ?3",
@@ -2843,7 +2871,24 @@ async fn anchor(
     if let Err(e) = r {
         tracing::warn!(sid = ctx.session, "step anchors not recorded: {e}");
     }
-    (snapshot, head)
+    (snapshot, head, history_op)
+}
+
+/// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
+/// text to.  None when the session has no history (a folder that is no git worktree, a test, a history that fails).
+async fn newest_record(ctx: &StepCtx, end: f64) -> Option<i64> {
+    let (hubs, state) = ctx.history.clone()?;
+    let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
+    crate::clock::blocking(move || {
+        let (hub, _) = hubs.of_tree(&state, &cwd).ok()?;
+        hub.with(|h| h.last_caused_by(&sid, end))
+            .ok()
+            .flatten()
+            .map(|op| op.0)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -4406,6 +4451,12 @@ impl Session {
         if !send {
             return;
         }
+        // the turn's first step holds the tree as it is before the agent hears of the turn: taken by the step writer
+        // once that step is written, it could already hold the turn's first write
+        if let Some(s) = &self.snap {
+            let tree = s.before_turn(&self.id, &self.cwd).await;
+            lock(&self.state).before = tree;
+        }
         // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
         // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
@@ -5353,6 +5404,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            history: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -5395,6 +5447,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }
@@ -5452,6 +5505,7 @@ mod tests {
             provider: None,
             cwd: PathBuf::new(),
             acp: None,
+            history: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -5490,6 +5544,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }
@@ -5497,6 +5552,105 @@ mod tests {
         let unpriced = seen.recv().await.unwrap().step;
         assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
         assert_eq!(unpriced.cost_unit, None);
+    }
+
+    // test-pattern: D
+    #[tokio::test]
+    async fn an_edit_step_anchors_the_history_record_of_its_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.path().join("state")).unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                    .args(["-c", "commit.gpgsign=false"])
+                    .args(args)
+                    .current_dir(&work)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        let hubs = Arc::new(crate::history::wire::Hubs::default());
+        let state = dir.path().join("state");
+        let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
+        let cause = verdandi::Cause {
+            session: Some("a1".into()),
+            ..Default::default()
+        };
+        let made = hub
+            .on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
+            .unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: work.clone(),
+            acp: None,
+            history: Some((hubs.clone(), state)),
+        };
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Tool,
+                    start: end - 0.5,
+                    tool: Some(format!("{kind} a.txt")),
+                    tool_kind: Some(kind.into()),
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+                detail: None,
+                command: None,
+                context: None,
+                before: None,
+            })
+            .unwrap();
+        }
+        let edit = seen.recv().await.unwrap().step;
+        let read = seen.recv().await.unwrap().step;
+        assert_eq!(edit.history_op, Some(made[0].op as u64));
+        assert!(edit.revertible);
+        assert_eq!(read.history_op, None, "a read step anchors no record");
     }
 
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
@@ -5533,6 +5687,7 @@ mod tests {
             provider: None,
             cwd: wt.clone(),
             acp: None,
+            history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let done = tokio::spawn(write_steps(rx, sink, ctx));
@@ -5564,6 +5719,7 @@ mod tests {
                 detail: None,
                 command: None,
                 context: None,
+                before: None,
             })
             .unwrap();
         }

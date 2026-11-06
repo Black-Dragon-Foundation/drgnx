@@ -156,7 +156,7 @@ Every call is pushed on `calls' as (METHOD . PARAMS), newest first."
 (defconst drgnx-history-revert-test--fork-replies
   '(("history/fork" . (:id "f1" :branch "fork/f1" :source_branch "main" :path "/t" :level "message"))
     ("history/compare" . (:files ((:path "a.txt" :hunks ((:ours_start 0 :ours_end 3 :theirs_start 0 :theirs_end 5
-                                                                      :ours_text "one" :theirs_text "three" :author "agent:f1"
+                                                                      :ours_text "one" :theirs_text "three" :author (:kind "agent" :session "f1")
                                                                       :session "f1" :step "9" :record 2)))))))
   "The hub's answers to a fork and its comparison.")
 
@@ -198,7 +198,7 @@ Every call is pushed on `calls' as (METHOD . PARAMS), newest first."
           (with-current-buffer "*drgnx compare: main..fork/f1*"
             (let ((text (buffer-string)))
               (should (string-search "a.txt" text))
-              (should (string-search "by agent:f1, session f1, step 9" text))
+              (should (string-search "by agent f1, session f1, step 9" text))
               (should (string-search "- one" text))
               (should (string-search "+ three" text)))))
       (drgnx-history-revert-test--kill-cards))))
@@ -240,12 +240,12 @@ Every call is pushed on `calls' as (METHOD . PARAMS), newest first."
           (cl-letf (((symbol-function 'drgnx-history-tracked-p) (lambda (&optional _) t))
                     ((symbol-function 'locate-dominating-file) (lambda (&rest _) (file-name-directory file))))
             (drgnx-history-revert-test--hub
-                '(("history/blame" . (:spans ((:start 0 :end 3 :author "agent:s1" :step "4")
-                                              (:start 3 :end 5 :author "user" :step nil)))))
+                '(("history/blame" . (:spans ((:start 0 :end 3 :author (:kind "agent" :session "s1") :record 6 :session "s1" :step "4")
+                                              (:start 3 :end 5 :author (:kind "user") :record 7)))))
               (let (said)
                 (cl-letf (((symbol-function 'message) (lambda (f &rest a) (setq said (apply #'format f a)))))
                   (drgnx-history-who-wrote-this 1 4))
-                (should (equal said "agent:s1 (step 4), user"))
+                (should (equal said "agent s1 (step 4), you"))
                 (should (equal (plist-get (cdr (assoc "history/blame" calls)) :start) 0))))))
       (delete-file file))))
 

@@ -11755,6 +11755,35 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "HistoryCopy": {
+            "additionalProperties": false,
+            "description": "One project's `history.db` copy.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "project",
+              "path",
+              "ok",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "What a backup did: the checked copy, and the old copies rotation removed.",
@@ -11769,6 +11798,14 @@
               "string",
               "null"
             ]
+          },
+          "history": {
+            "default": [],
+            "description": "The copy of each project's edit history (`history.db`) made beside `work.db`: one per project, replaced each\nnight.  A failed one never fails the `work.db` copy.",
+            "items": {
+              "$ref": "#/$defs/HistoryCopy"
+            },
+            "type": "array"
           },
           "ms": {
             "format": "double",
@@ -14140,6 +14177,103 @@
       "classes": [
         "user"
       ],
+      "doc": "who wrote a range of a tracked file's text and in which record and step, from the edit history (not git's blame)",
+      "name": "history/blame",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/blame`: who wrote the characters START..END (0-based offsets in the document's LF text) of PATH in the\nworktree at WORKTREE_ROOT.",
+        "properties": {
+          "end": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "description": "Relative to the worktree.",
+            "type": "string"
+          },
+          "start": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "worktree_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "start",
+          "end"
+        ],
+        "title": "BlameParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BlameSpan": {
+            "additionalProperties": false,
+            "description": "A run of one author's text, in the record it was made in.  Typing no record holds yet, and text of the base, are\nleft out.",
+            "properties": {
+              "author": {
+                "description": "The author as the history holds it (`{kind: user}`, `{kind: agent, session}`, `{kind: external, source}`, …)."
+              },
+              "end": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "record": {
+                "description": "The record the text was made in.",
+                "format": "int64",
+                "type": "integer"
+              },
+              "session": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "step": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "record"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "spans": {
+            "items": {
+              "$ref": "#/$defs/BlameSpan"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "spans"
+        ],
+        "title": "Blamed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the hunks branch B has that branch A does not, per file, each with who wrote it and in which record and step",
       "name": "history/compare",
       "params": {
@@ -14373,6 +14507,102 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "what changed on a history branch since a record: per file, hunks numbered as git diff --unified=0 numbers them; the edits ledger and the review view read this",
+      "name": "history/hunks",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks`: what changed on the history branch BRANCH since record SINCE.",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "since": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "branch",
+          "since"
+        ],
+        "title": "BranchHunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "FileHunks": {
+            "additionalProperties": false,
+            "properties": {
+              "hunks": {
+                "items": {
+                  "$ref": "#/$defs/LineHunk"
+                },
+                "type": "array"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "hunks"
+            ],
+            "type": "object"
+          },
+          "LineHunk": {
+            "additionalProperties": false,
+            "description": "One hunk with git's numbers (`@@ -old_start,old_count +new_start,new_count @@` of `git diff --unified=0`).",
+            "properties": {
+              "new_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "new_start": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_count": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "old_start": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "old_start",
+              "old_count",
+              "new_start",
+              "new_count"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/hunks`' answer: the files that changed, in path order of their documents.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/FileHunks"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "BranchHunks",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -24191,6 +24421,13 @@
                 "description": "Why the move from schema 6 failed (it is not tried again until the hub restarts; `work.db` is still schema 6).",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "history_backup": {
+                "description": "Whether the last night's copies of the edit histories (`history.db`, one per project) were all good (none: no\ncopy was made since the hub started).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },

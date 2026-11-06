@@ -19,11 +19,19 @@
 (defface drgnx-history-compare-heading '((t :inherit bold)) "A file's name in a comparison." :group 'drgnx)
 (defface drgnx-history-compare-by '((t :inherit shadow)) "Who wrote a hunk, and in which step." :group 'drgnx)
 
+(defun drgnx-history-compare--who (author)
+  "AUTHOR, as the history holds it (`:kind' user, agent, external or origin), in words."
+  (pcase (and (listp author) (plist-get author :kind))
+    ("user" "you")
+    ("agent" (format "agent %s" (plist-get author :session)))
+    ("external" (format "outside drgnx (%s)" (or (plist-get author :source) "unknown")))
+    ("origin" (format "%s" (plist-get author :name)))
+    (_ (if author (format "%s" author) "no one recorded"))))
+
 (defun drgnx-history-compare--author (hunk)
   "A line saying who wrote HUNK's text in B and in which step."
   (let ((author (plist-get hunk :author)) (session (plist-get hunk :session)) (step (plist-get hunk :step)))
-    (concat "by " (if author (format "%s" (if (listp author) (or (plist-get author :name) (plist-get author :id) author) author))
-                    "no one recorded")
+    (concat "by " (drgnx-history-compare--who author)
             (and session (format ", session %s" session))
             (and step (format ", step %s" step)))))
 
@@ -69,7 +77,7 @@
       "No one is recorded for this text"
     (string-join
      (delete-dups
-      (mapcar (lambda (s) (format "%s%s" (or (plist-get s :author) "unknown")
+      (mapcar (lambda (s) (format "%s%s" (drgnx-history-compare--who (plist-get s :author))
                                   (if (plist-get s :step) (format " (step %s)" (plist-get s :step)) "")))
               spans))
      ", ")))

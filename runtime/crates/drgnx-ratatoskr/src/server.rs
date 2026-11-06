@@ -904,8 +904,9 @@ fn nightly_backup(front: &Front) {
         return;
     }
     let g = g.clone();
+    let hub = front.dirs.get().map(|d| d.hub.clone());
     tokio::spawn(crate::backup_timer::guarded(async move {
-        crate::graph::run_backup(&g).await;
+        crate::graph::run_backup(&g, hub.as_deref()).await;
     }));
 }
 

@@ -182,6 +182,11 @@ GitHub tokens, `AKIA…`, `AIza…`, Slack and GitLab tokens, private key blocks
 `*`, a character for a character so the buffer's offsets hold. `Batch::hash` is the SHA-256 of the inserted texts after
 redaction. A key typed one character at a time is not seen by the scan; excise takes it out afterwards.
 
+The hub applies it on every way in: an editor `batch` and `resync`, and the file an agent wrote, the watcher saw or a
+rescan read (the whole file is scanned before it is diffed onto the document, so the file keeping its key is no new
+version each time). The editor's hash covers its own text, so while a buffer holds a redacted key the hub keeps that
+buffer's text beside the document, in memory only, and checks the hash against it; it lets go of it when the key is gone.
+
 `History::excise(doc, branch, target, author, at)` removes text for good: `Target::Range` (characters of the text now on
 `branch`) or `Target::Pattern` (every place the text was typed, deleted or not, on any branch). Each branch's document is
 exported as JSON updates, the characters become `*`, and the result is imported into a fresh document that replaces the
@@ -205,6 +210,17 @@ now; an expired branch pins no more. Under the cap (default 2 GiB) nothing is cu
 of a record at or before a cut is refused with the reason (the file was compacted, its history up to that record is
 gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
 owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).
+
+A worktree's branch remembers the folder it was made for (`branch.root`, schema 5, `History::set_root`, set on first
+use). The sweep freezes the branch of a worktree whose folder, or its `.git`, is gone, so it is kept for compare and
+expires 90 days on like a dropped fork (`History::roots` lists the live ones). A worktree removed while the hub is down
+is found by the first sweep after it starts.
+
+The hub runs this on its clock: `Hub::sweep(now, cap)` expires, compacts when over the cap (by a `system` peer's
+`compact` record) and writes `size-report.json` (size, cap, the eight biggest pins) beside `history.db`. The first sweep
+comes a minute after the history opens, then every hour. The doctor reads the report files and never opens the live
+database: its `history` row gives each project's size against its cap and the biggest pin, and warns at 80 % of the cap
+naming what keeps the size up.
 
 ## The hub
 
@@ -298,13 +314,67 @@ by `drgnx-history-revert--event`, the only code here that runs from the event co
 lint reads its source): clean buffers revert under `drgnx-history-with-origin "revert"`, buffers with unsaved changes are
 kept in a bounded list and a notice carries `drgnx-history-resolve-dirty`, whose card offers keep mine, take theirs and
 edit. `drgnx-history-who-wrote-this` asks `history/blame {path, worktree_root, start, end}` (0-based offsets) and reads
-`:spans` of `{start, end, author, step}`; the hub half of that method lands with the views.
+`:spans` of `{start, end, author, record, session, step}`; `author` is the history's own object (`{kind: "user"}`,
+`{kind: "agent", session}`, `{kind: "external", source}`, `{kind: "origin", name}`), and the command words it ("you",
+"agent s1", "outside drgnx (disk)").
+
+**Views** (`views.rs`). `history/blame {path, worktree_root, start, end}` answers `{spans}`: one span per run of one
+author's text made in one record, offsets 0-based in the document's LF text, cut to the text; text of the base and typing
+no record holds yet (it settles after 30 s) are left out. `history/hunks {branch, since}` answers `{files: [{path,
+hunks: [{old_start, old_count, new_start, new_count}]}]}`, numbered as `git diff --unified=0` numbers them, from the text
+after record `since` to the text now, in whichever project's history holds the branch. Both are user-only reads. The shape
+of `history/hunks` and of the bus event `history/file-version` is frozen for the Work space and the runners; a change to
+either is a change to those.
+
+**Steps and records.** A step that edited, and the first step of a turn, get `step.history_op`: the newest record the
+session caused at or before the step's end (none for a session outside a git worktree). `timeline/get` then shows the
+step as `revertible`, and a fork from it cuts the history at exactly that record.
+
+**One origin per tree.** The hub keeps an `OriginCore` per worktree (`origin::Origins`): the same path with the same
+bytes in two worktrees of one project is two versions, and the watcher's event about one tree's file is never matched
+against another's write.
+
+A hook that refused an agent's edit (the plugin hooks) is to show on the revert card as a skipped path whose reason
+starts `refused by hook`; the card prints a reason that starts so as it is.
+
+## Backup
+
+The nightly backup (and `graph/backup`) copies each project's `history.db` after the `work.db` copy: `VACUUM INTO` a
+temporary file beside `<data>/backup/history-<project>.db`, an integrity check, a rename over the old copy
+(`History::vacuum_into`, or `verdandi::vacuum_file` for a store nobody has open, which is what the backup uses).
+There is one copy per project and it is replaced each night, never rotated; the 2 GiB cap per project bounds it. A
+failed copy is logged, shows in `status.store.history_backup` and in `drgnx doctor` (the `store` row's warning and the
+`history` row's newest copy), and never fails the `work.db` copy or the other projects'.
 
 ## Testing
 
 `test/unit/history-test.el` (pattern D: batch splitting, the origin macro, an indirect buffer, the mode's teardown, the
 no-prompt lint) and `test/unit/history-hub-test.el` (pattern B: the real hub through the delivery gate; the answers to
 batches and resyncs are the evidence). Rows that need the hook skip on a Nidhogg built without the flag.
+
+`test/unit/history-worktrees-test.el` (pattern B: git worktrees, two worker agents on `ratatoskr-mock`, the user's
+checkout tracked through the editor methods, so it needs no hook).
+
+The conformance rows (`domr`, a real hub, `ratatoskr-mock acp --state`; `test/conformance/rewind/`, `fork/`,
+`edit-history/`) run the whole chain per provider: a worker's writes through its own `fs/write_text_file`, the
+`agent-step` events (a row reads a step's `seq` from one and sends it to `history/revert/preview` or `history/fork`),
+the preview and apply, and the restart of the hub on the same root. The mock's `call:record_decision` and
+`call:note_add` also show as a tool call, as the agents show them, which is how the hub finds the step a decision was
+recorded in (`history/revert/preview {decision}`). Things the rows fix as they are:
+
+- A revert's *files* come from the checkpoint a step holds. A turn's first step holds the tree as it was before the
+  turn's prompt went to the agent, so a revert to it never keeps a write of that turn; an edit's checkpoint is taken
+  once its step is written, so a write the agent makes at once after it can already be in it.
+- The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
+  keep-mine puts the checkpoint's file back over them.
+- A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
+  default answer keeps the user's file.
+- Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
+- A revert to a subagent's step cuts the conversation at the message before the Task call and carries what the cut
+  leaves out in a summary, so it needs the user's message, and the card says so (`needs_message`).
+
+`cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
+later deletes); it is a measurement, not a gate.
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some

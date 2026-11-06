@@ -133,6 +133,10 @@ pub struct StoreStatus {
     /// Whether that copy passed its check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_ok: Option<bool>,
+    /// Whether the last night's copies of the edit histories (`history.db`, one per project) were all good (none: no
+    /// copy was made since the hub started).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_backup: Option<bool>,
     /// The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,
     /// `work.db.schema5`): the doctor offers removing them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

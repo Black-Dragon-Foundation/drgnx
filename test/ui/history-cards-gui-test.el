@@ -79,5 +79,46 @@
       (mapc #'disable-theme custom-enabled-themes)
       (dolist (b buffers) (when (buffer-live-p b) (kill-buffer b))))))
 
+(defun drgnx-ui-history-cards--visible (buffer needle)
+  "Whether the first NEEDLE in BUFFER, shown in the selected window, is on screen."
+  (with-current-buffer buffer
+    (let ((at (save-excursion (goto-char (point-min)) (search-forward needle nil t))))
+      (and at (pos-visible-in-window-p at (selected-window))))))
+
+(ert-deftest drgnx-ui-history-cards/the-whole-revert-card-is-in-the-frame ()
+  ;; D: the card with every part, in a window as it opens: its Conversation section and its Apply button are on screen
+  ;; (the pictures kept for the row show the whole card), under both themes
+  (drgnx-uitest-bare-frame)
+  (let (card)
+    (unwind-protect
+        (dolist (theme '(drgnx-dark drgnx-light))
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t)
+          ;; a revert that is not blocked: its card has Apply (a blocked one offers Fork in its place)
+          (setq card (drgnx-history-revert--open
+                      (let ((p (copy-sequence drgnx-ui-history-cards--preview))) (plist-put p :blocked nil) p)))
+          (switch-to-buffer card)
+          (delete-other-windows)
+          ;; frame the whole card: as tall as its text, and the picture is taken of that
+          (let ((frame (window-frame)))
+            (set-frame-size frame (frame-width frame)
+                            (+ 4 (with-current-buffer card (count-lines (point-min) (point-max))))))
+          (with-current-buffer card (goto-char (point-min)))
+          (set-window-start (selected-window) (point-min))
+          (drgnx-test-wait-presented :secs 20)
+          ;; a card the frame cannot show whole fails here, with what was waited for, never hangs
+          (drgnx-test-wait (lambda ()
+                             (and (drgnx-ui-history-cards--visible card "Conversation")
+                                  (drgnx-ui-history-cards--visible card "Apply")))
+                           :secs 20
+                           :what (list "the revert card's Conversation and Apply on screen" theme
+                                       :lines (with-current-buffer card (count-lines (point-min) (point-max)))
+                                       :window-rows (window-body-height) :frame-rows (frame-height)
+                                       :conversation (drgnx-ui-history-cards--visible card "Conversation")))
+          (should (file-exists-p (drgnx-ui-history-cards--shot "revert-whole" theme)))
+          (kill-buffer card))
+      (mapc #'disable-theme custom-enabled-themes)
+      (when (buffer-live-p card) (kill-buffer card)))))
+
 (provide 'history-cards-gui-test)
 ;;; history-cards-gui-test.el ends here

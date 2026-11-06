@@ -1039,6 +1039,34 @@ server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind t
                      :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
                      :check (lambda (f) (drgnx-doctor--store-check f)))
 
+;; The edit history (history.db, verdandi): the nightly copies of each project's history, from the `store' section.
+(defun drgnx-doctor--history-check (f)
+  "The `history' check of the fact F: the newest nightly copy of the edit histories (a failed copy warns in `store')."
+  (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
+         (h (plist-get store :history))
+         (copies (or (plist-get h :copies) 0))
+         (age (plist-get h :newest_age_s))
+         (sizes (mapconcat
+                 (lambda (row)
+                   (let ((pin (aref (or (plist-get row :pins) [nil]) 0)))
+                     (format "%s %d MiB of %d MiB%s" (plist-get row :project)
+                             (/ (or (plist-get row :size) 0) 1048576) (/ (or (plist-get row :cap) 0) 1048576)
+                             (if pin (format ", pinned by %s" (plist-get pin :name)) ""))))
+                 (plist-get store :history_size) "; "))
+         (warnings (append (plist-get store :history_warnings) nil)))
+    (cond
+     ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
+     (warnings (list 'warn (mapconcat #'identity warnings "; ") "Pin less, drop old forks and worktrees, or let the 90-day expiry run"))
+     ((zerop copies) (list 'ok "no copy of an edit history yet (the nightly backup makes one per project)" nil))
+     (t (list 'ok (format "%d project cop%s, newest %s ago%s" copies (if (= copies 1) "y" "ies")
+                          (if age (format "%d h" (/ age 3600)) "?")
+                          (if (string-empty-p sizes) "" (concat "; " sizes)))
+              nil)))))
+
+(drgnx-doctor-define 'history :group "Agents"
+                     :doc "The edit history (history.db): its nightly copies, one per project, beside work.db's"
+                     :check (lambda (f) (drgnx-doctor--history-check f)))
+
 ;; The agent browser: the `browser' section of `ratatoskr doctor --json' (what a session would get, the tier and Landlock
 ;; ABI, the web proxy's refusals judged in-process, the memory cap, the last cached smoke check).
 (defun drgnx-doctor--agent-browser-check (f)

@@ -628,10 +628,13 @@ opening rule's text (the writer looks at the file once more first); a newer one 
 `best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
 state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify`, from any
 class, wakes the `events` broadcast. `status` says `store: {schema, writer: ready | not-ready |
-read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, denied_in?}`: the writer's state
-from its opening rule's last answer, the transactions the front's methods committed since start, when the move from
-schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
-out of the migration (`last_backup` and `backup_ok` come with the daily backups).
+read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, history_backup?, denied_in?}`: the
+writer's state from its opening rule's last answer, the transactions the front's methods committed since start, when the
+move from schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list
+kept out of the migration (`last_backup` and `backup_ok` come with the daily backups; `history_backup` says whether the
+last night's copies of the edit histories were all good). `graph/backup` and the nightly timer also copy each
+project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, replaced, never rotated) and answer
+`history: [{project, path, ok, bytes}]`; a failed one never fails the `work.db` copy.
 
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
@@ -1005,7 +1008,9 @@ A revert takes an agent's work back to one of its steps: the files, the decision
 
 - **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
   card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
-  revert cannot undo, the level, `needs_message`, `blocked`, the paths left out, the conversation (`restored`, or
+  revert cannot undo, the level, `needs_message` (the rewind tells the conversation a summary: at Summary level, or
+  for steps the cut leaves out, as at a subagent's step; apply then refuses without a message before anything
+  changes), `blocked`, the paths left out, the conversation (`restored`, or
   `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
   `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
   `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
@@ -1347,9 +1352,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
@@ -2983,7 +2990,9 @@ adds `revertible`: it has a history record and its session's snapshots were not 
 ([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
-tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. A
+turn's tree is taken before its prompt goes to the agent (through an index of its own, held by `refs/drgnx/turn/<sid>`
+until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
