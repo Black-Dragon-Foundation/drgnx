@@ -189,6 +189,53 @@ fn gemini_has_no_fork_list_resume_or_close() {
     assert!(r["result"].is_object());
 }
 
+// [C] handshake: DeepSeek Harness 0.2.2's `--patch` takes a top-level YAML array of loader patches and refuses
+// anything else at boot (`packages/boot/app-boot/src/index.ts:536-545`, `:571-589`); the patches to rows its base
+// bundle has (`sandbox-policy`, `approval`: `packages/bundle/base/cordis.patch.yml:243-262`) apply, and the
+// inserted ask plugin's `kinds` are what it asks about.
+#[test]
+fn dsh_boots_only_on_a_patch_list() {
+    let d = dir();
+    let map = d.path().join("map.yml");
+    std::fs::write(
+        &map,
+        "sandbox:\n  mode: danger-full-access\napproval:\n  policy: ask\nplugins:\n  drgnx-ask:\n    kinds: [execute]\n",
+    )
+    .unwrap();
+    let out = Command::new(MOCK)
+        .args(["acp", "--as", "dsh", "--patch", map.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("must be a top-level YAML array"), "{err}");
+    let list = d.path().join("list.yml");
+    std::fs::write(
+        &list,
+        "# x\n- id: sandbox-policy\n  config:\n    mode: danger-full-access\n\n- id: approval\n  config:\n    policy: ask\n\n\
+         - insert:\n    - id: drgnx-ask\n      name: '@deepseek-ai/dsh-acp-drgnx-ask'\n      config:\n        kinds: [execute, edit]\n",
+    )
+    .unwrap();
+    let log = d.path().join("log");
+    let mut a = Acp::start(&[
+        "--as",
+        "dsh",
+        "--log",
+        log.to_str().unwrap(),
+        "--patch",
+        list.to_str().unwrap(),
+    ]);
+    a.init();
+    a.new_session(d.path().to_str().unwrap(), json!({}));
+    let l = log_lines(&log);
+    let note = l.iter().find_map(|v| v.get("dsh")).unwrap();
+    assert_eq!(
+        note,
+        &json!({"policy": "ask", "sandbox": "danger-full-access", "kinds": ["execute", "edit"]})
+    );
+}
+
 // [C] handshake: Gemini CLI 0.67 loads an `--admin-policy` file whose every rule has a toolName, a known decision and
 // a priority in 0..=999 (`packages/core/src/policy/toml-loader.ts:39-70`), and drops a file that has not, running on
 // without it (`:376-389`); the Gemini personality logs which.

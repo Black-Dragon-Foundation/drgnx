@@ -46,8 +46,10 @@ const SETTINGS_MAX: u64 = 1_048_576;
 /// Codex's lock is unproven until the sandboxed launch and the laundering rows pass on it: flip it then.
 const CODEX_LOCK_PROVEN: bool = false;
 
-/// DeepSeek Harness's lock is unproven until the drgnx ask plugin its overlay mounts ships with its fork and its rows
-/// pass: flip it then.
+/// DeepSeek Harness's lock is unproven until the drgnx ask plugin its overlay inserts ships in the installed `dsh`
+/// (the fork's `@deepseek-ai/dsh-acp-drgnx-ask`, resolvable from its profile), a sandboxed launch row passes on it, and
+/// the session's start can tell the plugin loaded (a patch to a row the bundle lacks is only a Loader warning): flip
+/// it then.
 const DSH_LOCK_PROVEN: bool = false;
 
 /// Codex's requirements layer and its managed (System) config, bound read-only inside the sandbox; the user's own
@@ -519,13 +521,18 @@ fn kimi_config(kinds: &[&str]) -> Vec<u8> {
     t.into_bytes()
 }
 
-/// DeepSeek Harness's overlay: the full-access sandbox mode (Gleipnir is the one sandbox) and, set apart from it,
-/// `approval.policy: ask` (the base bundle ties the mode to a policy that rejects every ask); the drgnx ask plugin
-/// asks for the tools of KINDS.
+/// DeepSeek Harness's overlay, as `--patch` reads it (0.2.2: a top-level YAML array of loader patches; anything else
+/// stops its boot, `packages/boot/app-boot/src/index.ts:536-545`, `:571-589`): the `sandbox-policy` row's mode
+/// full-access (Gleipnir is the one sandbox) and, set apart from it, the `approval` row's policy `ask` (the base bundle
+/// ties that mode to `never`, which rejects every ask: `packages/bundle/base/cordis.patch.yml:243-262`); the drgnx
+/// ask plugin, inserted, asks for the tools of KINDS (the fork's `packages/acp/acp-drgnx-ask`, whose fixture
+/// `tests/fixtures/drgnx.overlay.yml` this is).
 fn dsh_overlay(kinds: &[&str]) -> Vec<u8> {
     format!(
         "# drgnx: the hub's overlay for this session's DeepSeek Harness (read-only inside its sandbox).\n\
-         sandbox:\n  mode: danger-full-access\napproval:\n  policy: ask\nplugins:\n  drgnx-ask:\n    kinds: [{}]\n",
+         - id: sandbox-policy\n  config:\n    mode: danger-full-access\n\n\
+         - id: approval\n  config:\n    policy: ask\n\n\
+         - insert:\n    - id: drgnx-ask\n      name: '@deepseek-ai/dsh-acp-drgnx-ask'\n      config:\n        kinds: [{}]\n",
         kinds.join(", ")
     )
     .into_bytes()

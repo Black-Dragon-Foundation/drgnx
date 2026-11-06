@@ -361,7 +361,10 @@ fn kimi_strips_yolo_and_asks_for_subscribed_kinds() {
 }
 
 // [D] pure: DeepSeek Harness gets an overlay that keeps `approval.policy: ask` beside the full-access sandbox mode
-// (the base bundle ties `never` to that mode) and mounts the drgnx ask plugin for the subscribed kinds.
+// (the base bundle ties `never` to that mode) and mounts the drgnx ask plugin for the subscribed kinds, written as
+// `--patch` reads it: a top-level YAML array of loader patches (`packages/boot/app-boot/src/index.ts:571-589`), the
+// sandbox row's id `sandbox-policy` (`packages/bundle/base/cordis.patch.yml:243-246`), as the fork's own fixture has
+// it (`packages/acp/acp-drgnx-ask/tests/fixtures/drgnx.overlay.yml`).
 #[test]
 fn dsh_overlay_keeps_policy_ask_under_full_access() {
     let d = tempfile::tempdir().unwrap();
@@ -379,14 +382,27 @@ fn dsh_overlay_keeps_policy_ask_under_full_access() {
         ]
     );
     let text = file_of(&plan, &overlay).unwrap();
-    for want in [
-        "mode: danger-full-access",
-        "policy: ask",
-        "kinds: [read, search]",
-    ] {
-        assert!(text.contains(want), "{want} in {text}");
-    }
-    assert!(!text.contains("never"), "{text}");
+    let body: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    assert_eq!(
+        body,
+        [
+            "- id: sandbox-policy",
+            "  config:",
+            "    mode: danger-full-access",
+            "- id: approval",
+            "  config:",
+            "    policy: ask",
+            "- insert:",
+            "    - id: drgnx-ask",
+            "      name: '@deepseek-ai/dsh-acp-drgnx-ask'",
+            "      config:",
+            "        kinds: [read, search]",
+        ],
+        "{text}"
+    );
     let home = plan.login_dir.clone().expect("a hub-owned home");
     assert_eq!(env_of(&plan, "DSH_HOME"), home.to_str());
     // the ask plugin ships with the fork: until then the lock is not enforced, and says so

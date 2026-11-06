@@ -118,6 +118,12 @@ pub fn run(args: &[String]) -> ! {
             "usage: ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]",
         ),
     };
+    // DeepSeek Harness refuses an overlay that is not a patch list at boot, before it speaks ACP
+    if kind == Kind::Dsh
+        && let Err(why) = dsh::check(args)
+    {
+        crate::die(&format!("dsh: {why}"));
+    }
     let script = flag(args, "--script")
         .map(|p| {
             std::fs::read_to_string(&p)
