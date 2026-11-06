@@ -1402,6 +1402,11 @@ pub(super) async fn prepare(
     if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
         // its edits of the checkout go through the pair door only: Claude's own edit tools are off from the start
         plan = plan.with_project_chat();
+        // paired from the start when the cell allows it; the user's toggle decides under an ask
+        front.pair.started(
+            sid,
+            norn::matrix::decide(&eff, Action::ChatProjectEdit, None),
+        );
     }
     // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
     let cell = eff.cell(Action::Browser).verdict;
@@ -3004,6 +3009,7 @@ impl Session {
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
             waiting: self.pair.waiting(&self.id),
+            paired: self.pair.paired_now(&self.id),
         }
     }
 
@@ -3780,6 +3786,23 @@ impl Session {
             .map_err(|r| r.0)
     }
 
+    /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once
+    /// and queues a note to the agent, cancelling nothing.
+    pub(crate) async fn pair_toggle(self: &Arc<Self>, on: bool) -> Result<(), Error> {
+        if !self.project_chat() {
+            return Err(refuse("pair mode is a chat's in a project"));
+        }
+        let eff = self.cells_now().await.map_err(|e| refuse(&e))?;
+        self.pair
+            .toggle(&self.id, on, &eff)
+            .map_err(|r| refuse(&r.0))?;
+        if !on {
+            self.prompt(crate::pair::door::OFF_NOTE.to_string(), Origin::Hub)?;
+        }
+        self.changed();
+        Ok(())
+    }
+
     async fn write_file(&self, req: &Value) -> Result<(), String> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let content = req.get("content").and_then(Value::as_str).unwrap_or("");
@@ -4257,6 +4280,19 @@ pub fn tool_input(
         raw_input,
         truncated,
     })
+}
+
+/// `agents/pair`: the user turns pair mode on or off for a chat in a project.
+pub async fn pair(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::pair::PairToggle,
+) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user turns pair mode on or off"));
+    }
+    f.core.agents.find(p.id.as_str())?.pair_toggle(p.on).await?;
+    Ok(true)
 }
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.

@@ -23,8 +23,16 @@ Autonomous starts chats paired ([security.md](security.md), the matrix).
   `mise.toml`), CI and build files (`.github/`, `Makefile*`, `build.rs`, `*.sh`), credential files, or anything outside
   the checkout, links included. `read_file` never hands over a credential file either.
 
+## Turning Pair off
+
+Turning Pair off for a chat closes its door at once: writes not yet in your editor are refused ("pair mode was turned
+off by the user"), the ones waiting in your editor are dropped unapplied, and the chat is told in a note. Nothing it is
+doing is cancelled. Pair mode cannot be turned on where the matrix says never. While you hold a chat's wheel its
+writes are refused the same way.
+
 ## When a write is refused
 
 The chat is told why, in words it can act on: the lines you are editing, "read it with read_file", "the editor is
 away". After two refusals of one file within a minute it is told to wait for you or ask you, and its card shows which
-file it waits on.
+file it waits on. A chat writes only files open in your editor: a file you have not opened is refused "not open in the
+editor; ask the user to open it", and a file open as a large or remote file is refused too.

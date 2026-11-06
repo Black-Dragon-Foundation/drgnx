@@ -108,8 +108,89 @@ pub struct PairReadAnswer {
     pub error: Option<Text>,
 }
 
+/// How the editor has a file open: a pair write goes only to a `normal` buffer (a large-file or remote buffer refuses
+/// it).
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    Normal,
+    Large,
+    Remote,
+}
+
+/// `pair/open` (the editor): it has FILE open now, as KIND.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenParams {
+    pub file: AbsPath,
+    pub kind: FileKind,
+}
+
+/// `pair/closed` (the editor): it no longer has FILE open.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClosedParams {
+    pub file: AbsPath,
+}
+
+/// One file the editor has open.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenFile {
+    pub file: AbsPath,
+    pub kind: FileKind,
+}
+
+/// `pair/open-set` (the editor, at its module's setup and on every connection): every file it has open; it replaces
+/// what the hub held for that editor.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenSetParams {
+    pub files: Vec<OpenFile>,
+}
+
+/// `agents/pair` (the user): pair mode on or off for chat ID.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PairToggle {
+    pub id: crate::types::Id,
+    pub on: bool,
+}
+
+/// `pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair
+/// off or took the wheel.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PairDrop {
+    pub session: String,
+    /// Why, as the editor's answer gives it back (`pair-off`, `held`).
+    pub reason: String,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
+        method!(
+            "pair/open", PairOpen(OpenParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor has a file open now (normal, large or remote): a pair write of it goes to this editor",
+        ),
+        method!(
+            "pair/closed", PairClosed(ClosedParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor no longer has a file open",
+        ),
+        method!(
+            "pair/open-set", PairOpenSet(OpenSetParams) -> bool,
+            classes: [User], writes: false,
+            doc: "every file the editor has open, at its setup and on every connection: it replaces what the hub held for that editor",
+        ),
+        method!(
+            "agents/pair", AgentsPair(PairToggle) -> bool,
+            classes: [User], writes: false,
+            doc: "pair mode on or off for a chat in a project: on needs chat.project-edit not never; off refuses its later writes and drops those queued in the editor, cancelling nothing",
+        ),
         method!(
             "pair/answer", PairAnswer(PairAnswer) -> bool,
             classes: [User], writes: false,

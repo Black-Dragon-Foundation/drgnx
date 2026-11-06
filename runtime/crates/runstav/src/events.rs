@@ -313,6 +313,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version"
         ),
         event!(
+            "pair-drop",
+            crate::methods::pair::PairDrop,
+            "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason"
+        ),
+        event!(
             "pair-reconcile",
             crate::methods::pair::PairReconcile,
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
@@ -386,6 +391,7 @@ mod tests {
                     "say-failed",
                     // agent system part 3: pair mode
                     "pair-apply",
+                    "pair-drop",
                     "pair-read",
                     "pair-reconcile",
                 ]
@@ -402,7 +408,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 30);
+        assert_eq!(events().len(), 31);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

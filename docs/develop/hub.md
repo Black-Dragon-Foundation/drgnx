@@ -1037,6 +1037,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
@@ -1130,6 +1131,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
 | `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
+| `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |
+| `pair/open-set` | user | `{files: [{file: AbsPath, kind: "normal" \| "large" \| "remote"}]}` | `boolean` | no |
 | `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
@@ -1275,6 +1279,7 @@ result is (`event(NAME).check`):
 | `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
 | `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
 | `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
@@ -1304,6 +1309,17 @@ checkout read-only for it.
   away leaves a write in flight unknown ("read it with read_file to see"), never refused.
 - **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
   them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
+- **The open set** (`pair::open_set`): the editor tells the hub which files it has open, `pair/open {file, kind:
+  normal | large | remote}` and `pair/closed {file}`, and sends its full set (`pair/open-set {files: [{file, kind}]}`)
+  at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
+  to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
+  editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
+  has refuses "not open in the editor" (this version never writes the disk itself), and its read comes from the disk.
+- **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
+  door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
+  holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
+  is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel").
 
 ## Per-session sockets
 

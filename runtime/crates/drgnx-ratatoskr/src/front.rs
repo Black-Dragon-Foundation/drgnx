@@ -15,6 +15,7 @@ use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Refusals};
 use crate::gateway::Gate;
 use crate::hello::{self, Session};
+use crate::pair::open_set::OpenEv;
 use crate::sessions::{self, Sessions};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
@@ -614,6 +615,20 @@ impl Front {
             // the pair door: the editor's answers to pair-apply, pair-reconcile and pair-read (crate::pair::door)
             Params::PairAnswer(p) => Ok(json!(self.pair.answer(s.conn, p))),
             Params::PairReadAnswer(p) => Ok(json!(self.pair.read_answer(s.conn, p))),
+            // the files this editor has open (crate::pair::open_set)
+            Params::PairOpen(p) => Ok(json!(self.pair.open_ev(OpenEv::Open {
+                conn: s.conn,
+                file: opened(&p.file),
+                kind: p.kind,
+            }))),
+            Params::PairClosed(p) => Ok(json!(self.pair.open_ev(OpenEv::Closed {
+                conn: s.conn,
+                file: opened(&p.file),
+            }))),
+            Params::PairOpenSet(p) => Ok(json!(self.pair.open_ev(OpenEv::Set {
+                conn: s.conn,
+                files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
+            }))),
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -630,6 +645,7 @@ impl Front {
             | Params::AgentsEntriesUnsubscribe(_)
             | Params::AgentsToolInput(_)
             | Params::AgentsPause(_)
+            | Params::AgentsPair(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -790,6 +806,11 @@ impl Front {
 fn unserved(method: &Method) -> Result<Value, Error> {
     tracing::error!(method = method.name, "a method reached no handler");
     Err(internal(format!("{} reached no handler", method.name)))
+}
+
+/// The file an editor names as open, resolved as the pair door resolves a write's path (a link to it is the file).
+fn opened(file: &runstav::types::AbsPath) -> PathBuf {
+    std::fs::canonicalize(file.as_str()).unwrap_or_else(|_| PathBuf::from(file.as_str()))
 }
 
 /// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.

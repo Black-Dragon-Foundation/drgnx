@@ -8,6 +8,8 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/README", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
 {"do": "file", "path": "$ROOT/a.log", "contains": "\"disallowedTools\":[\"Edit\",\"Write\",\"MultiEdit\",\"NotebookEdit\"]", "within_ms": 10000}

@@ -14,6 +14,12 @@
 //!   served.
 //! - **Refusals** name what to do; two refused writes of one file by a session within [`REFUSAL_WINDOW`] say "wait
 //!   for the user or ask them", and the session's snapshot says `waiting {file, lines}` until a write of it applies.
+//! - **Which editor** ([`super::open_set`]): a write goes to the editor that has the file open as a normal buffer; a
+//!   large or remote buffer refuses it, a file an editor had when it went away refuses "the editor is away", and a
+//!   file no editor has refuses "not open in the editor".  The hub never writes the disk behind an open file.
+//! - **The toggle and the wheel** ([`Door::toggle`], [`Door::hold`]): pair off, or the user holding the wheel, closes
+//!   the session's door at once: its writes not yet sent are refused, the editor drops those it holds (`pair-drop`,
+//!   each answered `dropped`), and later ones are refused.  Nothing of the session's turn is cancelled.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,12 +30,13 @@ use std::time::Duration;
 use norn::matrix::{Action, Effective, Verdict, decide};
 use runstav::methods::agents::Waiting;
 use runstav::methods::pair::{
-    PairAnswer, PairApply, PairRead, PairReadAnswer, PairReconcile, PairResult,
+    PairAnswer, PairApply, PairDrop, PairRead, PairReadAnswer, PairReconcile, PairResult,
 };
 use runstav::types::AbsPath;
 use serde_json::json;
 use tokio::sync::oneshot;
 
+use super::open_set::{OpenEv, OpenSet, Route};
 use super::writes::{Ev, FileQueue, Outcome, REREAD, Served, WriteId, plan_edit, plan_whole};
 use super::{Refusal, gate, read_gate};
 use crate::settings::agents::Editors;
@@ -49,8 +56,22 @@ pub const REFUSAL_WINDOW: Duration = Duration::from_secs(60);
 /// What the drgnx edit tools answer while the chat is not paired.
 pub const PAIR_OFF: &str = "pair mode is off; ask the user to turn it on";
 
-/// What a write answers when no editor has the file.
+/// What a write answers when the editor that had the file went away.
 pub const EDITOR_AWAY: &str = "the editor is away";
+
+/// What a chat's writes answer once the user turned pair off for it.
+pub const OFF_BY_USER: &str = "pair mode was turned off by the user";
+
+/// What a write of a session whose wheel the user holds answers.
+pub const HELD: &str = "the user holds the wheel; wait until they give it back";
+
+/// What the user is told when turning pair on where the matrix says never.
+pub const NEVER_HERE: &str =
+    "pair mode is not allowed for this chat: the matrix's chat.project-edit is never for it";
+
+/// What the agent is told, queued, when the user turns pair off for it.
+pub const OFF_NOTE: &str = "[drgnx: the user turned pair mode off for this chat. Your edits of the project are \
+    refused until they turn it on again; nothing you were doing was cancelled.]";
 
 /// A write's form.
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +105,8 @@ pub fn refused_text(reason: &str, lines: Option<[u64; 2]>) -> String {
         "read-only" => "the buffer is read-only in the editor".to_string(),
         "locked" => "another Emacs has this file locked".to_string(),
         "not-open" => "not open in the editor; ask the user to open it".to_string(),
+        "pair-off" => OFF_BY_USER.to_string(),
+        "held" => HELD.to_string(),
         other => other.to_string(),
     }
 }
@@ -101,8 +124,30 @@ struct Pending {
     whole: Option<String>,
 }
 
+/// A chat's pair state.
+#[derive(Default)]
+struct SessionPair {
+    /// Its `chat.project-edit` verdict when last seen.
+    cell: Option<Verdict>,
+    /// The user's toggle; none: as the cell says (allow: paired).
+    on: Option<bool>,
+    /// The user holds its wheel.
+    held: bool,
+}
+
+impl SessionPair {
+    fn paired(&self) -> bool {
+        match self.cell {
+            None | Some(Verdict::Never) => false,
+            Some(c) => self.on.unwrap_or(c == Verdict::Allow),
+        }
+    }
+}
+
 #[derive(Default)]
 struct St {
+    sessions: HashMap<String, SessionPair>,
+    open: OpenSet,
     served: HashMap<(String, PathBuf), Served>,
     files: HashMap<PathBuf, FileQueue>,
     ordinals: HashMap<PathBuf, u64>,
@@ -137,9 +182,31 @@ impl Door {
         self.next.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Whether a session with the cells EFF is paired now.
-    pub fn paired(&self, _session: &str, eff: &Effective) -> bool {
-        decide(eff, Action::ChatProjectEdit, None) == Verdict::Allow
+    /// Whether SESSION, with the cells EFF, is paired now: the user's toggle, else `chat.project-edit` allow; never
+    /// while the cell is never.
+    pub fn paired(&self, session: &str, eff: &Effective) -> bool {
+        let cell = decide(eff, Action::ChatProjectEdit, None);
+        let mut st = lock(&self.st);
+        let s = st.sessions.entry(session.to_string()).or_default();
+        s.cell = Some(cell);
+        s.paired()
+    }
+
+    /// Chat SESSION in a project started with CELL as its `chat.project-edit` (its snapshot's `paired` from now on).
+    pub fn started(&self, session: &str, cell: Verdict) {
+        lock(&self.st)
+            .sessions
+            .entry(session.to_string())
+            .or_default()
+            .cell = Some(cell);
+    }
+
+    /// SESSION's snapshot `paired`: none for a session that is no chat in a project.
+    pub fn paired_now(&self, session: &str) -> Option<bool> {
+        lock(&self.st)
+            .sessions
+            .get(session)
+            .map(SessionPair::paired)
     }
 
     /// SESSION's `waiting {file, lines}`: two refusals of one file, until a write of it applies.
@@ -147,9 +214,85 @@ impl Door {
         lock(&self.st).waiting.get(session).cloned()
     }
 
-    /// The editor connection a write or read of FILE goes to.
-    fn editor_for(&self, _file: &Path) -> Option<u64> {
-        self.editors.first()
+    /// The editor's open files changed (`pair/open`, `pair/closed`, `pair/open-set`).
+    pub fn open_ev(&self, ev: OpenEv) -> bool {
+        lock(&self.st).open.step(ev);
+        true
+    }
+
+    /// The user's toggle: pair ON or off for SESSION (cells EFF).  On needs `chat.project-edit` not never; off closes
+    /// the door at once ([`Door::close`]).
+    pub fn toggle(
+        self: &Arc<Self>,
+        session: &str,
+        on: bool,
+        eff: &Effective,
+    ) -> Result<(), Refusal> {
+        let cell = decide(eff, Action::ChatProjectEdit, None);
+        if on && cell == Verdict::Never {
+            return Err(Refusal(NEVER_HERE.into()));
+        }
+        {
+            let mut st = lock(&self.st);
+            let s = st.sessions.entry(session.to_string()).or_default();
+            s.cell = Some(cell);
+            s.on = Some(on);
+        }
+        if !on {
+            self.close(session, OFF_BY_USER, "pair-off");
+        }
+        Ok(())
+    }
+
+    /// The user took (HELD) or gave back SESSION's wheel: while held its door is closed ([`Door::close`]).
+    pub fn hold(self: &Arc<Self>, session: &str, held: bool) {
+        lock(&self.st)
+            .sessions
+            .entry(session.to_string())
+            .or_default()
+            .held = held;
+        if held {
+            self.close(session, HELD, "held");
+        }
+    }
+
+    /// SESSION's door closes: its writes not yet sent are refused with WHY, and each editor holding one of its writes
+    /// is told to drop them (`pair-drop`, answered `dropped` with REASON, each the editor's verdict).
+    fn close(self: &Arc<Self>, session: &str, why: &str, reason: &str) {
+        let mut st = lock(&self.st);
+        let files: Vec<PathBuf> = st.files.keys().cloned().collect();
+        for f in files {
+            let fx = step(
+                &mut st,
+                &f,
+                Ev::Close {
+                    session: session.to_string(),
+                    why: why.to_string(),
+                },
+            );
+            self.run(&mut st, &f, fx);
+        }
+        let mut conns: Vec<u64> = st
+            .pending
+            .values()
+            .filter(|p| p.session == session)
+            .map(|p| p.conn)
+            .collect();
+        conns.sort_unstable();
+        conns.dedup();
+        drop(st);
+        let ev = json!(PairDrop {
+            session: session.to_string(),
+            reason: reason.to_string(),
+        });
+        for c in conns {
+            self.editors.send_to(c, "pair-drop", ev.clone());
+        }
+    }
+
+    /// Where a write of FILE goes now.
+    fn route(&self, file: &Path) -> Route {
+        lock(&self.st).open.route(&file.to_path_buf())
     }
 
     /// SESSION's read of PATH in the checkout ROOT (cells EFF): the editor's text and version when an editor has it,
@@ -162,9 +305,10 @@ impl Door {
         path: &str,
     ) -> Result<Served, Refusal> {
         let real = read_gate(eff, root, Path::new(path))?;
-        let from_editor = match self.editor_for(&real) {
-            Some(conn) => self.ask_editor(conn, &real).await?,
-            None => None,
+        // the editor's text when a normal buffer has the file; the disk's otherwise
+        let from_editor = match self.route(&real) {
+            Route::Editor(conn) => self.ask_editor(conn, &real).await?,
+            Route::Refused(_) | Route::Disk => None,
         };
         let served = match from_editor {
             Some(s) => s,
@@ -234,17 +378,30 @@ impl Door {
         path: &str,
         kind: WriteKind,
     ) -> Result<String, Refusal> {
+        if lock(&self.st).sessions.get(session).is_some_and(|s| s.held) {
+            return Err(Refusal(HELD.into()));
+        }
         if !self.paired(session, eff) {
             // the gate's own refusal (a never cell, a protected path) says more than "off"
             gate(eff, root, Path::new(path))?;
             return Err(Refusal(PAIR_OFF.into()));
         }
         let real = gate(eff, root, Path::new(path))?;
-        let conn = self
-            .editor_for(&real)
-            .ok_or_else(|| Refusal(EDITOR_AWAY.into()))?;
+        let conn = match self.route(&real) {
+            Route::Editor(conn) => conn,
+            Route::Refused(why) => return Err(Refusal(why.into())),
+            // this version writes only through an editor: the hub never writes the disk behind an open file
+            Route::Disk => return Err(Refusal(refused_text("not-open", None))),
+        };
         let rx = {
             let mut st = lock(&self.st);
+            // the door may have closed since the checks above: decided again under the lock the close takes
+            match st.sessions.get(session) {
+                Some(s) if s.held => return Err(Refusal(HELD.into())),
+                Some(s) if s.on == Some(false) => return Err(Refusal(OFF_BY_USER.into())),
+                Some(s) if !s.paired() => return Err(Refusal(PAIR_OFF.into())),
+                _ => {}
+            }
             let (planned, whole) = match kind {
                 WriteKind::Edit { old, new } => (plan_edit(&old, &new)?, None),
                 WriteKind::Whole { content } => {
@@ -419,9 +576,11 @@ impl Door {
         true
     }
 
-    /// Editor connection CONN is gone: its writes in flight are unknown, the reads waiting for it give up.
+    /// Editor connection CONN is gone: the files it had open are away until an editor opens them again, its writes in
+    /// flight are unknown, the reads waiting for it give up.
     pub fn editor_gone(self: &Arc<Self>, conn: u64) {
         let mut st = lock(&self.st);
+        st.open.step(OpenEv::Gone { conn });
         st.reads.retain(|_, (c, _)| *c != conn);
         let lost: Vec<(WriteId, PathBuf)> = st
             .pending
@@ -477,22 +636,29 @@ impl Door {
                     (None, None) => "applied in the editor".to_string(),
                 });
             }
+            // the door closed before it was sent: not the agent's mistake, not counted
+            Outcome::Refused(why) if why == OFF_BY_USER || why == HELD => return Err(Refusal(why)),
             Outcome::Refused(reason) => {
                 let lines = answer.as_ref().and_then(|a| a.lines);
                 refused_text(&reason, lines)
             }
-            Outcome::Dropped => answer.as_ref().and_then(|a| a.reason.as_ref()).map_or_else(
-                || {
-                    "the editor did not get to it in time; nothing of it was applied: try again"
-                        .to_string()
-                },
-                |r| {
-                    format!(
-                        "{}; nothing of it was applied",
-                        refused_text(r.as_str(), None)
-                    )
-                },
-            ),
+            // dropped unapplied (its time ran out, the user turned pair off or took the wheel): no refusal of the
+            // agent's text, so not counted towards "wait for the user"
+            Outcome::Dropped => {
+                return Err(Refusal(
+                    answer
+                        .as_ref()
+                        .and_then(|a| a.reason.as_ref())
+                        .filter(|r| matches!(r.as_str(), "pair-off" | "held"))
+                        .map_or_else(
+                            || {
+                                "the editor did not get to it in time; nothing of it was applied: try again"
+                                    .to_string()
+                            },
+                            |r| refused_text(r.as_str(), None),
+                        ),
+                ));
+            }
             Outcome::Lost => {
                 return Err(Refusal(
                     "the editor went away before it answered; read it with read_file to see whether your \
@@ -581,5 +747,128 @@ mod tests {
         assert!(!door.paired("s1", &chat(Preset::Balanced)));
         assert!(door.paired("s1", &chat(Preset::Autonomous)));
         assert!(!door.paired("s1", &chat(Preset::Cautious)));
+    }
+
+    /// A checkout with a.txt, and a door whose editor (connection 1) is OUT.
+    fn fixture() -> (tempfile::TempDir, PathBuf, Arc<Door>, Arc<Outbox>) {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        let editors = Arc::new(Editors::default());
+        let out = Arc::new(Outbox::new(1));
+        editors.subscribe(1, out.clone());
+        (d, root, Door::new(editors), out)
+    }
+
+    fn opened(door: &Door, file: &Path, kind: super::super::open_set::FileKind) {
+        door.open_ev(OpenEv::Open {
+            conn: 1,
+            file: file.to_path_buf(),
+            kind,
+        });
+    }
+
+    fn events(out: &Outbox) -> Vec<serde_json::Value> {
+        out.take_lines()
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    /// [D] A file the editor has open as a large or remote buffer refuses a pair write with the reason, and the
+    /// editor is sent nothing; a file no editor has refuses "not open in the editor".
+    #[tokio::test]
+    async fn large_and_remote_refuse() {
+        use super::super::open_set::{FileKind, LARGE_OR_REMOTE};
+        let (_d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        for (name, kind) in [("big.log", FileKind::Large), ("far.txt", FileKind::Remote)] {
+            let f = root.join(name);
+            opened(&door, &f, kind);
+            let edit = WriteKind::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            };
+            let r = door
+                .write("s1", &root, &eff, &f.to_string_lossy(), edit)
+                .await
+                .unwrap_err();
+            assert_eq!(r.0, LARGE_OR_REMOTE, "{name}");
+        }
+        let r = door
+            .write(
+                "s1",
+                &root,
+                &eff,
+                &root.join("a.txt").to_string_lossy(),
+                WriteKind::Edit {
+                    old: "a".into(),
+                    new: "b".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(r.0.contains("not open in the editor"), "{r}");
+        assert!(events(&out).is_empty(), "nothing went to the editor");
+    }
+
+    /// [D] The user takes the wheel while a write of the session waits in the editor: the editor is told to drop the
+    /// session's writes (`pair-drop`), the write's answer is the editor's `dropped` (refused text, never applied), and
+    /// every later write is refused at the door with nothing sent.  Given back, writes go to the editor again.
+    #[tokio::test]
+    async fn a_held_session_is_refused_at_the_door() {
+        use super::super::open_set::FileKind;
+        let (_d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let f = root.join("a.txt");
+        opened(&door, &f, FileKind::Normal);
+        let edit = || WriteKind::Edit {
+            old: "a".into(),
+            new: "b".into(),
+        };
+        let path = f.to_string_lossy().into_owned();
+        let d2 = door.clone();
+        let (r2, p2, e2) = (root.clone(), path.clone(), eff.clone());
+        let first = tokio::spawn(async move { d2.write("s1", &r2, &e2, &p2, edit()).await });
+        // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-apply");
+        let id = sent[0]["data"]["write"].as_u64().unwrap();
+        door.hold("s1", true);
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-drop");
+        assert_eq!(sent[0]["data"]["session"], "s1");
+        // the verdict is the editor's own answer
+        assert!(door.answer(
+            1,
+            PairAnswer {
+                write: id,
+                result: PairResult::Dropped,
+                version: None,
+                reason: runstav::types::Text::new("held").ok(),
+                lines: None,
+                saved: None,
+                not_saved: None,
+            }
+        ));
+        assert_eq!(first.await.unwrap().unwrap_err().0, HELD);
+        let r = door
+            .write("s1", &root, &eff, &path, edit())
+            .await
+            .unwrap_err();
+        assert_eq!(r.0, HELD);
+        assert!(events(&out).is_empty(), "nothing after held");
+        // given back: the next write goes to the editor
+        door.hold("s1", false);
+        let d3 = door.clone();
+        let (r3, p3, e3) = (root.clone(), path.clone(), eff.clone());
+        let _later = tokio::spawn(async move { d3.write("s1", &r3, &e3, &p3, edit()).await });
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-apply");
     }
 }

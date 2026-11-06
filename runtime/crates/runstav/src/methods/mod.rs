@@ -262,6 +262,10 @@ params! {
     RunnersRemove(runners::RemoveParams),
     PairAnswer(pair::PairAnswer),
     PairReadAnswer(pair::PairReadAnswer),
+    PairOpen(pair::OpenParams),
+    PairClosed(pair::ClosedParams),
+    PairOpenSet(pair::OpenSetParams),
+    AgentsPair(pair::PairToggle),
 }
 
 /// Every method, in no order.

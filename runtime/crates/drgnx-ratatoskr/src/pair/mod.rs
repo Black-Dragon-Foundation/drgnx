@@ -10,6 +10,7 @@
 //!   (Gleipnir's hide list and the secrets table), so a hub-served read never hands over what the sandbox hides.
 
 pub mod door;
+pub mod open_set;
 pub mod writes;
 
 use norn::matrix::{Action, Effective, Verdict, decide};

@@ -102,6 +102,7 @@ pub async fn serve(
         }
         Params::AgentsToolInput(p) => answer(agents::session::tool_input(f, c, p)),
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
+        Params::AgentsPair(p) => answer(agents::session::pair(f, c, p).await),
         Params::ExecStart(p) => answer(exec::start(f, c, p).await),
         Params::ExecGet(p) => answer(exec::get(f, c, p).await),
         Params::ExecList(p) => answer(exec::list(f, c, p).await),

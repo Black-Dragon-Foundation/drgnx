@@ -166,6 +166,9 @@ pub struct Snapshot {
     /// until a write of that file applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<Waiting>,
+    /// A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paired: Option<bool>,
 }
 
 /// The file (and the user's lines in it) a paired chat waits on.
