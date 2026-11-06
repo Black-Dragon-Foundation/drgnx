@@ -230,6 +230,20 @@ pub async fn advance(d: Duration) -> Advanced {
     v.advance(d).await
 }
 
+/// The hub's barrier (`__test_barrier`'s), for a test that runs the hub's tasks in its own process: waits until every
+/// [`spawn`]ed task is parked and outside any real wait, at most [`BUSY_AFTER`] of real time, then advances by no
+/// time.  The origins still inside a real wait or running after that, sorted, once each: none when it held.  Panics on
+/// the real clock (test-hooks).
+#[cfg(feature = "test-hooks")]
+pub async fn barrier() -> Vec<String> {
+    let Settled { mut waiting, busy } = settle_real(BUSY_AFTER, &[]).await;
+    waiting.extend(busy);
+    waiting.extend(advance(Duration::ZERO).await.busy);
+    waiting.sort();
+    waiting.dedup();
+    waiting
+}
+
 /// The origin of the task running now (test-hooks): its [`spawn`] name and the task's spawn ordinal (one count across
 /// every task this process spawned), none outside such a task.
 #[cfg(feature = "test-hooks")]
