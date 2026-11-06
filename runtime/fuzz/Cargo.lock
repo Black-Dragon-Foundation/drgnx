@@ -716,6 +716,7 @@ dependencies = [
 name = "drgnx-px"
 version = "0.1.0"
 dependencies = [
+ "gleipnir",
  "libc",
  "serde",
  "serde_json",

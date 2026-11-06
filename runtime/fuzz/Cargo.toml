@@ -28,7 +28,7 @@ http = "1"
 norn = { path = "../crates/norn" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
 drgnx-px = { path = "../crates/drgnx-px" }
-tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
+tokio = { version = "1.54", features = ["rt", "io-util", "time", "sync"] }
 
 [workspace]
 
@@ -238,6 +238,20 @@ bench = false
 [[bin]]
 name = "px_frames"
 path = "fuzz_targets/px_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_owner"
+path = "fuzz_targets/px_owner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_mux"
+path = "fuzz_targets/px_mux.rs"
 test = false
 doc = false
 bench = false

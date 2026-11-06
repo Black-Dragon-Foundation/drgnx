@@ -130,7 +130,34 @@ blocking stdin); stdout carries frames only, and logs and panics go to stderr. A
 | 101 | a panic |
 
 The feature `test-hooks` adds `--test-log-frames` (a log line per frame) and `--test-panic-on-beat`; a shipped build
-has neither.
+has neither. `sidecar::serve` is the channel the binary runs on its fds 0, 1 and 2, callable on any pipes (the
+small-pipe tests run it in-process).
+
+## The owner (`owner`)
+
+The owner's end runs where the job's proxy is (the hub, or a runner's job helper), on the sidecar's stdout and stdin:
+
+- `owner::wait_ready(out, want, limit)` reads exactly the first frame (nothing past it) and wants a `READY` naming
+  `want` within `limit` (10 s, `READY_LIMIT`). Otherwise `End::Ready` with the reason: none in time, the relay gone
+  before it, another frame first, another address.
+- `owner::run(out, inp, streams, events, beat, stall, log)` then carries the channel on the shell with `Side::Owner`
+  and returns how it ended (`End`: `Eof`, also for a pipe error or the sidecar's output ending mid-frame, logged as
+  "the relay ended mid-frame"; `Violation`; `Stalled`; `IdsUsedUp`). It sends a `BEAT` every `beat` (10 s); a write
+  without progress for `stall` (60 s) ends it. It takes `out` and `inp` by value and drops them before it returns.
+- Each `OPEN` becomes a `tokio::io::duplex` of 16 KiB and a `oneshot` pair: one end and the receiver go to the proxy
+  on `streams` as a `gleipnir::net::proxy::Relayed` (its `Listener::Streams`), by `try_send`, never awaited (the
+  receiver is the proxy's accept loop; `streams` needs room for `STREAMS_ROOM`, 128, and a full or closed channel
+  resets that stream). The stream keeps the sender. A reset either way, or the channel's end, drops it at once, and
+  the proxy's `gone` drops the connection wherever it is and frees its place. A stream closed by both `FIN`s keeps the
+  sender until the proxy lets go of the stream (or the channel ends): the proxy may still be copying the last bytes the
+  stream left in its `duplex`, and a `gone` then would cut them off.
+- Foreign sources go on `events` as `OwnerEvent::ForeignSource`, also by `try_send`: a full channel counts the drop,
+  the count goes out as `OwnerEvent::EventsDropped(n)` before the next event once there is room, and what is still
+  counted when `run` returns goes into the log. The sidecar's own count (`EventsCounted`) is logged.
+- `owner::Sidecar::start(podman, argv, env)` runs the sidecar's container with its stdio piped; a task reads its stderr
+  as it comes into a 4 KiB ring (`Sidecar::stderr`, for a refusal's text), so the sidecar never blocks on it.
+  `take_io` gives stdin and stdout to `wait_ready` and `run`. `stop(podman, name, env)` closes stdin (and an untaken
+  stdout), waits up to 10 s for the exit, runs `podman rm -f name`, and kills what still runs.
 
 ## Tests
 
@@ -139,10 +166,25 @@ has neither.
 - `src/orders.rs`: both ends' `Mux` and `Pending` joined by two pipes, with each shell reduced to its local side, its
   consumer, its writer and its reader, run in every order of those steps by `skuld` ([A]): bytes once and in order,
   every `FIN` after its stream's last `DATA`, frames crossing a reset discarded, `OPEN`s in id order, an instant reset
-  as `OPEN` then `RST`, and never a 65th counted stream at the owner.
+  as `OPEN` then `RST`, never a 65th counted stream at the owner, a full window holding up only its own stream, and
+  the sidecar's end taking every stream down with the channel.
+- `src/owner/tests.rs`: the owner's end in-process, `duplex`es for the sidecar's stdio and a stand-in sidecar writing
+  frames by hand, with gleipnir's proxy behind it where a stream needs one ([C]): a CONNECT relayed to the proxy, the
+  `READY` checks, a violation, a 403 while the job keeps sending (the owner's `RST`, the late `DATA` discarded, the
+  channel whole), a stall, a partial frame at the end, an events channel nobody reads, `gone` firing however a stream
+  ends, and `Sidecar::stop` against a stand-in `podman` that floods.
 - `tests/sidecar.rs`: the built binary against a test owner on its stdio ([C]; Linux only, as it binds 127.0.0.2–4):
   the source check, the 65th connection waiting, the bind rules, the buffers, the exit codes, resets reaching the job,
-  and a stderr pipe nobody reads. Two of them need `--features test-hooks`:
+  and a stderr pipe nobody reads.
+- `tests/small_pipes.rs` ([C]; Linux): the sidecar (the shell in-process, then the built binary) and the owner's `run`
+  with gleipnir's proxy behind it, joined through 4096-byte pipes and a conmon stand-in, one thread that copies each
+  input to its output with a blocking write, so one full direction stalls the others as in conmon. 64 streams push
+  4 MiB each way at once; streams 1–32 stop reading on the job's side and 33–48 on the upstream's until every one of
+  49–64 has finished both ways, checked by sha256. A relay in which one stalled stream holds up the channel never
+  gets there and times out. `test/mutations/container-net/` holds two such relays (a reader that awaits a stream's
+  consumer, a reader that waits for its frames to be written), each of which turns both tests red.
+
+`tests/small_pipes.rs` and two of `tests/sidecar.rs` need `--features test-hooks`:
 
 ```
 cargo test -p drgnx-px --features test-hooks
@@ -151,4 +193,7 @@ cargo test -p drgnx-px --features test-hooks
 ## Fuzzing
 
 `px_frames` feeds arbitrary bytes in chunks through the decoder; every frame it returns must re-encode to exactly the
-bytes it consumed ([runtime.md](runtime.md#fuzzing)).
+bytes it consumed. `px_owner` feeds arbitrary sidecar output into `owner::run`, which must end in `Eof`, `Violation`
+or `IdsUsedUp`. `px_mux` drives both ends' `Mux` and `Pending` with arbitrary inputs and injected frames: every
+`Deliver` within what the end credited, never more than the window queued, and no `FIN` before its stream's last `DATA`
+or `OPEN` out of id order on the wire ([runtime.md](runtime.md#fuzzing)).

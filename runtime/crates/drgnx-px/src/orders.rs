@@ -50,6 +50,8 @@ enum Ev {
     Put { at: At },
     /// ... and the writer steps on (where `Wrote` was stepped before it moved to `shell::take_next`).
     Ack { at: At },
+    /// The end's output ends (its process is gone): it writes nothing more, and the peer reads the pipe to its end.
+    Close { at: At },
 }
 
 impl Ev {
@@ -65,6 +67,7 @@ impl Ev {
             Ev::Take { .. } => "Take",
             Ev::Put { .. } => "Put",
             Ev::Ack { .. } => "Ack",
+            Ev::Close { .. } => "Close",
         }
     }
 }
@@ -112,6 +115,15 @@ struct End {
     mux: Mux,
     pending: Pending,
     auto_drain: bool,
+    /// Streams whose consumer never drains.
+    stuck: BTreeSet<u32>,
+    /// The output ended (`Ev::Close`): this end writes nothing more.
+    closed: bool,
+    /// The channel ended here (the peer's output read to its end), and with it every stream still open: the shell's
+    /// end, reduced.
+    ended: bool,
+    /// The streams the end of the channel took down.
+    killed: BTreeSet<u32>,
     known: BTreeSet<u32>,
     to_send: BTreeMap<u32, usize>,
     sent: BTreeMap<u32, usize>,
@@ -143,6 +155,10 @@ impl End {
             mux: Mux::new(side),
             pending: Pending::new(side),
             auto_drain: true,
+            stuck: BTreeSet::new(),
+            closed: false,
+            ended: false,
+            killed: BTreeSet::new(),
             known: BTreeSet::new(),
             to_send: BTreeMap::new(),
             sent: BTreeMap::new(),
@@ -208,7 +224,7 @@ impl End {
                     }
                     *self.got.entry(stream).or_default() += bytes.len();
                     *self.queued.entry(stream).or_default() += bytes.len();
-                    if self.auto_drain {
+                    if self.auto_drain && !self.stuck.contains(&stream) {
                         self.drain(stream);
                     }
                 }
@@ -304,7 +320,8 @@ impl End {
             | Ev::Read { .. }
             | Ev::Take { .. }
             | Ev::Put { .. }
-            | Ev::Ack { .. } => unreachable!("the world's"),
+            | Ev::Ack { .. }
+            | Ev::Close { .. } => unreachable!("the world's"),
         }
     }
 
@@ -322,7 +339,7 @@ impl End {
 
     /// The writer takes the next frame; false when nothing waits (or one is taken already).
     fn take(&mut self) -> bool {
-        if self.violation.is_some() || self.in_flight.is_some() {
+        if self.violation.is_some() || self.in_flight.is_some() || self.closed || self.ended {
             return false;
         }
         match shell::take_next(&mut self.mux, &mut self.pending) {
@@ -341,6 +358,9 @@ impl End {
 
     /// The taken frame reaches `pipe`.
     fn put(&mut self, pipe: &mut VecDeque<Frame>) -> bool {
+        if self.closed {
+            return false;
+        }
         let Some(f) = self.in_flight.take() else {
             return false;
         };
@@ -373,12 +393,23 @@ impl End {
         true
     }
 
-    /// Steps one frame from `pipe`; false when none is there.
-    fn read(&mut self, pipe: &mut VecDeque<Frame>) -> bool {
-        if self.violation.is_some() {
+    /// Steps one frame from `pipe`; false when none is there. A pipe whose writer closed it, read to its end, ends the
+    /// channel here: every stream still open goes down with it.
+    fn read(&mut self, pipe: &mut VecDeque<Frame>, writer_closed: bool) -> bool {
+        if self.violation.is_some() || self.ended {
             return false;
         }
         let Some(f) = pipe.pop_front() else {
+            if writer_closed {
+                self.ended = true;
+                self.killed = self
+                    .known
+                    .iter()
+                    .filter(|s| !self.dropped.contains(s))
+                    .copied()
+                    .collect();
+                return true;
+            }
             return false;
         };
         self.step(In::Frame(f));
@@ -438,11 +469,13 @@ impl World {
                 self.o.write(&mut self.o2s);
             }
             Ev::Read { at: At::S } => {
-                self.s.read(&mut self.o2s);
+                self.s.read(&mut self.o2s, self.o.closed);
             }
             Ev::Read { at: At::O } => {
-                self.o.read(&mut self.s2o);
+                self.o.read(&mut self.s2o, self.s.closed);
             }
+            Ev::Close { at: At::S } => self.s.closed = true,
+            Ev::Close { at: At::O } => self.o.closed = true,
             Ev::Take { at: At::S } => {
                 self.s.take();
             }
@@ -482,17 +515,17 @@ impl World {
             while self.o.write(&mut self.o2s) {
                 moved = true;
             }
-            while self.o.read(&mut self.s2o) {
+            while self.o.read(&mut self.s2o, self.s.closed) {
                 moved = true;
             }
-            while self.s.read(&mut self.o2s) {
+            while self.s.read(&mut self.o2s, self.o.closed) {
                 moved = true;
             }
             for end in [&mut self.s, &mut self.o] {
                 let queued: Vec<u32> = end
                     .queued
                     .iter()
-                    .filter(|(_, n)| **n > 0)
+                    .filter(|(s, n)| **n > 0 && !end.stuck.contains(s))
                     .map(|(s, _)| *s)
                     .collect();
                 for s in queued {
@@ -1118,6 +1151,111 @@ fn every_order_instant_reset_sends_open_first() {
                     w.s.mux.counted(),
                     w.o.mux.counted()
                 ));
+            }
+            Ok(())
+        },
+    );
+}
+
+/// [A] Two streams; the owner's consumer of stream 1 never drains. Stream 1 stops at its window and waits; stream 3's
+/// 1 MiB arrives whole and drains, in every order of the sidecar's writes, the owner's reads and their `CREDIT`s.
+#[test]
+fn every_order_a_full_window_stalls_only_its_stream() {
+    kinds!(K: "Send", "Eof", "Write", "Read");
+    const MIB: usize = 1 << 20;
+    let over = 30_000;
+    run::<K>(
+        vec![
+            (
+                "stream 1's job",
+                vec![Ev::Send {
+                    at: S,
+                    s: 1,
+                    n: WINDOW as usize + over,
+                }],
+            ),
+            (
+                "stream 3's job",
+                vec![
+                    Ev::Send {
+                        at: S,
+                        s: 3,
+                        n: MIB,
+                    },
+                    Ev::Eof { at: S, s: 3 },
+                ],
+            ),
+            ("sidecar's writer", n_of(Ev::Write { at: S }, 6)),
+            ("owner's reader", n_of(Ev::Read { at: O }, 6)),
+            ("owner's writer", n_of(Ev::Write { at: O }, 2)),
+            ("sidecar's reader", n_of(Ev::Read { at: S }, 2)),
+        ],
+        || {
+            let mut w = World::with_streams(2);
+            w.o.stuck.insert(1);
+            w
+        },
+        |_, w| {
+            w.no_violation()?;
+            w.whole(3)?;
+            if w.o.queued.get(&3).copied().unwrap_or(0) != 0 {
+                return Err("stream 3 isn't drained".into());
+            }
+            let got1 = w.o.got.get(&1).copied().unwrap_or(0);
+            let left1 = w.s.to_send.get(&1).copied().unwrap_or(0);
+            if got1 != WINDOW as usize || left1 != over || w.s.mux.credit(1) != 0 {
+                return Err(format!(
+                    "stream 1: the owner got {got1}, the sidecar has {left1} left and {} credit",
+                    w.s.mux.credit(1)
+                ));
+            }
+            Ok(())
+        },
+    );
+}
+
+/// [A] The sidecar's output ends (its process is gone) while two streams carry bytes both ways, in every order of
+/// the writes and reads before it: the owner reads what reached the pipe, then its channel ends with `Eof`, and every
+/// stream it knew went down, by its own close or with the channel. Nothing breaks a rule on the way.
+#[test]
+fn every_order_sidecar_eof_ends_every_stream_and_returns_eof() {
+    kinds!(K: "Accept", "Send", "Close", "Write", "Read");
+    run::<K>(
+        vec![
+            (
+                "sidecar's jobs",
+                vec![
+                    Ev::Accept,
+                    Ev::Send {
+                        at: S,
+                        s: 1,
+                        n: 20_000,
+                    },
+                    Ev::Accept,
+                    Ev::Send {
+                        at: S,
+                        s: 3,
+                        n: 100,
+                    },
+                    Ev::Close { at: S },
+                ],
+            ),
+            ("sidecar's writer", n_of(Ev::Write { at: S }, 4)),
+            ("owner's reader", n_of(Ev::Read { at: O }, 5)),
+            ("owner's upstream", vec![Ev::Send { at: O, s: 1, n: 50 }]),
+            ("owner's writer", n_of(Ev::Write { at: O }, 1)),
+            ("sidecar's reader", n_of(Ev::Read { at: S }, 1)),
+        ],
+        World::new,
+        |_, w| {
+            w.no_violation()?;
+            if !w.o.ended {
+                return Err("the owner's channel never ended".into());
+            }
+            for s in &w.o.known {
+                if !w.o.dropped.contains(s) && !w.o.killed.contains(s) {
+                    return Err(format!("stream {s} outlived the channel"));
+                }
             }
             Ok(())
         },

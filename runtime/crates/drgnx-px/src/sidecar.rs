@@ -176,21 +176,51 @@ async fn relay(args: &Args, log: &Log) -> i32 {
         cfg.log_frames = args.log_frames;
         cfg.panic_on_beat = args.panic_on_beat;
     }
+    let end = serve(
+        cfg,
+        listener,
+        bound,
+        args.job_ip,
+        stdin,
+        stdout,
+        stderr,
+        log.clone(),
+    )
+    .await;
+    log.line(&format!("the channel ended: {end:?}"));
+    exit_code(&end)
+}
+
+/// The sidecar's channel over `input` and `output`: `READY` naming `bound`, then the job's connections from `job_ip` on
+/// `listener`, with the log written to `log_out` as it fills. Returns how the channel ended. The binary runs it on its
+/// own fds 0, 1 and 2; the small-pipe tests on pipes of their own.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the binary's one call and the tests'"
+)]
+pub async fn serve(
+    cfg: Config,
+    listener: TcpListener,
+    bound: SocketAddr,
+    job_ip: IpAddr,
+    input: impl AsyncRead + Unpin,
+    output: impl AsyncWrite + Unpin,
+    log_out: Option<impl AsyncWrite + Unpin>,
+    log: Log,
+) -> End {
     let shell: Shell<TcpStream> = Shell::new(cfg, log.clone());
     shell.send(Frame::ready(bound));
     let drain = async {
-        if let Some(e) = stderr {
+        if let Some(e) = log_out {
             log.drain_to(e).await;
         }
         std::future::pending::<()>().await
     };
-    let end = tokio::select! {
-        e = shell.run(stdin, stdout) => e,
-        () = accept_loop(&shell, &listener, args.job_ip) => unreachable!("the accept loop never returns"),
+    tokio::select! {
+        e = shell.run(input, output) => e,
+        () = accept_loop(&shell, &listener, job_ip) => unreachable!("the accept loop never returns"),
         () = drain => unreachable!("the log drain never returns"),
-    };
-    log.line(&format!("the channel ended: {end:?}"));
-    exit_code(&end)
+    }
 }
 
 /// Accepts the job's connections while there is room; never returns.

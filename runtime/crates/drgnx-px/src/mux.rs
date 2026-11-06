@@ -278,6 +278,12 @@ impl Mux {
         self.now = now;
     }
 
+    /// The owner read the sidecar's `READY` itself, before stepping any frame: what follows is the channel, and
+    /// another `READY` is a violation.
+    pub fn ready_read(&mut self) {
+        self.ready = true;
+    }
+
     /// The stream's sending credit (0 for a stream that isn't open).
     pub fn credit(&self, stream: u32) -> u32 {
         self.open.get(&stream).map_or(0, |s| s.send_credit)

@@ -314,6 +314,11 @@ impl<C: Consumer> Shell<C> {
         &self.inner.log
     }
 
+    /// The owner read the sidecar's `READY` before the channel ran (`owner::wait_ready`).
+    pub fn ready_read(&self) {
+        self.lock().mux.ready_read();
+    }
+
     /// Queues a frame of this end's own (`READY`, `BEAT`, `EVENT`) for the writer.
     pub fn send(&self, f: Frame) {
         self.lock().pending.push(f);

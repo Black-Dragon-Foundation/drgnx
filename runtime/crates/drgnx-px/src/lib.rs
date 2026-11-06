@@ -7,10 +7,12 @@
 //! - [`mux`]: the channel's state machine, pure, on both ends;
 //! - [`pending`]: what waits for the writer and the order it leaves in, pure;
 //! - [`shell`]: the reader, the writer and the per-stream tasks around them, on both ends;
-//! - [`sidecar`]: the listener, the source check and stdio; the `drgnx-px` binary runs it.
+//! - [`sidecar`]: the listener, the source check and stdio; the `drgnx-px` binary runs it;
+//! - [`owner`]: the owner's end, which hands each stream to the job's proxy, and the sidecar's container.
 
 pub mod frame;
 pub mod mux;
+pub mod owner;
 pub mod pending;
 pub mod shell;
 pub mod sidecar;
