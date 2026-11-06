@@ -9,7 +9,8 @@ skuld::events!(PresenceEv {
     Step,
     SessionEnd,
     Live,
-    CloseLive
+    CloseLive,
+    Withdraw
 });
 
 fn live(
@@ -96,6 +97,13 @@ fn step(session: &str, step: i64, at: f64, files: Vec<Touch>) -> PresenceEv {
         step,
         at,
         files,
+    }
+}
+
+fn withdrawn(session: &str, call: &str) -> PresenceEv {
+    PresenceEv::Withdraw {
+        session: session.into(),
+        tool_call: call.into(),
     }
 }
 
@@ -202,7 +210,7 @@ fn every_order_same_now_set() {
     );
     let gone = p.source("end", vec![end("b")]);
     p.before((b, 1), (gone, 0));
-    // a call that ran in a file and was dropped leaves nothing there
+    // a call that ran in a file and was dropped, and a request whose entry was withdrawn, leave nothing there
     p.source(
         "d",
         vec![
@@ -216,6 +224,16 @@ fn every_order_same_now_set() {
                 240.0,
             ),
             dropped("d", "t"),
+            live(
+                "d",
+                "p",
+                "/w/out.txt",
+                Mode::Pending,
+                2,
+                CallStatus::Pending,
+                241.0,
+            ),
+            withdrawn("d", "p"),
         ],
     );
     let r = every_order(&p, Bound::default(), Harness::default, |h, _| {
@@ -466,7 +484,7 @@ fn every_order_live_then_close_leaves_one_entry() {
     p.before((reader, 0), (writer, 0));
     p.before((reader, 2), (writer, 1));
     let _ = b;
-    // a third session reads elsewhere and ends
+    // a third session reads elsewhere, has a request's entry withdrawn there, and ends
     p.source(
         "c",
         vec![
@@ -476,6 +494,16 @@ fn every_order_live_then_close_leaves_one_entry() {
                 230.0,
                 vec![touch("/w/z.rs", Mode::Read, None, Source::Acp)],
             ),
+            live(
+                "c",
+                "p",
+                "/w/z.rs",
+                Mode::Pending,
+                2,
+                CallStatus::Pending,
+                231.0,
+            ),
+            withdrawn("c", "p"),
             end("c"),
         ],
     );
@@ -549,7 +577,7 @@ fn every_order_a_denied_pending_is_dropped() {
     p.before((ask, 0), (deny, 0));
     p.before((ask, 0), (writer, 0));
     let _ = steps;
-    // a third session that was pending elsewhere ends
+    // a third session that was pending elsewhere, and allowed, ends
     p.source(
         "c",
         vec![
@@ -562,6 +590,8 @@ fn every_order_a_denied_pending_is_dropped() {
                 CallStatus::Pending,
                 205.0,
             ),
+            // allowed: the request's own entry gives way to the call the agent reports
+            withdrawn("c", "q1"),
             end("c"),
         ],
     );
@@ -660,6 +690,7 @@ fn every_order_two_sessions_one_file_keep_both() {
                 221.0,
             ),
             dropped("c", "k"),
+            withdrawn("c", "k"),
             end("c"),
         ],
     );

@@ -184,14 +184,19 @@ struct State {
 /// lock, applied after it.
 #[derive(Clone, Debug)]
 enum LiveOut {
-    /// It runs: its detail as it stands now (the path as the agent gave it) and its status.
+    /// It runs: its detail as it stands now (the path as the agent gave it), its status, and its content's `diff` items
+    /// (path, oldText, newText): an edit's lines, and its `pending` while it has not landed.
     At {
         detail: Box<norn::write::work::StepDetail>,
         status: crate::work::presence::CallStatus,
+        diffs: Diffs,
     },
     /// It failed, or it ended with no step of its own open: its live entry goes.
     Gone,
 }
+
+/// A tool call's `diff` content items: (path, oldText, newText).
+type Diffs = Vec<(String, Option<String>, String)>;
 
 /// A tool call entry's ACP status (absent: pending).
 fn call_status(rest: &Map<String, Value>) -> crate::work::presence::CallStatus {
@@ -252,6 +257,8 @@ struct ClosedStep {
     /// A tool step's call had ended when the step closed (completed or failed); none: the step was cut (a wait, the
     /// next call) while the call runs on, and its live presence entry still stands for it.
     call_end: Option<crate::work::presence::CallStatus>,
+    /// A tool step's `diff` content items: where an edit's lines are found when the step is written.
+    diffs: Diffs,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -352,10 +359,16 @@ impl State {
                     use crate::work::presence::CallStatus;
                     matches!(s, CallStatus::Completed | CallStatus::Failed)
                 });
+            let diffs = open
+                .tool_id
+                .as_deref()
+                .map(|id| self.tool_diffs(id))
+                .unwrap_or_default();
             self.closed.push(ClosedStep {
                 detail,
                 command,
                 call_end,
+                diffs,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -384,6 +397,15 @@ impl State {
             locations,
             rest.get("rawInput"),
         )
+    }
+
+    /// The `diff` items of tool call ID's content as the entry holds it now.
+    fn tool_diffs(&self, id: &str) -> Diffs {
+        self.tools
+            .get(id)
+            .and_then(|i| self.entries.get(*i))
+            .map(|e| crate::work::edit_lines::diffs(e.rest.get("content")))
+            .unwrap_or_default()
     }
 
     /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
@@ -685,6 +707,7 @@ impl State {
                         status => self.tool_detail(id).map(|detail| LiveOut::At {
                             detail: Box::new(detail),
                             status,
+                            diffs: self.tool_diffs(id),
                         }),
                     };
                     if let Some(out) = out {
@@ -2365,8 +2388,25 @@ async fn write_steps(
     };
     let mut local = 0u64;
     let mut turn_start = true;
-    while let Some(c) = rx.recv().await {
+    while let Some(mut c) = rx.recv().await {
         local += 1;
+        // an edit's lines: where its diff content is in the file now (off the async threads)
+        let mut edit_col = None;
+        if !c.diffs.is_empty()
+            && let Some(d) = c.detail.clone()
+        {
+            let (dir, diffs) = (ctx.cwd.clone(), std::mem::take(&mut c.diffs));
+            if let Ok((d, r)) = crate::clock::blocking(move || {
+                let mut d = d;
+                let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+                (d, r)
+            })
+            .await
+            {
+                c.detail = Some(d);
+                edit_col = r.map(|r| r.col);
+            }
+        }
         let class_name = serde_json::to_value(c.open.class)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
@@ -2503,7 +2543,7 @@ async fn write_steps(
                                 .as_ref()
                                 .and_then(|d| d.line_end)
                                 .and_then(|l| u32::try_from(l).ok()),
-                            col: None,
+                            col: edit_col,
                             source: t.source,
                             step: id,
                             at: step.start,
@@ -2895,7 +2935,7 @@ impl Session {
     /// caller's.
     fn perform(self: &Arc<Self>, s: Stepped) {
         for p in s.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
         }
         for e in s.fx {
             match e {
@@ -3137,7 +3177,7 @@ impl Session {
                             )
                         };
                         // the cursor moves as the call runs, before its step closes
-                        self.feed_live(live_out);
+                        self.feed_live(live_out).await;
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
@@ -3246,30 +3286,133 @@ impl Session {
     }
 
     /// What the updates said of the running tool calls, into the presence model's live feed (and the map's presence).
-    fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
-        use crate::work::presence::{LiveUpdate, touches_of_detail};
+    async fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
         let mut changed = Vec::new();
         for (call, out) in outs {
             match out {
-                LiveOut::At { detail, status } => {
-                    let Some(t) = touches_of_detail(&detail, &self.cwd).into_iter().next() else {
+                LiveOut::At {
+                    detail,
+                    status,
+                    diffs,
+                } => {
+                    // an edit with diff content that has not landed is pending, on the lines it will change
+                    let pending = !diffs.is_empty()
+                        && matches!(status, CallStatus::Pending | CallStatus::InProgress);
+                    let Some(mut update) = self.live_update(*detail, diffs, status).await else {
                         continue;
                     };
-                    let update = LiveUpdate {
-                        path: t.file,
-                        mode: t.mode,
-                        line: t.line,
-                        line_end: detail.line_end.and_then(|l| u32::try_from(l).ok()),
-                        col: None,
-                        status,
-                        source: t.source,
-                        at: crate::clock::wall_secs(),
-                    };
+                    if pending && update.mode == Mode::Edit {
+                        update.mode = Mode::Pending;
+                    }
                     changed.extend(self.presence.apply_live(&self.id, &call, update));
                 }
                 LiveOut::Gone => changed.extend(self.presence.close_live(&self.id, &call, None)),
             }
         }
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// A running call's presence from its DETAIL: its file and line, and for an edit with DIFFS the lines they change
+    /// in the file now (found off the async threads); none when it names no file.
+    async fn live_update(
+        &self,
+        detail: norn::write::work::StepDetail,
+        diffs: Diffs,
+        status: crate::work::presence::CallStatus,
+    ) -> Option<crate::work::presence::LiveUpdate> {
+        let dir = self.cwd.clone();
+        let (detail, range) = if diffs.is_empty() {
+            (detail, None)
+        } else {
+            let (dir, fallback) = (dir.clone(), detail.clone());
+            crate::clock::blocking(move || {
+                let mut d = detail;
+                let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+                (d, r)
+            })
+            .await
+            .unwrap_or((fallback, None))
+        };
+        let t = crate::work::presence::touches_of_detail(&detail, &dir)
+            .into_iter()
+            .next()?;
+        Some(crate::work::presence::LiveUpdate {
+            path: t.file,
+            mode: t.mode,
+            line: t.line,
+            line_end: detail.line_end.and_then(|l| u32::try_from(l).ok()),
+            col: range.map(|r| r.col),
+            status,
+            source: t.source,
+            at: crate::clock::wall_secs(),
+        })
+    }
+
+    /// A permission request whose tool call carries `diff` content: the edit it asks for shows as pending on its lines
+    /// from now until the request is answered ([`Session::settle`]).
+    async fn feed_pending(&self, req: &Value) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
+        let Some(tool) = req.get("toolCall") else {
+            return;
+        };
+        let Some(call) = tool.get("toolCallId").and_then(Value::as_str) else {
+            return;
+        };
+        let diffs = crate::work::edit_lines::diffs(tool.get("content"));
+        let Some(path) = tool
+            .pointer("/locations/0/path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| diffs.first().map(|d| d.0.clone()))
+        else {
+            return;
+        };
+        let detail = norn::write::work::StepDetail {
+            kind: Some("edit".into()),
+            path: Some(path),
+            origin: "acp".into(),
+            ..Default::default()
+        };
+        let Some(mut update) = self.live_update(detail, diffs, CallStatus::Pending).await else {
+            return;
+        };
+        update.mode = Mode::Pending;
+        let changed = self.presence.apply_live(&self.id, call, update);
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// Permission request P answered with ANSWER (none: cancelled), and its pending presence settled: refused, the call
+    /// will not run and its entry goes; allowed, the call's own updates carry it on (an id the agent has not reported
+    /// is the request's own: its entry goes, the call left open).
+    fn settle(&self, p: Pending, answer: Option<String>) {
+        let allowed = answer.as_deref().is_some_and(|a| {
+            p.options
+                .iter()
+                .any(|(id, k)| id == a && k.starts_with("allow"))
+        });
+        let call = p
+            .public
+            .tool
+            .as_ref()
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        reply(p.resp, answer);
+        let Some(call) = call else { return };
+        let changed = if !allowed {
+            self.presence.close_live(&self.id, &call, None)
+        } else if lock(&self.state).tools.contains_key(&call) {
+            Vec::new()
+        } else {
+            self.presence.withdraw_live(&self.id, &call)
+        };
         if !changed.is_empty() {
             self.map.presence(&self.presence.now_in(&changed));
         }
@@ -3331,10 +3474,15 @@ impl Session {
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
                 Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
-                Gate::Ask(card) if card > 0 => {
-                    s.hold_permission(&req, options, resp, Some(card), turn)
+                gate => {
+                    // held for the user: an edit it asks for is pending meanwhile
+                    s.feed_pending(&req).await;
+                    let card = match gate {
+                        Gate::Ask(card) if card > 0 => Some(card),
+                        _ => None,
+                    };
+                    s.hold_permission(&req, options, resp, card, turn)
                 }
-                _ => s.hold_permission(&req, options, resp, None, turn),
             }
         });
     }
@@ -3390,7 +3538,7 @@ impl Session {
             });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
-                reply(pending.resp, None);
+                self.settle(pending, None);
                 // nobody answers its card either
                 self.withdraw_later(Self::withdrawn(&fx));
                 return;
@@ -3441,7 +3589,7 @@ impl Session {
                     drop(st);
                     for p in std::mem::take(&mut stepped.answered) {
                         let answer = p.option(allow, option);
-                        reply(p.resp, answer);
+                        self.settle(p, answer);
                     }
                     self.perform(stepped);
                     self.changed();
@@ -3498,7 +3646,7 @@ impl Session {
         let allow = gate == Gate::Allow;
         for p in waiting {
             let answer = p.option(allow, chosen);
-            reply(p.resp, answer);
+            self.settle(p, answer);
         }
         self.changed();
     }
@@ -4003,7 +4151,7 @@ impl Session {
             return;
         }
         for p in stepped.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
         }
         self.changed();
     }
@@ -4809,6 +4957,7 @@ mod tests {
                 command: None,
                 context: None,
                 call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
@@ -4904,6 +5053,7 @@ mod tests {
                 command: None,
                 context: None,
                 call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
@@ -4978,6 +5128,7 @@ mod tests {
                 command: None,
                 context: None,
                 call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }

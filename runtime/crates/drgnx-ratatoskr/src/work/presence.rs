@@ -116,6 +116,9 @@ pub enum PresenceEv {
         tool_call: String,
         closed: Option<Entry>,
     },
+    /// SESSION's live entry under TOOL_CALL goes, and the call is not closed: an allowed permission request whose call
+    /// the agent reports under an id of its own (its updates may still come under this one).
+    Withdraw { session: String, tool_call: String },
 }
 
 /// What changed: a file whose entries may read differently now.
@@ -147,7 +150,8 @@ impl Presence {
             PresenceEv::Step { session, .. }
             | PresenceEv::SessionEnd { session }
             | PresenceEv::Live { session, .. }
-            | PresenceEv::CloseLive { session, .. } => session.clone(),
+            | PresenceEv::CloseLive { session, .. }
+            | PresenceEv::Withdraw { session, .. } => session.clone(),
         };
         if self.ended.contains(&session) {
             return Vec::new();
@@ -243,6 +247,15 @@ impl Presence {
                     e.live = false;
                     e.tool_call = None;
                     self.put_closed(e, &mut changed);
+                }
+            }
+            PresenceEv::Withdraw { session, tool_call } => {
+                if let Some(old) = self
+                    .live
+                    .get_mut(&session)
+                    .and_then(|m| m.remove(&tool_call))
+                {
+                    changed.insert(old.file);
                 }
             }
         }
@@ -690,6 +703,14 @@ impl Live {
             session: session.into(),
             tool_call: tool_call.into(),
             closed,
+        })
+    }
+
+    /// SESSION's live entry under TOOL_CALL goes, the call left open (see [`PresenceEv::Withdraw`]).
+    pub fn withdraw_live(self: &Arc<Self>, session: &str, tool_call: &str) -> Vec<RepoPath> {
+        self.apply(PresenceEv::Withdraw {
+            session: session.into(),
+            tool_call: tool_call.into(),
         })
     }
 

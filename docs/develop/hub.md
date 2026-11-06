@@ -1477,6 +1477,16 @@ and badges build on it). This is its contract.
   Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `pending` >
   `read` > `listed`). Part 3 adds `line_end` (the range's last line), `col` (the column after an edit's last inserted
   character, where its cursor sits) and `pending` (an edit about to land).
+- **Edit lines and read ranges** (part 3, `work::edit_lines`): an edit's lines come from its ACP `diff` content, never
+  from `rawInput`. A fragment (Claude's `Edit`, Codex's one `diff` per hunk) is placed where its `oldText` is found
+  exactly once in the file's text now, or its `newText` once it has landed; a whole file (Gemini's diff, a `Write`, a
+  new file) is its old text diffed against its new, line by line. A call with several hunks sits on its last one.
+  Lines count on LF (a CRLF file is read as LF); found nowhere, or more than once, or in a file over 8 MiB, the entry
+  is the file only. The step's detail records the lines (`line_start`, `line_end`), so they survive a restart. A
+  read's range is its location's line (else its `offset`) through `limit` lines.
+- **Pending:** an edit call with `diff` content that is still `pending` or `in_progress`, and a permission request
+  for one that waits for the user, show as `pending` on the lines the diff will change. A refused request's entry
+  goes at once; an allowed one gives way to the call's own updates.
 - **The live feed** (part 3): the session's reader applies each `tool_call` and `tool_call_update` as it arrives, not
   only when the step closes. Such an entry has `live: true`, `tool_call` (the call's id) and `step: 0`, and stands in
   for the session's closed entry in that file while the call runs. The call's end replaces it: the closed step's entry
