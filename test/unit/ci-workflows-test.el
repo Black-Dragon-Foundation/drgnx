@@ -204,6 +204,22 @@
         (forward-line 1)))
     (should (equal (sort (copy-sequence found) #'string<) (sort (copy-sequence listed) #'string<)))))
 
+(ert-deftest drgnx-ci/a-run-of-ignored-tests-skips-the-timing-rows ()
+  ;; the timing rows are #[ignore] too: a `cargo test … -- --ignored' of a crate the timing list names skips that
+  ;; crate's rows (a debug build on a shared runner judged a release budget: search/query p95 in the escape legs)
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (rows (drgnx-ci-test--file "test/timing-rust.txt")) timed (runs 0))
+    (skip-unless (and rt rows))
+    (dolist (line (split-string rows "\n" t))
+      (unless (string-match-p "\\`\\s-*#" line) (push (car (split-string line)) timed)))
+    (dolist (line (split-string rt "\n"))
+      (when (and (string-match-p "cargo test .*-- --ignored" line) (string-match "-p \\([a-z0-9-]+\\)" line)
+                 (member (match-string 1 line) timed))
+        (setq runs (1+ runs))
+        (should (string-suffix-p " $skips" line))))
+    (should (= runs 1))
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
+
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
     (skip-unless (and tiers (file-exists-p script)))
