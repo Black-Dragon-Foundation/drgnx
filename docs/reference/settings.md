@@ -752,6 +752,24 @@ Above this size (MiB) the question's default is chunks, else lean.  Read when a 
 | `:agents` | `grantable` |
 | `:schema` | `(pred drgnx-large-files--mib-p "a size in MiB above 0")` |
 
+## drgnx-look-accent
+
+Where the accent colour comes from: `system' (the desktop's accent colour, as text for the theme's variant) or
+`theme' (the theme's own).  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `system` |
+| Type | `(choice (const :tag "The desktop's" system) (const :tag "The theme's" theme))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-follow-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum system theme)` |
+
 ## drgnx-look-density
 
 How much room the look gives: `compact', `comfortable' or `roomy' (the line, row, tab, bar and gap sizes).  A
@@ -929,13 +947,14 @@ then on.
 
 ## drgnx-look-theme
 
-The colour theme ui/look loads at start (Color Theme picks it); nil: the theme Emacs starts with.  A change
-switches the theme at once while the module runs.
+The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as
+the desktop says, until a theme of yours is loaded; nil: the theme Emacs starts with.  A change switches the theme
+at once while the module runs.
 
 | Key | Value |
 | --- | --- |
-| Default | `nil` |
-| Type | `(choice (const :tag "Emacs's own" nil) symbol)` |
+| Default | `auto` |
+| Type | `(choice (const :tag "Follow the desktop" auto) (const :tag "Emacs's own" nil) symbol)` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
 | `:merge` | `replace` |
@@ -944,6 +963,23 @@ switches the theme at once while the module runs.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | `(or null symbol)` |
+
+## drgnx-look-themes-notice
+
+Whether the one-time notice that drgnx now has its own themes was shown.  drgnx sets it; there is no reason to.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
 
 ## drgnx-modules-disabled
 
