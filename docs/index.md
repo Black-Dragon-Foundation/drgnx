@@ -66,7 +66,7 @@ How drgnx is built, tested and measured.
 - [sleipnir](develop/sleipnir.md): the runner — the machine probe and the runner contract, the reservation files two schedulers share, the one podman argv, the slice tree, job units, job-exec and `result.json`, the row parsers, jobq's shim; a job's inputs frozen at submit, the hardened git (no hook, fsmonitor or outside config ever runs), and checkout slots whose git dirs no job can reach.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
-- [The store (Urdr)](develop/store.md): `work.db` schema 10 — one knowledge graph with history, written by Ratatoskr only.
+- [The store (Urdr)](develop/store.md): `work.db` schema 11 — one knowledge graph with history, written by Ratatoskr only.
 - [The Work space](develop/work-space.md): how the map is built — the map core `vegvisir` (its events, model, chains, overlaps, effects and tests), its layout (plan blocks, lanes with a capacity, ports) and the 30-agent fixture; the hub's facts (worktree bases, live specs, machines, shell reads).
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.

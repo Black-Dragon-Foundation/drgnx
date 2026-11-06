@@ -15,6 +15,7 @@ pub mod grants;
 pub mod kinds;
 pub mod matrix;
 pub mod migrate10;
+pub mod migrate11;
 pub mod migrate7;
 pub mod migrate8;
 pub mod migrate9;
