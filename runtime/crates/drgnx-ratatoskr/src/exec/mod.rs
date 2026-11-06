@@ -356,6 +356,8 @@ const KEEP_GRACE_S: f64 = 3600.0;
 const STOP_WAIT: Duration = Duration::from_secs(5);
 /// The job folder's file naming the `shared` runner the job ran on: its result is labelled and never counts for a gate.
 const SHARED: &str = "shared";
+/// The job folder's file with the line saying how the job's rows split over its attempts (`summary::split_line`).
+const SPLIT: &str = "split";
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -817,7 +819,10 @@ impl Inner {
     /// hub left as `pending.json` is read into the queue once (the file goes once `rq_job` holds it).
     async fn restore(self: Arc<Self>, waiting: Vec<String>) {
         let (stored, attempts) = match &self.hooks.runtime {
-            Some(db) => queue::stored(db).await,
+            Some(db) => {
+                self.queue.restore_kept(queue::kept(db).await);
+                queue::stored(db).await
+            }
             None => (vec![], vec![]),
         };
         let known: HashSet<String> = stored.iter().map(|s| s.submit.id.clone()).collect();
@@ -910,11 +915,14 @@ impl Inner {
     /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict, shared) = match o {
+            let (id, verdict, shared, split) = match o {
                 Outcome::Done {
                     id, result, shared, ..
-                } => (id, queue::verdict_of(&result), shared),
-                Outcome::Lost { id } => (id, None, None),
+                } => {
+                    let split = result["split"].as_str().map(String::from);
+                    (id, queue::verdict_of(&result), shared, split)
+                }
+                Outcome::Lost { id } => (id, None, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -945,6 +953,9 @@ impl Inner {
             }
             if let Some(runner) = shared {
                 write(SHARED, &runner);
+            }
+            if let Some(line) = split {
+                write(SPLIT, &line);
             }
             let me = self.clone();
             crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });
@@ -1311,6 +1322,10 @@ impl Inner {
             &text,
             &dir.join("log").display().to_string(),
         );
+        // rows that ran over several attempts: the split first
+        if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
+            summary.lines.insert(0, line);
+        }
         // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
         if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
             summary
@@ -1780,6 +1795,7 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         visibility,
         shared_overlay,
         origin_key,
+        suite: None,
     }
 }
 

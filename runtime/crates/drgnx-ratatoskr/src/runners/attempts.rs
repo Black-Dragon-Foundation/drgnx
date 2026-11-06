@@ -576,6 +576,120 @@ impl Core {
     }
 }
 
+/// One row's result as the hub keeps it (`rq_rows`): its verdict (`pass`, `fail`, `skip`, `crash`), and the attempt
+/// and machine that gave it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowResult {
+    pub verdict: String,
+    pub attempt: u32,
+    pub machine: String,
+}
+
+/// The rows a job's attempts gave, by row and attempt. The union holds each row once, from its latest attempt, in
+/// whatever order the attempts' rows came in (design §6.9, "Partial results").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Rows {
+    by: BTreeMap<String, BTreeMap<u32, (String, String)>>,
+}
+
+impl Rows {
+    /// ATTEMPT on MACHINE gave ROW the result VERDICT.
+    pub fn record(&mut self, attempt: u32, row: &str, verdict: &str, machine: &str) {
+        self.by
+            .entry(row.to_string())
+            .or_default()
+            .insert(attempt, (verdict.to_string(), machine.to_string()));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by.is_empty()
+    }
+
+    /// Each row once, from its latest attempt.
+    pub fn union(&self) -> BTreeMap<String, RowResult> {
+        self.by
+            .iter()
+            .filter_map(|(row, by)| {
+                let (&attempt, (verdict, machine)) = by.last_key_value()?;
+                Some((
+                    row.clone(),
+                    RowResult {
+                        verdict: verdict.clone(),
+                        attempt,
+                        machine: machine.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// The rows with a result, as `forseti::split::remaining_rows` reads them.
+    pub fn done(&self) -> Vec<forseti::split::RowResult> {
+        self.union()
+            .into_iter()
+            .map(|(row, r)| forseti::split::RowResult {
+                row,
+                pass: !matches!(r.verdict.as_str(), "fail" | "crash"),
+            })
+            .collect()
+    }
+
+    /// Whether an attempt before ATTEMPT gave a row.
+    pub fn before(&self, attempt: u32) -> bool {
+        self.by
+            .values()
+            .any(|by| by.keys().next().is_some_and(|&a| a < attempt))
+    }
+}
+
+/// LATEST, the `result.json` of a job's last attempt, with the counts, rows and failing names of the union of its
+/// attempts' rows. A pass is judged again over the union under EXPECT (a row an earlier attempt failed stays failed);
+/// any other verdict stands.
+pub fn union_result(latest: &Value, rows: &Rows, expect: &forseti::Expect) -> Value {
+    use sleipnir::linux::parse::{Parsed, RowVerdict, judge};
+    if rows.is_empty() {
+        return latest.clone();
+    }
+    let mut p = Parsed {
+        counts_rows: true,
+        ..Parsed::default()
+    };
+    let (mut listed, mut failing) = (vec![], vec![]);
+    for (name, r) in rows.union() {
+        let Ok(v) = serde_json::from_value::<RowVerdict>(Value::String(r.verdict.clone())) else {
+            continue;
+        };
+        let c = &mut p.counts;
+        match v {
+            RowVerdict::Pass => c.passed += 1,
+            RowVerdict::Fail => c.failed += 1,
+            RowVerdict::Skip => c.skipped += 1,
+            RowVerdict::Crash => c.crashed += 1,
+        }
+        if v != RowVerdict::Skip {
+            c.ran += 1;
+        }
+        if matches!(v, RowVerdict::Fail | RowVerdict::Crash) {
+            failing.push(name.clone());
+        }
+        listed.push(
+            json!({"name": name, "verdict": r.verdict, "attempt": r.attempt, "machine": r.machine}),
+        );
+        p.rows.push((name, v));
+    }
+    let mut out = latest.clone();
+    let Some(o) = out.as_object_mut() else {
+        return out;
+    };
+    if latest["verdict"] == "Pass" {
+        o.insert("verdict".into(), json!(judge(&p, expect)));
+    }
+    o.insert("counts".into(), json!(p.counts));
+    o.insert("rows".into(), Value::Array(listed));
+    o.insert("failing".into(), json!(failing));
+    out
+}
+
 /// The notice of a frame that doesn't count.
 fn ignore(runner: &str, r: &JobRef, what: &str) -> Effect {
     Effect::Ignore {
@@ -792,6 +906,72 @@ mod tests {
                 job: "j1".into(),
                 attempt: 1
             }]
+        );
+    }
+
+    // [D] pure: rows from two attempts, the later one's results winning; the counts are the union's
+    #[test]
+    fn union_with_latest_attempt_winning() {
+        let mut rows = Rows::default();
+        // attempt 2 reran b and c (a requeue), attempt 1's late result came after it
+        rows.record(2, "b", "pass", "laptop");
+        rows.record(2, "c", "fail", "laptop");
+        for (row, v) in [("a", "pass"), ("b", "fail"), ("c", "pass"), ("d", "skip")] {
+            rows.record(1, row, v, "desktop");
+        }
+        let u = rows.union();
+        let got: Vec<(&str, &str, u32, &str)> = u
+            .iter()
+            .map(|(n, r)| {
+                (
+                    n.as_str(),
+                    r.verdict.as_str(),
+                    r.attempt,
+                    r.machine.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a", "pass", 1, "desktop"),
+                ("b", "pass", 2, "laptop"),
+                ("c", "fail", 2, "laptop"),
+                ("d", "skip", 1, "desktop"),
+            ]
+        );
+        assert!(rows.before(2) && !rows.before(1));
+        let done: Vec<String> = rows.done().into_iter().map(|d| d.row).collect();
+        assert_eq!(done, ["a", "b", "c", "d"]);
+        // attempt 2's own result passed with its two rows; the union has four, one failed
+        let latest = json!({
+            "verdict": "Pass",
+            "counts": {"ran": 2, "passed": 2, "failed": 0, "skipped": 0, "crashed": 0},
+            "rows": [],
+            "failing": [],
+            "wall_s": 3.0,
+        });
+        let v = union_result(&latest, &rows, &forseti::Expect::default());
+        assert_eq!(
+            v["counts"],
+            json!({"ran": 3, "passed": 2, "failed": 1, "skipped": 1, "crashed": 0})
+        );
+        assert_eq!(v["verdict"], "Red", "{v}");
+        assert_eq!(v["failing"], json!(["c"]));
+        assert_eq!(
+            v["rows"][1],
+            json!({"name": "b", "verdict": "pass", "attempt": 2, "machine": "laptop"})
+        );
+        assert_eq!(v["wall_s"], 3.0, "the rest is the latest attempt's");
+        // a verdict other than a pass stands; no rows: the result as it came
+        let timed_out = json!({"verdict": "Timeout"});
+        assert_eq!(
+            union_result(&timed_out, &rows, &forseti::Expect::default())["verdict"],
+            "Timeout"
+        );
+        assert_eq!(
+            union_result(&latest, &Rows::default(), &forseti::Expect::default()),
+            latest
         );
     }
 
