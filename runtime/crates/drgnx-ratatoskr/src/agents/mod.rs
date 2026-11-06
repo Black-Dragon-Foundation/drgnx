@@ -14,6 +14,7 @@
 
 pub mod deliver;
 pub mod handoff;
+pub mod identity;
 pub mod launch;
 pub mod lock;
 pub mod net;
@@ -56,6 +57,8 @@ pub struct Hub {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     db: OnceLock<urdr::Handle>,
     steps: StepBus,
+    /// Each live session's ordinal, handle and monogram ([`identity`]).
+    pub identities: Arc<identity::Pool>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -229,6 +232,7 @@ impl Hub {
     }
 
     async fn forget(&self, id: &str) {
+        self.identities.free(id);
         if let Some(db) = self.db() {
             session::delete_row(db, id).await;
         }

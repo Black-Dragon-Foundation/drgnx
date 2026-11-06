@@ -863,6 +863,8 @@ pub struct Session {
     stamps: Arc<crate::work::conclusions::Stamps>,
     /// A planning session's turn ends go to Say it ([`crate::say`]).
     say: crate::say::SayTx,
+    /// The hub's identities: this session holds one from its start until it ends ([`super::identity`]).
+    identities: Arc<super::identity::Pool>,
 }
 
 /// What `Conn::prompt` answered.
@@ -1934,6 +1936,18 @@ fn assemble(
             ),
         );
     }
+    // its identity: the lowest free ordinal of its workspace, and a handle unique there
+    let identities = front.core.agents.identities.clone();
+    let provider = profile.provider().and_then(|p| {
+        serde_json::to_value(p)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+    });
+    identities.take(
+        &super::identity::workspace_of(&i.cwd),
+        &i.id,
+        &super::identity::model_short(profile.model.as_deref(), provider.as_deref()),
+    );
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
@@ -1991,6 +2005,7 @@ fn assemble(
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
         say: front.core.say.handle(),
+        identities,
     });
     (s, done_rx)
 }
@@ -3053,8 +3068,13 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        let identity = self.identities.get(&self.id);
         let st = lock(&self.state);
         Snapshot {
+            ordinal: identity.as_ref().map(|i| i.ordinal),
+            handle: identity.as_ref().map(|i| i.handle.clone()),
+            monogram: identity.map(|i| i.monogram),
+            last_active: Some(st.last_update),
             id: self.id.clone(),
             name: Some(self.name.clone()),
             profile: Some(self.profile.clone()),
@@ -3262,6 +3282,8 @@ impl Session {
                         self.schedule();
                         return;
                     }
+                    // it is no longer live: its ordinal and handle are free
+                    self.identities.free(&self.id);
                     let stepped = {
                         let mut st = lock(&self.state);
                         st.exit =

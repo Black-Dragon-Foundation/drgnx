@@ -1511,6 +1511,25 @@ and badges build on it). This is its contract.
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
 
+### Identity
+
+Every live session holds an identity from its start until it ends (`agents::identity`, part 3), so every surface
+names and colours an agent the same way:
+
+- **Ordinal:** the lowest number from 1 that no other live session of its workspace holds, kept for its life. A
+  workspace is the session's git repository (the project id of its checkout's common directory, the same for every
+  worktree of it), else its folder. The hub never gives a live ordinal twice; a display that has fewer
+  colour-and-mark pairs than agents reuses one by its own rule, reading `last_active`.
+- **Handle:** the model's short name (Claude's families by name, `Opus`, `Sonnet`, `Haiku`; another model by the first
+  word of its name; else the provider: `Claude`, `Codex`, `Gemini`), numbered from the second live agent of that model
+  in the workspace on (`Opus`, `Opus 2`, `Opus 3`; a freed number is given again, lowest first). The **monogram** is
+  its initial and that number (`O`, `O2`).
+- **Where:** the `agent` snapshot (`agents/list`, the `agent` event) carries `ordinal`, `handle`, `monogram` and
+  `last_active` (the hub's time of its latest update); an ended session has none. A session frees its identity when it
+  is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
+  Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
+  parent's; subagents have no snapshot, so none is shown yet.
+
 ### The Work map
 
 The Work space's map (`work::map`): the hub feeds the pure map core `vegvisir` from its sources and sends each map

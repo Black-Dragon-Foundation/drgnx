@@ -162,6 +162,21 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come
+    /// from it. Absent once it has ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordinal: Option<u32>,
+    /// Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on
+    /// ("Opus", "Opus 2").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    /// The handle's short form for badges ("O", "O2").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monogram: Option<String>,
+    /// The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its
+    /// capacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<f64>,
 }
 
 /// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
