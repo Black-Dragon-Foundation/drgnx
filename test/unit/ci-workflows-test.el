@@ -407,7 +407,7 @@
           (let ((rk (match-string 1 head)))
             (should (or (string-search "hashFiles(" rk)
                         (and (string-prefix-p "cargo-" rk)
-                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
+                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.95\\.0\\|env\\.NIGHTLY" rk))
                         (string-prefix-p "fuzz-corpus-" rk)
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
