@@ -87,6 +87,9 @@ the current manifest) and changes nothing.
 
 ### What you asked for
 
+The [Extensions view](extensions.md) is the screen for all of this: Install, Update and Uninstall there queue the
+commands below, and its pages show the lock's marks as *Why* a package is here.
+
 A package you install yourself — `drgnx sync --add magit`, or Install in the Extensions view, which runs it — is
 recorded as yours on its lock entry, `:wanted user`, in the same lock write as the install. Those entries are the
 manifest's fourth source, so the next sync keeps them, `--prune` never removes them, and a rollback brings the wish

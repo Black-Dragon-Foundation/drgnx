@@ -16,6 +16,7 @@
 (require 'drgnx-ui)
 (require 'drgnx-perf)
 (require 'drgnx-perf-settings)
+(require 'drgnx-perf-extensions)
 (require 'drgnx-perf-workloads)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
@@ -778,6 +779,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :measure ,drgnx-perf-run--agent-settings-measure-form
        :teardown ,drgnx-perf-run--agent-settings-teardown-form)
       ,@(drgnx-perf-settings-workloads)
+      ,@(drgnx-perf-extensions-workloads)
       ;; typing in a local file while a remote root is listed in the Explorer and its connection is dead
       (remote-typing
        :setup ,(drgnx-perf-run--remote-setup-form)

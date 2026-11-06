@@ -546,6 +546,11 @@ that holds a program (a workspace file cannot set it), `:merge alist` one that m
 A described variable behaves like any other setting; drgnx sets it with `set-default` after recording it, and taking
 the value away puts back what it was.
 
+**Extensions** (a page of its own under drgnx): the packages you asked for, read-only, taken from the lock's `:wanted
+user` marks. To add or remove one use the [Extensions view](extensions.md); a hand edit of `packages.eld` or the lock is
+not needed. The settings of the view itself (`drgnx-extensions-check-updates`, `-review`, `-recommended`,
+`drgnx-packages-off`) are listed in [Extensions](extensions.md#settings).
+
 **Other tools** (Workspace group): the files other tools keep in the folder (`.editorconfig`, `.prettierrc*`,
 `pyproject.toml`, `.clang-format`, `.clangd`, `rust-analyzer.toml`, `tsconfig.json`, `.eslintrc*`, `biome.json`,
 `.golangci.yml`, `.ruff.toml`), each with [Open]. They stay theirs: nothing is imported or written.

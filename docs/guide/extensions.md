@@ -54,11 +54,32 @@ A word after `@` that is none of these shows as a quiet chip, *not a filter*; it
 Uninstall asks nothing: a rollback (see Generations) brings the package back. A package something else still needs is
 refused and the row says why.
 
+Every command is also in the palette, under Extensions: **Open Extensions**, **Search Extensions**, **Extension
+Details**, **Install Extension**, **Update Extension**, **Update All Extensions**, **Uninstall Extension**, **Turn
+Extension On or Off Here**, **Refresh Extensions**, **Cancel Extension Job**, **Show Extension Job Log**, **Roll Back
+Packages**, **Restart drgnx**, **More About Extension**, **Show Recommended Extensions**, **Show Suggested Extension**,
+and, for the trust card and a reviewed update, **Install After the Trust Card**, **Cancel the Trust Card** and **Apply
+Reviewed Update**. The row commands act on the row at point; with the search or a page open they act on that page.
+
+## Settings
+
+| Setting | Default | What it does |
+|---|---|---|
+| `drgnx-extensions-check-updates` | `daily` | `daily` reads the archives once a day in the background; `manual` only on **Refresh Extensions** |
+| `drgnx-extensions-review` | none | packages and archives (`"melpa"`) whose updates you read before they install |
+| `drgnx-extensions-recommended` | none | the packages a project recommends (its shared `.drgnx/settings.el` or your private workspace file) |
+| `drgnx-packages-off` | none | packages turned off in one project (your private workspace file, or the project's shared settings) |
+| `drgnx-extensions-list-density` | `comfortable` | `dense` keeps one line a row |
+
+The first four are on the settings deny-list: no agent changes them. Settings → Extensions lists the packages you asked
+for, read-only, from the lock.
+
 ## A page for each extension
 
 `RET` on a row opens its page in a preview tab that the next page replaces; `RET` again on the same row keeps it. The
 page has the name, the versions, where it comes from and how far to trust that, the maintainer, the address, **Why**
-it is here (*you (Extensions) · needed by forge · config.el:31 (:ensure)*), and, for code, the line every extension
+it is here (*you (Extensions) · needed by forge · config.el:31 (:ensure)*; the other words are *module NAME*,
+*packages.eld* and *installed by hand*, for a package with no hash in the lock), and, for code, the line every extension
 carries: *Runs inside Emacs as you: it can read your files and reach the network.* Then the buttons for what you can do,
 and the tabs **Readme**, **Changes**, **Settings (N)**, **Dependencies** and **Files**.
 
@@ -164,6 +185,7 @@ With `drgnx-extensions-check-updates` set to `daily` (the default) drgnx reads t
 background, the first time at least ten minutes after it started and only while you are idle, and when you open the
 Updates list on an older catalog. `manual` reads them only when you run **Refresh Extensions**. The status bar shows
 *3 updates* and a restart mark when there is something to see.
+
 ## When a restart is needed
 
 Most changes the Extensions view makes work at once, in the drgnx you are using:

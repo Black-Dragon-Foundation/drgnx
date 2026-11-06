@@ -79,7 +79,8 @@ or the time box), `stopped` or `gone` (lost); a job that ended keeps the hub's s
 hours) or `:no-timebox`. `:machine` says where it runs (`"local"` or a runner's name; the hub's `auto` when absent) and
 `:local-only t` keeps it on this machine whatever the project's runner settings say: the Extensions view's installs,
 updates and catalog refreshes are jobs named `Extensions: …` with both, and a two-hour time box
-([Extensions](../develop/extensions.md#jobs)). The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
+([Extensions](../develop/extensions.md#jobs); what the view shows of them is in the [guide](extensions.md): `C-g` never
+stops one, **Cancel Extension Job** does). The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
 Report) run without a time box, so a daemon that stays up for days never loses them: they end
 when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the

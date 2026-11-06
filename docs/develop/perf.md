@@ -832,3 +832,36 @@ reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, opti
 
 In CI the `huginn_read` fuzz target runs in `runtime.yml`'s fuzz job, and `ci.yml`'s Nidhogg job builds huginn's `dump`
 example so the ERT differential (`drgnx-huginn/differential-fresh-seed`) compares it with Emacs's reader.
+
+## Extensions
+
+The Extensions view's rows are the workloads of `harness/drgnx-perf-extensions.el`, in the form of the settings rows: a
+library evaluated in the session builds the fixture under temporary data, config, state and cache directories, times the
+real functions against a hub stub that answers from memory, and puts everything back. The four archives are local
+directories of `archive-contents` at their 2026-11-06 sizes (gnu 420, nongnu 480, melpa 5,500, melpa-stable 750: 7,150
+rows), written by `drgnx-perf-extensions-write-archives`; no network. To write them for a look by hand:
+`emacs --batch -l harness/drgnx-perf-extensions.el -f drgnx-perf-extensions-fixture-main [DIR]`
+(default `test/fixtures/extensions/full`, written on demand and not committed).
+
+| Workload | What it measures | Budget (`:report-only ext-pass`) |
+|---|---|---|
+| `extensions-open` | `Open Extensions` to the first drawn sections; `:processes` counts processes started | `:open_ms` 100, `:processes` 0 |
+| `extensions-search` | each key of a search over 7,150 rows | `:key_p50_ms` 8, `:key_max_ms` 16 |
+| `extensions-scroll` | scrolling the full list, per key | `:key_max_ms` 16 |
+| `extensions-details` | opening a details page | `:open_ms` 50 |
+| `extensions-progress` | a running job's progress-file reads per second, and typing's p95 against idle | `:reads_per_s` 4, `:typing_delta_ms` 1 |
+| `activate-live` | repointing a running session into the generation that holds the old copies | `:activate_ms` 20 |
+| `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |
+| `refresh-job` | the catalog refresh from the archives | none (reported) |
+| `list-packages-compare` | `list-packages` on the same fixtures, offline: first render, a `package-menu-filter-by-name` keystroke, scrolling, memory | none; `:beats_*` flags say whether the view wins each |
+
+The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` names `ext-pass`, the combined gate pass
+that judges them. Run them pinned, alone on the perf island:
+`DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
+
+The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
+7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. It is `#[ignore]`d;
+run it once, optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+
+Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
