@@ -1,0 +1,70 @@
+# One-off: the container-net spike's probes (P9, P4, P5, P6) on the rootless Ubuntu runner. Push-triggered on its own
+# branch only; it builds nothing and runs no drgnx code.
+name: S0 spike (container net)
+
+on:
+  push:
+    branches: [spike/cn-s0]
+
+permissions:
+  contents: read
+
+jobs:
+  probes:
+    name: S0 probes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: versions
+        run: |
+          cat /etc/os-release | head -3; uname -r; cat /sys/kernel/security/lsm; echo
+          podman --version; dpkg -l podman crun conmon passt netavark golang-github-containers-common 2>/dev/null | tail -n +6 || true
+      # rootless podman needs the user's systemd (as the agent-containers job does)
+      - name: a systemd user session for podman
+        run: |
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          timeout 60 sh -c "until [ -S /run/user/$uid/bus ]; do sleep 0.5; done"
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+      - name: sshd on 127.0.0.1 and S0's key (the ssh:// path)
+        run: |
+          command -v sshd || { sudo apt-get update -q; sudo apt-get install -y -q openssh-server; }
+          sudo systemctl start ssh || sudo systemctl start sshd
+          ssh-keygen -q -t ed25519 -N '' -C bld-s0 -f "$HOME/s0key"
+          mkdir -p -m 700 "$HOME/.ssh"; cp "$HOME/s0key.pub" "$HOME/.ssh/authorized_keys"; chmod 600 "$HOME/.ssh/authorized_keys"
+      - name: images and the scratch tar
+        run: |
+          podman info --format '{{.Host.CgroupsVersion}} {{.Host.CgroupManager}} {{.Host.NetworkBackend}} {{.Host.Pasta.Version}}'
+          podman pull -q docker.io/library/busybox:1.37 docker.io/alpine/socat:latest
+          mkdir -p "$HOME/s0w/pxroot/etc"
+          for b in /usr/sbin/ldconfig.real /usr/sbin/ldconfig; do file -L "$b" | grep -q 'static' && { cp "$b" "$HOME/s0w/pxroot/px"; break; }; done
+          cp .github/s0/passwd "$HOME/s0w/pxroot/etc/passwd"; cp .github/s0/dk.conf "$HOME/s0w/"
+          tar -C "$HOME/s0w/pxroot" -cf "$HOME/s0w/px.tar" px etc; tar -tvf "$HOME/s0w/px.tar"
+      - name: P9 (Q8's nine checks), local, --remote, ssh://
+        if: ${{ !cancelled() }}
+        run: bash .github/s0/probe.sh p9 local remote ssh 2>&1 | tee p9.log
+      - name: P4 stdio
+        if: ${{ !cancelled() }}
+        run: bash .github/s0/probe.sh p4 local remote ssh 2>&1 | tee p4.log
+      - name: P4 detach keys
+        if: ${{ !cancelled() }}
+        run: bash .github/s0/probe.sh detach local remote ssh 2>&1 | tee detach.log
+      - name: P6 podman import
+        if: ${{ !cancelled() }}
+        run: bash .github/s0/probe.sh p6 local remote ssh 2>&1 | tee p6.log
+      - name: P5 the attach path's cost
+        if: ${{ !cancelled() }}
+        run: bash .github/s0/timing.sh p5 local remote ssh 2>&1 | tee p5.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: s0-${{ matrix.os }}
+          path: "*.log"
