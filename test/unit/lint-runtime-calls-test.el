@@ -196,7 +196,8 @@ list of (FILE . HASH-OF-SYMBOLS) for the kept forms."
                   "settings-resolve" "settings-review" "settings-runtime" "settings-tidy" "settings-trust"
                   "settings-workspace" "shell-env" "shell" "startup-trace" "store-privacy" "surfaces" "timer" "toml"
                   "trust" "tty-fallback" "tty-recommend" "tty" "ui-kit" "user-lisp" "watchdog-doctor" "watchdog" "work-db"
-                  "work-client" "work-scan" "work" "workers-doctor")))  "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
+                  "work-client" "work-scan" "work" "workers-doctor")))
+  "Every file under core/ after the Lisp agent runtime was deleted: a new core file is added here on purpose, so no
 runtime file comes back unnoticed.")
 
 (ert-deftest drgnx-lint/no-runtime-lisp ()
