@@ -54,10 +54,13 @@
         (should (assq 'transition (drgnx-look-palette-for variant)))))))
 
 (ert-deftest drgnx-look-float/motion-sets-glitnir-reduced-motion ()
-  "Pattern D: `auto' and `full' set `glitnir-reduced-motion' when it is bound; a Nidhogg without it is left alone."
-  (let ((glitnir-reduced-motion 'unset))
-    (let ((drgnx-look-motion 'auto)) (drgnx-look--motion-apply) (should (eq glitnir-reduced-motion 'auto)))
-    (let ((drgnx-look-motion 'full)) (drgnx-look--motion-apply) (should (null glitnir-reduced-motion)))))
+  "Pattern D: `auto' is Glitnir's `auto' (the desktop says), `full' is nil (never reduce), `reduced' t; outside ui/look
+the option is left alone (ui/look sets it as the module: `drgnx-look/teardown-restores-reduced-motion')."
+  (pcase-dolist (`(,m . ,want) '((auto . auto) (full . nil) (reduced . t)))
+    (let ((drgnx-look-motion m)) (should (eq want (drgnx-look--motion-value)))))
+  (let ((glitnir-reduced-motion 'unset) (drgnx-look-motion 'full))
+    (drgnx-look--motion-apply)
+    (should (eq glitnir-reduced-motion 'unset))))
 
 (ert-deftest drgnx-look-float/lane-fonts ()
   "Pattern D: in a lane's buffer the descriptions take the UI face and the keys the code face."

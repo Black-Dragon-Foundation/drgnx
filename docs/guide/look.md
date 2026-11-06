@@ -218,8 +218,9 @@ parameter lists; a value you set (Customize or `settings.el`) stands in every va
 
 `drgnx-look-motion` (a setting) says how things move: `auto` (the default) follows the desktop's reduced-motion
 preference, `full` always moves, `reduced` never does: popups, the palette and notices then appear and vanish at once, and
-blur and shadows stay. A change applies at once. Where Glitnir is off, nothing floats and nothing moves: popups and the
-palette use the plain frames and notices go to the echo area.
+blur and shadows stay. A change applies at once. It sets Glitnir's own `glitnir-reduced-motion` (`auto`, `nil` or
+`t`) as the module, so a value you gave that option stays, and turning ui/look off gives it back. Where Glitnir is
+off, nothing floats and nothing moves: popups and the palette use the plain frames and notices go to the echo area.
 
 ## Icons
 

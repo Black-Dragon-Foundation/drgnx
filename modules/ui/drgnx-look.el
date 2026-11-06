@@ -120,14 +120,30 @@ Also the function `child-frame-chrome' holds while ui/look is on, so a theme cha
     (when (fboundp 'drgnx-palette-frame-restyle) (drgnx-palette-frame-restyle))
     (glitnir-refresh)))
 
+(defun drgnx-look--motion-value ()
+  "`glitnir-reduced-motion' for `drgnx-look-motion': `auto' (the desktop says), nil for `full', t for `reduced'."
+  (pcase drgnx-look-motion ('auto 'auto) ('full nil) (_ t)))
+
+(defun drgnx-look--motion-set ()
+  "Set `glitnir-reduced-motion' as ui/look (`drgnx-module-set': a value you gave it stays, and the module's teardown
+gives the option back)."
+  (drgnx-module-set 'glitnir-reduced-motion (drgnx-look--motion-value)))
+
+(defvar drgnx-look--motion-door nil
+  "While ui/look runs under Glitnir: `drgnx-look--motion-set' run as the module, so a later change of
+`drgnx-look-motion' is undone with the module too.  nil otherwise.")
+
 (defun drgnx-look--motion-apply ()
-  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it (only when Glitnir has it), then the
-popups and the palette are styled again."
-  (when (boundp 'glitnir-reduced-motion)
-    (pcase drgnx-look-motion
-      ('auto (setq glitnir-reduced-motion 'auto))
-      ('full (setq glitnir-reduced-motion nil))))
+  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it while ui/look runs under Glitnir, then
+the popups and the palette are styled again."
+  (when drgnx-look--motion-door (funcall drgnx-look--motion-door))
   (when (drgnx-module-running-p 'ui/look) (drgnx-look--float-refresh)))
+
+(defun drgnx-look--motion-on ()
+  "In ui/look's setup: `glitnir-reduced-motion' follows `drgnx-look-motion' now and on every change, as the module."
+  (drgnx-look--motion-set)
+  (setq drgnx-look--motion-door (drgnx-modules-with-owner (drgnx-look--motion-set)))
+  (drgnx-modules-push-undo "motion door" (lambda () (setq drgnx-look--motion-door nil))))
 
 (defun drgnx-look--float-on-theme (&rest _)
   "`enable-theme-functions' and `disable-theme-functions': the variant may have changed."
@@ -146,7 +162,7 @@ follows the theme's variant: the option holds a function until the module is off
                              (lambda () (remove-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
                                (remove-hook 'disable-theme-functions #'drgnx-look--float-on-theme)))
     (drgnx-decor-faces-on)
-    (drgnx-look--motion-apply)
+    (drgnx-look--motion-on)
     (glitnir-refresh)))
 
 ;;;; Cards (Glitnir, the compositor)
