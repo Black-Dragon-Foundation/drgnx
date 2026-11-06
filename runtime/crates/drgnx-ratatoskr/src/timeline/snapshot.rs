@@ -1,7 +1,8 @@
 //! Step snapshots (Task 19, Calls made 15): a shadow repository per worktree under `<state>/hub/checkpoints/<hash>.git`
 //! and, in it, a tree of the worktree written with a persistent per-session index (a temporary one loses the stat
 //! cache and rehashes the whole tree every step), kept as `refs/drgnx/s/<sid>/<seq>`.  Secret files are never in a
-//! tree.  Restore and fork are part 4's.
+//! tree.  A checkpoint is restored into a tree ([`restore_into`]) by mode, through `eitri` (no link followed), never
+//! over a protected path, a `.git` or a secret file (`history::tree::restorable`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -125,7 +126,7 @@ pub fn patch(
 
 /// The pathspecs that leave the secret files out: the fixed names, EXTRA (the secrets table's paths, relative to
 /// the worktree) and the usual key files, anywhere in the tree.
-fn excludes(extra: &[String]) -> Vec<String> {
+pub(crate) fn excludes(extra: &[String]) -> Vec<String> {
     let mut names: BTreeSet<String> = gleipnir::toolchain::SECRET_FILES
         .iter()
         .map(|s| (*s).to_string())
@@ -168,9 +169,20 @@ fn write_tree(
     extra: &[String],
 ) -> Result<(PathBuf, String), String> {
     let repo = repo_of(root, worktree);
+    let tree = write_tree_in(&repo, worktree, key, extra)?;
+    Ok((repo, tree))
+}
+
+/// The tree of WORKTREE with the persistent index of KEY, written into the shadow repository REPO; the tree id.
+fn write_tree_in(
+    repo: &Path,
+    worktree: &Path,
+    key: &str,
+    extra: &[String],
+) -> Result<String, String> {
     if !repo.join("HEAD").exists() {
-        std::fs::create_dir_all(&repo).map_err(|e| format!("{}: {e}", repo.display()))?;
-        git(&repo, None, None, &["init", "--bare", "-q", "."])?;
+        std::fs::create_dir_all(repo).map_err(|e| format!("{}: {e}", repo.display()))?;
+        git(repo, None, None, &["init", "--bare", "-q", "."])?;
     }
     let index = repo.join(format!("index-{}", safe(key)));
     let mut add: Vec<String> = ["add", "-A", "--ignore-errors", "--", "."]
@@ -179,9 +191,8 @@ fn write_tree(
         .collect();
     add.extend(excludes(extra));
     let add: Vec<&str> = add.iter().map(String::as_str).collect();
-    git(&repo, Some(worktree), Some(&index), &add)?;
-    let tree = git(&repo, Some(worktree), Some(&index), &["write-tree"])?;
-    Ok((repo, tree))
+    git(repo, Some(worktree), Some(&index), &add)?;
+    git(repo, Some(worktree), Some(&index), &["write-tree"])
 }
 
 /// The tree of WORKTREE as it is when it is made, kept as `refs/drgnx/base/<hash>` in its shadow repository: the base
@@ -311,6 +322,194 @@ pub fn head_of(worktree: &Path) -> Option<String> {
         }
     };
     is_id(&id).then_some(id)
+}
+
+/// The tree of SID's nearest snapshot at or below step SEQ in WORKTREE's shadow repository (`refs/drgnx/s/<sid>/<n>`
+/// with the largest N not above SEQ); none when it has none.
+pub fn tree_at(root: &Path, worktree: &Path, sid: &str, seq: i64) -> Option<String> {
+    let repo = repo_of(root, worktree);
+    if !repo.join("HEAD").exists() {
+        return None;
+    }
+    let prefix = format!("refs/drgnx/s/{}/", safe(sid));
+    let out = git(
+        &repo,
+        None,
+        None,
+        &["for-each-ref", "--format=%(refname) %(objectname)", &prefix],
+    )
+    .ok()?;
+    out.lines()
+        .filter_map(|l| {
+            let (name, id) = l.split_once(' ')?;
+            let n: i64 = name.strip_prefix(&prefix)?.parse().ok()?;
+            (n <= seq).then(|| (n, id.to_string()))
+        })
+        .max_by_key(|(n, _)| *n)
+        .map(|(_, id)| id)
+}
+
+/// One path that differs between two trees: each side's git mode (0: not there) and the TO side's blob.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeChange {
+    pub path: PathBuf,
+    pub from_mode: u32,
+    pub to_mode: u32,
+    pub to_blob: Option<String>,
+}
+
+/// The paths that differ between FROM and TO of WORKTREE's shadow repository, with both sides' modes
+/// (`diff-tree -r -z --raw --no-renames`, in the shadow repository only: the worktree is never looked at).
+pub fn changed(
+    root: &Path,
+    worktree: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<TreeChange>, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let repo = repo_of(root, worktree);
+    let out = git_bytes(
+        &repo,
+        None,
+        None,
+        &["diff-tree", "-r", "-z", "--raw", "--no-renames", from, to],
+    )?;
+    // ":<from mode> <to mode> <from blob> <to blob> <status>\0<path>\0" per path
+    let mut it = out.split(|b| *b == 0);
+    let mut v = Vec::new();
+    while let Some(meta) = it.next() {
+        if meta.is_empty() {
+            continue;
+        }
+        let Some(path) = it.next() else {
+            break;
+        };
+        let meta = String::from_utf8_lossy(meta);
+        let f: Vec<&str> = meta.trim_start_matches(':').split(' ').collect();
+        let [from_mode, to_mode, _, to_blob, _] = f[..] else {
+            return Err(format!("diff-tree: an unknown line {meta:?}"));
+        };
+        let mode = |m: &str| u32::from_str_radix(m, 8).unwrap_or(0);
+        let to_mode = mode(to_mode);
+        v.push(TreeChange {
+            path: PathBuf::from(std::ffi::OsStr::from_bytes(path)),
+            from_mode: mode(from_mode),
+            to_mode,
+            to_blob: (to_mode != 0).then(|| to_blob.to_string()),
+        });
+    }
+    Ok(v)
+}
+
+/// What a restore did: the paths written or removed, and those left with the reason (`protected`, `gitlink`, or
+/// what the write said).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Restored {
+    pub written: Vec<PathBuf>,
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
+/// REL's missing folders made beneath DIR, one component at a time through `eitri` (a link in any is refused).
+fn make_parents(dir: std::os::fd::BorrowedFd<'_>, rel: &Path) -> Result<(), eitri::FsError> {
+    use eitri::{FsError, Kind, open_beneath};
+    use std::os::fd::AsFd;
+    let Some(parent) = rel.parent() else {
+        return Ok(());
+    };
+    let mut at = PathBuf::new();
+    for c in parent.components() {
+        let next = at.join(c);
+        match open_beneath(dir, &next, Kind::Dir) {
+            Ok(_) => {}
+            Err(FsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                let here = if at.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    at.as_path()
+                };
+                let base = open_beneath(dir, here, Kind::Dir)?;
+                rustix::fs::mkdirat(
+                    base.fd.as_fd(),
+                    c.as_os_str(),
+                    rustix::fs::Mode::from_raw_mode(0o755),
+                )
+                .map_err(FsError::from)?;
+            }
+            Err(e) => return Err(e),
+        }
+        at = next;
+    }
+    Ok(())
+}
+
+/// TARGET made equal to tree TO of SOURCE's shadow repository under ROOT (ONLY: just those paths), by mode: a regular
+/// file through `eitri::write_regular` with its mode, a link (`120000`) through `eitri::symlink_beneath` with its
+/// target as bytes, a path TO lacks through `eitri::remove_beneath`; a gitlink (`160000`) is skipped and listed, and so
+/// is every path [`crate::history::tree::restorable`] refuses (EXTRA: the secret paths the snapshots left out).  What
+/// TARGET holds now is first written as a tree into the same shadow repository (git runs there only, with TARGET as
+/// its work tree, as a snapshot does).  Nothing is chmodded through a path; a write that fails is listed, not fatal.
+pub fn restore_into(
+    root: &Path,
+    source: &Path,
+    target: &Path,
+    to: &str,
+    only: Option<&[PathBuf]>,
+    extra: &[String],
+) -> Result<Restored, String> {
+    use std::os::fd::AsFd;
+    let repo = repo_of(root, source);
+    let key = repo_of(Path::new(""), target)
+        .to_string_lossy()
+        .trim_end_matches(".git")
+        .to_string();
+    let now = write_tree_in(&repo, target, &format!("restore-{key}"), extra)?;
+    let changes = changed(root, source, &now, to)?;
+    let dir = rustix::fs::open(
+        target,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|e| format!("{}: {e}", target.display()))?;
+    let dir = dir.as_fd();
+    let mut r = Restored::default();
+    for c in changes {
+        if only.is_some_and(|o| !o.contains(&c.path)) {
+            continue;
+        }
+        if !crate::history::tree::restorable(&c.path, extra) {
+            r.skipped.push((c.path, "protected".into()));
+            continue;
+        }
+        let bytes = || -> Result<Vec<u8>, eitri::FsError> {
+            let blob = c.to_blob.as_deref().unwrap_or_default();
+            git_bytes(&repo, None, None, &["cat-file", "blob", blob])
+                .map_err(|e| eitri::FsError::Io(std::io::Error::other(e)))
+        };
+        let done = match c.to_mode {
+            0 => eitri::remove_beneath(dir, &c.path),
+            0o100644 | 0o100755 => bytes().and_then(|b| {
+                make_parents(dir, &c.path)?;
+                eitri::write_regular(dir, &c.path, &b, c.to_mode & 0o777)
+            }),
+            0o120000 => bytes().and_then(|b| {
+                make_parents(dir, &c.path)?;
+                eitri::symlink_beneath(dir, &c.path, &b)
+            }),
+            0o160000 => {
+                r.skipped.push((c.path, "gitlink".into()));
+                continue;
+            }
+            m => {
+                r.skipped.push((c.path, format!("mode {m:o}")));
+                continue;
+            }
+        };
+        match done {
+            Ok(()) => r.written.push(c.path),
+            Err(e) => r.skipped.push((c.path, e.to_string())),
+        }
+    }
+    Ok(r)
 }
 
 /// Bytes under DIR (files only).
@@ -752,5 +951,68 @@ mod tests {
         )
         .unwrap();
         assert_eq!(refs, "refs/drgnx/s/live/1");
+    }
+
+    /// Pattern D: an added, a modified, a deleted file and a mode change, each with both sides' git modes, read in
+    /// the shadow repository only; and the nearest snapshot at or below a step.
+    #[test]
+    fn changed_reports_add_modify_delete_and_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("edit.txt"), "one").unwrap();
+        std::fs::write(wt.join("gone.txt"), "x").unwrap();
+        std::fs::write(wt.join("run.sh"), "echo").unwrap();
+        let t1 = take(&root, &wt, "s1", 1, &[]).unwrap();
+        std::fs::write(wt.join("edit.txt"), "two").unwrap();
+        std::fs::remove_file(wt.join("gone.txt")).unwrap();
+        std::fs::write(wt.join("new.txt"), "n").unwrap();
+        std::fs::set_permissions(wt.join("run.sh"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::os::unix::fs::symlink("edit.txt", wt.join("link")).unwrap();
+        let t3 = take(&root, &wt, "s1", 3, &[]).unwrap();
+        let mut got = changed(&root, &wt, &t1, &t3).unwrap();
+        got.sort_by(|a, b| a.path.cmp(&b.path));
+        let modes: Vec<(&str, u32, u32, bool)> = got
+            .iter()
+            .map(|c| {
+                (
+                    c.path.to_str().unwrap(),
+                    c.from_mode,
+                    c.to_mode,
+                    c.to_blob.is_some(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            [
+                ("edit.txt", 0o100644, 0o100644, true),
+                ("gone.txt", 0o100644, 0, false),
+                ("link", 0, 0o120000, true),
+                ("new.txt", 0, 0o100644, true),
+                ("run.sh", 0o100644, 0o100755, true),
+            ]
+        );
+        let edit = got
+            .iter()
+            .find(|c| c.path == Path::new("edit.txt"))
+            .unwrap();
+        assert_eq!(
+            blob(&root, &wt, &t3, "edit.txt").unwrap(),
+            git_bytes(
+                &repo_of(&root, &wt),
+                None,
+                None,
+                &["cat-file", "blob", edit.to_blob.as_deref().unwrap()]
+            )
+            .unwrap()
+        );
+        // the nearest snapshot at or below a step: 2 has none of its own
+        assert_eq!(tree_at(&root, &wt, "s1", 2).as_deref(), Some(t1.as_str()));
+        assert_eq!(tree_at(&root, &wt, "s1", 3).as_deref(), Some(t3.as_str()));
+        assert_eq!(tree_at(&root, &wt, "s1", 0), None);
+        assert_eq!(tree_at(&root, &wt, "s2", 3), None);
     }
 }

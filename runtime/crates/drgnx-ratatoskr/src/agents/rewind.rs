@@ -313,7 +313,7 @@ pub(crate) async fn rewind_conversation(
 }
 
 /// Who a session was, from its row or, for a finished one, its `session:<sid>` entity: profile, cwd and task.
-async fn source_of(
+pub(crate) async fn source_of(
     hub: &Hub,
     front: &Front,
     sid: &str,

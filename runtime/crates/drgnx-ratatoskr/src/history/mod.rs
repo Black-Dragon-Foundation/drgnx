@@ -7,12 +7,14 @@
 //! - [`blob`]: git object ids through a git directory the caller names.
 //! - [`methods`]: `register`, `batch`, `resync`, `unregister` on the hub, for the editor's buffers.
 //! - [`watch`]: Hrafn's watcher events into the hub.
+//! - [`tree`]: what may be written into an agent's tree, a commit there inside its sandbox, and a fork's tree.
 
 pub mod blob;
 mod capture;
 pub mod methods;
 pub mod origin;
 mod timers;
+pub mod tree;
 pub mod watch;
 pub mod wire;
 

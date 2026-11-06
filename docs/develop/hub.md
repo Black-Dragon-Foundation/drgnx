@@ -981,6 +981,34 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
   with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
   them too.
+- **Writing into an agent's tree** (`history::tree`, `timeline::snapshot`). `tree::restorable(rel, extra)` refuses
+  the lock's `NEVER_RESTORED` (`PROTECTED_RO`: `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`; the same list a runner's returned patch is refused by) at any depth, any `.git` component, and the
+  secret files a snapshot leaves out (`snapshot::excludes`, with the settings' extra paths), component by component
+  (case-folded on macOS). `snapshot::restore_into(root, source, target, tree, only, extra)` makes a tree equal to a
+  checkpoint: what it holds now is written as a tree into the source's shadow repository, `snapshot::changed`
+  (`diff-tree -r -z --raw`, both sides' git modes) lists what differs, and each path is written by mode through
+  `eitri`: `100644`/`100755` with `write_regular` and the mode, `120000` with `symlink_beneath` (the target as
+  bytes), a path the checkpoint lacks with `remove_beneath`; a gitlink (`160000`) and a refused path are skipped and
+  listed. Nothing is chmodded through a path. `snapshot::tree_at(root, worktree, sid, seq)` is the nearest snapshot
+  at or below a step.
+- **The forward commit** (`tree::commit_in_sandbox(front, sid, cwd, paths, subject)`), as `git commit --only` but
+  quiet about a path neither side has (a deletion committed before a crash, a file never added): HEAD is read into
+  the commit's own index (`GIT_INDEX_FILE=.git/drgnx-commit-index`), the paths updated there (`update-index --add
+  --remove`), the index compared with HEAD (`diff-index --cached --quiet`: equal is nothing to commit), committed
+  (`commit --no-verify`, `core.hooksPath=/dev/null`, no signing), and the same paths updated in the worktree's own
+  index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
+  (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
+  (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
+  read-only, the provider's relay only); elsewhere with plain git. The commit is read from the ref files after
+  (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
+  crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
+  the common folder and fails.
+- **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
+  base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
+  and `base` the step's head when that commit verifies there, else the worktree's recorded `base_commit`; the
+  checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
+  touched.
 
 ## The store
 
@@ -2330,7 +2358,7 @@ wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `s
   (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
   text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
   attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
-  segment, `**` any segments, `dir/` the folder), a protected name (`PROTECTED`) or `.git` at any depth, a bad path,
+  segment, `**` any segments, `dir/` the folder), a protected name (`lock::NEVER_RESTORED`, the list a revert never writes either) or `.git` at any depth, a bad path,
   a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
   hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
   than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
