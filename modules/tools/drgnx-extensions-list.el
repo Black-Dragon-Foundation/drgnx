@@ -398,8 +398,8 @@ ticket (an integer) has no row, nil."
                    'face 'drgnx-status-warn)))))
 
 (defun drgnx-extensions-list--attention ()
-  "The face of what needs you: the look's attention face when it exists, else the warning one."
-  (if (facep 'drgnx-status-attention) 'drgnx-status-attention 'drgnx-status-warn))
+  "The face of what needs you: the look's attention face when it exists, else the kit's needs-you face."
+  (if (facep 'drgnx-status-attention) 'drgnx-status-attention 'drgnx-status-needs-you))
 
 (defun drgnx-extensions-list--state-chip (row)
   "The chip the hub's state of ROW gives it, or nil."
@@ -600,11 +600,12 @@ ticket (an integer) has no row, nil."
 
 (defun drgnx-extensions--before-install (entry)
   "Queue ENTRY (an `:add' entry) once the trust layer lets it through: at once for a signed source or a package whose
-trust card was seen here, else when the card's Install is clicked (`drgnx-extensions-trust-before-install')."
-  (let ((queue (lambda () (drgnx-extensions-jobs-queue entry))))
-    (if (fboundp 'drgnx-extensions-trust-before-install)
-        (drgnx-extensions-trust-before-install (format "pkg:%s" (plist-get entry :add)) queue)
-      (funcall queue))))
+trust card was seen here, else when the card's Install is clicked (`drgnx-extensions-trust-before-install').  Without
+the trust layer nothing is queued: an install never skips its card."
+  (unless (fboundp 'drgnx-extensions-trust-before-install)
+    (user-error "Extensions: the trust check is not loaded, so nothing was installed"))
+  (drgnx-extensions-trust-before-install (format "pkg:%s" (plist-get entry :add))
+                                         (lambda () (drgnx-extensions-jobs-queue entry))))
 
 (defun drgnx-extensions-install ()
   "Queue the install of the package at point: the job layer runs it, the row shows its progress.  A package from a

@@ -182,8 +182,9 @@ windows. When this drgnx is the `drgnx.service` daemon it restarts the unit inst
 ## Updates
 
 With `drgnx-extensions-check-updates` set to `daily` (the default) drgnx reads the archives once a day in the
-background, the first time at least ten minutes after it started and only while you are idle, and when you open the
-Updates list on an older catalog. `manual` reads them only when you run **Refresh Extensions**. The status bar shows
+background, when you have been idle for ten minutes and the catalog is a day old (never at startup), and when you
+open the Updates list on an older catalog. `manual` reads them only when you run **Refresh Extensions**. A change of
+the setting applies at once, without a restart. The status bar shows
 *3 updates* and a restart mark when there is something to see.
 
 ## When a restart is needed

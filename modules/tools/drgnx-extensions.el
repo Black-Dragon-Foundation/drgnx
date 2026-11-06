@@ -54,11 +54,6 @@
 (defvar drgnx-extensions-list--updates)
 (defvar drgnx-extensions-list--restart)
 
-(drgnx-defsetting drgnx-packages-off nil
-  "Packages that are off in this project: their file modes and minor modes fall back to Emacs's own here.  The
-Extensions view writes it."
-  :type '(repeat symbol) :group 'drgnx :scope 'project :workspace 'data :agents 'never :schema '(list-of symbol))
-
 (drgnx-defsetting drgnx-extensions-recommended nil
   "Packages this project recommends: the Extensions view lists them under Recommended, with an Install button."
   :type '(repeat symbol) :group 'drgnx :scope 'project :workspace 'data :agents 'never :schema '(list-of symbol))
@@ -72,7 +67,7 @@ Extensions view writes it."
   "How the Extensions view learns of updates: `daily' reads the archives in the background once a day, `manual' only
 when you ask (the Refresh command)."
   :type '(choice (const daily) (const manual)) :group 'drgnx :scope 'global :workspace 'never :agents 'never
-  :schema '(enum daily manual))
+  :schema '(enum daily manual) :apply #'drgnx-extensions--check-updates-apply)
 
 ;;;; The status bar
 
@@ -92,12 +87,20 @@ when you ask (the Refresh command)."
              (fboundp 'drgnx-extensions-jobs-run))
     (drgnx-extensions-jobs-run 'refresh)))
 
-(defun drgnx-extensions--start-daily-check ()
-  "Look at the catalog's age every hour, the first time ten minutes from now (never at startup)."
-  (drgnx-timer-start 'extensions-daily-check 600 #'drgnx-extensions--daily-check :repeat 3600))
+(defun drgnx-extensions--start-daily-check (&optional owner)
+  "Look at the catalog's age once in every pause of ten minutes (never at startup, never while you work).  OWNER as
+`drgnx-timer-start' takes it."
+  (drgnx-timer-start 'extensions-daily-check 600 #'drgnx-extensions--daily-check :idle t :repeat t :owner owner))
 
 (defun drgnx-extensions--stop-daily-check ()
   (drgnx-timer-cancel 'extensions-daily-check))
+
+(defun drgnx-extensions--check-updates-apply ()
+  "The `:apply' of `drgnx-extensions-check-updates': while the module runs, the daily check runs at once when it is
+`daily' and stops when not."
+  (if (and (eq drgnx-extensions-check-updates 'daily) (drgnx-module-running-p 'tools/extensions))
+      (drgnx-extensions--start-daily-check 'tools/extensions)
+    (drgnx-extensions--stop-daily-check)))
 
 ;;;; The module
 

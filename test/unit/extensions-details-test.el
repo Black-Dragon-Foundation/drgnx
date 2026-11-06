@@ -59,7 +59,8 @@
 (ert-deftest drgnx-extensions/another-version-queues-that-version ()
   (let (queued)
     (cl-letf (((symbol-function 'drgnx-extensions-jobs-queue) (lambda (entry) (push entry queued) 1))
-              ((symbol-function 'drgnx-extensions-trust-before-install) nil))
+              ;; a source the trust layer lets through at once
+              ((symbol-function 'drgnx-extensions-trust-before-install) (lambda (_id then) (funcall then))))
       (drgnx-extensions-details-install-version "pkg:a" "1.0")
       (should (equal queued '((:add a :version "1.0")))))))
 

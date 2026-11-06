@@ -66,7 +66,9 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   layer compares the queue with what the runs took, and a ticket still there (clicked after the run took the queue)
   gets one new run, so no click is stranded. When another drgnx holds `pending.eld` the click is not queued: the
   row is `refused` with the hint "busy, try again" in `:error` (shown in the warning face): a refusal for now, neither
-  a running job (no elapsed-time tick) nor `failed`; the next click replaces it. `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
+  a running job (no elapsed-time tick) nor `failed`; the next click replaces it. The view queues an install only
+  through the trust layer (`drgnx-extensions--before-install`); without it the click is refused, never queued past
+  the card. `drgnx-extensions-jobs-cancel` takes a ticket still queued out of the file, or stops a
   job by its id.
 - **Other jobs.** `(drgnx-extensions-jobs-run KIND ARGS… :callback FN)`: `upgrade` NAMES (`:stage`, `:staged`),
   `upgrade-all`, `rollback` N, `refresh`, `fetch-readme` ARCHIVE NAME, `plugin-install` PATH (`:replace`),

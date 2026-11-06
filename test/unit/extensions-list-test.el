@@ -153,9 +153,72 @@
             (should (null runs))
             (drgnx-test-advance 599)
             (should (null runs))
+            ;; a pause shorter than ten minutes starts nothing; a ten-minute one checks
             (drgnx-test-idle 2)
+            (should (null runs))
+            (drgnx-test-idle 601)
             (should (equal runs '(refresh)))))
         (drgnx-extensions--stop-daily-check)))))
+
+(ert-deftest drgnx-extensions/a-refused-click-says-try-again-and-is-not-busy ()
+  (drgnx-extensions-test--with
+    (drgnx-test-with-clock (:allow-pending t)
+      (drgnx-extensions-list--receive 'installed (list (drgnx-extensions-test--row "magit" "available")) 1 0)
+      (with-current-buffer (drgnx-extensions-list--buffer)
+        ;; what the job layer says when another drgnx held the queue file
+        (drgnx-extensions-jobs--put '(magit) (list :status 'refused :error "busy, try again" :since (float-time)))
+        (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
+        (let ((text (substring-no-properties (drgnx-extensions-list--render "pkg:magit"))))
+          (should (string-search "busy, try again" text))
+          (should-not (string-search "working" text)))
+        (should-not (drgnx-extensions-list--busy-ids))
+        (should-not (drgnx-timer-active-p 'extensions-list-tick))))))
+
+(ert-deftest drgnx-extensions/an-install-without-the-trust-layer-is-refused ()
+  (let (queued)
+    (cl-letf (((symbol-function 'drgnx-extensions-jobs-queue) (lambda (entry) (push entry queued) 1))
+              ((symbol-function 'drgnx-extensions-trust-before-install) nil))
+      (should-error (drgnx-extensions--before-install '(:add magit)) :type 'user-error)
+      (should-not queued))))
+
+(ert-deftest drgnx-extensions/what-needs-you-falls-back-to-the-needs-you-face ()
+  (cl-letf (((symbol-function 'facep) (lambda (f) (not (eq f 'drgnx-status-attention)))))
+    (should (eq (drgnx-extensions-list--attention) 'drgnx-status-needs-you))))
+
+(ert-deftest drgnx-extensions/the-list-draws-in-slices-and-keeps-its-section-ids ()
+  (drgnx-extensions-test--with
+    (drgnx-extensions-list--define-view)
+    (should (drgnx-view-type-slice (alist-get 'extensions drgnx-view--types)))
+    (drgnx-extensions-list--receive 'installed (list (drgnx-extensions-test--row "magit" "installed")
+                                                     (drgnx-extensions-test--row "dash" "update")) 2 0)
+    ;; read again with nothing new: the same list, not one made again per header and per sync
+    (should (eq (drgnx-extensions-list--section-ids 'installed) (drgnx-extensions-list--section-ids 'installed)))
+    (should (equal (drgnx-extensions-list--section-ids 'installed) '("pkg:magit")))
+    (drgnx-extensions-list--receive 'installed (list (drgnx-extensions-test--row "magit" "installed")
+                                                     (drgnx-extensions-test--row "dash" "installed")) 2 0)
+    (should (equal (drgnx-extensions-list--section-ids 'installed) '("pkg:magit" "pkg:dash")))))
+
+(ert-deftest drgnx-extensions/the-daily-check-follows-the-setting-at-once ()
+  (drgnx-test-with-modules '(tools/extensions)
+    (let ((apply (plist-get (drgnx-setting-meta 'drgnx-extensions-check-updates) :apply)))
+      (should (functionp apply))
+      (unwind-protect
+          (progn
+            (setq drgnx-extensions-check-updates 'manual)
+            (funcall apply)
+            (should-not (drgnx-timer-active-p 'extensions-daily-check))
+            (setq drgnx-extensions-check-updates 'daily)
+            (funcall apply)
+            (should (drgnx-timer-active-p 'extensions-daily-check)))
+        (setq drgnx-extensions-check-updates 'daily)))))
+
+(ert-deftest drgnx-extensions/packages-off-is-declared-once ()
+  ;; the per-project layer owns the setting: its words, not a second declaration's
+  (should (string-prefix-p "Packages whose file modes and buffer modes are off in this project"
+                           (documentation-property 'drgnx-packages-off 'variable-documentation t)))
+  (with-temp-buffer
+    (insert-file-contents (expand-file-name "modules/tools/drgnx-extensions.el" drgnx-dir))
+    (should-not (search-forward "(drgnx-defsetting drgnx-packages-off" nil t))))
 
 (ert-deftest drgnx-extensions/the-module-turns-off-clean ()
   (drgnx-test-with-modules '(tools/extensions)
