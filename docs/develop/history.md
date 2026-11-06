@@ -101,6 +101,43 @@ case made is found, and no other.
 **Roll back mine too** (`Mode::RollBackMine`). The text goes back to what it was before the scope, applied as new
 operations; the document as it was is kept as branch `undone/<record>`, so its hunks can be redone.
 
+## The hub
+
+`drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per
+project (its git common folder), `history.db` under `<state>/hub/history/<project>/`. Its methods are synchronous and run
+git; the front calls them in blocking tasks.
+
+**Capture** (`capture.rs`). A file's new content comes from an agent's write (`on_agent_write`, called before the file is
+written), the watcher (`on_disk_change`), a step-boundary rescan (`rescan`, `rescan_known`) or a git event
+(`on_git_event`: one record for every file that differs between two commits). The content is read as an agent's files
+must be: `eitri::read_regular` below the worktree's folder, no link followed, a FIFO refused at once. A link is recorded
+as a link (a version in the snapshot class whose blob is the target's name), never read through; credentials files
+(`gleipnir::toolchain::SECRET_FILES` and the snapshot's key files) are never read. Text becomes a diff onto the
+document (`similar`, ascending, applied as the author's peer), and one record: `agent_step` with the cause, `external`
+by the peer `external:disk` or `external:git`, `rename` for an agent's move. Binary files, files over 4 MB, lock files,
+files `linguist-generated` in `.gitattributes` and links take the snapshot class: a version with a blob id and no
+document. The blob id is `git hash-object --path` over the bytes read (the repository's filters), through the git
+directory the tree names: the run's trusted store for a tree a sandboxed agent worked in, never plain git in such a tree.
+Each version is published as the bus event `history/file-version {worktree, path, blob, op}`; its shape is frozen for its
+consumers.
+
+**Whose version** (`origin.rs`, pure). The hub registers a write before the file is written; the watcher's event about it
+and a rescan then find it known. `OriginCore` takes `HubWrite`, `Watch` and `Rescan` events (a path and a content hash)
+and answers which version each is: the hub's write, its own watcher event and a rescan are one version, the hub's; a
+change another program made is its own, `Outside`. Tests run every order (`every_order_*`).
+
+**Watcher** (`watch.rs`). One watcher per project: Hrafn's. `Project::tap` gives a second reader of its `WatchEvent`
+stream; `history/register` starts a loop that feeds it to the hub (a changed file is diffed onto its document, a change
+to `HEAD`, the index or a ref rescans every known path). Ignored files are skipped.
+
+**Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers
+`{doc, tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in
+are `tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash}` applies changes (character
+offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>` for a change merged in) and answers
+`{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`; more than 1 MiB inserted
+is refused as `split-required`. `history/resync {buffer_id, text}` replaces the document's text as the user's change;
+`history/unregister {buffer_id}` stops tracking. Typing is grouped by the settle rule (`Settler`) as in the store.
+
 ## Testing
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in

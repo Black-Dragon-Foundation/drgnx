@@ -11060,6 +11060,235 @@
       "classes": [
         "user"
       ],
+      "doc": "the changes of a tracked buffer as the user's (or a merged-in agent's) operations; resync when the hash differs",
+      "name": "history/batch",
+      "params": {
+        "$defs": {
+          "BatchChange": {
+            "additionalProperties": false,
+            "description": "One change of a batch: OLD_LEN characters at START (offsets in the document's LF text) replaced by INSERTED.",
+            "properties": {
+              "inserted": {
+                "type": "string"
+              },
+              "old_len": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`user` (the default) or `agent:<session>` for a change merged in from an agent.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "old_len",
+              "inserted"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          },
+          "changes": {
+            "description": "At most 1 MiB of inserted text; more is refused as `split-required` and the editor splits it.",
+            "items": {
+              "$ref": "#/$defs/BatchChange"
+            },
+            "type": "array"
+          },
+          "region_hash": {
+            "description": "SHA-256 in hex of the buffer's whole text after the batch.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id",
+          "changes",
+          "region_hash"
+        ],
+        "title": "BatchParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`{ok: true}`, or `{resync: true}` when the buffer and the document disagree (send `history/resync`).",
+        "properties": {
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resync": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "BatchResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor tracks a buffer's file: its document, or why it is not tracked (ignored, secret, personal)",
+      "name": "history/register",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A buffer the editor starts tracking.",
+        "properties": {
+          "buffer_id": {
+            "description": "The editor's name for the buffer, used by every later call.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file's path, relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "description": "The worktree's folder.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "buffer_id"
+        ],
+        "title": "RegisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "doc": {
+            "description": "The file's document (0 when untracked).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Why not: `ignored`, `secret`, `personal` or `agent-tree`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracked": {
+            "description": "False for a gitignored file, a credentials file and the personal-notes deny-list: the editor sends no batches.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "doc",
+          "tracked"
+        ],
+        "title": "Registered",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a tracked buffer's whole text, as the user's change to its document",
+      "name": "history/resync",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer's whole text (LF line ends).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id",
+          "text"
+        ],
+        "title": "ResyncParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Done",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor stops tracking a buffer",
+      "name": "history/unregister",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id"
+        ],
+        "title": "UnregisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Done",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a proposed job runs, with an optional budget",
       "name": "job/approve",
       "params": {
