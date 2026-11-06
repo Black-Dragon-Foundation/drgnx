@@ -1903,7 +1903,7 @@ mod tests {
             (
                 "program under no read root",
                 Target::LinuxBwrap,
-                change(&|b| b.program = "/etc/passwd".into()),
+                change(&|b| b.program = fx.p("agent/agent.1")),
                 "lies under none of",
             ),
             (
