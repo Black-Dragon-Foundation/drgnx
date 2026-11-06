@@ -53,7 +53,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
-| memory | after the workloads and a GC | RSS |
+| memory | after the workloads, a GC, then one key (`<down>`) and the pause after it, read once the idle collection's timer has given the freed heap back to the system (as it does for a user: `drgnx-gc--idle`) | RSS |
 
 **The agent workloads** (`agent-typing`, `agent-stream`) run a Ratatoskr hub in the session, as the
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;

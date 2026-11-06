@@ -75,7 +75,8 @@ threshold was consed since the last collection, no input is pending and someone 
 \(`drgnx-gc--someone-waits-p').  The pause's collection then lands there instead of on the next keys.
 A collection gives the memory it frees back to malloc, not to the system (a big file's parse trees left hundreds of
 megabytes resident): the first pause after any collection, this one's or an earlier one, trims the heap once
-\(`malloc-trim')."
+\(`malloc-trim').  The first trim after the workloads cost 53 ms (900 MB resident down to 190 MB), the later ones
+under 1 ms: hence once per collection, in a pause, never after every collection."
   (let* ((idle (current-idle-time))
          (pause (and idle (- (float-time) (float-time idle)))))
     (when (and pause

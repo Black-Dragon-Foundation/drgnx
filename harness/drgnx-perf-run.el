@@ -826,7 +826,11 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
-      (memory :measure "(progn (garbage-collect) (list :rss_kb (drgnx-perf-rss-kb)))")
+      ;; what a user's Emacs holds: a collection, then a key and the pause after it, in which the idle collection's
+      ;; timer gives the freed heap back (`drgnx-gc--idle'); RSS is read once it has
+      (memory :each "(progn (garbage-collect) t)" :actions ((:keys "<down>"))
+              :complete-when "(or (not (fboundp 'malloc-trim)) (eql drgnx-gc--trimmed gcs-done))"
+              :measure "(list :rss_kb (drgnx-perf-rss-kb))")
       ,@(drgnx-perf-run--childframe-workloads)
       ;; last: evil cannot be unloaded from the session, so the workloads above stay as they were without it
       ,@(drgnx-perf-run--modal-workloads))))
