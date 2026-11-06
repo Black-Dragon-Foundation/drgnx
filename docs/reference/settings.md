@@ -232,6 +232,25 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-identity-walk
+
+How agents are given a colour and a mark: `diagonal' (the look's six colours each with its own mark, then the
+rest) or `colour-first' (every colour with the circle first, marks from the agent after the last colour).  A change
+applies to the agents shown from then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `diagonal` |
+| Type | `(choice (const :tag "Diagonal" diagonal) (const :tag "Colour first" colour-first))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agent-identity-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum diagonal colour-first)` |
+
 ## drgnx-agents-job-cpus
 
 How many CPUs one job may use.
