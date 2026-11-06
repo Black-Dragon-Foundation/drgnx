@@ -101,6 +101,30 @@ fn agent_write_becomes_ops_on_its_branch_with_cause() {
     assert!(!rec.spans.is_empty());
 }
 
+/// A made-up key of a well-known shape.
+fn key() -> String {
+    format!("sk-{}", "q".repeat(30))
+}
+
+#[test]
+fn a_key_in_an_agent_write_is_stored_as_stars_and_not_again() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let body = format!("one\nTOKEN={}\n", key());
+    let v = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", body.as_bytes(), "s1", cause("1"), 10.0)
+        .unwrap();
+    assert_eq!(v.len(), 1);
+    let stored = f.hub.text(&f.tree, "a.txt").unwrap().unwrap();
+    assert_eq!(stored, format!("one\nTOKEN={}\n", "*".repeat(33)));
+    // the file on disk still has the key: the next look at it is no new version
+    let again = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", body.as_bytes(), "s1", cause("2"), 11.0)
+        .unwrap();
+    assert!(again.is_empty(), "{again:?}");
+}
+
 #[test]
 fn external_change_is_diffed_onto_disk_peer() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);

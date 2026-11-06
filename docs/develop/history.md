@@ -182,6 +182,11 @@ GitHub tokens, `AKIA…`, `AIza…`, Slack and GitLab tokens, private key blocks
 `*`, a character for a character so the buffer's offsets hold. `Batch::hash` is the SHA-256 of the inserted texts after
 redaction. A key typed one character at a time is not seen by the scan; excise takes it out afterwards.
 
+The hub applies it on every way in: an editor `batch` and `resync`, and the file an agent wrote, the watcher saw or a
+rescan read (the whole file is scanned before it is diffed onto the document, so the file keeping its key is no new
+version each time). The editor's hash covers its own text, so while a buffer holds a redacted key the hub keeps that
+buffer's text beside the document, in memory only, and checks the hash against it; it lets go of it when the key is gone.
+
 `History::excise(doc, branch, target, author, at)` removes text for good: `Target::Range` (characters of the text now on
 `branch`) or `Target::Pattern` (every place the text was typed, deleted or not, on any branch). Each branch's document is
 exported as JSON updates, the characters become `*`, and the result is imported into a fresh document that replaces the

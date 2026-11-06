@@ -8,6 +8,7 @@ use super::{Buffer, Hub, Tree, blob};
 use norn::deny::{DenyList, Verdict};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use verdandi::redact::redact;
 use verdandi::{BranchKind, Change, DocId, Error, PeerId, Result};
 
 /// A batch with more inserted bytes than this is refused with `split-required`: the editor splits it.
@@ -47,6 +48,13 @@ pub fn hash(text: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// OLD_LEN characters of TEXT at START replaced by INSERTED.
+fn splice(text: &mut String, start: usize, old_len: usize, inserted: &str) {
+    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+    let (from, to) = (at(start), at(start + old_len));
+    text.replace_range(from..to, inserted);
 }
 
 fn author_of(origin: &str) -> (String, Value) {
@@ -93,8 +101,14 @@ impl Hub {
         g.h.activate(doc, branch, || {
             Ok(super::capture::base_text(tree, rel).unwrap_or_default())
         })?;
-        g.buffers
-            .insert(buffer_id.to_owned(), Buffer { doc, branch });
+        g.buffers.insert(
+            buffer_id.to_owned(),
+            Buffer {
+                doc,
+                branch,
+                raw: None,
+            },
+        );
         Ok(Registered {
             doc: doc.0,
             tracked: true,
@@ -116,12 +130,12 @@ impl Hub {
             return Err(Error::Refused("split-required".into()));
         }
         let mut g = self.lock();
-        let (doc, branch) = {
+        let (doc, branch, mut raw) = {
             let b = g
                 .buffers
-                .get(buffer_id)
+                .get_mut(buffer_id)
                 .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
-            (b.doc, b.branch)
+            (b.doc, b.branch, b.raw.take())
         };
         let mut spans = Vec::new();
         // the editor applying a hunk's revert (`history/revert/hunk`): the user's operations, in one `revert` record
@@ -140,10 +154,18 @@ impl Hub {
             });
             let peer = g.peer(branch, &key, &author)?;
             let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
+            // a key in the change never reaches the document; the buffer's own text is kept beside it in memory
+            let inserted = redact(&c.inserted);
+            if inserted != c.inserted && raw.is_none() {
+                raw = Some(ad.text());
+            }
+            if let Some(r) = raw.as_mut() {
+                splice(r, c.start, c.old_len, &c.inserted);
+            }
             let ch = Change {
                 start: c.start,
                 old_len: c.old_len,
-                inserted: c.inserted.clone(),
+                inserted,
             };
             match (ad.apply(peer, &ch), reverting) {
                 (Ok(s), Some(op)) => match reverts.iter_mut().find(|r| r.0 == op) {
@@ -163,7 +185,13 @@ impl Hub {
             g.h.record_hunk_revert(op, s, peer, now)?;
         }
         let text = g.h.activate(doc, branch, || Ok(String::new()))?.text();
-        Ok(if hash(&text) == region_hash {
+        // the key is gone from the buffer (or the two agree again): nothing to keep apart
+        let raw = raw.filter(|r| redact(r) != *r);
+        let seen = hash(raw.as_deref().unwrap_or(&text));
+        if let Some(b) = g.buffers.get_mut(buffer_id) {
+            b.raw = raw;
+        }
+        Ok(if seen == region_hash {
             BatchReply::Ok
         } else {
             BatchReply::Resync
@@ -185,10 +213,14 @@ impl Hub {
         let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
         let old = ad.text();
         let mut spans = Vec::new();
-        for ch in diff(&old, text) {
+        let redacted = redact(text);
+        for ch in diff(&old, &redacted) {
             spans.extend(ad.apply(peer, &ch)?);
         }
         g.settler.change(doc, peer, &spans, now);
+        if let Some(b) = g.buffers.get_mut(buffer_id) {
+            b.raw = (redacted != text).then(|| text.to_owned());
+        }
         Ok(())
     }
 
@@ -374,6 +406,43 @@ mod tests {
             "{authors:?}"
         );
         assert!(authors.iter().any(|a| a["kind"] == "user"), "{authors:?}");
+    }
+
+    // pattern: D
+    #[test]
+    fn a_key_in_a_batch_is_stored_as_stars_and_the_buffer_stays_in_step() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let key = format!("sk-{}", "q".repeat(30));
+        let typed = format!("one {key}\n");
+        let reply = f
+            .hub
+            .batch(
+                "b1",
+                &[change(3, 0, &format!(" {key}"), "user")],
+                &hash(&typed),
+                5.0,
+            )
+            .unwrap();
+        // the buffer holds the key, the history does not, and they are not out of step
+        assert_eq!(reply, BatchReply::Ok);
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some(format!("one {}\n", "*".repeat(33)).as_str())
+        );
+        // a later batch is checked against the buffer's own text
+        let more = format!("one {key}!\n");
+        let reply = f
+            .hub
+            .batch("b1", &[change(37, 0, "!", "user")], &hash(&more), 6.0)
+            .unwrap();
+        assert_eq!(reply, BatchReply::Ok);
+        // the editor's whole text through a resync is redacted too
+        f.hub.resync("b1", &format!("{key}\n"), 7.0).unwrap();
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some(format!("{}\n", "*".repeat(33)).as_str())
+        );
     }
 
     // pattern: D

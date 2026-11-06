@@ -93,6 +93,9 @@ pub struct FileVersion {
 pub(crate) struct Buffer {
     pub doc: DocId,
     pub branch: BranchId,
+    /// The buffer's own text while it differs from the document's because a key was redacted from it: kept in memory
+    /// only, so the buffer's hash can still be checked; none while the two are the same.
+    pub raw: Option<String>,
 }
 
 pub(crate) struct Inner {

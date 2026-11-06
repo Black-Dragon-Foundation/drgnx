@@ -258,7 +258,8 @@ impl Inner {
             .activate(doc, branch, || Ok(base_text(tree, rel).unwrap_or_default()))?;
         let old = ad.text();
         let mut spans = Vec::new();
-        for ch in diff(&old, &new) {
+        // a key in the file is stored as stars (the file keeps it, and the next look at it is no new version)
+        for ch in diff(&old, &verdandi::redact::redact(&new)) {
             spans.extend(ad.apply(peer, &ch)?);
         }
         Ok(Some(Staged {
