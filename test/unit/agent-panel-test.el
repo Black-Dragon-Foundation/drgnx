@@ -105,8 +105,16 @@ unanswered, and panel \"s1\" as `buf'."
 (ert-deftest drgnx-agent-panel/a-message-without-blocks-falls-back-to-its-text ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
-      (drgnx-agent-panel--take-entries (list (list 0 (list :type "agent" :text "plain words"))))
-      (should (string-match-p "plain words" (drgnx-agent-panel-test--text buf))))))
+      ;; a message with blocks is drawn from them, not from its raw text
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (list :type "agent" :text "raw *source*"
+                           :blocks (vector (drgnx-agent-panel-test--block 0 "paragraph" '("styled" . "emph")))))))
+      ;; one without draws its text
+      (drgnx-agent-panel--take-entries (list (list 1 (list :type "agent" :text "plain words"))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "styled" text))
+        (should-not (string-match-p "raw \\*source\\*" text))
+        (should (string-match-p "plain words" text))))))
 
 (ert-deftest drgnx-agent-panel/a-chip-without-a-feed-is-hidden ()
   (drgnx-agent-panel-test--with
