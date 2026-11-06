@@ -1033,6 +1033,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
@@ -1049,6 +1050,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/unfollow` | user | `{view: string}` | `boolean` | no |
 | `agents/wheel/give` | user | `{id: Id}` | `boolean` | yes |
 | `agents/wheel/saved` | user | `{req: natnum, unsaved?: [AbsPath]}` | `boolean` | no |
 | `agents/wheel/take` | user | `{id: Id}` | `boolean` | yes |
@@ -1276,6 +1278,7 @@ result is (`event(NAME).check`):
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
+| `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
@@ -1579,6 +1582,28 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The follow feed
+
+A follow window in the editor shows where one agent is (`editor::follow`). `agents/follow {view, session}` (user
+connections) makes the connection's VIEW follow SESSION from now on, its latest place first; `agents/unfollow {view}`
+ends it (true when it followed one), and a connection's views end with it. The event `agent-follow {view, session,
+file?, worktree, line?, col?, mode, step_title?, plan_entry?, why_source, changed?}` goes by `Front::send_to` to the
+view's connection only.
+
+- **Source:** each tool call update of the session (`tool_call`, `tool_call_update`), as the transcript merges it:
+  its first location is the place, its kind the mode (`read`; `search` → `listed`; `edit`, `delete`, `move` →
+  `pending` until completed, then `edit`, or `write` for a whole-file write). A failed call and other kinds (a
+  command, a fetch) do not move the window.
+- **The rules** (`editor::follow::Core`, pure, tested in every order on the hub's clock): at most one move per 200 ms
+  per view (the latest one held goes when the window ends); a read of another file switches only after the agent has
+  stayed in it 500 ms (a third file starts the dwell again, a move back cancels it); a search or a glob never switches
+  files: its query (the step's title) goes in the line and the window stays; an edit, a write or a pending edit
+  switches at once (the throttle still holds). `changed` is set when a completed edit changed the file shown, so the
+  window reverts it from disk.
+- **The line is the agent's own words:** the plan's `in_progress` entry when the agent sends plans
+  (`why_source: plan_entry`), else the tool call's title (`step_title`). Nothing is generated.
+- **Restart:** nothing is kept; the editor follows again.
 
 ### After a restart
 

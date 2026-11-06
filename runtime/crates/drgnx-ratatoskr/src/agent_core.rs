@@ -106,6 +106,8 @@ pub async fn serve(
         Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
         Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),
         Params::AgentsPair(p) => answer(agents::session::pair(f, c, p).await),
+        Params::AgentsFollow(p) => answer(crate::editor::follow(f, c, p)),
+        Params::AgentsUnfollow(p) => answer(crate::editor::unfollow(f, c, p)),
         Params::ExecStart(p) => answer(exec::start(f, c, p).await),
         Params::ExecGet(p) => answer(exec::get(f, c, p).await),
         Params::ExecList(p) => answer(exec::list(f, c, p).await),

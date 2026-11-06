@@ -76,6 +76,7 @@ pub mod conn;
 pub mod coord;
 pub mod dispatch;
 pub mod doctor;
+pub mod editor;
 pub mod embed;
 pub mod eval_cli;
 pub mod exec;

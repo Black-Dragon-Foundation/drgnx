@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod editor;
 pub mod exec;
 pub mod forecast;
 pub mod gateway;
@@ -269,6 +270,8 @@ params! {
     PairClosed(pair::ClosedParams),
     PairOpenSet(pair::OpenSetParams),
     AgentsPair(pair::PairToggle),
+    AgentsFollow(editor::FollowParams),
+    AgentsUnfollow(editor::UnfollowParams),
 }
 
 /// Every method, in no order.
@@ -294,6 +297,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(search::methods());
     v.extend(runners::methods());
     v.extend(pair::methods());
+    v.extend(editor::methods());
     v
 }
 

@@ -332,6 +332,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             crate::methods::pair::PairReconcile,
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
+        event!(
+            "agent-follow",
+            crate::methods::editor::AgentFollow,
+            "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
+        ),
     ];
     v.sort_by_key(|e| e.name);
     v
@@ -407,6 +412,8 @@ mod tests {
                     "pair-drop",
                     "pair-read",
                     "pair-reconcile",
+                    // agent system part 3: the follow feed
+                    "agent-follow",
                 ]
                 .contains(&n.as_str())
             })
@@ -421,7 +428,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 33);
+        assert_eq!(events().len(), 34);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

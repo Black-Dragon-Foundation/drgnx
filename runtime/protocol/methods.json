@@ -500,6 +500,121 @@
     {
       "data": {
         "$defs": {
+          "FollowMode": {
+            "description": "What the agent is doing where the follow window shows it.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read",
+                  "write",
+                  "edit"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A search or a glob: the files it lists (it never moves the window to one).",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "An edit about to land (a permission request, or an edit call still pending).",
+                "type": "string"
+              }
+            ]
+          },
+          "WhySource": {
+            "description": "Which of the agent's own words the line shows.",
+            "oneOf": [
+              {
+                "const": "plan_entry",
+                "description": "The agent's `in_progress` plan entry.",
+                "type": "string"
+              },
+              {
+                "const": "step_title",
+                "description": "The tool call's title.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agent-follow`: where the session VIEW follows is now.  `file` in `worktree` (the session's folder), at `line` and\n`col` (1-based; none: the file only); `changed`: the file changed on disk since the last move, so the window\nrefreshes it.",
+        "properties": {
+          "changed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "col": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/$defs/FollowMode"
+          },
+          "plan_entry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "step_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "why_source": {
+            "$ref": "#/$defs/WhySource"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "session",
+          "worktree",
+          "mode",
+          "why_source"
+        ],
+        "title": "AgentFollow",
+        "type": "object"
+      },
+      "doc": "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title",
+      "name": "agent-follow"
+    },
+    {
+      "data": {
+        "$defs": {
           "PresenceEntry": {
             "additionalProperties": false,
             "description": "One session in one file: the presence model's entry.",
@@ -2694,6 +2809,46 @@
           "session"
         ],
         "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection's view follows a session: agent-follow events to it alone (at most one move per 200 ms; a read's file switch after a 500 ms dwell; a search never switches; an edit at once), the session's latest place first",
+      "name": "agents/follow",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/follow`: the editor's VIEW (a follow window) follows SESSION from now on; a view follows one session.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          },
+          "view": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "session"
+        ],
+        "title": "FollowParams",
         "type": "object"
       },
       "result": {
@@ -5041,6 +5196,34 @@
         ],
         "title": "ToolInput",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection's view follows nothing any more (true when it followed a session)",
+      "name": "agents/unfollow",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/unfollow`: VIEW follows nothing any more.",
+        "properties": {
+          "view": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "UnfollowParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

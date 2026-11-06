@@ -82,6 +82,8 @@ pub struct Front {
     pub editors: Arc<crate::settings::agents::Editors>,
     /// The pair door: a paired chat's reads and writes of your checkout, through the editor ([`crate::pair`]).
     pub pair: Arc<crate::pair::door::Door>,
+    /// The follow feed: where each followed session is, to the follow views ([`crate::editor::follow`]).
+    pub follows: Arc<crate::editor::follow::Follows>,
     /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
     pub search: crate::search::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
@@ -155,6 +157,7 @@ impl Front {
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
         let pair = crate::pair::door::Door::new(editors.clone());
+        let follows = crate::editor::follow::Follows::new(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -171,6 +174,7 @@ impl Front {
             settings,
             editors,
             pair,
+            follows,
             search: crate::search::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
@@ -294,6 +298,7 @@ impl Front {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
         self.pair.editor_gone(conn);
+        self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
     }
@@ -649,6 +654,8 @@ impl Front {
             | Params::AgentsWheelGive(_)
             | Params::AgentsWheelSaved(_)
             | Params::AgentsPair(_)
+            | Params::AgentsFollow(_)
+            | Params::AgentsUnfollow(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)

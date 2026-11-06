@@ -184,6 +184,10 @@ struct State {
     wheel: Wheel,
     /// The step snapshot taken when the hold began: what the give measures the user's changes from.
     wheel_base: Option<String>,
+    /// The tool entry the last update changed, for the follow feed ([`crate::editor::follow`]).
+    follow_tool: Option<usize>,
+    /// The plan's `in_progress` entry, the follow feed's line when the agent sends plans.
+    plan_now: Option<String>,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -273,6 +277,8 @@ impl State {
             mcp_begun: Vec::new(),
             wheel: Wheel::Free,
             wheel_base: None,
+            follow_tool: None,
+            plan_now: None,
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
@@ -624,6 +630,7 @@ impl State {
                     m.name = s("toolName").or(m.name.take());
                     m.parent = s("parentToolUseId").or(m.parent.take());
                 }
+                self.follow_tool = Some(idx);
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -689,6 +696,16 @@ impl State {
             }
             "plan" => {
                 self.open = None;
+                self.plan_now = u
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .and_then(|a| {
+                        a.iter()
+                            .find(|e| e.get("status") == Some(&json!("in_progress")))
+                    })
+                    .and_then(|e| e.get("content"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 let mut rest = Map::new();
                 rest.insert(
                     "entries".into(),
@@ -758,6 +775,8 @@ pub struct Session {
     pair: Arc<crate::pair::door::Door>,
     /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
     map: Arc<crate::work::map::Map>,
+    /// The follow feed: each tool call's place reaches it ([`crate::editor::follow`]).
+    follows: Arc<crate::editor::follow::Follows>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -1972,6 +1991,7 @@ fn assemble(
         editors: front.editors.clone(),
         pair: front.pair.clone(),
         map: front.core.map.clone(),
+        follows: front.follows.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -3098,6 +3118,8 @@ impl Session {
             let Some(ev) = ev else { break };
             self.handle(ev).await;
         }
+        // the agent is gone: a follow view keeps where it was, a new follow starts from nothing
+        self.follows.session_gone(&self.id);
     }
 
     async fn handle(self: &Arc<Self>, ev: Event) {
@@ -3130,16 +3152,28 @@ impl Session {
                             lock(&self.state).add_turn_cost(booked.delta);
                             self.budgets.notify(booked.hits);
                         }
-                        let (stepped, begun) = {
+                        let (stepped, begun, moved) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
                             let begun = std::mem::take(&mut st.mcp_begun);
+                            let moved = st.follow_tool.take().and_then(|i| {
+                                crate::editor::follow::of_tool(
+                                    &self.id,
+                                    &self.cwd,
+                                    &st.entries[i].rest,
+                                    st.plan_now.as_deref(),
+                                )
+                            });
                             (
                                 std::mem::take(&mut st.tool_ended)
                                     .then(|| st.turn_step(TurnEvent::ToolCompleted)),
                                 begun,
+                                moved,
                             )
                         };
+                        if let Some(m) = moved {
+                            self.follows.moved(m);
+                        }
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
