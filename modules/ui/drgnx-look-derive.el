@@ -78,7 +78,7 @@
   (let ((e (drgnx-look-derive--colour 'default :background kind))
         (f (drgnx-look-derive--colour 'default :foreground kind)))
     (when (and e f)
-      (let* ((black (drgnx-color-hex '(0.0 0.0 0.0)))
+      (let* ((black (drgnx-color-hex drgnx-color-black))
              (dark (< (drgnx-color-contrast e black) (drgnx-color-contrast f black)))
              (bar (if dark 1.10 1.20))
              (panel (drgnx-color-mix e f 0.03 'srgb))
@@ -146,11 +146,12 @@ A run that finds nothing to derive changes nothing, and nothing here signals on 
 
 (defun drgnx-look-accent-text (rgb variant)
   "The portal's accent RGB, (R G B) floats in 0..1, as text for VARIANT (`dark', `light' or `hc'): lighter on dark,
-darker on light, as libadwaita does, then moved until it reaches 4.5:1 on the variant's `editor'."
+darker on light, as libadwaita does, then moved until it reaches its bar on the variant's `editor': 4.5:1, and 7:1
+in High Contrast (every text pair there is 7:1)."
   (let* ((dark (memq variant '(dark hc)))
-         (toward (drgnx-color-hex (if dark '(1.0 1.0 1.0) '(0.0 0.0 0.0)))))
+         (toward (drgnx-color-hex (if dark drgnx-color-white drgnx-color-black))))
     (drgnx-color-solve (drgnx-color-mix (drgnx-color-hex rgb) toward (if dark 0.25 0.15))
-                       toward (drgnx-look-token 'editor variant) 4.5)))
+                       toward (drgnx-look-token 'editor variant) (if (eq variant 'hc) 7.0 4.5))))
 
 ;;;; On and off
 

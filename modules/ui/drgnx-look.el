@@ -120,14 +120,30 @@ Also the function `child-frame-chrome' holds while ui/look is on, so a theme cha
     (when (fboundp 'drgnx-palette-frame-restyle) (drgnx-palette-frame-restyle))
     (glitnir-refresh)))
 
+(defun drgnx-look--motion-value ()
+  "`glitnir-reduced-motion' for `drgnx-look-motion': `auto' (the desktop says), nil for `full', t for `reduced'."
+  (pcase drgnx-look-motion ('auto 'auto) ('full nil) (_ t)))
+
+(defun drgnx-look--motion-set ()
+  "Set `glitnir-reduced-motion' as ui/look (`drgnx-module-set': a value you gave it stays, and the module's teardown
+gives the option back)."
+  (drgnx-module-set 'glitnir-reduced-motion (drgnx-look--motion-value)))
+
+(defvar drgnx-look--motion-door nil
+  "While ui/look runs under Glitnir: `drgnx-look--motion-set' run as the module, so a later change of
+`drgnx-look-motion' is undone with the module too.  nil otherwise.")
+
 (defun drgnx-look--motion-apply ()
-  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it (only when Glitnir has it), then the
-popups and the palette are styled again."
-  (when (boundp 'glitnir-reduced-motion)
-    (pcase drgnx-look-motion
-      ('auto (setq glitnir-reduced-motion 'auto))
-      ('full (setq glitnir-reduced-motion nil))))
+  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it while ui/look runs under Glitnir, then
+the popups and the palette are styled again."
+  (when drgnx-look--motion-door (funcall drgnx-look--motion-door))
   (when (drgnx-module-running-p 'ui/look) (drgnx-look--float-refresh)))
+
+(defun drgnx-look--motion-on ()
+  "In ui/look's setup: `glitnir-reduced-motion' follows `drgnx-look-motion' now and on every change, as the module."
+  (drgnx-look--motion-set)
+  (setq drgnx-look--motion-door (drgnx-modules-with-owner (drgnx-look--motion-set)))
+  (drgnx-modules-push-undo "motion door" (lambda () (setq drgnx-look--motion-door nil))))
 
 (defun drgnx-look--float-on-theme (&rest _)
   "`enable-theme-functions' and `disable-theme-functions': the variant may have changed."
@@ -146,7 +162,7 @@ follows the theme's variant: the option holds a function until the module is off
                              (lambda () (remove-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
                                (remove-hook 'disable-theme-functions #'drgnx-look--float-on-theme)))
     (drgnx-decor-faces-on)
-    (drgnx-look--motion-apply)
+    (drgnx-look--motion-on)
     (glitnir-refresh)))
 
 ;;;; Cards (Glitnir, the compositor)
@@ -377,9 +393,10 @@ that does not load is said, and the colours stay.  `auto' hands over to the foll
 
 (defun drgnx-look-load-theme (theme)
   "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
-refuses (`drgnx-settings-refused') before the theme changes."
+refuses (`drgnx-settings-refused') before the theme changes.  THEME is your choice, one of drgnx's own included:
+under `auto' the follower pauses, as for a `load-theme' in config.el."
   (drgnx-settings-area-ensure-writable)
-  (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
+  (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
 (defun drgnx-look-choose-theme (theme)
@@ -498,9 +515,10 @@ refuses (`drgnx-settings-refused') before the theme changes."
                                              :doc "Run the decoration button at point")
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
                        (drgnx-look-follow-on)
+                       ;; Color Theme's pick of an earlier session: your choice, so the follower pauses for it
                        (when-let* ((theme (drgnx-look--saved-theme)))
                          (when (memq theme (custom-available-themes))      ; `auto' is not one: the follower chose
-                           (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
+                           (condition-case e (drgnx-look--load theme)
                              (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
                                              theme (error-message-string e))))))))
 

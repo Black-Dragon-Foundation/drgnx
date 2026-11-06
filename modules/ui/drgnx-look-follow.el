@@ -6,8 +6,9 @@
 ;; With `drgnx-look-theme' at `auto' (the default) the theme is drgnx Dark, Light or High Contrast as the desktop's
 ;; portal says (Nidhogg's `nhwl-settings': `color-scheme', `contrast', `accent-color'), switching when an answer
 ;; comes and when it changes.  The portal is read asynchronously by `nhwl-settings', so the first frame never waits:
-;; until it answers, the theme is Dark.  `auto' acts only while no theme but drgnx's three is on: one loaded any other
-;; way (`load-theme' in config.el, a package, Color Theme) pauses it for the session, with one notice.  With
+;; until it answers, the theme is Dark.  `auto' acts only while no theme it did not load is on: one loaded any other
+;; way (`load-theme' in config.el, a package, Color Theme), drgnx's own three included, pauses it for the session,
+;; with one notice.  With
 ;; `drgnx-look-accent' `system' the accent and focus faces take the portal's accent colour as text for the variant.
 ;; Nothing here prompts or blocks: it runs in the portal's signal handler.  See docs/guide/look.md ("Following the
 ;; desktop").
@@ -25,7 +26,6 @@
 
 (defvar drgnx-look-theme)
 (defvar nhwl-settings-changed-functions)
-(defvar nhwl-settings--values)
 (defvar ns-system-appearance)
 (defvar ns-system-appearance-change-functions)
 (declare-function drgnx-look--load "drgnx-look" (theme))
@@ -35,6 +35,7 @@
 (declare-function drgnx-settings-area-has-entry-p "drgnx-settings-area" (var))
 (declare-function drgnx-settings-area-update "drgnx-settings-area" (vars fn &optional always))
 (declare-function nhwl-settings-get "nhwl-settings" (key))
+(declare-function nhwl-settings-answered-p "nhwl-settings" (key))
 
 (drgnx-defsetting drgnx-look-accent 'system
   "Where the accent colour comes from: `system' (the desktop's accent colour, as text for the theme's variant) or
@@ -55,10 +56,11 @@
 (defvar drgnx-look-follow--on nil "Non-nil while the follower runs.")
 
 (defvar drgnx-look-follow--paused nil
-  "Non-nil once a theme other than drgnx's was enabled by anything but the follower; for the session.")
+  "Non-nil once a theme (drgnx's own included) was enabled by anything but drgnx itself; until the follower is off.")
 
 (defvar drgnx-look-follow--loading nil
-  "Non-nil while drgnx itself enables a theme (the follower, Color Theme): that is not a theme from elsewhere.")
+  "Non-nil while drgnx itself enables a theme (the follower, the theme `drgnx-look-theme' names): that is not a theme
+you chose.  Color Theme does not bind it: its pick is yours.")
 
 (defvar drgnx-look-follow--accent-faces nil "The faces whose override spec the follower wrote.")
 
@@ -74,7 +76,8 @@ Contrast 1 is High Contrast; scheme 1 is Dark; 0 or 2 is Light once the portal a
 
 (defun drgnx-look-follow--read ()
   "What the desktop says now: a plist (:scheme N :contrast N :accent (R G B) :answered BOOL).  Never blocks: the
-store holds what the asynchronous reads brought, and the defaults until they come.  nil when there is no store.
+store holds what the asynchronous reads brought, and the defaults until they come; `nhwl-settings-answered-p' says
+whether the colour scheme was answered (0 is both GNOME's Light and the default).  nil when there is no store.
 `contrast' is read when the store knows the key (a Nidhogg without it answers 0)."
   (cond ((and (eq system-type 'darwin) (boundp 'ns-system-appearance))
          (list :scheme (if (eq ns-system-appearance 'dark) 1 2) :contrast 0 :accent nil :answered t))
@@ -82,8 +85,7 @@ store holds what the asynchronous reads brought, and the defaults until they com
          (list :scheme (nhwl-settings-get 'color-scheme)
                :contrast (condition-case nil (nhwl-settings-get 'contrast) (error 0))
                :accent (nhwl-settings-get 'accent-color)
-               :answered (and (boundp 'nhwl-settings--values) (hash-table-p nhwl-settings--values)
-                              (gethash 'color-scheme nhwl-settings--values) t)))))
+               :answered (and (fboundp 'nhwl-settings-answered-p) (nhwl-settings-answered-p 'color-scheme) t)))))
 
 ;;;; The theme
 
@@ -173,9 +175,10 @@ store holds what the asynchronous reads brought, and the defaults until they com
       (drgnx-look-follow--clear-accent))))
 
 (defun drgnx-look-follow--on-theme (theme &rest _)
-  "`enable-theme-functions': a theme from elsewhere pauses `auto'; the accent follows the variant."
+  "`enable-theme-functions': a theme enabled by anything but drgnx itself (one of drgnx's own three included) is
+chosen and pauses `auto'; the accent follows the variant."
   (when (and (eq drgnx-look-theme 'auto) (not drgnx-look-follow--loading) (not drgnx-look-follow--paused)
-             (not (memq theme drgnx-look-follow--own-themes)) (not (eq theme 'user)))
+             (not (eq theme 'user)))
     (drgnx-look-follow--pause theme))
   (when (eq drgnx-look-theme 'auto) (drgnx-look-follow--apply-accent)))
 
@@ -187,28 +190,26 @@ store holds what the asynchronous reads brought, and the defaults until they com
   "`ns-system-appearance-change-functions': macOS changed its appearance."
   (drgnx-look-follow-apply))
 
-(defun drgnx-look-follow--after-set (key _value)
-  "After `nhwl-settings--set': the store runs no hook for an answer equal to the default (0, Light on GNOME), so
-the first answer of `color-scheme' is heard here."
-  (when (eq key 'color-scheme) (drgnx-look-follow-apply)))
-
 (defun drgnx-look-follow-on ()
-  "Follow the desktop: listen to the portal and to themes, say the migration notice, and switch now."
+  "Follow the desktop: listen to the portal and to themes, say the migration notice, and switch now.  A theme already
+on was chosen before ui/look's setup (`load-theme' in config.el, one of drgnx's three included: ui/look's teardown
+takes the themes drgnx loaded away), so `auto' starts paused."
   (setq drgnx-look-follow--on t)
+  (when-let* (((eq drgnx-look-theme 'auto)) (theme (car (drgnx-look-follow--themes))))
+    (drgnx-look-follow--pause theme))
   (add-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (add-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (add-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)
-  (when (fboundp 'nhwl-settings--set) (advice-add 'nhwl-settings--set :after #'drgnx-look-follow--after-set))
   (when (eq drgnx-look-theme 'auto) (drgnx-look-follow--migrate))
   (drgnx-look-follow-apply))
 
 (defun drgnx-look-follow-off ()
-  "Undo `drgnx-look-follow-on': the listeners off, the accent back to the theme's.  The theme stays."
-  (setq drgnx-look-follow--on nil)
+  "Undo `drgnx-look-follow-on': the listeners off, the accent back to the theme's, not paused any more.  The theme
+stays."
+  (setq drgnx-look-follow--on nil drgnx-look-follow--paused nil)
   (remove-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (remove-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (remove-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)
-  (advice-remove 'nhwl-settings--set #'drgnx-look-follow--after-set)
   (drgnx-look-follow--clear-accent))
 
 (provide 'drgnx-look-follow)

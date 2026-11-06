@@ -493,15 +493,17 @@ core features that define files are listed in `drgnx-doctor-config-features`: a 
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 
 **The settings reference.** `docs/reference/settings.md` is generated the same way from the settings declared with
-`drgnx-defsetting` (`harness/drgnx-settings-doc.el`; a port that declares settings appends a `(require FEATURE)` line
-to `drgnx-settings-doc-sources`). After declaring or changing one, regenerate it and commit it with the change:
+`drgnx-defsetting` (`harness/drgnx-settings-doc.el`, which loads every file under `core/`, `wb/`, `modules/` and
+`harness/` with a line that starts `(drgnx-defsetting `; nothing to register). After declaring or changing one,
+regenerate it and commit it with the change:
 
 ```sh
 emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
   --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
 ```
 
-Test: `test/unit/settings-doc-test.el` runs this very command and compares.
+Test: `test/unit/settings-doc-test.el` runs this very command and compares, and reads the files itself to fail on a
+declared setting the reference lacks.
 
 `onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
 state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
@@ -2713,6 +2715,9 @@ unspecified never makes colour code signal.
 | `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
 | `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
 | `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
+
+`drgnx-color-black` and `drgnx-color-white` are black and white as `(R G B)`, named once here for the code that moves
+a colour toward one of them (`(drgnx-color-hex drgnx-color-white)`), so no other file spells them.
 
 ### Where colours may be written
 

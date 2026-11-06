@@ -47,16 +47,16 @@ its settings portal; on macOS, the system appearance).
 
 The portal is read in the background and never waited for, so the first frame is drawn at once in Dark and the theme
 switches when the answer comes, and again whenever you change the desktop's setting. A theme you choose yourself
-(Color Theme, `load-theme` in `config.el`, a package) switches `auto` off for the session, and one notice says so
-("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces it. To keep one theme, pick it
-with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
+(Color Theme, `load-theme` in `config.el`, a package), drgnx's own three included, switches `auto` off for the
+session, and one notice says so ("Theme follows the desktop: paused while modus-vivendi is on"); drgnx never replaces
+it. To keep one theme, pick it with Color Theme; set `drgnx-look-theme` to `nil` to keep Emacs's own colours.
 
 The first time drgnx starts with `auto` because your `settings.el` named no theme, one notice says "drgnx now has its
 own themes; Color Theme picks another". It is shown once.
 
 `drgnx-look-accent` is `system` by default: the accent and the focus ring take the accent colour the desktop gives,
-made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text. Set it to `theme` for the
-theme's own accent.
+made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text (7:1 under High Contrast).
+Set it to `theme` for the theme's own accent.
 
 ### Terminals
 
@@ -134,15 +134,18 @@ When several places name a font for a role, the first match wins:
 1. **Your Lisp and Customize.** A `custom-set-faces` entry in `custom.el`, or a `set-face-attribute` on a role face
    in `config.el`. drgnx then leaves that face alone, and the settings page says where the value is set
    (`config.el:31`, `custom.el:9`). A theme load wipes `set-face-attribute`, so drgnx puts your attributes back after
-   every theme change.
+   every theme change. This holds for the code font too: a `(set-face-attribute 'default nil :family "Iosevka")` in
+   `config.el` stays, under drgnx's themes and without one.
 2. **A per-mode override**, a `(:mode MODE ...)` section of `settings.el` (for example Org's prose in the UI font).
 3. **The setting.**
 4. **The theme.** A theme may name fonts for the role faces.
 5. **The desktop**, only for roles set to `follow-desktop`.
 6. **drgnx's defaults** (the table above).
 
-A setting changes only the attributes you set; the theme's other attributes show through. A family that is not
-installed falls back down its `:fallback` list, then to the generic family.
+A setting changes only the attributes you set; the theme's other attributes show through. A theme that paints a role
+face without naming a font (drgnx's three themes paint `default`, its colours) leaves the role's font as the list
+says: the desktop's or drgnx's defaults, so the code font is JetBrains Mono 13.5 px under drgnx Dark. A family that
+is not installed falls back down its `:fallback` list, then to the generic family.
 
 Terminal frames ignore families and sizes and keep only the weight.
 
@@ -197,7 +200,8 @@ pixels (a frame at scale 2 draws twice as many):
 | Tree indent | 12 | 12 | 14 |
 
 **The code line** is the frame's `line-spacing` parameter, worked out in device pixels (the line less the font's own
-height) for every frame, and again when the frame is resized, its scale changes or the code font changes. Who decides,
+height) for every frame, a frame made later included (`C-x 5 2`, `emacsclient -c`, a daemon's first graphical
+frame), and again when the frame is resized, its scale changes or the code font changes. Who decides,
 first match: the `:line-height` you set on `drgnx-look-font-code`, then the density. A `line-spacing` you set
 yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
 code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.
@@ -218,8 +222,9 @@ parameter lists; a value you set (Customize or `settings.el`) stands in every va
 
 `drgnx-look-motion` (a setting) says how things move: `auto` (the default) follows the desktop's reduced-motion
 preference, `full` always moves, `reduced` never does: popups, the palette and notices then appear and vanish at once, and
-blur and shadows stay. A change applies at once. Where Glitnir is off, nothing floats and nothing moves: popups and the
-palette use the plain frames and notices go to the echo area.
+blur and shadows stay. A change applies at once. It sets Glitnir's own `glitnir-reduced-motion` (`auto`, `nil` or
+`t`) as the module, so a value you gave that option stays, and turning ui/look off gives it back. Where Glitnir is
+off, nothing floats and nothing moves: popups and the palette use the plain frames and notices go to the echo area.
 
 ## Icons
 

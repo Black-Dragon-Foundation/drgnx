@@ -40,6 +40,38 @@ back with the old value."
       (drgnx-look-fonts-off)
       (delete-frame second))))
 
+(ert-deftest drgnx-ui-look-fonts/the-code-font-under-each-theme ()
+  "Pattern D: under each of drgnx's themes (they style `default', so Emacs skips its defface spec) the frame's
+`default' is the code role's, not the frame's own font: with the code role following the desktop and the desktop
+answering a 27 px monospace font (twice the 13.5 px default, so the frame's lines are plainly taller whatever fonts
+the machine has), and with the defaults the family when it is installed; a theme loaded before the faces are written
+and one loaded after alike."
+  (skip-unless (display-graphic-p))
+  (let ((was custom-enabled-themes)
+        (installed (find-font (font-spec :family "JetBrains Mono"))))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-test-wait-presented)
+          (let ((plain (frame-char-height)))
+            (drgnx-look-fonts-on)
+            (when installed
+              (drgnx-test-wait-presented)
+              (should (equal "JetBrains Mono" (face-attribute 'default :family (selected-frame)))))
+            (let ((drgnx-look-font-code 'follow-desktop))
+              (drgnx-look-fonts-desktop-answer '(:ui ("sans-serif" . 13) :code ("monospace" . 27)))
+              (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast))
+                (unless (equal custom-enabled-themes (list theme))
+                  (mapc #'disable-theme custom-enabled-themes)
+                  (load-theme theme t))
+                (drgnx-test-wait-presented)
+                (should (equal (list theme t) (list theme (> (frame-char-height) (* 1.5 plain)))))))))
+      (drgnx-look-fonts-off)
+      (drgnx-look-fonts-reset)
+      (mapc #'disable-theme custom-enabled-themes)
+      (mapc (lambda (th) (load-theme th t)) (reverse was)))))
+
 (ert-deftest drgnx-ui-look-fonts/fallback-names-the-role ()
   "Pattern D: a family that is not installed is reported for the role that asked for it."
   (skip-unless (display-graphic-p))

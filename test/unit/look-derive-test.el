@@ -165,5 +165,12 @@ nine accents."
           ;; and on the side the variant moves it to: lighter on dark is further from black, darker on light from white
           (should (>= (drgnx-color-contrast text edge) (drgnx-color-contrast accent edge))))))))
 
+(ert-deftest drgnx-look-derive/accent-text-meets-7-in-high-contrast ()
+  "Pattern D: under High Contrast every text pair is 7:1, the desktop's accent as text included, for GNOME's nine
+accents (purple #9141ac reached only 5.96:1 when it was solved to 4.5)."
+  (dolist (accent '("#3584e4" "#2190a4" "#3a944a" "#c88800" "#ed5b00" "#e62d42" "#d56199" "#9141ac" "#6f8396"))
+    (let ((text (drgnx-look-accent-text (drgnx-color-rgb accent) 'hc)))
+      (should (>= (drgnx-color-contrast text (drgnx-look-token 'editor 'hc)) 7.0)))))
+
 (provide 'look-derive-test)
 ;;; look-derive-test.el ends here

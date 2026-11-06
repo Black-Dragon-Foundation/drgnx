@@ -43,5 +43,30 @@ and roomy after a setting change, with no restart."
       (drgnx-look-density-off)
       (set-window-buffer (selected-window) was))))
 
+(ert-deftest drgnx-ui-look-density/a-new-frame-gets-the-code-line ()
+  "Pattern D: a frame made after the density is on (as `C-x 5 2', `emacsclient -c' and a daemon's first graphical
+frame make one: the store's `frame-added') has round (21 x scale) lines too, not the font's own."
+  (skip-unless (display-graphic-p))
+  (let ((state-was (bound-and-true-p drgnx-state-mode)) (frame nil) (buf (get-buffer-create " *look-density-new*")))
+    (with-current-buffer buf (erase-buffer) (insert "code\ncode\n"))
+    (unwind-protect
+        (progn
+          (drgnx-state-mode 1)
+          (drgnx-look-density-on)
+          (setq frame (make-frame '((name . "look-density-new"))))
+          (set-window-buffer (frame-selected-window frame) buf)
+          (let ((sample (drgnx-test-wait-presented
+                         :frame frame
+                         :value (lambda ()
+                                  (with-selected-window (frame-selected-window frame)
+                                    (goto-char (point-min))
+                                    (list (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0)
+                                          (line-pixel-height)))))))
+            (should (= (round (* 21 (nth 0 sample))) (nth 1 sample)))))
+      (drgnx-look-density-off)
+      (when (frame-live-p frame) (delete-frame frame))
+      (drgnx-state-mode (if state-was 1 -1))
+      (kill-buffer buf))))
+
 (provide 'look-density-gui-test)
 ;;; look-density-gui-test.el ends here

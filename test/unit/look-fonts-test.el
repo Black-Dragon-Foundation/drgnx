@@ -19,6 +19,7 @@
   (dolist (th '(drgnx-fonts-test))
     (when (custom-theme-p th) (disable-theme th))
     (put th 'theme-settings nil))
+  (put 'default 'theme-face (assq-delete-all 'drgnx-fonts-test (copy-sequence (get 'default 'theme-face))))
   (put 'user 'theme-settings
        (cl-remove-if (lambda (s) (memq (cadr s) drgnx-look-fonts-test--faces)) (get 'user 'theme-settings)))
   (dolist (f drgnx-look-fonts-test--faces)
@@ -141,6 +142,66 @@ and the resolution names where it came from."
               (should (equal "Lisp Sans" (face-attribute 'drgnx-ui-heading :family nil)))
               (should (equal "Custom Sans" (face-attribute 'drgnx-ui-caption :family nil)))))
         (delete-directory dir t)))))
+
+(defmacro drgnx-look-fonts-test--default-kept (&rest body)
+  "BODY, then `default' as it was: its attributes for new frames, no theme of drgnx's, the module off."
+  (declare (indent 0))
+  `(let ((was (mapcar (lambda (a) (cons a (face-attribute 'default a t))) '(:family :height :weight))))
+     (unwind-protect (progn ,@body)
+       (dolist (th '(drgnx-dark drgnx-light drgnx-high-contrast))
+         (when (custom-theme-enabled-p th) (disable-theme th)))
+       (drgnx-look-fonts-off)
+       (pcase-dolist (`(,a . ,v) was) (set-face-attribute 'default t a v))
+       (dolist (fr (frame-list)) (face-spec-recalc 'default fr)))))
+
+(ert-deftest drgnx-look-fonts/the-code-font-reaches-default-under-a-theme ()
+  "Pattern D: drgnx Dark styles `default' (its colours), so Emacs skips `default's defface spec; the code role's
+defaults reach it all the same, whether the theme comes before the faces are written or after, and so does the
+desktop's font once the code role follows it."
+  (drgnx-look-fonts-test--clean
+    (drgnx-look-fonts-test--default-kept
+      (load-theme 'drgnx-dark t)
+      (drgnx-look-fonts-on)
+      (should (equal "JetBrains Mono" (face-attribute 'default :family)))
+      (load-theme 'drgnx-light t)
+      (should (equal "JetBrains Mono" (face-attribute 'default :family)))
+      (let ((drgnx-look-font-code 'follow-desktop))
+        (drgnx-look-fonts-desktop-answer '(:ui ("Desk Sans" . 14) :code ("Desk Mono" . 12)))
+        (should (equal "Desk Mono" (face-attribute 'default :family))))
+      ;; a theme that names the family itself still wins over the default
+      (deftheme drgnx-fonts-test "A theme that names the code family.")
+      (custom-theme-set-faces 'drgnx-fonts-test '(default ((t :family "Theme Mono"))))
+      (provide-theme 'drgnx-fonts-test)
+      (enable-theme 'drgnx-fonts-test)
+      (should (equal "Theme Mono" (face-attribute 'default :family)))
+      (should (eq 'theme (plist-get (drgnx-look-fonts-resolve 'code) :source)))
+      (disable-theme 'drgnx-fonts-test)
+      (put 'default 'theme-face (assq-delete-all 'drgnx-fonts-test (copy-sequence (get 'default 'theme-face))))
+      (drgnx-look-fonts-apply)
+      (should (equal "JetBrains Mono" (face-attribute 'default :family))))))
+
+(ert-deftest drgnx-look-fonts/your-lisp-default-font-stays ()
+  "Pattern D: a `set-face-attribute' on `default' in config.el (after the module's setup noted `default', before
+init ended) is your Lisp: it stays with no theme and under drgnx's own, and the resolution says so."
+  (drgnx-look-fonts-test--clean
+    (drgnx-look-fonts-test--default-kept
+      (let* ((dir (make-temp-file "look-fonts" t))
+             (config (drgnx-look-fonts-test--file
+                      dir "config.el" "(set-face-attribute 'default nil :family \"Iosevka\")\n")))
+        (unwind-protect
+            (progn
+              (drgnx-look-fonts--note-default)
+              (set-face-attribute 'default nil :family "Iosevka")
+              (drgnx-look-fonts-snapshot config)
+              (drgnx-look-fonts-apply)
+              (should (equal "Iosevka" (face-attribute 'default :family)))
+              (let ((r (drgnx-look-fonts-resolve 'code)))
+                (should (eq 'lisp (plist-get r :source)))
+                (should (equal "config.el:1" (plist-get r :where))))
+              (drgnx-look-fonts-on)
+              (load-theme 'drgnx-dark t)
+              (should (equal "Iosevka" (face-attribute 'default :family))))
+          (delete-directory dir t))))))
 
 (ert-deftest drgnx-look-fonts/no-font-attribute ()
   "Pattern D: no spec drgnx writes holds `:font': it is tied to one display."

@@ -1069,6 +1069,43 @@ Module flags: ((MODULE FLAG…)…).
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (list-of symbol))` |
 
+## drgnx-notice-style
+
+Where a notice that interrupts shows: `float' (a toast over the editor, while Glitnir draws the frames),
+`echo' (a line in the echo area) or `auto' (`float' while Glitnir draws, else `echo').  A change applies to the next
+notice.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const echo) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum auto echo float)` |
+
+## drgnx-popup-style
+
+How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
+over the editor, bottom-centre) or `auto': `float' under Glitnir, `window' without it.
+
+| Key | Value |
+| --- | --- |
+| Default | `auto` |
+| Type | `(choice (const auto) (const window) (const float))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or (const auto) (const window) (const float))` |
+
 ## drgnx-runners-heavy
 
 Suite or command patterns whose jobs are heavy in this project (a job is heavy only when marked so).
@@ -1313,6 +1350,24 @@ Preferences: Keep drgnx Running in the Background, which remembers it in setting
 | `:merge` | `replace` |
 | `:on-error` | `last-good` |
 | `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
+## drgnx-speed-gc-census
+
+Non-nil: record every garbage collection's pause, origin and live heap (Help → GC Census shows them).
+Read at every start; a change turns the census on or off at once.  `drgnx-gc-census-mode' does it for this session.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-gc-census--settings-apply` |
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
