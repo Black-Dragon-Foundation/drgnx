@@ -151,5 +151,50 @@ delta E from the cursor."
   (dolist (c '("#4477ee" "#ee4444" "#2a8a2a" "#808080"))
     (should (< (drgnx-color-delta-e c (apply #'drgnx-color-lch (drgnx-color-oklch c))) 0.5))))
 
+(ert-deftest drgnx-agent-identity/glyph-falls-back-to-ascii-when-wide ()
+  "Pattern D: a mark whose Unicode shape is not displayable or not one column wide on the frame is its ASCII stand-in,
+and the choice is kept per frame until the cache is cleared."
+  (agent-identity-test--with-ring 6
+    (cl-letf (((symbol-function 'char-displayable-p) (lambda (_) t))
+              ((symbol-function 'char-width) (lambda (_) 1)))
+      (drgnx-agent-identity-clear)
+      (should (equal '("●" "■" "▲" "◆" "⬢" "★") (mapcar #'drgnx-agent-identity-text '(1 2 3 4 5 6)))))
+    (cl-letf (((symbol-function 'char-displayable-p) (lambda (_) t))
+              ((symbol-function 'char-width) (lambda (_) 2)))
+      (drgnx-agent-identity-clear)
+      (should (equal '("o" "#" "^" "<" "H" "*") (mapcar #'drgnx-agent-identity-text '(1 2 3 4 5 6)))))
+    (cl-letf (((symbol-function 'char-displayable-p) (lambda (_) nil))
+              ((symbol-function 'char-width) (lambda (_) 1)))
+      (drgnx-agent-identity-clear)
+      (should (equal "o" (drgnx-agent-identity-text 1))))))
+
+(ert-deftest drgnx-agent-identity/fringe-uses-four-shapes ()
+  "Pattern D: the gutter has circle, square, triangle and diamond bitmaps, all defined; hexagon uses the circle's and star
+the diamond's."
+  (agent-identity-test--with-ring 6
+    (let ((bitmaps (mapcar #'drgnx-agent-identity-fringe '(1 2 3 4 5 6))))
+      (should (equal '(drgnx-agent-fringe-circle drgnx-agent-fringe-square drgnx-agent-fringe-triangle
+                                                 drgnx-agent-fringe-diamond drgnx-agent-fringe-circle
+                                                 drgnx-agent-fringe-diamond)
+                     bitmaps))
+      (should (= 4 (length (delete-dups (copy-sequence bitmaps)))))
+      (dolist (b bitmaps) (should (fringe-bitmap-p b))))))
+
+(ert-deftest drgnx-agent-identity/image-colour-comes-from-the-face ()
+  "Pattern D: the mark's image is a Lucide icon drawn with `currentColor' under the agent's own face, so its colour is
+the face's in any theme and no colour is written in the string."
+  (agent-identity-test--with-ring 6
+    (drgnx-icons-clear)
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'image-type-available-p) (lambda (_) t)))
+      (drgnx-agent-identity-clear)
+      (let* ((s (drgnx-agent-identity-image 3 16))
+             (data (plist-get (cdr (get-text-property 0 'display s)) :data)))
+        (should (eq 'drgnx-agent-3 (get-text-property 0 'face s)))
+        (should (string-match-p "stroke=\"currentColor\"" data))
+        (should (string-match-p "M13.73 4" data))     ; the triangle
+        (should-not (string-match-p "#[0-9a-fA-F]\\{3,8\\}\\b" data))
+        (should-not (equal data (plist-get (cdr (get-text-property 0 'display (drgnx-agent-identity-image 4 16))) :data)))))))
+
 (provide 'agent-identity-test)
 ;;; agent-identity-test.el ends here
