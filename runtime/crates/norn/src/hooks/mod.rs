@@ -197,8 +197,9 @@ impl<R: Fn(&mut HookInput) + Sync> HookHost for PluginHooks<'_, R> {
 }
 
 /// The kind a hook matches on. The agent's kind is kept only when it is an ACP kind; anything else, `drgnx`
-/// included, is `other`. An `other` named `NotebookEdit` is `edit` (the Claude adapter reports notebook edits as
-/// `other`). `drgnx` is never returned: only the hub's own servers say it.
+/// included, is `other`. An `other` whose tool name is in [`KIND_BY_NAME`] gets that table's kind (the Claude
+/// adapter reports notebook edits as `other`; Kimi Code and DeepSeek Harness send `other` or no kind for their own
+/// tools). `drgnx` is never returned: only the hub's own servers say it. MCP tools stay `other`.
 pub fn acp_kind(raw: Option<&str>, tool_name: Option<&str>) -> &'static str {
     // brokkr's list is the ACP kinds and the hub's own `drgnx`
     let kind = raw
@@ -209,12 +210,32 @@ pub fn acp_kind(raw: Option<&str>, tool_name: Option<&str>) -> &'static str {
                 .find(|k| *k == r && *k != "drgnx")
         })
         .unwrap_or("other");
-    if kind == "other" && tool_name == Some("NotebookEdit") {
-        "edit"
-    } else {
-        kind
+    if kind != "other" {
+        return kind;
     }
+    tool_name
+        .and_then(|n| KIND_BY_NAME.iter().find(|(name, _)| *name == n))
+        .map_or(kind, |(_, k)| k)
 }
+
+/// The kind of an `other` step by its tool name: Claude Code's `NotebookEdit`, Kimi Code's `FetchURL`, and DeepSeek
+/// Harness's snake-case tools. The lookup only sharpens what a hook's filter sees; the matrix classifies the step by
+/// the agent's own kind, unchanged.
+pub const KIND_BY_NAME: [(&str, &str); 13] = [
+    ("NotebookEdit", "edit"),
+    ("FetchURL", "fetch"),
+    ("read", "read"),
+    ("read_image", "read"),
+    ("glob", "search"),
+    ("grep", "search"),
+    ("web_fetch", "fetch"),
+    ("web_search", "fetch"),
+    ("bash", "execute"),
+    ("edit", "edit"),
+    ("write", "edit"),
+    ("apply_patch", "edit"),
+    ("str_replace_editor", "edit"),
+];
 
 /// Whether PATHS has one path matching one of GLOBS (an empty GLOBS matches everything).
 fn paths_match(globs: &[brokkr::manifest::Glob], paths: &[PathBuf]) -> bool {

@@ -177,6 +177,10 @@ pub struct Plugins {
     looking: tokio::sync::Mutex<()>,
     /// The network plugins reach, made at the first [`host_io`].
     net: OnceLock<Arc<hub_io::Net>>,
+    /// The plugin host, started at the first plugin call ([`Plugins::host`]).
+    host: OnceLock<Result<brokkr::Host, String>>,
+    /// The plugins loaded into it, by the hash the user approved: a plugin is read and checked once per approval.
+    loaded: Mutex<BTreeMap<[u8; 32], Arc<brokkr::Plugin>>>,
 }
 
 /// The I/O of the plugin calls of CTX (a session or a job, with the network cell it launched with; none: every request
@@ -216,6 +220,36 @@ impl Plugins {
         self.open
             .get()
             .ok_or_else(|| internal("the plugins are not open yet"))
+    }
+
+    /// The hub's one plugin host (its guest runtime and epoch ticker start with it), or why it could not start.
+    pub fn host(&self) -> Result<&brokkr::Host, String> {
+        self.host
+            .get_or_init(|| brokkr::Host::new(brokkr::Limits::default()).map_err(|e| e.to_string()))
+            .as_ref()
+            .map_err(|e| format!("the plugin host did not start: {e}"))
+    }
+
+    /// PLUGINS loaded into the host, in their order: each the first time its approved hash is asked for (its files
+    /// read and hashed again, then compiled), then from memory, so the code that runs is the code that was approved
+    /// whatever the folder holds later. One that does not load is named with why.
+    pub fn loaded(
+        &self,
+        plugins: &[Arc<Plugin>],
+    ) -> Vec<Result<Arc<brokkr::Plugin>, (String, String)>> {
+        plugins
+            .iter()
+            .map(|p| {
+                let name = p.manifest.name.as_str().to_owned();
+                if let Some(l) = lock(&self.loaded).get(&p.hash) {
+                    return Ok(l.clone());
+                }
+                let host = self.host().map_err(|e| (name.clone(), e))?;
+                let l = Arc::new(host.load(p, p.hash).map_err(|e| (name, e.to_string()))?);
+                lock(&self.loaded).insert(p.hash, l.clone());
+                Ok(l)
+            })
+            .collect()
     }
 
     /// The folder is read again: the list, and what changed since the last look (every plugin at the first).

@@ -603,6 +603,12 @@ impl TurnCore {
         self.status
     }
 
+    /// Whether a permission request of TURN would still be held now (the turn runs, and is not being cancelled):
+    /// what `PermissionAsked` checks.
+    pub(crate) fn asks_in(&self, turn: u64) -> bool {
+        self.status == SessionStatus::Busy && turn == self.turn && !self.cancelling && !self.killed
+    }
+
     pub(crate) fn queue(&self) -> &Queue {
         &self.queue
     }

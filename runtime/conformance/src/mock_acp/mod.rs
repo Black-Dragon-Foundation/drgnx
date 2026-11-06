@@ -11,6 +11,8 @@
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
+//! | `ask:tool JSON` | `session/request_permission` for the tool call JSON (`kind`, `title`, `rawInput`, `locations`, `_meta` …; its id is added); says `permission: OPTION` |
+//! | `ask:folded JSON` | as `ask:tool`, after a pending `tool_call` of that shape, and the request itself has no `kind` (Kimi Code, DeepSeek Harness) |
 //! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
 //! | `commit MSG` | `git add -A && git commit -m MSG` in the cwd |
@@ -668,6 +670,11 @@ impl Agent {
                 let answer = self.permission(sid, turn, kind, &format!("{kind} request"));
                 self.say(sid, turn, &format!("permission: {answer}"));
             }
+            "ask:tool" | "ask:folded" => {
+                let call = serde_json::from_str(rest).unwrap_or_else(|_| json!({}));
+                let answer = self.permission_for(sid, turn, call, head == "ask:folded");
+                self.say(sid, turn, &format!("permission: {answer}"));
+            }
             "sleep-loop" => {
                 let cmd = "sleep 30; pgrep -f ratatoskr-mock-sleep-loop";
                 let answer = self.permission(sid, turn, "execute", cmd);
@@ -815,14 +822,38 @@ impl Agent {
 
     /// Ask the client; the chosen option's id, or `cancelled`.
     fn permission(&mut self, sid: &str, turn: u64, kind: &str, title: &str) -> String {
+        let call = json!({"title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}});
+        self.permission_for(sid, turn, call, false)
+    }
+
+    /// Ask the client about the tool call CALL (a `toolCall` without its id); the chosen option's id, or `cancelled`.
+    /// FOLDED: a pending `tool_call` of CALL's shape goes first, and the request itself carries no `kind`, as Kimi Code
+    /// and DeepSeek Harness ask.
+    fn permission_for(&mut self, sid: &str, turn: u64, call: Value, folded: bool) -> String {
         let tid = format!("tc-{turn}-{}", self.next_out_id);
         self.next_out_id += 1;
-        let rid = self.request("session/request_permission", json!({"sessionId": sid,
-            "toolCall": {"toolCallId": tid, "title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}},
+        let kind = call.get("kind").cloned().unwrap_or(Value::Null);
+        let mut call = match call {
+            Value::Object(o) => o,
+            _ => serde_json::Map::new(),
+        };
+        call.insert("toolCallId".into(), json!(tid));
+        if folded {
+            let mut update = call.clone();
+            update.insert("sessionUpdate".into(), json!("tool_call"));
+            update.insert("status".into(), json!("pending"));
+            self.update(sid, Value::Object(update));
+            call.remove("kind");
+        }
+        let rid = self.request(
+            "session/request_permission",
+            json!({"sessionId": sid,
+            "toolCall": call,
             "options": [
                 {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
                 {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
-                {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}));
+                {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}),
+        );
         let answer = self.response(rid).map_or("cancelled".to_string(), |r| {
             r["result"]["outcome"]["optionId"]
                 .as_str()

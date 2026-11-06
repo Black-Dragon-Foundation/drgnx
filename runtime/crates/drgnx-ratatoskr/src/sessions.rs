@@ -56,8 +56,9 @@ const SID_HEX: usize = 12;
 /// The coordination tools, shared by every connection.
 pub type ToolList = Arc<[Box<dyn Tool<Ctx>>]>;
 
-/// A tool on a session's socket: once its call ends, the hub reads what it wrote ([`norn::tools::Hub::after_tool`]),
-/// then it answers.
+/// A tool on a session's socket: before its call, the hub's `before-tool` hooks ([`norn::tools::Hub::before_tool`]:
+/// they may refuse it, or change its arguments, which its schema then checks again); once its call ends, the hub
+/// reads what it wrote ([`norn::tools::Hub::after_tool`]), then it answers.
 struct AfterTool(Box<dyn Tool<Ctx>>);
 
 impl Tool<Ctx> for AfterTool {
@@ -82,6 +83,27 @@ impl Tool<Ctx> for AfterTool {
         args: serde_json::Value,
     ) -> mimir::BoxFuture<'a, mimir::ToolResult> {
         Box::pin(async move {
+            let mut args = args;
+            if let Identity::Session { sid, .. } = &ctx.1 {
+                let asked = args.clone();
+                match ctx
+                    .0
+                    .hub()
+                    .before_tool(sid, "drgnx", self.0.name(), args)
+                    .await
+                {
+                    Ok(a) => args = a,
+                    Err(text) => return mimir::ToolResult::Err(text),
+                }
+                if args != asked
+                    && let Err(e) = self.0.check(&args)
+                {
+                    return mimir::ToolResult::Err(format!(
+                        "drgnx refused {}: a hook's change does not fit its arguments: {e}",
+                        self.0.name()
+                    ));
+                }
+            }
             let r = self.0.call(ctx, args).await;
             if let Identity::Session { sid, .. } = &ctx.1 {
                 ctx.0.hub().after_tool(sid, self.0.name()).await;

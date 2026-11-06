@@ -138,6 +138,19 @@ pub trait Hub: Send + Sync {
         Box::pin(async {})
     }
 
+    /// Session SID calls the tool TOOL of the hub's server SERVER (`drgnx`) with ARGS, which the tool's schema
+    /// accepted: the hub's `before-tool` hooks run first. `Ok` runs it with those arguments (ARGS, or a hook's
+    /// change, which the caller checks against the schema again); `Err` refuses it with that text. The default: ARGS.
+    fn before_tool<'a>(
+        &'a self,
+        _sid: &'a str,
+        _server: &'static str,
+        _tool: &'a str,
+        args: serde_json::Value,
+    ) -> BoxFuture<'a, Result<serde_json::Value, String>> {
+        Box::pin(async move { Ok(args) })
+    }
+
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
     /// `{name, value, source}`: NAMES only, or all.
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {

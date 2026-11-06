@@ -1,0 +1,27 @@
+{"scenario": "hooks/allow-verdict-on-an-ask-cell-still-asks", "requires": ["v1", "test-hooks"], "doc": "[C] Hooks only narrow: the deny-rm-hook fixture says allow to `ls`, on a step the matrix asks about. The hooks run before the card, the matrix still asks (one matrix card, the row's outcome `ask`), and only the user's yes lets the agent go on."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role worker) :verdict ask)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "run", "args": ["plugins", "install", "$SCENARIOS/../../runtime/target/plugin-fixtures/plugins/deny-rm-hook"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"plugins": [{"name": "deny-rm-hook", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "plugins/approve", "params": {"name": "deny-rm-hook", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-plugins", "source": "row", "value": ["deny-rm-hook"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "ask:tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}, \"_meta\": {\"claudeCode\": {\"toolName\": \"Bash\"}}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:card", "kind": "matrix"}}, "within_ms": 15000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.records[0].verdict') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["ask", "allow"]]}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select count(*) from card where kind = 'matrix' and state = 'open'", "rows": [[1]]}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "cards/settle", "params": {"card": "$card", "choice": "allow"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"settled": true}}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"permission\":{\"kind\":\"execute\",\"answer\":\"allow_once\"}}", "within_ms": 15000}

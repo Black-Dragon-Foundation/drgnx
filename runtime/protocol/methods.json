@@ -3,6 +3,41 @@
     {
       "data": {
         "$defs": {
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "Mode": {
             "description": "What a message sent while the session works does.",
             "enum": [
@@ -167,6 +202,17 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
               },
               "id": {
                 "type": "string"
@@ -388,7 +434,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -399,7 +445,8 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
           }
@@ -661,6 +708,11 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
               },
               "id": {
                 "format": "int64",
@@ -2400,7 +2452,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -2411,9 +2463,45 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
+          },
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           },
           "Mode": {
             "description": "What a message sent while the session works does.",
@@ -2579,6 +2667,17 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
               },
               "id": {
                 "type": "string"
@@ -2835,6 +2934,41 @@
       },
       "result": {
         "$defs": {
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "Mode": {
             "description": "What a message sent while the session works does.",
             "enum": [
@@ -2999,6 +3133,17 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
               },
               "id": {
                 "type": "string"
@@ -3923,7 +4068,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -3934,7 +4079,8 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
           },
@@ -4024,6 +4170,11 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
               },
               "id": {
                 "format": "int64",
@@ -20395,6 +20546,11 @@
                   "integer",
                   "null"
                 ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
               },
               "id": {
                 "format": "int64",

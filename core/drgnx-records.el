@@ -302,11 +302,12 @@ never called."
 
 (drgnx-schema-deftype
  'drgnx-records-entry
- '(plist (:type (enum user agent thought tool plan stop error usage notice compaction)
-                "What the entry is (usage, notice and compaction are reserved)")
+ '(plist (:type (enum user agent thought tool plan stop error usage notice compaction note)
+                "What the entry is (usage, notice and compaction are reserved; a note is a hook's, under its step)")
          (:text string "The entry's whole text (no :chunks)") (:length natnum) (:id drgnx-records-rpc-id) (:title string)
          (:kind string) (:status string) (:content any) (:url string) (:children (list-of drgnx-records-entry))
-         (:entries (list-of any)) (:stop string) (:steer boolean) (:done boolean))
+         (:entries (list-of any)) (:stop string) (:steer boolean) (:done boolean)
+         (:source string "Who a note is from: rule:ID, or plugin:NAME@VERSION#HASH") (:step integer))
  "One entry of a session's transcript, its text joined.")
 
 (drgnx-schema-deftype

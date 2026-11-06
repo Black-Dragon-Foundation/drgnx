@@ -589,6 +589,35 @@ fn kind_is_normalised_to_the_acp_enum() {
     ));
 }
 
+/// [D] pure: hooks/kind-by-name-per-provider. Kimi Code's and DeepSeek Harness's own tools reach the hooks of their
+/// kind: they come as `other` or with no kind. A known kind is kept, and an MCP tool stays `other`.
+#[test]
+fn kind_by_name_per_provider() {
+    for (name, kind) in [
+        ("FetchURL", "fetch"),
+        ("read", "read"),
+        ("read_image", "read"),
+        ("glob", "search"),
+        ("grep", "search"),
+        ("web_fetch", "fetch"),
+        ("web_search", "fetch"),
+        ("bash", "execute"),
+        ("edit", "edit"),
+        ("write", "edit"),
+        ("apply_patch", "edit"),
+        ("str_replace_editor", "edit"),
+    ] {
+        assert_eq!(acp_kind(Some("other"), Some(name)), kind, "{name}");
+        assert_eq!(acp_kind(None, Some(name)), kind, "{name} with no kind");
+    }
+    assert_eq!(acp_kind(Some("read"), Some("bash")), "read");
+    assert_eq!(
+        acp_kind(Some("other"), Some("mcp__drgnx__task_read")),
+        "other"
+    );
+    assert_eq!(acp_kind(Some("other"), Some("Bash")), "other");
+}
+
 /// The point's 2 s are shared: a hook gets the smaller of its own deadline and what is left, and one that would
 /// start after the budget is spent is not run (a note if advisory, else a deny).
 #[tokio::test(start_paused = true)]

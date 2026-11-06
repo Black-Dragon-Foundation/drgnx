@@ -10,6 +10,7 @@ use crate::types::{Bounded, Id, null_as_empty};
 use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// What a step was spent on.
 #[derive(
@@ -130,6 +131,10 @@ pub struct Step {
     /// Whether "Revert to here" can act on the step: it has an edit history record and its checkpoint is kept.
     #[serde(default)]
     pub revertible: bool,
+    /// Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:
+    /// [{source, verdict, ms, reason?}], outcome, …}`), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<Value>,
 }
 
 /// What a timeline covers.

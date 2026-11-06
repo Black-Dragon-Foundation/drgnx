@@ -162,9 +162,30 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooked: Option<Hooked>,
 }
 
-/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
+/// The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the
+/// permission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the
+/// agent runs them without asking). Fixed at the session's start; never faked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Hooked {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub before_tool: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub by_adapter: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unhooked: Vec<String>,
+    /// Why the unhooked kinds are (shown as "not hooked: KINDS (WHY)").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under
+/// its step).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
@@ -178,6 +199,7 @@ pub enum EntryType {
     Usage,
     Notice,
     Compaction,
+    Note,
 }
 
 /// One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).

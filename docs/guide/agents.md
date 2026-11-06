@@ -125,6 +125,21 @@ program and everything it started. The answer says `ok` and the name and version
 answer in time, it could not start, or it ended first, with its exit status and the last 2 KiB of its error output (secrets
 blanked out). Nothing is recorded and no gateway token is made for it. The check is yours alone: an agent cannot ask it.
 
+## Why was this step refused?
+
+A step an agent asked for can be refused before you see it:
+
+- **by the permissions matrix**, when its cell is `never` ([security.md](security.md#the-permissions-matrix));
+- **by the freshness check**, when the agent of a job has not read the job's decision log;
+- **by a rule or a plugin's hook** before the tool call ([plugins.md](plugins.md#before-a-tool-call)). The agent is
+  told in drgnx's words, with the rule's or hook's quoted ("drgnx refused Bash; the hook deny-rm-hook said: «no rm
+  -rf»"), and the step's provenance in the timeline (`timeline/get`, each step's `hooks`) lists every rule and hook
+  that looked at it, what each said and how long it took. A hook that failed or timed out refuses too, and says so
+  ("hook NAME failed: timed out").
+
+A note a rule or hook added shows under the step. The session's `hooked` mark says which kinds of step its hooks see
+and which the agent runs without asking.
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,

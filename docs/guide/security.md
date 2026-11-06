@@ -500,7 +500,10 @@ Your hook rules and your plugins' hooks ([plugins.md](plugins.md#rules-and-hooks
 has, and they can only narrow what it says. A hook's `allow` means "no objection": a step the matrix asks about is
 still asked about, and a step it refuses is refused before any hook runs. A hook can turn Allow or Ask into a refusal,
 never the other way. A hook that fails (it times out, crashes, is busy, or answers something its manifest did not
-declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step.
+declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step. Only
+at the hub's own tools may a hook change a call, only for the tools it names, and the tool checks the changed
+arguments, against its schema and its own matrix checks, before anything runs; at the permission seam a change is a
+failure ([plugins.md](plugins.md#before-a-tool-call)).
 
 ## Checking it
 

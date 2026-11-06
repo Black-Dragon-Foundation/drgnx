@@ -204,6 +204,7 @@ fn step_of(s: table::Step) -> Step {
         revertible: s.history_op.is_some(),
         history_op: s.history_op.map(|v| v as u64),
         undone_by: s.undone_by.map(|v| v as u64),
+        hooks: Vec::new(),
     }
 }
 
@@ -288,7 +289,11 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
             };
             let mut details = Vec::with_capacity(steps.len());
             for s in &steps {
-                details.push(norn::read::work::step_detail(c, s.id)?);
+                let sid = s.session.strip_prefix("session:").unwrap_or(&s.session);
+                details.push((
+                    norn::read::work::step_detail(c, s.id)?,
+                    crate::hook_points::provenance(c, sid, s.seq)?,
+                ));
             }
             Ok((steps, details, table::rollup(c, scope, &id)?))
         })
@@ -297,8 +302,9 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
     let mut steps: Vec<Step> = steps
         .into_iter()
         .zip(details)
-        .map(|(s, d)| Step {
+        .map(|(s, (d, hooks))| Step {
             detail: d.as_ref().map(crate::work::detail::wire),
+            hooks,
             ..front.core.timeline.wire(s)
         })
         .collect();

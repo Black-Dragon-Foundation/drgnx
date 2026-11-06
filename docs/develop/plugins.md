@@ -96,7 +96,9 @@ no store. The hub's points (before a tool call, after an edit, before a commit, 
   and hook filters (`*` and `?` in one segment, a `**` segment across segments), iterative with one backtrack point
   per level; `runner/clash.rs`'s glob is not reused (there `*` crosses `/`, and it recurses).
 - `acp_kind(raw, tool_name)` normalises an agent's kind: an ACP kind stays, anything else (`drgnx` included) is
-  `other`, and an `other` named `NotebookEdit` is `edit`. It never returns `drgnx`; only the hub's servers set it.
+  `other`, and an `other` whose tool name is in `KIND_BY_NAME` takes that kind (Claude's `NotebookEdit`, Kimi Code's
+  `FetchURL`, DeepSeek Harness's snake-case tools). It never returns `drgnx`; only the hub's servers set it. The
+  table only sharpens what a filter sees: the seam's `classify` reads the agent's own kind, unchanged.
 - `subscribed(input, rules, plugins)` is the points' fast path: does any rule, or any plugin's hook at the point
   whose `filter` matches, look at this step.
 - `run(input, budget, accepts_change, rules, plugins, host)` runs the matching rules in list order, then each plugin's matching hook
@@ -128,6 +130,42 @@ no store. The hub's points (before a tool call, after an edit, before a commit, 
 
 `hooks::tests::allow_never_widens` checks every cell, both contexts and every list of up to three records of every
 kind (3 200 cases).
+
+## The hook points
+
+`drgnx-ratatoskr/src/hook_points.rs` runs the engine where the hub sees a step. Before a tool call is there; after an
+edit, before a commit and at review use its row.
+
+- **Sites** (`At`): `Seam` (`Session::seam_hooks`, from `permission_request`), `HubServer` (`at_hub_server`: the
+  coordination tools through `sessions.rs`'s `AfterTool` and `norn::tools::Hub::before_tool`, and the abilities'
+  server), `Adapter` (the panel extension's `_drgnx/before_tool`). Only `HubServer` accepts a change; the caller
+  checks the changed arguments against the tool's schema again.
+- **A site's facts** (`Site`): session, Urdr project (its plan's, else its folder's repository, resolved once),
+  folder, role, profile, job, task. `Session::hook_site(at)` makes one; `Session::tool_call_info(toolCall)` reads a
+  request as the hooks see it (`ToolCallInfo::from_acp`: the folded `tool_call`'s kind when the request has none,
+  the adapter's tool name, paths from `locations` and the raw input, the command, the session's step).
+- **The seam, in order:** the wait-loop refusal and the freshness gate; `classify`; a hub tool's step (`other`,
+  named `mcp__drgnx__*` or `mcp__drgnx-plugins__*`) skips the hooks, with a row "hooked at the hub's server" when
+  its server would run some; `prepare` (the fast path: the project's rules and enabled plugins, and `subscribed`:
+  nothing subscribed is today's seam, with no `dry` and no row); `refresh_from(settings)`, `MatrixGate::dry`; Never
+  refuses with no hook run; `run`; a turn no longer asking (`TurnCore::asks_in`) answers `cancelled`; a deny answers
+  the reject option and makes no card; a `dry` Allow answers Allow with no `decide`; a `dry` Ask goes to `decide`.
+- **`run(front, site, call, prepared, cell)`**: the plugins loaded into the hub's one host (`Plugins::host`,
+  `Plugins::loaded`: read, hashed and compiled once per approved hash, then from memory), the I/O of the session
+  (`plugins::host_io`, the session's network cell), `norn::hooks::run` with the point's 2 s and the site's
+  `accepts_change`, then `combine`. Rules alone run without starting the host. A plugin that does not load, or a
+  host or I/O that cannot be made, fails its matching hook (a deny, or a note when advisory). Then one row, the
+  notes as `note` entries under the step (`Session::hook_note`), and a deny's `refusal` steered into the turn.
+- **The row** (`record_data`, `write_row`): kind `status`, `{"hook": true, point, session, step, job, task, tool, at,
+  records: [{source, verdict, ms, reason?}], outcome, more?}`, written with `coord::HOOKS_METHOD`, whose tx actor is
+  `hub:hooks` (no wire method has that name). It stays within `DATA_MAX`: the envelope and every source and verdict
+  first, then the deciding reason, then the others' (an annotation at most 200 characters), and when even the
+  sources do not fit, the deciding record and `more`. `provenance(conn, sid, step)` reads only `hub:hooks` rows;
+  `timeline/get` puts them on each step as `hooks`.
+- **The lock** (`agents/lock.rs`): `subscribed_kinds(plugins, project)` at launch (a rule or hook naming no kind:
+  every kind), `LaunchPlan::with_hook_asks(kinds)` (Claude: managed ask rules of `claude_ask_tools(kind)`, beside
+  the user's, never an allow rule) and `hooked(profile, kinds)`, the snapshot's `hooked {before_tool, by_adapter,
+  unhooked, why}`. Codex's and Gemini's locks are not changed here.
 
 ## What a plugin can reach
 

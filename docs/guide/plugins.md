@@ -2,7 +2,7 @@
 
 Plugins give agents tools of their own (abilities) and shape what agents do (hooks). This page is being written:
 it grows as plugins reach the hub. Today it covers installing and approving a plugin, how your rules and the plugins'
-hooks decide a step, and choosing the plugins of one project.
+hooks decide a step, choosing the plugins of one project, and the hooks before an agent's tool call.
 
 ## Installing and approving
 
@@ -122,4 +122,41 @@ bad regex, an id used twice) refuses the whole list, naming the place (`[2].id`)
 
 **Kinds are the agent protocol's.** A kind an agent reports that is not one of the list above counts as `other`, and
 only the hub's own servers say `drgnx`, so an agent cannot pass its step off as one of the hub's tools. A notebook
-edit, which the Claude adapter reports as `other`, counts as `edit`.
+edit, which the Claude adapter reports as `other`, counts as `edit`. Kimi Code's and DeepSeek Harness's own tools
+count by their names (`FetchURL`, `web_fetch` and `web_search` are `fetch`; `read` and `read_image` are `read`;
+`glob` and `grep` are `search`; `bash` is `execute`; `edit`, `write`, `apply_patch` and `str_replace_editor` are
+`edit`), and a request that names no kind takes the kind the agent gave the same tool call before.
+
+## Before a tool call
+
+The `before-tool` point runs where the hub sees an agent's tool call:
+
+- **At the permission seam,** when the agent asks before one of its own tools runs. Your rules and the hooks run
+  after the agent's freshness check and before the permissions matrix answers. A cell of `never` refuses at once,
+  with no hook run. On `allow` or `ask` the hooks run first: a deny refuses the step with no card made, and only when
+  none denied does the matrix ask you (a card) or let it run. A hook's `allow` never answers a card for you.
+- **At the hub's own tools** (the coordination tools, and the plugins' abilities): once, at the hub's server, with
+  the kind `drgnx` and the tool's full name (`mcp__drgnx__record_decision`). This is the one place a hook may
+  `change` a call, and only for the tools its manifest names: the tool checks the changed arguments against its
+  schema again, and a tool whose matrix checks are in its body (the manager's `merge`) checks what will run. The
+  seam does not run the hooks again for such a step, but it still checks the step against the matrix, as it always
+  did (`code.edit`); its row says "hooked at the hub's server".
+- **Steps an agent allows itself.** Most agents run some tools without asking. When a rule or a hook of the
+  session's plugin set looks at a kind, drgnx makes Claude ask about it too, through the managed ask rules of its
+  lock (read → `Read`; search → `Grep`, `Glob`; fetch → `WebFetch`, `WebSearch`; execute → `Bash`; edit → `Edit`,
+  `Write`, `NotebookEdit`), so those steps reach the seam. The session shows which kinds are hooked and which are
+  not ("not hooked: think"): Claude's own tools that ask nothing (`TodoWrite`), and, for Gemini and Codex, reads and
+  searches. That Claude's ask rule makes a read-only command ask is expected, not yet checked against the real
+  Claude Code.
+
+What the agent is told of a refusal comes from drgnx, with the rule's or hook's words quoted: "drgnx refused Bash;
+the hook deny-rm-hook said: «no rm -rf»". It is steered into the agent's running turn, so it does not retry. A note
+shows under the step in the transcript. Each point run on a step is one record of the hub's own, with every rule and
+hook that looked, what each said and how long it took; it is the step's provenance in the timeline.
+
+**The plugin set is the session's start.** The hub reads your plugin list and rules at every step, but the lock's
+ask rules are made when the session starts (a fork keeps its parent's): a hook enabled since then sees the steps
+that reach the seam, and the session's marks say what it started with.
+
+**A hook that hangs** is stopped at the point's 2 s, and the step is refused ("hook NAME failed: timed out"). The
+session goes on.

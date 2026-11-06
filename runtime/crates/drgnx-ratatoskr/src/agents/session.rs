@@ -52,7 +52,7 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A Stop that the agent has not answered by then ends its process.
 const STOP_ANSWER: Duration = Duration::from_secs(2);
 /// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
-const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
+pub(crate) const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -779,6 +779,12 @@ pub struct Session {
     asks: crate::work::asks::AskTx,
     /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
     stamps: Arc<crate::work::conclusions::Stamps>,
+    /// The front, for the hooks before a tool call (none until the front is bound: no hooks run).
+    tool_hub: Arc<crate::coord::ToolHub>,
+    /// Its Urdr project, resolved from its folder at the first hook run (`None` inside: no project).
+    project: std::sync::OnceLock<Option<String>>,
+    /// Which tool kinds its `before-tool` hooks see, as its lock made them at launch.
+    hooked: Option<runstav::methods::agents::Hooked>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -855,6 +861,7 @@ struct Launched {
     /// Its provider proxy, bound before the spawn (and its browser's web proxy and CDP broker).
     net: Option<super::net::SessionNet>,
     browser_why: Option<String>,
+    hooked: Option<runstav::methods::agents::Hooked>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
@@ -953,6 +960,7 @@ pub(super) struct Prepared {
     /// How its shell steps' opens are seen (`work::trace`).
     trace: crate::work::trace::TraceMode,
     browser: BrowserLaunch,
+    hooked: Option<runstav::methods::agents::Hooked>,
 }
 
 /// What a session's browser came to at its launch: the hub's side of it (the session has one), or why it has none
@@ -1340,6 +1348,12 @@ pub(super) async fn prepare(
         plan = plan.with_claude_rules(deny, ask);
     }
     plan = plan.with_codex_untrusted(profile, cwd);
+    // the kinds the before-tool hooks and rules of its plugin set at launch subscribe to: the lock makes the agent
+    // ask about them, so they reach the seam; a fork's lock `_meta` is its parent's
+    let project = session_project(front, sid, cwd).await;
+    let kinds = crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref());
+    plan = plan.with_hook_asks(&kinds);
+    let hooked = plock::hooked(profile, &kinds);
     if gateway.is_some() {
         // the process gets the same variables the Claude options carry
         let extra: Vec<(String, String)> = profile
@@ -1388,7 +1402,21 @@ pub(super) async fn prepare(
         gateway,
         trace,
         browser,
+        hooked,
     })
+}
+
+/// Session SID's Urdr project: its plan's when a plan runs it, else the repository of CWD (`None` outside one). Runs
+/// git, off the hub's workers.
+async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Option<String> {
+    if let Some(p) = ActionCtx::of_session(&front.core.runs.scopes(), sid).project {
+        return Some(p);
+    }
+    let cwd = cwd.to_path_buf();
+    crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
@@ -1864,6 +1892,7 @@ async fn launch(
             gateway: prep.gateway,
             net,
             browser_why: prep.browser.why,
+            hooked: prep.hooked,
         },
         rx,
     ))
@@ -1981,6 +2010,9 @@ fn assemble(
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
+        tool_hub: front.tool_hub.clone(),
+        project: std::sync::OnceLock::new(),
+        hooked: l.hooked,
     });
     (s, done_rx)
 }
@@ -2576,6 +2608,7 @@ async fn write_steps(
             history_op: None,
             undone_by: None,
             revertible: false,
+            hooks: Vec::new(),
         };
         // the files the step was in: the presence model (a shell step's command looked up off the async threads)
         if let Some(live) = &sink.presence
@@ -3138,6 +3171,7 @@ impl Session {
                 Some(self.live.ids(&self.id).join(","))
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
+            hooked: self.hooked.clone(),
         }
     }
 
@@ -3355,7 +3389,8 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        // The matrix decides first: allowed answers at once, never refuses at once, an ask waits for the user.
+        // The matrix decides, after the before-tool hooks where any subscribe: allowed answers at once, never refuses
+        // at once, an ask waits for the user.
         let s = self.clone();
         tokio::spawn(async move {
             if s.has_jobs() && is_wait_loop(req.get("toolCall")) {
@@ -3376,6 +3411,16 @@ impl Session {
                 return;
             }
             let (action, facts) = classify(req.get("toolCall"));
+            match s
+                .seam_hooks(req.get("toolCall"), action, &facts, &options, turn)
+                .await
+            {
+                SeamHooks::Answer(option) => {
+                    reply(resp, option);
+                    return;
+                }
+                SeamHooks::Today | SeamHooks::Decide => {}
+            }
             let ctx = ActionCtx {
                 facts,
                 ..ActionCtx::of_session(&s.scopes, &s.id)
@@ -3715,6 +3760,157 @@ impl Session {
     /// turn; hermod cannot inject into a running one).
     pub(crate) fn steer_in(self: &Arc<Self>, text: String) {
         self.turn_event(TurnEvent::QueueEdited(QueueEdit::SteerIn(text)));
+    }
+
+    /// The front, once bound and while it lives (the hooks before a tool call reach the plugins through it).
+    pub(crate) fn front(&self) -> Option<Arc<Front>> {
+        self.tool_hub.front()
+    }
+
+    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task.
+    pub(crate) async fn hook_site(&self, at: crate::hook_points::At) -> crate::hook_points::Site {
+        let project = match self.project.get() {
+            Some(p) => p.clone(),
+            None => {
+                let p = match ActionCtx::of_session(&self.scopes, &self.id).project {
+                    Some(p) => Some(p),
+                    None => {
+                        let cwd = self.cwd.clone();
+                        crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                };
+                let _ = self.project.set(p.clone());
+                p
+            }
+        };
+        crate::hook_points::Site {
+            at,
+            session: self.id.clone(),
+            project,
+            root: Some(self.cwd.clone()),
+            role: serde_json::to_value(self.role)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned)),
+            profile: Some(self.profile.clone()),
+            job: self.job.clone(),
+            task: self.task.clone(),
+        }
+    }
+
+    /// The tool call TOOL of a permission request as the hooks see it, with what this session folded of the same
+    /// `toolCallId` (its kind, when the request has none; the adapter's tool name) and its step.
+    pub(crate) fn tool_call_info(&self, tool: Option<&Value>) -> crate::hook_points::ToolCallInfo {
+        let id = tool
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let (kind, name, step) = {
+            let st = lock(&self.state);
+            let kind = st
+                .tools
+                .get(id)
+                .and_then(|i| st.entries.get(*i))
+                .and_then(|e| e.rest.get("kind"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let name = st.tool_meta.get(id).and_then(|m| m.name.clone());
+            let step = st
+                .cur
+                .as_ref()
+                .filter(|c| !id.is_empty() && c.tool_id.as_deref() == Some(id))
+                .map(|c| c.key);
+            (kind, name, step)
+        };
+        crate::hook_points::ToolCallInfo::from_acp(tool, kind.as_deref(), name.as_deref(), step)
+    }
+
+    /// The step running now (`step.seq`), if any.
+    pub(crate) fn current_step(&self) -> Option<i64> {
+        lock(&self.state).cur.as_ref().map(|c| c.key)
+    }
+
+    /// A hook's note TEXT (from SOURCE, `rule:ID` or `plugin:NAME@…`) under STEP: a `note` entry of the transcript.
+    pub(crate) fn hook_note(
+        self: &Arc<Self>,
+        step: Option<i64>,
+        source: Option<String>,
+        text: String,
+    ) {
+        let mut rest = Map::new();
+        rest.insert("text".into(), json!(text));
+        if let Some(s) = step {
+            rest.insert("step".into(), json!(s));
+        }
+        if let Some(s) = source {
+            rest.insert("source".into(), json!(s));
+        }
+        lock(&self.state).push(EntryType::Note, rest);
+        self.changed();
+    }
+
+    /// The `before-tool` hooks at the seam, for the request TOOL that `classify` read as ACTION with FACTS during
+    /// TURN (design addendum §4.1, "The seam, step by step"):
+    /// - a hub tool's step is hooked at its server, not here (its row says so);
+    /// - nothing subscribed: today's seam ([`SeamHooks::Today`]: no `dry`, no row);
+    /// - else the matrix's `dry` (the settings read again first): Never refuses with no hook run; on Allow or Ask
+    ///   the hooks run. A deny answers the reject option and makes no card; a turn cancelled meanwhile answers
+    ///   `cancelled`; a `dry` Allow answers Allow with no `decide`; a `dry` Ask goes to `decide`.
+    async fn seam_hooks(
+        self: &Arc<Self>,
+        tool: Option<&Value>,
+        action: Action,
+        facts: &runstav::methods::matrix::Facts,
+        options: &[(String, String)],
+        turn: u64,
+    ) -> SeamHooks {
+        use crate::hook_points::{self as points, At};
+        let Some(front) = self.front() else {
+            return SeamHooks::Today;
+        };
+        let call = self.tool_call_info(tool);
+        if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
+            let site = self.hook_site(At::Seam).await;
+            points::hub_tool_at_the_seam(&front, &site, &call).await;
+            return SeamHooks::Today;
+        }
+        let site = self.hook_site(At::Seam).await;
+        let Some(prepared) = points::prepare(&front.core.plugins, &site, &call) else {
+            return SeamHooks::Today;
+        };
+        self.gate.refresh_from(&self.settings);
+        let ctx = ActionCtx {
+            facts: facts.clone(),
+            ..ActionCtx::of_session(&self.scopes, &self.id)
+        };
+        let (g, who, at) = (self.gate.clone(), self.who(), now());
+        // a store that fails asks the user, as `decide` does
+        let verdict = self
+            .writer
+            .db
+            .read(move |c| Ok(g.dry(c, &who, action, &ctx, at).verdict))
+            .await
+            .unwrap_or(runstav::methods::matrix::Verdict::Ask);
+        if verdict == runstav::methods::matrix::Verdict::Never {
+            return SeamHooks::Answer(pick_reject(options));
+        }
+        let cell = norn::matrix::Cell {
+            verdict,
+            limit: None,
+        };
+        let out = points::run(&front, &site, &call, prepared, Some(cell)).await;
+        if !lock(&self.state).core.asks_in(turn) {
+            return SeamHooks::Answer(None);
+        }
+        match out.decision {
+            norn::hooks::Decision::Deny(_) => SeamHooks::Answer(pick_reject(options)),
+            norn::hooks::Decision::Proceed { .. } if pick_allow(options).is_some() => {
+                SeamHooks::Answer(pick_allow(options))
+            }
+            _ => SeamHooks::Decide,
+        }
     }
 
     /// First call for decision-log version V: true (the gate tells the agent once per version).
@@ -4150,6 +4346,16 @@ fn is_wait_loop(tool: Option<&Value>) -> bool {
         || words
             .windows(2)
             .any(|p| p[0] == "tail" && matches!(p[1], "-f" | "-F" | "--follow"))
+}
+
+/// What the `before-tool` hooks at the seam left to do ([`Session::seam_hooks`]).
+enum SeamHooks {
+    /// Nothing subscribed: the seam as it was before hooks (`decide`).
+    Today,
+    /// The hooks ran and none denied, and the matrix asks: `decide` makes the card (or a grant allows).
+    Decide,
+    /// The answer is decided: the option, or none ("cancelled").
+    Answer(Option<String>),
 }
 
 /// The reject option of OPTIONS (once preferred), else none (the answer is "cancelled").
