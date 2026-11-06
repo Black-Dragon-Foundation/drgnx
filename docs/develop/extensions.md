@@ -75,6 +75,38 @@ file's removal on `kill-emacs-hook`.
   (marked instead); a directory in use that is gone is repointed into the newest generation holding it, else marked
   "files of dash 2.19 are gone: restart drgnx". Then `drgnx-modules-retry-waiting`.
 - `(drgnx-extensions-live-restart-pending)` → `((NAME . TEXT)…)`: a cache read, for the view's rows.
-- Nothing prompts, waits or signals (an error is one message), and nothing writes `elpa/`, the lock or the quickstart
+- Nothing prompts, waits or signals (an error is one notice), and nothing writes `elpa/`, the lock or the quickstart
   file. Turning the module off removes the hooks; the in-use file then stays until the next snapshot sweeps it, once
   the session is gone, so a generation it still loads from is never deleted under it.
+
+## In one project
+
+User guide: [In one project](../guide/extensions.md#in-one-project).
+
+- **The modes index.** `core/drgnx-extensions-index.el` writes `<cache>/extensions/modes.eld` after every sync,
+  upgrade or rollback that worked (`drgnx-pkg--index-modes` is on `drgnx-pkg-after-change-functions`): for each
+  installed package `(PKG :auto ((REGEXP . MODE)…) :interpreter (…) :magic (…) :minor (MODE…) :scope SCOPE)`, from
+  its `PKG-autoloads.el` read as data (never evaluated). `:auto`, `:interpreter` and `:magic` are the constant
+  entries of its `add-to-list`s to the mode alists; `:minor` its autoloaded `-mode`s whose signature is `(fn
+  &optional ARG)` and that have no variable of their own there (a global minor mode has one). SCOPE is `global` when
+  the file holds, anywhere, an `add-hook`, `advice-add`, `add-function`, a global minor mode, a binding in a global
+  keymap (`global-set-key`, `keymap-global-set`, `define-key global-map …`) or a theme; else `narrow` when it adds an
+  entry or a minor mode; else `none`. `drgnx-extensions-index-counts` gives `(:narrow N :global N :none N)`.
+- **The setting.** `drgnx-packages-off` (`:scope 'project :workspace 'data :agents 'never`), declared in
+  `modules/tools/drgnx-extensions-project.el`. `(drgnx-extensions-project-set PKG ROOT OFF)` writes it into ROOT's
+  **private** workspace file (`drgnx-settings-editors-commit`, tab `workspace`), refuses a package that is not
+  `narrow` (a `user-error`: "On in every project: it changes Emacs as a whole"), and runs `normal-mode` in ROOT's
+  open file buffers. `(drgnx-extensions-project-off-p PKG ROOT)`, `(drgnx-extensions-project-describe PKG ROOT)` (the
+  row's words) and `drgnx-extensions-project-toggle` are for the view.
+- **While a package is off somewhere** (your value, your private workspace files, the shared files drgnx read;
+  `drgnx-extensions-project-refresh`, again on `drgnx-settings-changed-functions`): a named `:around` advice on
+  `major-mode-remap` acts only in a buffer with `buffer-file-name` asked for a mode of a package off in its project
+  (the root its private workspace file names, else the folder of the nearest `.drgnx/settings.el`; the value read
+  by root with `drgnx-setting-for-root`, since the buffer's project values are not applied yet when its mode is
+  chosen): it answers for the mode `set-auto-mode` would choose with those packages' modes taken out of
+  `interpreter-mode-alist`, `magic-mode-alist`, `auto-mode-alist` and `magic-fallback-mode-alist`, in that order,
+  else `fundamental-mode`. A named function on `after-change-major-mode-hook` (depth 100) turns their buffer minor
+  modes off in such a buffer. With nothing off, neither is installed. The Extensions module's setup calls
+  `drgnx-extensions-project-setup`, its teardown `drgnx-extensions-project-teardown` (both go).
+- `drgnx doctor`'s `package-modes-off` check lists the open file buffers where such a mode is still on
+  (`drgnx-extensions-project-misses`).

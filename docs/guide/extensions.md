@@ -20,3 +20,23 @@ with `M-x package-install` since the last change and then removed or replaced.
 drgnx keeps the copies a running session uses (`~/.local/state/drgnx/elpa-in-use/`) until that session ends; a sync
 from the command line or from onboarding keeps its usual advice to restart drgnx. Developers: [live
 activation](../develop/extensions.md#live-activation).
+
+## In one project
+
+A package's page can turn the package off **in the project you are in** (its row says "Off in this project"). Its
+file modes and buffer modes are then off there: a file it would open in its mode opens in the mode it would get
+without the package (`.rs` in `rust-ts-mode` when `rust-mode` is off, for instance), and its buffer minor modes do not
+turn on in that project's files. Other projects, and buffers that are not files (`*scratch*`, Magit's), are not
+changed. Turning it off or on again applies at once: the project's open files take their modes again.
+
+- Only a package that adds file modes or buffer modes and nothing else can be off in one project. One that changes
+  Emacs as a whole (hooks, advice, global modes or keys, a theme: Magit, for instance) says "On in every project: it
+  changes Emacs as a whole" and has no switch.
+- The choice is yours: it is saved in your private workspace file for that project (`~/.config/drgnx/workspaces/`),
+  never in the project's shared `.drgnx/settings.el`. A project's shared settings may list packages in
+  `drgnx-packages-off` too ("Off in this project by the project's shared settings").
+- No agent can change it.
+- `drgnx doctor` says when an open file still has the mode of a package that is off in its project (after a hand
+  edit of the setting): `M-x normal-mode` there sets it right.
+
+Developers: [in one project](../develop/extensions.md#in-one-project).
