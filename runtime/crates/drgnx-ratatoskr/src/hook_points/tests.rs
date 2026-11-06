@@ -12,6 +12,8 @@ use norn::store::CoordDb;
 use norn::write::event::{DATA_MAX, Event, EventKind, event};
 use runstav::registry::Class;
 
+mod after_edit;
+
 fn writer(dir: &std::path::Path) -> Writer {
     Writer {
         db: CoordDb::spawn(dir.join("work.db")),

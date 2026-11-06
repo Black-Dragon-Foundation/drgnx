@@ -12,11 +12,19 @@
 //! - **What the agent is told:** a deny's reason is steered into its running turn in the hub's words, the hook's
 //!   quoted ([`refusal`]); an annotation is a `note` entry under the step.
 //!
-//! After an edit, before a commit and at review use [`record_data`] and [`write_row`] too.
+//! - **After an edit** ([`after_edit`]): runs off the agent's turn (the session's write request or its completed edit
+//!   step is handled in its own task), inside the point's 5 s budget, and never widens anything: a hook's answer is a
+//!   note, a refusal of what an fs write would put on disk, or (fs writes only) a replacement of the content. It
+//!   shares the plugin host and the loaded-plugin cache of [`Plugins`] with the before-tool point.
+//!
+//! Before a commit and at review use [`record_data`] and [`write_row`] too.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+
+use crate::agents::session::Session;
+use brokkr::HostIo;
 
 use norn::hooks::{self, Decision, HookInput, Outcome, Point, Record, Rule, Source, Verdict};
 use norn::matrix::{Cell, Verdict as Matrix};
@@ -854,6 +862,181 @@ pub fn provenance(c: &Tx, sid: &str, step: i64) -> Result<Vec<Value>, CoordError
         .flatten()
         .filter_map(|t| serde_json::from_str(&t).ok())
         .collect())
+}
+
+/// The whole point's time: every rule and hook at `after-edit` shares it.
+pub const AFTER_EDIT_BUDGET: Duration = Duration::from_secs(5);
+
+/// An edit the hooks are asked about.
+#[derive(Clone, Debug, Default)]
+pub struct EditInfo {
+    /// The file, absolute.
+    pub path: PathBuf,
+    /// The unified diff of the edit, when the hub can tell it.
+    pub diff: Option<String>,
+    /// What the hub is about to write: only for `fs/write_text_file`, the one edit a hook may change.
+    pub content: Option<String>,
+    /// The timeline step, when known.
+    pub step: Option<i64>,
+}
+
+fn proceed(annotations: Vec<String>) -> Outcome {
+    Outcome {
+        decision: Decision::Proceed { changed: None },
+        decided_by: None,
+        annotations,
+        provenance: Vec::new(),
+    }
+}
+
+/// The hooks and rules of PROJECT asked about EDIT in SESSION (a file under ROOT), through IO.
+pub(crate) async fn run_after_edit(
+    plugins: &Plugins,
+    project: Option<&str>,
+    root: &Path,
+    io: Arc<dyn HostIo>,
+    session: &str,
+    edit: &EditInfo,
+) -> Outcome {
+    let rules = plugins.rules_for(project);
+    let installed = plugins.enabled_for(project);
+    let rel = edit
+        .path
+        .strip_prefix(root)
+        .unwrap_or(&edit.path)
+        .to_path_buf();
+    let mut detail = json!({"edit": {"path": rel, "diff": edit.diff}});
+    if let Some(c) = &edit.content {
+        detail["edit"]["content"] = json!(c);
+    }
+    let input = HookInput {
+        point: Point::AfterEdit,
+        session: Some(session.to_owned()),
+        step: edit.step,
+        tool_kind: Some("edit".into()),
+        tool: None,
+        paths: vec![rel],
+        command: None,
+        detail,
+    };
+    if !norn::hooks::subscribed(&input, &rules, &installed) {
+        return proceed(Vec::new());
+    }
+    let host = match plugins.host() {
+        Ok(h) => h,
+        Err(e) => return proceed(vec![format!("hooks did not run: {e}")]),
+    };
+    let (plugs, failed) = load(plugins, &installed);
+    let failed: Vec<String> = failed
+        .into_iter()
+        .map(|(p, why)| format!("hook {} not loaded: {why}", p.manifest.name.as_str()))
+        .collect();
+    let hooks = hooks::PluginHooks {
+        host,
+        io,
+        refresh: |i: &mut HookInput| {
+            if let Some(p) = i.detail.pointer("/edit/path").and_then(Value::as_str) {
+                i.paths = vec![PathBuf::from(p)];
+            }
+        },
+    };
+    let records = hooks::run(
+        &input,
+        AFTER_EDIT_BUDGET,
+        edit.content.is_some(),
+        &rules,
+        &plugs,
+        &hooks,
+    )
+    .await;
+    let mut out = hooks::combine(None, edit.content.is_some(), &records);
+    out.annotations.extend(failed);
+    out
+}
+
+/// The hooks asked about EDIT, an edit SESSION made (or is making). Never blocks the editor: callers run it in a
+/// task of their own, and a hook that does not answer in time is a note or a refusal of this edit alone.
+pub async fn after_edit(front: &Front, s: &Session, edit: &EditInfo) -> Outcome {
+    let project = s.project();
+    let root = s.cwd().to_path_buf();
+    let manifests: Vec<_> = front
+        .core
+        .plugins
+        .enabled_for(project.as_deref())
+        .iter()
+        .map(|p| p.manifest.clone())
+        .collect();
+    let refs: Vec<&brokkr::Manifest> = manifests.iter().collect();
+    let io: Arc<dyn HostIo> = match crate::plugins::host_io(
+        front,
+        Some((
+            crate::plugins::io::IoCtx::Session(s.id.clone()),
+            crate::agents::launch::NetCell::ProviderOnly,
+        )),
+        &refs,
+    ) {
+        Ok(io) => io,
+        Err(_) => return proceed(vec!["hooks did not run: the plugins are not open".into()]),
+    };
+    run_after_edit(
+        &front.core.plugins,
+        project.as_deref(),
+        &root,
+        io,
+        &s.id,
+        edit,
+    )
+    .await
+}
+
+/// The replacement content a `change` verdict carries, and the name of the hook that made it.
+pub fn changed_content(out: &Outcome) -> Option<(String, String)> {
+    let (Decision::Proceed {
+        changed: Some(c), ..
+    }
+    | Decision::Ask {
+        changed: Some(c), ..
+    }) = &out.decision
+    else {
+        return None;
+    };
+    let content = c.get("content")?.as_str()?.to_owned();
+    let name = out
+        .provenance
+        .iter()
+        .rev()
+        .find(|r: &&Record| matches!(r.verdict, Some(brokkr::Verdict::Change(_))))
+        .map(|r| match &r.source {
+            Source::Plugin { name, .. } => name.clone(),
+            other => other.name(),
+        })
+        .unwrap_or_default();
+    Some((content, name))
+}
+
+/// What the agent is told when a hook changed its write.
+pub fn change_notice(hook: &str, path: &str) -> String {
+    format!(
+        "drgnx's hook {hook} changed your write to {path}; read the file before editing it again"
+    )
+}
+
+/// The error an fs write is refused with.
+pub fn refusal_message(reason: &str) -> String {
+    format!("drgnx refused the write: {reason}")
+}
+
+/// What a deny of an edit is called, for the agent and the timeline.
+pub fn refusal_of(out: &Outcome) -> Option<(String, String)> {
+    let Decision::Deny(reason) = &out.decision else {
+        return None;
+    };
+    let name = out
+        .decided_by
+        .and_then(|i| out.provenance.get(i))
+        .map(|r| r.source.name())
+        .unwrap_or_default();
+    Some((name, reason.clone()))
 }
 
 #[cfg(test)]

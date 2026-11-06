@@ -2899,6 +2899,11 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
 
 impl Session {
     /// The budget scope of this session.
+    /// The project its plan run works under: the plugins and rules of that project apply.
+    pub(crate) fn project(&self) -> Option<String> {
+        self.scopes.get(&self.id).and_then(|(_, project)| project)
+    }
+
     pub(crate) fn scope(&self) -> runstav::methods::timeline::BudgetScope {
         scope_of(self.role, &self.id)
     }
@@ -3258,6 +3263,7 @@ impl Session {
                                 begun,
                             )
                         };
+                        self.hook_own_edits(&v);
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
@@ -3308,18 +3314,23 @@ impl Session {
                 }
                 Event::Request(Incoming::WriteFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
-                    match self.write_file(&v).await {
-                        Ok(()) => {
-                            if let Ok(r) =
-                                serde_json::from_value::<WriteTextFileResponse>(json!({}))
-                            {
-                                let _ = resp.respond(r);
+                    // in a task of its own: the after-edit hooks may take their whole budget, and this loop
+                    // must keep serving the agent's other events meanwhile
+                    let me = self.clone();
+                    crate::clock::spawn("session:write", async move {
+                        match me.write_file(&v).await {
+                            Ok(()) => {
+                                if let Ok(r) =
+                                    serde_json::from_value::<WriteTextFileResponse>(json!({}))
+                                {
+                                    let _ = resp.respond(r);
+                                }
+                            }
+                            Err((code, m)) => {
+                                let _ = resp.fail(code, &m);
                             }
                         }
-                        Err(m) => {
-                            let _ = resp.fail(-32602, &m);
-                        }
-                    }
+                    });
                 }
                 Event::Exit {
                     code,
@@ -4027,13 +4038,129 @@ impl Session {
         })
     }
 
-    async fn write_file(&self, req: &Value) -> Result<(), String> {
+    /// The agent's `fs/write_text_file`: the after-edit hooks see the content first. A deny refuses the write (-32000),
+    /// a change is what gets written (and the agent is told), a note goes under the step.
+    async fn write_file(self: &Arc<Self>, req: &Value) -> Result<(), (i64, String)> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
-        let content = req.get("content").and_then(Value::as_str).unwrap_or("");
-        let real = self.fence().check(path, true)?;
+        let mut content = req
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let real = self.fence().check(path, true).map_err(|m| (-32602, m))?;
+        if let Some(front) = self.front() {
+            let old = tokio::fs::read_to_string(&real).await.unwrap_or_default();
+            let diff = similar::TextDiff::from_lines(old.as_str(), content.as_str())
+                .unified_diff()
+                .to_string();
+            let edit = crate::hook_points::EditInfo {
+                path: real.clone(),
+                diff: Some(diff),
+                content: Some(content.clone()),
+                step: None,
+            };
+            let out = crate::hook_points::after_edit(&front, self, &edit).await;
+            self.note_all(&out.annotations);
+            if let Some((_, reason)) = crate::hook_points::refusal_of(&out) {
+                return Err((-32000, crate::hook_points::refusal_message(&reason)));
+            }
+            if let Some((new, hook)) = crate::hook_points::changed_content(&out) {
+                content = new;
+                self.steer_in(crate::hook_points::change_notice(&hook, path));
+            }
+        }
         tokio::fs::write(&real, content)
             .await
-            .map_err(|e| format!("{path}: {e}"))
+            .map_err(|e| (-32602, format!("{path}: {e}")))
+    }
+
+    /// Notes from the hooks, shown in the transcript under the step.
+    fn note_all(self: &Arc<Self>, notes: &[String]) {
+        if notes.is_empty() {
+            return;
+        }
+        {
+            let mut st = lock(&self.state);
+            for n in notes {
+                let mut rest = Map::new();
+                rest.insert("text".into(), json!(n));
+                st.push(EntryType::Notice, rest);
+            }
+        }
+        self.changed();
+    }
+
+    /// An edit the agent made itself just completed: the hooks may only note or deny it. Off the turn, in a task of
+    /// its own. A deny is steered to the agent and marks the step refused; the file stays.
+    fn hook_own_edits(self: &Arc<Self>, update: &Value) {
+        if update.get("sessionUpdate") != Some(&json!("tool_call_update"))
+            || update.get("status") != Some(&json!("completed"))
+            || self.front().is_none()
+        {
+            return;
+        }
+        let id = update
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let edits: Vec<(PathBuf, String)> = update
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.get("type") == Some(&json!("diff")))
+            .filter_map(|c| {
+                let path = c.get("path")?.as_str()?;
+                let new = c.get("newText").and_then(Value::as_str).unwrap_or("");
+                let old = c.get("oldText").and_then(Value::as_str).unwrap_or("");
+                let diff = similar::TextDiff::from_lines(old, new)
+                    .unified_diff()
+                    .to_string();
+                Some((PathBuf::from(path), diff))
+            })
+            .collect();
+        if edits.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        crate::clock::spawn("session:after-edit", async move {
+            let Some(front) = me.front() else {
+                return;
+            };
+            for (path, diff) in edits {
+                let shown = path.display().to_string();
+                let edit = crate::hook_points::EditInfo {
+                    path,
+                    diff: Some(diff),
+                    content: None,
+                    step: None,
+                };
+                let out = crate::hook_points::after_edit(&front, &me, &edit).await;
+                me.note_all(&out.annotations);
+                if let Some((hook, reason)) = crate::hook_points::refusal_of(&out) {
+                    me.mark_refused(&id, &hook, &reason);
+                    me.steer_in(format!(
+                        "drgnx refused your edit of {shown}; the hook {hook} said: «{reason}»"
+                    ));
+                }
+            }
+        });
+    }
+
+    /// The step of TOOL_ID is marked refused by hook HOOK (the timeline and the edits ledger read it).
+    fn mark_refused(self: &Arc<Self>, tool_id: &str, hook: &str, reason: &str) {
+        {
+            let mut st = lock(&self.state);
+            if let Some(i) = st.tools.get(tool_id).copied() {
+                st.entries[i].rest.insert(
+                    "refused_by_hook".into(),
+                    json!({"hook": hook, "reason": reason}),
+                );
+                st.dirty.insert(i);
+            }
+        }
+        self.changed();
     }
 
     /// Cancel the turn and end the process group.

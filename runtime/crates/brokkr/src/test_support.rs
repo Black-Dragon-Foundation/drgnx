@@ -155,7 +155,7 @@ mod tests {
             );
             seen += 1;
         }
-        assert_eq!(seen, 11, "the fixtures the plan names");
+        assert_eq!(seen, 13, "the fixtures the plan names");
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
         let found = scan(&root);
         assert_eq!(
             found.len(),
-            11,
+            13,
             "{:?}",
             found
                 .iter()
