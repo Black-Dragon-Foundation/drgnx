@@ -61,7 +61,8 @@ Set it to `theme` for the theme's own accent.
 ### Terminals
 
 On a terminal with 256 colours or fewer, the gap, the editor and the panel are one colour: the cards are drawn by the
-vertical border instead.
+vertical border instead. On every terminal (true colour too) drgnx's themes draw the selection in inverse video
+rather than in the selection colour, which a terminal can barely tell from the editor's.
 
 ### For theme authors
 

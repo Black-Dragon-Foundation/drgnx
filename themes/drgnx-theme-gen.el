@@ -214,16 +214,24 @@ A tint is composited over the variant's `editor'."
   "TOK for a terminal: the gap and the panel are the editor's colour."
   (lambda (name) (funcall tok (if (memq name '(gap panel)) 'editor name))))
 
+(defconst drgnx-theme--terminal-faces
+  '((region :inverse-video t :extend t))
+  "Faces drawn without a colour on a terminal frame: the selection's tint is too close to the editor's colour for a
+terminal to tell apart (Emacs then blinks a copy, as for an unhighlighted region), so there it is inverse video.")
+
 (defun drgnx-theme--specs (variant)
   "The arguments of `custom-theme-set-faces' for VARIANT: (FACE SPEC)…
-A true-colour clause first, then one for every other display with the terminal tier; one clause when they agree."
+A true-colour clause first, then one for every other display with the terminal tier; one clause when they agree.
+A face of `drgnx-theme--terminal-faces' gets its terminal attributes in a first clause for every terminal."
   (let ((full (drgnx-theme--faces variant (lambda (name) (drgnx-look-token name variant))))
         (tty (drgnx-theme--faces variant (drgnx-theme--tty-token (lambda (name) (drgnx-look-token name variant))))))
     (cl-mapcar (lambda (f g)
                  (list (car f)
-                       (if (equal f g)
-                           `((t ,@(cdr f)))
-                         `((((class color) (min-colors 16777216)) ,@(cdr f)) (t ,@(cdr g))))))
+                       (append (when-let* ((term (cdr (assq (car f) drgnx-theme--terminal-faces))))
+                                 `((((type tty)) ,@term)))
+                               (if (equal f g)
+                                   `((t ,@(cdr f)))
+                                 `((((class color) (min-colors 16777216)) ,@(cdr f)) (t ,@(cdr g)))))))
                full tty)))
 
 (defmacro drgnx-theme-define (name variant)
