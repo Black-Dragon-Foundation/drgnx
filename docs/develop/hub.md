@@ -1159,7 +1159,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
@@ -1212,7 +1212,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1236,8 +1236,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
+| `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
@@ -2117,8 +2120,10 @@ that ssh would expand (`%`) or that would break its line, and an empty argv; `gr
 it reads for an option: `ForwardAgent no`, `ForwardX11 no`, `ClearAllForwardings yes`, `PermitLocalCommand no`,
 `BatchMode yes`, `StrictHostKeyChecking yes`, `UpdateHostKeys no`, `ServerAliveInterval 15`, `ServerAliveCountMax 4`,
 `Compression yes`, `ControlPersist 10m`, `RemoteCommand none` and `RequestTTY no` (`FORCED`). A cloud runner adds
-`IdentityAgent`, `CertificateFile`, `IdentitiesOnly yes` and `UserKnownHostsFile` (paths quoted) and reads no user
-config; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
+`IdentityAgent`, `IdentityFile` (the public half of the agent's key), `CertificateFile`, `IdentitiesOnly yes` and
+`UserKnownHostsFile` (paths quoted) and reads no user config. The `IdentityFile` is needed: under `IdentitiesOnly`
+ssh pairs a certificate only with a named identity's agent key ("no separate private key for certificate"), and
+without one it offers the user's default keys; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
 `ProxyCommand` stay the user's. `write` puts it at `$XDG_RUNTIME_DIR/drgnx-runners/<name>/ssh_config`, mode 0600, its
 folders 0700 (made, or narrowed), replaced in one rename; a runner folder that is a link or someone else's is refused.
 ssh expands `~` from the password database, not `$HOME`, so a test's `Include` reaches its own home only in a
@@ -2149,7 +2154,8 @@ the runner's folder. `LinkError {Lost, NeedsLogin(Login), HostKeyChanged, Refuse
 `classify_stderr` reads ssh's error output: Tailscale's "requires an additional check" (its URL kept for the card,
 never opened), a passphrase, a host key not known yet (`Login`), a changed host key (`HostKeyChanged`, never
 accepted); `link_error` makes the machine down or out of reach `Lost` and the rest `Refused` in ssh's words.
-`Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
+`for_runner` makes a cloud machine's unknown host key `HostKeyChanged` and any login it asks for a refusal: its keys
+are pinned and there is nothing to log in to. `Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
 `forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
 
 Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
@@ -2160,6 +2166,188 @@ escape lane's `--ignored` run never picks it up. They need sshd set two ways, th
 banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
+## Runners: cloud machines
+
+`runners/cloud/` starts and ends the user's cloud machines (`docs/guide/runners.md`, "Cloud: what you give drgnx").
+`trait Provider` (`BoxFuture` methods, so the hub holds a `dyn Provider`): `preflight() -> Vec<Check>`, `start(&StartReq)
+-> Instance`, `describe(id) -> InstanceInfo`, `list_ours()`, `end(id)` (one already gone is fine), `console(id)` (where
+a machine prints its host keys) and `prices(sizes) -> Prices`. Every call is bounded by `CALL_TIMEOUT` (30 s) and an
+answer by `MAX_BODY` (8 MiB). `CloudError {NeedsLogin(cmd), Denied, Capacity, Transient, Other}` carries the
+provider's code and message, never a credential.
+
+**AWS** (`aws.rs`): EC2's Query API (and STS `GetCallerIdentity`, the Pricing API's `GetProducts`), signed by
+`aws-sigv4` (`sign-http` only), sent through bifrost's `Upstream` (HTTP/1.1, rustls on ring) and read by a small
+`quick-xml` tree (`El`). `run_params` always sets `ClientToken` (the start's token: a retry returns the same
+machine), the `drgnx-hub` and `Name` tags on the instance, its volumes and its network interface,
+`InstanceInitiatedShutdownBehavior=terminate`, `MetadataOptions` tokens required with hop limit 1, the security group,
+the spot options, and the user-data (public things only). `classify(status, code)`: a 401/403 with an expired or
+unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drops the cached credentials;
+`UnauthorizedOperation` is `Denied`; `Insufficient*Capacity` is `Capacity`; throttling, 5xx and a just-started
+machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
+sizes)` what `drgnx runner cloud setup aws` prints.
+
+**GCP** (`gcp.rs`, design §6.7.1, §6.7.6, H6): Compute Engine's REST API (and Resource Manager's
+`testIamPermissions`, the Billing Catalog's `skus.list`) as JSON with a bearer token, through the same `Upstream`.
+`Gcp::new(GcpCfg {project, zone, hub_id, lifetime}, creds)`; a machine's id is `ZONE/NAME`. `insert_request(req, now)`
+always sets the `requestId` (`request_id(token)`: a UUID from the start's token, so a retry is the same request), the
+`drgnx-hub` label on the instance and its disk, `terminationTime` = now + the lifetime with
+`instanceTerminationAction=DELETE`, `SPOT` with `preemptionNoticeDuration` 120 s for a spot start (`STANDARD`
+otherwise), `automaticRestart` off, no service account, the network tag `drgnx-<hub id>-ssh` and the Ignition config
+as `user-data`; a name that isn't `drgnx-…` is refused (the conditional role allows only those). `start` waits for its
+operation (GCE reports capacity and quota there); `describe` of a deleted machine is `Gone` (GCE keeps no record);
+`list_ours` is `instances.aggregatedList` with the label filter, in the zone's region; `end` is `instances.delete` (a
+machine already gone is fine) and there is no stop: on GCP the guest never powers off, and the idle stop is the hub's
+delete (`Sweeper::with_idle`). `scheduling(id)` reads back the deadline and its action (the first start's check).
+`classify`: 401 is `NeedsLogin` (a cached token gets one retry with a fresh one first), the zone-pool reasons are
+`Capacity`, 429/5xx and rate limits `Transient`, other 403s `Denied`. Tokens: the credential source's output
+(`Resolver::raw`) is a token (`gcloud auth print-access-token`, used 5 minutes) or a service-account JSON key
+(`parse_service_account`), whose `jwt_assertion` (RS256 by `ring`, scope `cloud-platform`) is traded at its
+`token_uri`. `ROLE` is the custom-role fixture (`gcp-role.json`); `setup_check(gcp, member)` lists the VMs without a
+`drgnx-hub` label and gives the `gcloud` commands (`setup_commands`), the binding with `condition(project)` when there
+are any; `drgnx runner cloud setup gcp` prints both bindings. `ensure_firewall` finds or makes the two rules
+`drgnx-<hub id>-ssh` (`0.0.0.0/0`) and `…-ssh6` (`::/0`), TCP 22 to that tag, the hub id in their description; one of
+ours that allows anything else is refused. The pre-flight's lines: credentials, permissions (every one of the role's),
+the base image (`images.getFromFamily`), other machines, firewall rules.
+
+**Ignition** (`ignition.rs`, design §6.7.2): `render(&Machine {ca_public, principal, limits, bundle_url,
+bundle_sha256})` writes the Fedora CoreOS `stable` config (spec 3.4.0). Ignition runs once, on a disk's first boot, so
+each machine gets its whole setup there instead of in a baked image: the runner user (linger, subordinate ids),
+`/usr/local/bin/sleipnir` fetched from the hub with its `sha256-` verification, the CA's public key, the principal and
+sshd's certificate-only drop-in, the watchdog's `watchdog.env` with `DRGNX_WATCHDOG_PROVIDER=gcp` and the image's own
+watchdog unit (without its first-boot dependency), `drgnx-host-keys.service` printing the fingerprints and keys to
+`/dev/ttyS0` in cloud-init's shape (`ca::pin::from_console` reads them from `getSerialPortOutput`), and Zincati off (a
+`config.d` drop-in and the unit masked). Files are percent-encoded `data:` URLs; nothing in it is secret, and nothing
+in it powers the machine off.
+
+**Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
+`/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
+prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
+in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`. `Resolver::raw()`
+is the source's output unparsed (in a `Zeroizing` buffer), for GCP.
+
+**The market** (`market.rs`, design §6.7.3, pure): `Policy {mode}` with `Mode {Spot, OnDemand, SpotThenOnDemand}`
+(`drgnx-runners-cloud-market`, the default the last). `History::record(region, at, Event {Preempted, NoCapacity})`
+keeps only what can still matter (`WINDOW_S` + `FALLBACK_S`). `choose(region, now, history)` is on-demand in a region
+where two events of one kind came within `WINDOW_S` (1 h), for `FALLBACK_S` (6 h) after the second;
+`for_job(restartable, …)` never gives a job that can't be restarted spot (on-demand, or none with `spot` only). A
+runner's `preempting` frame (its watchdog's notice, `docs/develop/sleipnir.md`, "The watchdog") ends its attempts
+`infra: preempted` and requeues them at once (`attempts`, `Event::Preempting`).
+
+**Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
+`_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
+
+Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
+classes, the policy's statements, a prompting credential command, the market's fallback and restartability), and [B]
+rows against the mock with its virtual clock (`start_describe_end_round_trip`,
+`a_retry_after_a_crash_returns_the_same_instance`). GCP: [D] `gcp::insert_always_has_deadline_delete_and_request_id`,
+`gcp::jwt_fallback_signs_with_ring` (a key `ssh-keygen` makes, verified by `ring`),
+`ignition::ignition_turns_zincati_off_and_holds_no_secret`, `ignition::the_guest_never_powers_off_on_gcp`; [B]
+`gcp::a_stopped_vm_is_deleted_by_the_sweeper` (and an idle one), `gcp::the_deadline_deletes_with_the_hub_down` (the
+mock's clock moved to the deadline with no client running; the firewall rules, the console, the prices),
+`gcp::a_shared_project_gets_the_conditional_role_warning` (the role, the setup's commands, the pre-flight).
+
+## Runners: cloud spend, the sweeper, the network rule
+
+**The meter** (`meter.rs`, design §6.7.5): `Meter::new(Rates, month_spent)` per month, from that month's records.
+Per machine (`Started {machine, runner, provider, region, size, market, price_h, disk_gb, at}`): running seconds ×
+the price at its start, its disk's GB-hours, its public IPv4 address-hours (`Rates`, AWS's list prices by default)
+and the bytes it sent back (`sent`) at the egress price; and the images' storage (`images(gb, now)`, the `images`
+record). `tick(now)` gives one `CloudSpend {machine, provider, region, type, market, from, to, amount}` per whole
+machine-hour, each once; `end(machine, now)` the last part-hour; `write(db, rec)` puts it in the graph as
+`cloud_spend:<machine>.<from>` (`("hub", Class::System)`, `norn::write::runners`). `spent(now)` is the records and
+what runs since.
+
+- `gate(now, cap, size, price_h, busy_s, idle_s, running, needs_login)`: while the credentials need a login, the
+  card's text (`needs_login_text`: "Run CMD, then Runners: Retry Cloud", CMD in backquotes); at the cap `"cloud cap: $50 of $50 used; no new cloud work"`; and a
+  start whose `forseti::cost::projection` passes the cap `"cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would
+  pass it"` (dollars from $10, cents below; the minutes are busy + idle).
+- `check(now, cap, machine_hour, CHECK_S) -> CapAct {Go, NoNewWork, StopAll([(instance, runner)])}`, through
+  `forseti::cost::guard` one check (10 s) ahead: on `StopAll` the hub runs a sweep with `CapState::PastCapPlusHour`,
+  which ends every machine, and `Queue::cloud_gone(runner, now)` requeues their attempts at once
+  (`attempts::Event::CloudGone`; a job that can't be restarted ends lost).
+
+**The sweeper** (`sweep.rs`, design §6.7.6 layer 3): `Sweeper::new(hub_id, Bounds {lifetime_s, unreachable_s})`;
+`pass(provider, now, reached, cap) -> Pass {Done(Swept), Paused(cmd), Failed(e)}`, at hub start, every `EVERY_S`
+(600 s) and on the cap's stop. It lists the provider's tagged machines and skips (into `Swept::not_ours`) any without
+`drgnx-hub=<this hub>`, whatever the list returned. A running machine `reached` says the hub has no link to goes into
+`reattach`, and is ended after `UNREACHABLE_S` (300 s) unreached in a row; a machine past its lifetime (its
+`launchTime`, `InstanceInfo::launched`), a stopped one, and with `PastCapPlusHour` every one is ended
+(`Ended {Unreachable, Lifetime, Stopped, Cap, Idle}`). Where the idle stop is the hub's (GCP), `with_idle(idle_s)`
+ends a reached machine that `idle_since(id, Some(t))` (its watchdog's `Idle {since}`, through `serve`) says has been
+idle that long; `idle_since(id, None)` is busy again. A `NeedsLogin` pauses it (`paused()` names the command, nothing is
+ended); the next pass the credentials work for resumes and ends what is past its bound by then.
+
+**The network rule** (`net.rs`): `ensure_rule(&Aws)` finds or makes the region's one security group
+`drgnx-<hub id>-ssh` in the default VPC, tagged `drgnx-hub` at creation, and gives it the one rule TCP 22 from
+`0.0.0.0/0` and `::/0`. A group of ours with no rule (a crash between the calls) gets it; one with any other rule is
+refused, never used.
+
+Tests: `forseti::cost::` [D] (`docs/develop/forseti.md`); `runners::cloud::meter::` [D]
+(`the_reason_text_is_the_designs`, `cap_plus_one_hour_stops_now`, `the_meter_counts_disk_ipv4_egress_and_images`); and
+against the mock with its virtual clock [B]: `sweep::ends_an_unreachable_tagged_machine_after_5_minutes`,
+`sweep::stops_every_machine_past_the_cap`, `sweep::never_touches_an_untagged_instance` (with a list that returns the
+whole account), `sweep::creds::expired_pauses_the_sweeper_and_it_resumes`, `net::the_rule_is_port_22_only_and_tagged`.
+
+## Runners: cloud SSH
+
+`runners/cloud/ca.rs` (design §6.7.4). Keys are `ring` ed25519 (the plan's fallback: `ssh-key` 0.6 would add sha2
+0.10), and the OpenSSH formats are written here:
+
+- `Ca::new() -> (Ca, PublicKey)`: one CA per hub. `to_secret()` is its unencrypted `openssh-key-v1` PEM as a
+  `SecretString`, for the editor to write to the keyring; `from_secret` reads it back from `runners/keys`. Its seed is
+  a `Zeroizing` array; nothing writes it.
+- `UserKey::generate()`: a fresh key per redial, in memory only.
+- `Ca::sign(user, principal, valid) -> Certificate`: an `ssh-ed25519-cert-v01@openssh.com` user certificate, the
+  principal as its only principal and key id, valid from now less 60 s (clock skew) to now plus VALID (1 h), with no
+  critical options and no extensions (no pty, no forwarding). Public: written beside the key's public half.
+- `Agent::start(runtime_dir)`: the hub's own `ssh-agent -D -a $XDG_RUNTIME_DIR/drgnx-runners/agent.sock` (`$TMPDIR`
+  on macOS), ready when it prints `SSH_AUTH_SOCK=`. `add(key, lifetime)` is `ssh-add -t SECS -` with the PEM on
+  stdin. Both run with a cleared environment (`PATH` and our `SSH_AUTH_SOCK` only), so the user's agent is never
+  asked. Dropping it stops the agent.
+- `pin::from_console(text) -> Vec<HostKey>`: the machine's host keys as cloud-init's `write-ssh-key-fingerprints`
+  prints them: the fingerprint lines (after `logger`'s syslog prefix) and the public keys, the last pair of blocks
+  winning. A key counts only when its SHA-256 is among the fingerprints; a console without both blocks, a key the
+  fingerprints don't list, or no key refuses the machine. No trust on first use. `pin::known_hosts(host, keys)` is the
+  machine's `UserKnownHostsFile`. The GCP image (Fedora CoreOS has no cloud-init) prints the same blocks.
+- `ssh_config::write_in(runtime_dir, name, file, text)` writes those public files into the runner's folder, 0600.
+
+Tests: `runners::cloud::ca::` [D] (a certificate's fields and its signature, the CA's bytes in no file after signing,
+the user's agent untouched with `SSH_AUTH_SOCK` on a recording listener, the console's refusals), and the fleet rows
+`tests/fleet_cloud.rs` [C] (`fleet.sh up --cloud`: a mock cloud's machine reached by certificate only, a changed host
+key refused).
+
+## Runners: the AWS image
+
+`runners/cloud/image.rs` and `user_data.rs` (design §6.7.2). drgnx's own image is Fedora Cloud 45 with everything a
+runner needs baked in, so a started machine is ready in about a minute.
+
+- `image::build(api, list, cfg, inputs) -> Built {id, reused, base}`: resolves the base (`resolve_base`: Fedora's
+  published `releases.json` through `FedoraList`, parsed by `parse_fedora_list` for the release, region and arch;
+  else the caller's named fallback; else `unavailable: no supported base image`), hashes the inputs with the base
+  (`user_data::input_hash`), and returns the image already carrying that hash (`reused`, no machine). Otherwise it
+  starts the build machine (`ImageApi::start_builder`: on-demand, **stops** at power-off instead of terminating),
+  waits for it to stop (`wait_stopped`, bounded by `BuildCfg.wait`, 10 s polls on the hub clock), images it
+  (`create_image`: encrypted block device, the hub's tag and `drgnx-version`, `drgnx-bundle`, `drgnx-input-hash`,
+  `drgnx-built` on the image and its snapshot), ends the machine (also when imaging failed), and keeps the newest two
+  (`keep_newest`; the older ones are `deregister`ed with their snapshots).
+- `user_data::render_build(inputs)`: the build machine's cloud-config. It installs git, podman, the runner bundle
+  (checked against its SHA-256), the watchdog and first-boot units, the CA's public key, the `runner` user, the
+  project images by digest, the git mirrors fetched from the hub and a warm cargo registry, then runs `FINAL_STEPS`:
+  remove `/etc/ssh/ssh_host_*`, `cloud-init clean --logs`, `sync`, `systemctl poweroff`. `ssh_deletekeys` is set, so
+  each instance makes its own host keys. `BuildInputs` takes public data only and refuses anything else (a private key
+  line, a URL with credentials, an image not named by digest).
+- `user_data::render(ca, principal, limits, flavor)`: an instance's user-data, **public things only** (the principal,
+  the watchdog's limits, optionally a newer CA public key). Any process on the machine can read it from the instance
+  metadata. `image/drgnx-first-boot` reads it at boot (IMDSv2), writes the `TrustedUserCAKeys` and
+  `AuthorizedPrincipalsFile` drop-in and the watchdog's limits, and reloads sshd.
+
+Tests: `runners::cloud::image::` and `user_data::` ([D] pure: `user_data_holds_no_secret`,
+`host_keys_removed_before_the_snapshot`, `keeps_the_newest_two_images`; [B] `image::build_then_start_from_it` against
+`ratatoskr-mock cloud`, the guest's power-off played by the test at the one point the build waits), and
+`test/runners/image-units.sh` (the first-boot script against a stand-in metadata service, and the units, in a
+container).
 
 ## Runners: attempts
 
@@ -2184,8 +2372,10 @@ attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r,
   then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
   the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
   when the job isn't restartable.
-- **The grace** is the runner's, `RunnerCfg::grace()`, passed in at `Placed`: 600 s with linger, 0 without, where a lost
-  link ends the attempt at once (the runner's jobs die with the login).
+- **The grace** is the runner's, passed in at `Placed`: the registry's (`RunnerCfg::grace()`, 600 s with linger) while
+  the runner's last `hello` says it lingers, 0 when it says it doesn't, where a lost link ends the attempt at once (the
+  runner's jobs die with the login). Each `hello` is read again: one without linger sets the grace of the runner's open
+  attempts to 0 (`Core::set_grace`), so linger turned off between two `hello`s ends them with the next lost link.
 - **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
   eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
   told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
@@ -2215,7 +2405,10 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight}` and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts}`, its frozen inputs (below) and what to start it
+from (`Pending`). `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
+name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
 honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
 `exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
@@ -2228,17 +2421,26 @@ splitter's (`Origin::Splitter`), 3 for an agent's `job_start`, 4 for a plan's or
 
 **A tick** (`Queue::tick(now)`, every 2 s on the hub's clock, at every start and on every link event): the detached
 attempts whose grace ended; then the queued jobs in `forseti`'s order (`effective_priorities`, `queue_order`, then
-`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick` over this machine and every
+`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick_with` over this machine and every
 runner (trust, pin, features, state, the project's send mode, the `machines` cell). `Pick::Local` asks the local
 runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
 it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
 `Pick::Runner` offers it there (a new attempt, a random nonce, `Placed` into the attempt state machine, an `offer`
-frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's `admit` is answered with
-`start`; a `refuse` puts the job back with the runner's reason; `finished`, a lost link, a `hello` and a preemption go
+frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's last `ready` is its budget
+(free memory and CPU, less what the hub offered it since) and the slots and images it holds: a runner whose budget has
+no room for a job's need is passed by (`no room`), so the hub offers only what fits (§6.8.1); one that sent no `ready`
+yet is offered as before. A runner's `admit` is answered with `start`; a `refuse` puts the job back with the runner's
+reason; `started` is written to `rq_attempt` at once (`running`, so a restart never reads `offered` for a job that
+ran); `finished`, a lost link, a `hello` and a preemption go
 through the attempt state machine, whose verdicts, losses and late results become `Outcome`s: the job layer writes the
 verdict as the job's `exit` (or `why`) and ends it as a job here ends. The session's `Route` writes a runner's log
 frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; a requeue moves the log aside as
 `log.<n>`.
+
+**Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
+and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
+changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
+leaves that state as it is, and nothing is placed there until the runner's next `hello`.
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
@@ -2258,6 +2460,174 @@ runner's `hello` lists them, and jobs running here are adopted by the job layer,
 Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
+
+## Runners: partial rows and learned placement
+
+**Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
+`Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
+rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+(`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
+(`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
+parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The
+`start` frame names the suite's parser, so the runner sends `row` frames; each counts for an attempt placed on that
+runner with that nonce, current or late, until the job's verdict (`attempts::Rows`, and `rq_rows`). A runner sends its
+rows at an attempt's end, so when an attempt is requeued the hub reads the rows its own copy of the log shows (up to the
+last whole line) as that attempt's. A requeued attempt whose rows the next one reruns is cancelled when its runner lists
+it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice. When
+every listed row already has its result at the requeue, nothing runs again: the job ends there from those rows, judged
+as a finish is (a `Pass` judged over the union), and the job layer gets its `Outcome::Done` for that attempt.
+
+At the verdict, `attempts::union_result` gives the runner's `result.json` the union's `counts`, `rows` (each with its
+attempt and machine) and `failing`: each row once, from its latest attempt. A `Pass` is judged again over the union
+(`sleipnir::linux::parse::judge` with the job's `expect`), so a row an earlier attempt failed keeps the job red; any other
+verdict stands. When the rows came from more than one attempt the result carries `split`, `exec::summary::split_line`'s
+words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
+summary (the job folder's `split` file).
+
+`exec/start` takes the suite as `rows: {parser, listed}` (`StartParams.rows`, at most 20000 rows): the job's
+`Placement.suite`. A run on this machine runs once, whole: `{rows}` becomes the selector of every listed row.
+
+**Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
+history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time, and `warm` when
+its start was: no grant). A job here that ran to its end is one too, machine `local` (`Queue::ran_here`, from the job
+layer's finish). The queue keeps each key's last 5 runs per machine, and `forseti::Learned` learns the speed ratios
+between machines from each new row (`Learned::observe_run`). A bundle the runner took in times the link: its bytes
+over the time from its sending to the runner's next `sync-need` (`Learned::observe_transfer`), and a candidate's
+transfer counts its overlay's bytes unless an attempt there synced the same inputs (the queue remembers the last 64
+input keys per runner). A start is warm on a runner whose last `ready` lists the job's slot
+(`sleipnir::sync::slot::SlotKey::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
+images its attempts ran in. Every candidate's estimate reads the job's history on every machine, and the pick is
+`forseti::pick_with` with what was learned and each candidate's warmth. After a restart `queue::kept` reads `rq_rows`
+and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and learns again in the same order, so
+placement is what it was; with no history it is the static rule's.
+
+**Backfill** (`forseti::backfill`, jobq §5.6). At each tick the head (the first queued job of the highest effective
+priority) reserves, when it fits none of the machines that may take it now, the one where it can start soonest
+(`forseti::reservation`): from this machine's probe and budget (live admission only: one admitting by count has no
+budget to reserve) and each runner's last `ready`, with the expected ends of what the queue runs there (a runner's job
+counts from its `started`, holding its grant, for the time its placement expected). While it holds, a job a machine
+would take waits as "room is kept for job H" there (`admit::head_protection`) unless it ends before the head's start,
+and may still go to another machine; the reservation goes once the head is placed, and is made again every tick.
+
+Tests: `runners::attempts::tests::union_with_latest_attempt_winning`,
+`exec::summary::tests::summary_shows_the_split`, `runners::queue::tests::a_requeue_runs_only_the_rows_without_a_result`,
+`learned_placement_comes_back_after_a_restart`, `the_head_reserves_a_runner_and_a_short_job_backfills_it`,
+`a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer`, `a_runner_with_the_jobs_slot_and_image_wins_a_tie`,
+`a_run_here_is_this_machines_history`, `exec::tests::rows_reach_the_queue_and_a_run_here_runs_them_all` [D];
+`tests/runners_orders.rs`
+`every_order_each_row_counted_once_latest_wins` [A] (two attempts' rows and a late `finished`, all 280 orders);
+`tests/fleet_runners.rs` `drill::a_dropped_link_at_row_150_of_240_reruns_only_the_rest` [C].
+
+## Runners: sync and job trust
+
+`runners/sync.rs` (design §6.2, §6.6). **Inputs are frozen at submit**: when the queue knows a runner and the job may
+leave this machine (`Placement::may_leave`), `submit_of` calls `sync::freeze(tree, extras, visibility, shared_overlay,
+store)`: sleipnir's `capture` (the commit, its tree, the overlay against it, the input key), the origin's URL and the
+commits its `refs/remotes/origin/*` reach, how many commits of the job's are on none of them (`not_on`), and each
+overlay file's bytes copied into the hub's blob store (`<state>/runner-store/blobs/<sha256>`, sleipnir's `Store`). A file
+that changes while it is read refuses the freeze; a worktree that can't be frozen (not git, a submodule's change)
+makes the job `local_only`, logged. The frozen inputs (`Frozen`) go in the `rq_job` spec as `inputs`, and `rq_input`
+gets the manifest by input key (`rq_job.input_key`). No new migration: both came with runtime.db 9.
+
+**Job trust** (`job_trust(visibility, not_on_origin, keys)`): `private+keys` when the job names keys, `public` when
+`drgnx-runners-project-visibility` is `public` and every commit is on the origin, `private` otherwise. Placement gets
+`commits_not_on_origin` for a public project, so `forseti::why_here` says "runs here: N commits not on origin".
+
+**The overlay** (`overlay_for(job, runner trust)`): the lock's protected files (`agents::lock::PROTECTED_RO`) are left
+out for every runner: worktrees carry stub `.envrc` and `mise.toml` routinely, and the runner gets their committed
+versions. A shared runner gets an overlay only with `drgnx-runners-shared-overlay` on and every file passing
+`runstav::secrets::looks_like_secret`; otherwise the queue keeps the job off shared runners and says why
+(`QJob::shared_why`).
+
+**The sync** (`Queue::sync_have`, `sync_need`): an `admit` of an attempt with inputs is answered with `sync-have`
+(the repository's mirror id, `repo_id`; the commit, the tree, the overlay for that runner's trust) instead of `start`.
+The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, origin key)`:
+
+| Case | What the hub does |
+|---|---|
+| public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | the key in a `key` frame (recorded as `key_sent`), then `origin-fetch` naming it (`cred`); the key is `drgnx-runners-origin-key`, taken only while the hub holds it (else asked for, and the commit goes another way) |
+| over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
+| a small gap | a push; for now a bundle too |
+| a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
+
+then the blobs it lacks (only those of its own overlay, `send_blob` in 1 MiB chunks), and asks again; an empty answer
+starts the attempt. Past 6 rounds, or when a step fails, the attempt is cancelled with why logged (`give_up`). A
+verdict, requeue or loss drops the attempt's sync and its bundle file.
+
+Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
+bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
+shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
+
+## Runners: keys
+
+`runners/keys.rs` and `runners/redact.rs` (design §6.3, §6.6; the user's side is docs/guide/runners.md, "Keys").
+
+**Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
+(`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
+matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
+in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+
+**The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
+`gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
+value and more than 32 keys, naming the key, never the value). `runners/keys-held` answers the names. When an attempt
+needs a key the hub doesn't hold, `runners/need-keys {names}` goes to the user's connections; nothing answers it but a
+command the user runs.
+
+**Sending.** On a keyed attempt's `started` (never before), `Queue::send_keys` sends each held key it hasn't sent yet in
+its own `key` frame, only where `keys::trust_ok` (never `shared`; `my-cloud` only its list, empty until cloud runners
+come); each is a `key_sent` row. Keys taken later go to the started attempts still missing them. A `key-use` frame
+from an attempt the hub placed there becomes a `key_use` row, `runner_reported: true`. Rows go to memory (the last
+10 000) and to the graph (norn kind `key_sent` / `key_use`, written as `("hub", System)`); `runners/audit {job?, key?}`
+reads the graph, or memory when the graph can't be read.
+
+**Redaction.** `QRoute::write_log` (the link's `Route` hook for `log` frames) runs a keyed attempt's chunks through its
+`Redactor` before they reach the hub's copy: every value sent masked in its raw, base64 (both alphabets, padded or not)
+and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
+form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
+`start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
+its keys are held again (`runners/keys`), then it is attached from the copy's end; its runner's `hello` that lists it
+asks for the missing ones (`runners/need-keys`). At `finished` the held tail is
+written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
+secret, never masking it.
+
+Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the-log-or-any-reply` [B] (conformance);
+`tests/fleet_keys.rs` [C] (one frame and one `key_sent` per key and one `key_use` per read, no key bytes on the runner;
+the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
+only and `memory.swap.max` 0).
+
+## Runners: returned data
+
+`runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
+wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+
+- `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
+  or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
+  `build.ninja`, `.ninja_log`, `.ninja_deps`, `config.status`) or an image (`oci-layout`; `.oci`, `.qcow2`, `.vmdk`,
+  `.vdi`, `.iso`, `.img`), by name, whatever a job declared.
+- `write(job_dir_fd, rel, bytes)`: both checks, then each folder on the way opened with `eitri::open_beneath` (a link
+  is refused) or made with `mkdirat` beneath the last one, then `eitri::write_regular` (0644; a link at the name is
+  replaced, never followed).
+- `archive_ok(tar)`: ustar (checksums checked; a ustar prefix, a GNU long name and a pax `path` taken; a global pax
+  `path` refused) holding only regular files and folders, every name through both checks; a link, device, FIFO,
+  any other type, a truncated entry or a missing end is refused.
+- `Patch::parse(from, bytes)` reads `git diff --full-index --binary` output: per file the paths before and after
+  (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
+  text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
+  attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
+  segment, `**` any segments, `dir/` the folder), a protected name (`PROTECTED`) or `.git` at any depth, a bad path,
+  a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
+  hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
+  than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
+- **`shared`:** `Queue::apply` gives `Outcome::Done` the runner's name when its trust is `shared`; the job layer writes
+  it to the job's `shared` file, `finish` starts the summary with `shared_label` ("output from runner NAME (shared)"),
+  so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
+  (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
+
+Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
+`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
 
 ## Runners: health
 

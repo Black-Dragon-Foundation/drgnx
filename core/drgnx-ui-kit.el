@@ -44,7 +44,7 @@ that is not UTF-8: an icon's glyph says less than its picture.  The icon names t
      (dot "●" . "*") (circle "○" . "o") (sep " · " . " | ") (flag "⚑" . "#")
      (diamond "◆" . "<>") (search "⌕" . "/") (bullet "•" . ">") (minimize "–" . "-") (maximize "▢" . "[]")
      (fail "✕" . "X") (stopped "■" . "#") (dismiss "×" . "x") (unqueue "−" . "-")
-     (info "ℹ" . "i") (warn "⚠" . "!")
+     (info "ℹ" . "i") (warn "⚠" . "!") (cloud "☁" . "c")
      (package "⬡" . "P") (plugin "◆" . "+") (module "▣" . "M")
      (refused "⛔" . "X") (note "✎" . "n") (changed "↻" . "~") (hook-busy "⏳" . "..."))
    drgnx-ui--icon-glyphs)

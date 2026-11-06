@@ -8,12 +8,16 @@
 //! sleipnir bench --root DIR --image DIGEST    this runner's speed, as JSON on stdout
 //! sleipnir git-receive --root ROOT REPO       the hub's `git push --receive-pack`: receive-pack on a mirror, hardened
 //! sleipnir credential-helper SOCKET OP        git's credential helper for an origin fetch: the token from SOCKET
+//! sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR
+//!                                             a cloud machine's own end: power-off (AWS), idle and notices to serve
 //! ```
 
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation\n       \
+const USAGE: &str = "usage: sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation \
+                     [--watchdog DIR]\n       \
                      sleipnir job-exec <attempt folder>\n       \
+                     sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root DIR --dir DIR\n       \
                      sleipnir job-helper --dir D [--hub-allow FILE]\n       \
                      sleipnir bench --root DIR --image DIGEST\n       \
                      sleipnir git-receive --root ROOT REPO\n       \
@@ -25,6 +29,7 @@ fn main() -> ExitCode {
         ["job-exec", dir] => job_exec(std::path::Path::new(dir)),
         ["job-helper", ref rest @ ..] => job_helper(rest),
         ["serve", ref rest @ ..] => serve(rest),
+        ["watchdog", ref rest @ ..] => watchdog(rest),
         ["bench", "--root", root, "--image", image] => bench(root, image),
         #[cfg(feature = "sync")]
         ["git-receive", "--root", root, repo] => sync::git_receive(root, repo),
@@ -70,6 +75,24 @@ fn serve(args: &[&str]) -> ExitCode {
 #[cfg(not(all(feature = "runner", target_os = "linux")))]
 fn serve(_args: &[&str]) -> ExitCode {
     eprintln!("sleipnir serve: runners serve only on Linux with a systemd user manager");
+    ExitCode::from(2)
+}
+
+#[cfg(all(feature = "runner", target_os = "linux"))]
+fn watchdog(args: &[&str]) -> ExitCode {
+    match sleipnir::watchdog::Args::parse(args) {
+        Ok(a) => ExitCode::from(sleipnir::watchdog::run(a).clamp(0, 255) as u8),
+        Err(e) => {
+            eprintln!("sleipnir watchdog: {e}\n{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// A watchdog runs only in drgnx's Linux images, built with the `runner` feature; anywhere else it refuses.
+#[cfg(not(all(feature = "runner", target_os = "linux")))]
+fn watchdog(_args: &[&str]) -> ExitCode {
+    eprintln!("sleipnir watchdog: only in drgnx's Linux cloud images");
     ExitCode::from(2)
 }
 

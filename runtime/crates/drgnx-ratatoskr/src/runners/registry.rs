@@ -11,7 +11,7 @@
 //! three sessions (`sh -c` with the script, its standard input and its exit code), so the user's own ssh config
 //! applies and nothing is installed but the one folder.
 
-use super::link::{self, Session};
+use super::link;
 use super::queue::{Queue, RemoteRunner};
 use super::ssh_config;
 use super::transport::{Channels, LinkError, Transport};
@@ -784,22 +784,17 @@ impl Registry {
             .ok_or_else(|| failed(format!("{}: the bench's answer has no speed", rec.name)))
     }
 
-    /// RECORD's runner linked into the queue: `serve` started over the transport, its session the queue's.
+    /// RECORD's runner linked into the queue: `serve` started over the transport, its session the queue's
+    /// ([`Queue::dial`]: a login the user must do, or a changed host key, puts it in `needs login`).
     pub async fn connect(&self, rec: &Record) -> Result<(), RegError> {
         let cfg = self.serve_cfg(rec);
         if let Some(old) = self.cfg.queue.session(&rec.name) {
             old.close().await;
         }
-        let channels = self.cfg.transport.open(&cfg).await?;
-        let session = Session::start(
-            &rec.name,
-            channels,
-            self.cfg.queue.route(),
-            self.cfg.queue.link_events(),
-        );
-        if !self.cfg.queue.set_session(&rec.name, session.clone()) {
-            self.cfg.queue.add_runner(self.remote(rec, &cfg), session);
-        }
+        self.cfg
+            .queue
+            .dial(&*self.cfg.transport, &cfg, self.remote(rec, &cfg))
+            .await?;
         Ok(())
     }
 

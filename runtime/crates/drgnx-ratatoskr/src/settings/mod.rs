@@ -143,6 +143,13 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         "String",
         OnError::Strict,
     ),
+    setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
+    setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting(
+        "drgnx-runners-origin-key",
+        "Option<String>",
+        OnError::Strict,
+    ),
     setting(
         "drgnx-sandbox-proxy-pinned-addresses",
         "ProxyPins",
@@ -237,6 +244,12 @@ pub struct RuntimeValues {
     pub runners_weight: f64,
     /// `public` or `private` (per project): with the commit on the public origin, what makes a job `public`.
     pub runners_project_visibility: String,
+    /// A shared runner may get a project's uncommitted files, once each passes the secret scan (per project).
+    pub runners_shared_overlay: bool,
+    /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
+    pub runners_job_keys: Vec<String>,
+    /// The name of a project's read-only deploy key or token for its private origin (per project).
+    pub runners_origin_key: Option<String>,
     pub sandbox_proxy_pins: ProxyPins,
     /// Where models come from instead of the Hugging Face host.
     pub search_model_mirror: Option<String>,
@@ -506,6 +519,9 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
             }
             values.runners_project_visibility = v;
         }
+        "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
+        "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
             values.sandbox_proxy_pins = pairs;

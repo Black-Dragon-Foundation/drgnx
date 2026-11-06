@@ -1,4 +1,5 @@
-//! The `runners/*` methods: the handlers over the hub's [`Registry`] (docs/develop/hub.md, "Runners: the registry").
+//! The `runners/*` methods: the handlers over the hub's [`Registry`] (docs/develop/hub.md, "Runners: the registry"),
+//! and the job keys' handover and audit (`runners/keys`, `runners/keys-held`, `runners/audit`; "Runners: keys").
 //! All are the user's alone (the method registry's classes). A change sends `runners-changed` with the whole list and
 //! tells the machine registry which runners there are.
 
@@ -6,7 +7,8 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use runstav::methods::Empty;
 use runstav::methods::runners::{
-    AddParams, ByName, ProbeParams, Probed, RemoveParams, Removed, Runner, Runners, SetParams,
+    AddParams, Audit, AuditParams, ByName, KeyNames, KeysParams, ProbeParams, Probed, RemoveParams,
+    Removed, Runner, Runners, SetParams,
 };
 use runstav::wire::{Error, ErrorCode};
 #[cfg(all(unix, not(target_os = "android")))]
@@ -127,13 +129,38 @@ mod on {
 
 pub use on::{Hub, start};
 
+/// What the Work map shows of runner R: its icon (a cloud machine, a dedicated host, a machine somebody sits at), its
+/// state as the list says it and its jobs.
+fn map_fact(r: &runstav::methods::runners::Runner) -> vegvisir::RunnerFact {
+    use runstav::methods::runners::{Profile, Trust};
+    let (trust, icon) = match (r.trust, r.profile) {
+        (Trust::MyCloud, _) => ("my-cloud", "cloud"),
+        (Trust::Mine, Profile::Workstation) => ("mine", "monitor"),
+        (Trust::Shared, Profile::Workstation) => ("shared", "monitor"),
+        (Trust::Mine, Profile::Dedicated) => ("mine", "server"),
+        (Trust::Shared, Profile::Dedicated) => ("shared", "server"),
+    };
+    vegvisir::RunnerFact {
+        trust: trust.into(),
+        state: r.state.clone(),
+        jobs: r.jobs,
+        icon: icon.into(),
+        cost: None,
+    }
+}
+
 /// The runners now, sent as `runners-changed` and given to the machine registry.
 #[cfg(all(unix, not(target_os = "android")))]
 async fn changed(f: &Front) {
     if let Ok(reg) = f.core.runners.get(f)
         && let Ok(list) = reg.list().await
     {
-        crate::work::machines::set_runners(f, list.iter().map(|r| r.name.clone()).collect());
+        crate::work::machines::set_runners(
+            f,
+            list.iter()
+                .map(|r| (r.name.clone(), map_fact(r), r.cores))
+                .collect(),
+        );
         f.broadcast("runners-changed", json!(Runners { runners: list }));
     }
 }
@@ -197,6 +224,40 @@ pub async fn remove(f: &Front, _: &Caller, p: RemoveParams) -> Result<Removed, E
     changed(f).await;
     Ok(Removed {
         name: p.name.as_str().to_string(),
+    })
+}
+
+/// `runners/keys`: job keys to the hub's memory, nowhere else (refused, taking nothing, while the hub can't keep other
+/// processes out of its memory); the started attempts waiting for one get it now.
+pub async fn keys(f: &Front, _: &Caller, p: KeysParams) -> Result<bool, Error> {
+    f.gate.protects_keys()?;
+    let q = crate::exec::queue(f)?;
+    q.take_keys(p.keys.into_pairs(), crate::clock::wall_secs() as u64);
+    Ok(true)
+}
+
+/// `runners/keys-held`: the names of the job keys the hub holds, never a value.
+pub async fn keys_held(f: &Front, _: &Caller, _: Empty) -> Result<KeyNames, Error> {
+    Ok(crate::exec::queue(f)?.keys().held())
+}
+
+/// `runners/audit`: the graph's `key_sent` and `key_use` rows (the hub's memory of them when the graph can't be read),
+/// of one job or one key when asked.
+pub async fn audit(f: &Front, _: &Caller, p: AuditParams) -> Result<Audit, Error> {
+    let job = p.job.as_ref().map(|j| j.as_str());
+    let key = p.key.as_ref().map(|k| k.as_str());
+    let rows = match crate::runners::keys::graph_audit(&f.writer.db).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("runners: the key audit in the graph: {e}");
+            crate::exec::queue(f)?.keys().audit(None, None)
+        }
+    };
+    Ok(Audit {
+        rows: rows
+            .into_iter()
+            .filter(|r| job.is_none_or(|j| r.job == j) && key.is_none_or(|k| r.key.as_str() == k))
+            .collect(),
     })
 }
 

@@ -276,6 +276,9 @@ params! {
     PluginsList(Empty),
     PluginsApprove(plugins::ApproveParams),
     PluginsDisable(plugins::DisableParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
 }
 
 /// Every method, in no order.

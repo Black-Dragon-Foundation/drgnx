@@ -288,6 +288,52 @@ async fn a_machine_the_hub_does_not_know_is_refused() {
     assert!(e.message.contains("no runner desktop"), "{}", e.message);
 }
 
+/// [D] pure: a container job granted a network reaches its cell's hosts (the settings' list), here and on a runner;
+/// one with no grant, and a command job, none.
+#[test]
+fn a_container_jobs_grant_is_the_hosts_a_runner_gets() {
+    let d = crate::settings::defaults();
+    let caps = crate::settings::containers::caps(&d.values);
+    let job = |net| ContainerJob {
+        image: "fedora".into(),
+        caps: caps.clone(),
+        net,
+    };
+    let want =
+        crate::sandbox::allowed_hosts(NetCell::ProviderAndPackages, &d.values.agents_net_hosts);
+    assert_eq!(want.len(), 6);
+    assert_eq!(
+        net_hosts_of(Some(&job(Some(NetCell::ProviderAndPackages)))),
+        want
+    );
+    assert!(net_hosts_of(Some(&job(None))).is_empty());
+    assert!(net_hosts_of(None).is_empty());
+}
+
+/// [D] pure: `rows` reaches the queue as the job's suite; a run here takes every row in place of `{rows}`, and a
+/// request without rows runs as it is.
+#[test]
+fn rows_reach_the_queue_and_a_run_here_runs_them_all() {
+    let p = params(
+        json!({"argv": ["run", "{rows}"], "rows": {"parser": "plist", "listed": ["t1", "t2"]}}),
+    );
+    let suite = suite_of(&p).expect("a suite");
+    assert_eq!(
+        suite,
+        queue::Suite {
+            parser: "plist".into(),
+            listed: vec!["t1".into(), "t2".into()],
+        }
+    );
+    let argv = vec!["run".to_string(), queue::ROWS.to_string()];
+    assert_eq!(
+        local_argv(&argv, Some(&suite)),
+        vec!["run".to_string(), forseti::split::selector(&suite.listed)]
+    );
+    assert_eq!(local_argv(&argv, None), argv);
+    assert_eq!(suite_of(&params(json!({}))), None);
+}
+
 fn params(extra: serde_json::Value) -> StartParams {
     let mut v = json!({"argv": ["true"], "cwd": "/"});
     v.as_object_mut()
@@ -1012,6 +1058,47 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
     let row = ended(&next, "xwaiting").await;
     assert_eq!(row.status, ExecStatus::Done);
     assert_eq!(row.summary.unwrap().lines, vec!["late".to_string()]);
+}
+
+/// [D] (files): a runner's verdict for a job that ran on a `shared` runner reaches the job's summary, and so its
+/// starter's wake, labelled ("output from runner uni-box (shared)"), and the job never counts for a gate; a verdict
+/// from a runner of yours has no label and counts. No slot here (fixed 0): both jobs stay queued until their verdicts.
+#[tokio::test]
+async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
+    let d = tempfile::tempdir().unwrap();
+    let r = plain(d.path(), 0);
+    let shared = r.start(agents(d.path(), "true")).await.unwrap();
+    let mine = r.start(agents(d.path(), "true")).await.unwrap();
+    assert_eq!(r.get(&shared).unwrap().status, ExecStatus::Queued);
+    let done = |id: &str, shared: Option<&str>| Outcome::Done {
+        id: id.into(),
+        attempt: 1,
+        result: json!({"verdict": "Pass"}),
+        shared: shared.map(String::from),
+    };
+    r.inner
+        .get()
+        .unwrap()
+        .outcomes(vec![done(&shared, Some("uni-box")), done(&mine, None)]);
+    let label = "output from runner uni-box (shared)";
+    let row = ended(&r, &shared).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    let lines = row.summary.unwrap().lines;
+    assert_eq!(lines.first().map(String::as_str), Some(label), "{lines:?}");
+    let wake = crate::agents::wake::wake_text(&r.done(&shared).unwrap());
+    assert!(wake.contains(label), "{wake}");
+    assert!(!r.counts_for_gates(&shared));
+    let row = ended(&r, &mine).await;
+    assert_eq!(row.status, ExecStatus::Done);
+    assert!(
+        !row.summary
+            .unwrap()
+            .lines
+            .iter()
+            .any(|l| l.contains("(shared)"))
+    );
+    assert!(r.counts_for_gates(&mine));
+    assert!(!r.counts_for_gates("xunknown"));
 }
 
 /// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file

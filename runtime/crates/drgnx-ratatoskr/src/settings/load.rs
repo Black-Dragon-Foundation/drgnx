@@ -383,6 +383,13 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-runners-project-visibility" => {
             values.runners_project_visibility = default.runners_project_visibility.clone();
         }
+        "drgnx-runners-shared-overlay" => {
+            values.runners_shared_overlay = default.runners_shared_overlay;
+        }
+        "drgnx-runners-job-keys" => values.runners_job_keys = default.runners_job_keys.clone(),
+        "drgnx-runners-origin-key" => {
+            values.runners_origin_key = default.runners_origin_key.clone();
+        }
         "drgnx-sandbox-proxy-pinned-addresses" => {
             values.sandbox_proxy_pins = default.sandbox_proxy_pins.clone();
         }

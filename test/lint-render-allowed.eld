@@ -24,6 +24,7 @@
  (:file "modules/tools/drgnx-diff.el" :in drgnx-diff--render :what erase-buffer :kind document :why "a diff is drawn once when the user opens it")
  (:file "modules/tools/drgnx-diff.el" :in drgnx-diff--load :what erase-buffer :kind document :why "the diff buffer shows \"Loading\" and then the diff (two sites)" :n 2)
  (:file "modules/tools/drgnx-job-ui.el" :in drgnx-job-ui-status :what erase-buffer :kind document :why "the job status page is drawn on the user's action")
+ (:file "modules/tools/drgnx-runners.el" :in drgnx-runners-show-log :what erase-buffer :kind document :why "a runner's record is drawn on the user's action")
  (:file "modules/tools/drgnx-layouts.el" :in drgnx-layouts--agent-buffer :what erase-buffer :kind document :why "the no-agent page is drawn once")
  (:file "modules/tools/drgnx-prs.el" :in drgnx-prs--draw :what tabulated-list-print :kind document :why "the pull-request list is printed on the user's refresh")
  (:file "modules/tools/drgnx-review.el" :in drgnx-review--draw :what erase-buffer :kind document :why "a review is drawn when the user opens it")

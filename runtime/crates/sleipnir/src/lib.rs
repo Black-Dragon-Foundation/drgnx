@@ -25,3 +25,5 @@ pub mod proto;
 pub mod serve;
 #[cfg(feature = "sync")]
 pub mod sync;
+#[cfg(all(feature = "runner", target_os = "linux"))]
+pub mod watchdog;

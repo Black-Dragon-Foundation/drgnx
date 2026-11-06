@@ -1,9 +1,11 @@
 //! Admission on the runner: an `offer` is judged by `forseti::admit` against the machine as it is now, under the
 //! machine's admission lock, and an admitted attempt's reservation is written before the lock is let go, so two
-//! schedulers (two hubs, a hub and jobq) never both fit into the same memory.
+//! schedulers (two hubs, a hub and jobq) never both fit into the same memory. A running job's grow ([`grow`]) is
+//! judged and held the same way.
 
 use crate::linux::probe::Probe;
 use crate::linux::reserve::{self, Reservation};
+use crate::linux::resize::{self, Head, Resize, Sized};
 use forseti::{
     Expected, Grant, Job, JobId, JobSpec, JobState, Limits, Priority, RunningJob, WaitReason,
 };
@@ -107,6 +109,49 @@ pub fn admit(
         })
         .map_err(|e| Refused::because(format!("the reservation can't be written: {e}")))?;
         Ok(grant)
+    })
+    .map_err(|e| Refused::because(format!("the admission lock: {e}")))?
+}
+
+/// A running job's grow, as [`grow`] takes it: the job, its reservation's name, and the head's reservation when one
+/// is known.
+pub struct Grow {
+    pub job: Sized,
+    pub reservation: String,
+    pub head: Option<Head>,
+}
+
+/// Grows G's job when [`resize::grow`] says so, under the machine's admission lock: the budget is the machine's as
+/// it is now (the others' live reservations and OURS counted), APPLY carries the grow out, and the job's reservation
+/// (held by SCHEDULER) then holds the share it added, so no scheduler admits into it. None: no grow; a grow APPLY
+/// couldn't carry out leaves the reservation as it was.
+pub fn grow(
+    probe: &Probe,
+    limits: &Limits,
+    scheduler: &str,
+    ours: &[RunningJob],
+    now: u64,
+    g: &Grow,
+    apply: impl FnOnce(&Resize) -> Result<(), String>,
+) -> Result<Option<Resize>, Refused> {
+    let rs = probe.reservations();
+    rs.with_admit_lock(|| {
+        let mut m = probe
+            .machine(now, limits)
+            .map_err(|e| Refused::because(format!("the machine can't be read: {e}")))?;
+        m.running = ours.to_vec();
+        let budget = forseti::budget(&m, limits);
+        let Some(r) = resize::grow(&g.job, &budget, g.head.as_ref()) else {
+            return Ok(None);
+        };
+        let mut held = rs
+            .read(scheduler, &g.reservation)
+            .map_err(|e| Refused::because(format!("the job's reservation: {e}")))?;
+        apply(&r).map_err(Refused::because)?;
+        held.reserve_mib += r.delta_mib();
+        rs.put(&held)
+            .map_err(|e| Refused::because(format!("the reservation can't be written: {e}")))?;
+        Ok(Some(r))
     })
     .map_err(|e| Refused::because(format!("the admission lock: {e}")))?
 }
@@ -289,6 +334,78 @@ mod tests {
         assert!(admit(&other, &limits(), "drgnx-hubB", &[], None, 1000, &offer).is_ok());
     }
 
+    /// [D] A grow is judged under the admission lock against the machine as it is, then held: once applied, the job's
+    /// reservation carries what it added, so the next admission counts it. A grow its apply can't carry out leaves the
+    /// reservation as it was, and with another scheduler holding the room there is no grow.
+    #[test]
+    fn a_grow_holds_its_share_in_the_reservation() {
+        let d = tempfile::tempdir().unwrap();
+        let p = probe(d.path());
+        let rs = Reservations::at(&p.runtime_dir);
+        let s = spec(2048);
+        let offer = Offer {
+            id: "a1",
+            attempt: 1,
+            spec: &s,
+            priority: Priority::P3,
+            expected: None,
+        };
+        let grant = admit(&p, &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        assert_eq!((grant.mem_cap_mib, grant.reserve_mib), (4096, 2048));
+        // long past its start, it uses 3,600 of its 4,096 cap
+        let now = 5000;
+        let ours = [RunningJob {
+            id: JobId("a1".into()),
+            priority: Priority::P3,
+            started: 1000,
+            reserve_mib: 2048,
+            current_mib: 3600,
+            cores: 1,
+            expected: unknown(&s),
+            restartable: true,
+            evicted_once: false,
+            long_build: false,
+        }];
+        let g = Grow {
+            job: Sized {
+                job: JobId("a1".into()),
+                container: "drgnx-run-a1".into(),
+                machine: "runner".into(),
+                cap_mib: 4096,
+                current_mib: 3600,
+                max_mib: 8192,
+            },
+            reservation: reservation_job("a1", 1),
+            head: None,
+        };
+        let held = || rs.read_others("nobody")[0].reserve_mib;
+        let grown = grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())).unwrap();
+        assert_eq!(grown.as_ref().map(|r| r.to_mib), Some(5120));
+        assert_eq!(held(), 2048 + 1024);
+        // an apply that fails holds nothing more
+        let failed = grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| {
+            Err("podman update: no".into())
+        });
+        assert!(failed.unwrap_err().why.contains("podman update"));
+        assert_eq!(held(), 3072);
+        // another scheduler holds the room: no grow
+        rs.put(&Reservation {
+            scheduler: "jobq".into(),
+            pid: std::process::id(),
+            boot_id: "b00t".into(),
+            start_time: reserve::start_time(std::process::id()).unwrap(),
+            job: "big".into(),
+            reserve_mib: 7200,
+            current_mib: 0,
+            expires: now + 600,
+        })
+        .unwrap();
+        assert_eq!(
+            grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())),
+            Ok(None)
+        );
+    }
+
     /// [D] A fake runner shares its host's pressure files and disk, so a test build takes the machine's pressure,
     /// disk and available memory from `test-machine.json` in the runner folder when one is there: a busy, nearly
     /// full host neither refuses nor admits a fleet row's job, and the profile's limits stay as strict as ever.
@@ -329,9 +446,28 @@ mod tests {
                 .reason,
             Some(WaitReason::DiskLow)
         );
-        // and a broken facts file is a loud refusal, never the host's figures
+        // a broken facts file is a loud refusal, never the host's figures
         facts("{");
         let e = admit(&p, &real, "drgnx-hubA", &[], None, 1000, &offer("q3")).unwrap_err();
         assert!(e.why.contains("test-machine.json"), "{e:?}");
+        // and mains power is in them too (the host's `power_supply` may show a battery): a workstation on battery
+        // admits nothing
+        let ws = Limits::for_profile(Profile::Workstation, 16384, 8);
+        // (a workstation reads its user's apps' pressure too)
+        let apps = d.path().join("manager/app.slice");
+        fs::create_dir_all(&apps).unwrap();
+        fs::write(
+            apps.join("memory.pressure"),
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .unwrap();
+        let mut wp = p;
+        wp.profile = Profile::Workstation;
+        facts(&quiet.replace(
+            "\"mem_available_mib\": 8192",
+            "\"mem_available_mib\": 8192, \"on_ac\": false",
+        ));
+        let e = admit(&wp, &ws, "drgnx-hubA", &[], None, 1000, &offer("q4")).unwrap_err();
+        assert_eq!(e.reason, Some(WaitReason::OnBattery), "{e:?}");
     }
 }

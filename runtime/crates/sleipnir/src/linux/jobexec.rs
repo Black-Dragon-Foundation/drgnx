@@ -6,7 +6,8 @@
 //!
 //! The attempt's folder holds `job.json` (the [`JobExec`] spec), the attempt's log, `offsets.json` (where each state
 //! dir's `check.log` stood at the start, so only this attempt's part is read), a `kill_reason` when the scheduler
-//! killed the job (written before the kill; `evicted` for an eviction), and `result.json`.
+//! killed the job (written before the kill; `evicted` for an eviction), `disturbed` when the scheduler paused or
+//! evicted it (its red is then `Suspect`), and `result.json`.
 
 use super::parse::{self, Parser, RowVerdict};
 use super::probe::CgroupStat;
@@ -107,6 +108,15 @@ fn write_atomic(dir: &Path, name: &str, body: &[u8]) -> io::Result<()> {
 /// Records REASON (`infra: disk`, `evicted`, …) in DIR before the scheduler kills the job, so the verdict names it.
 pub fn kill_reason(dir: &Path, reason: &str) -> io::Result<()> {
     write_atomic(dir, KILL_REASON, reason.as_bytes())
+}
+
+/// The mark the scheduler leaves in the attempt's folder before it pauses or evicts the job.
+pub const DISTURBED: &str = "disturbed";
+
+/// Marks the attempt in DIR disturbed (WHY: `paused`, `evicted`): its time is no fair sample, and a red from it is
+/// `Suspect`.
+pub fn disturbed(dir: &Path, why: &str) -> io::Result<()> {
+    write_atomic(dir, DISTURBED, why.as_bytes())
 }
 
 fn read_kill_reason(dir: &Path) -> Option<String> {
@@ -374,7 +384,14 @@ fn judge_run(
             .counts_rows
             .then(|| parse::judge(&parsed, &spec.expect)),
     };
-    let verdict = forseti::classify::classify(&ev);
+    // a paused or evicted run's red may be ours, not the job's: suspect, to be run again undisturbed
+    let disturbed = dir.join(DISTURBED).exists();
+    let verdict = match forseti::classify::classify(&ev) {
+        Verdict::Red if disturbed => {
+            Verdict::Suspect("disturbed: paused or evicted while it ran".into())
+        }
+        v => v,
+    };
     let infra = match &verdict {
         Verdict::Infra(why) => Some(format!("infra: {why}")),
         _ => None,
@@ -408,7 +425,7 @@ fn judge_run(
         wall_s: wall.as_secs_f64(),
         cpu_s: after.cpu_usec.saturating_sub(before.cpu_usec) as f64 / 1e6,
         mem_peak_mib: after.peak / (1024 * 1024),
-        disturbed: false,
+        disturbed,
         log: spec.log.display().to_string(),
     }
 }
@@ -474,6 +491,43 @@ mod tests {
         }
         kill_reason(d.path(), "infra: disk").unwrap();
         assert_eq!(judge(&exited(75)).verdict, Verdict::Infra("disk".into()));
+    }
+
+    /// [D] A paused or evicted run is disturbed: its red is `Suspect` (to be run again undisturbed), its pass and its
+    /// eviction stay what they are, and the result says it was disturbed; an undisturbed red stays red.
+    #[test]
+    fn disturbed_red_is_suspect() {
+        let d = tempfile::tempdir().unwrap();
+        let log = d.path().join("a3f.1.log");
+        fs::write(&log, "test a ... ok\ntest b ... FAILED\n").unwrap();
+        let s = spec(&log);
+        let st = CgroupStat::default();
+        let exited = |c: i32| Seen {
+            exit_code: Some(c),
+            ..Default::default()
+        };
+        let judge = |seen: &Seen| judge_run(d.path(), &s, seen, &st, &st, Duration::from_secs(1));
+        let r = judge(&exited(101));
+        assert_eq!((r.verdict, r.disturbed), (Verdict::Red, false));
+        disturbed(d.path(), "paused").unwrap();
+        let r = judge(&exited(101));
+        assert!(
+            matches!(r.verdict, Verdict::Suspect(ref why) if why.contains("disturbed")),
+            "{:?}",
+            r.verdict
+        );
+        assert!(r.disturbed);
+        assert_eq!(r.failing, ["b"], "the rows are still reported");
+        fs::write(&log, "test a ... ok\n").unwrap();
+        let r = judge(&exited(0));
+        assert_eq!((r.verdict, r.disturbed), (Verdict::Pass, true));
+        kill_reason(d.path(), EVICTED).unwrap();
+        let killed = Seen {
+            signal: Some(9),
+            ..Default::default()
+        };
+        let r = judge(&killed);
+        assert_eq!((r.verdict, r.disturbed), (Verdict::Evicted, true));
     }
 
     /// [D] A reason written before a kill names the verdict, whatever the exit and the rows say; an eviction stays an

@@ -16,6 +16,8 @@
 //!
 //! - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--panel FEATURES]` is a scripted ACP agent on
 //!   stdio (src/mock_acp/mod.rs); with `--panel` it speaks drgnx's `_drgnx/panel` extension, as an adapter fork does.
+//! - `cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] …` is an EC2 and GCE subset with
+//!   failure knobs and a virtual clock (src/mock_cloud/mod.rs; docs/develop/scenarios.md, "The cloud mock").
 //! - `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host: it prints
 //!   `MOCK-HF-PORT N` and `MOCK-HF-CDN-PORT M`. `/…/resolve/REV/FILE` on N answers 302 to `FILE?sig=1` on M (or to URL, always,
 //!   with `--location`), and M serves the files of DIR and honours `Range: bytes=START-` (unless `--no-range`). The first
@@ -38,6 +40,8 @@
 
 #[path = "../mock_acp/mod.rs"]
 mod mock_acp;
+#[path = "../mock_cloud/mod.rs"]
+mod mock_cloud;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{Value, json};
@@ -59,12 +63,13 @@ fn main() {
         Some("llm") => llm(&args[1..]),
         Some("proxy") => proxy(&args[1..]),
         Some("acp") => mock_acp::run(&args[1..]),
+        Some("cloud") => mock_cloud::run(&args[1..]),
         Some("hf") => hf(&args[1..]),
         Some("embed") => embed(&args[1..]),
         Some("http-serve") => http_serve(&args[1..]),
         Some("cdp-drive") => cdp_drive(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
         ),
     }
 }

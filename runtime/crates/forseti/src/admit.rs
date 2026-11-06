@@ -1,7 +1,7 @@
-//! Admission: the machine's budget, the checks a job must pass to start, its grant, and head protection.
+//! Admission: the machine's budget, the checks a job must pass to start, its grant, and head protection (the head's
+//! reservation, [`crate::backfill`]).
 
-use std::collections::HashMap;
-
+use crate::backfill::{Reservation, backfill_ok};
 use crate::model::{
     Expected, Grant, Job, JobId, Limits, MachineState, Priority, Range, RunningJob, WaitReason,
 };
@@ -11,8 +11,6 @@ use crate::reserve::count_others;
 pub const YOUNG_S: u64 = 300;
 /// The least time between two starts on one machine.
 pub const START_GAP_S: u64 = 10;
-/// How long the best waiting job may wait without fitting before smaller jobs are held off its machine.
-pub const HEAD_PROTECTION_S: u64 = 600;
 
 /// What a machine can still give: memory (may be negative) and CPU (cores).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,7 +30,7 @@ pub(crate) fn held_beyond_use(rj: &RunningJob, now: u64) -> u64 {
 }
 
 /// The CPU a running job counts: its expected mean, or its grant's cores when it has no history.
-fn cpu_counted(rj: &RunningJob) -> f64 {
+pub(crate) fn cpu_counted(rj: &RunningJob) -> f64 {
     if rj.expected.known() {
         rj.expected.cpu
     } else {
@@ -185,21 +183,23 @@ pub fn oom_rerun(mem: &Range<u64>) -> Range<u64> {
     }
 }
 
-/// Head protection: when the first job of `order` (the best of the highest waiting priority) has waited
-/// [`HEAD_PROTECTION_S`] or more without fitting, it holds smaller jobs off its best machine. `fits` answers `Ok`
-/// when a job fits somewhere now, else `Err(best machine)`. Returns the head and that machine.
+/// Head protection, as the head's reservation ([`crate::backfill`]): a job that [`admit`] lets start on `machine`
+/// waits as `HeadProtection(head)` while the reservation holds it there ([`backfill_ok`]). With no reservation, nothing
+/// is held.
 pub fn head_protection(
-    order: &[JobId],
-    waiting_since: &HashMap<JobId, u64>,
+    job: &JobId,
+    eff: Priority,
+    machine: &str,
+    expected_s: f64,
+    reservation: Option<&Reservation>,
     now: u64,
-    fits: &dyn Fn(&JobId) -> Result<(), String>,
-) -> Option<(JobId, String)> {
-    let head = order.first()?;
-    let since = *waiting_since.get(head)?;
-    if now.saturating_sub(since) < HEAD_PROTECTION_S {
-        return None;
+) -> Result<(), WaitReason> {
+    match reservation {
+        Some(r) if !backfill_ok(job, eff, machine, expected_s, r, now) => {
+            Err(WaitReason::HeadProtection(r.job.clone()))
+        }
+        _ => Ok(()),
     }
-    fits(head).err().map(|best| (head.clone(), best))
 }
 
 #[cfg(test)]
@@ -454,24 +454,6 @@ mod tests {
         };
         let g = size(&j, &known(1.0, 900), &b, 1);
         assert_eq!((g.mem_cap_mib, g.reserve_mib), (1536, 1536));
-    }
-
-    #[test]
-    fn head_protection_after_10_minutes() {
-        // [D] pure
-        let now = 10_000;
-        let head = JobId("head".into());
-        let order = [head.clone(), JobId("small".into())];
-        let nowhere = |_: &JobId| Err("desktop".to_string());
-        let since: HashMap<JobId, u64> = [(head.clone(), now - 599)].into();
-        assert_eq!(head_protection(&order, &since, now, &nowhere), None);
-        let since: HashMap<JobId, u64> = [(head.clone(), now - HEAD_PROTECTION_S)].into();
-        assert_eq!(
-            head_protection(&order, &since, now, &nowhere),
-            Some((head.clone(), "desktop".to_string()))
-        );
-        assert_eq!(head_protection(&order, &since, now, &|_| Ok(())), None);
-        assert_eq!(head_protection(&[], &since, now, &nowhere), None);
     }
 
     #[test]

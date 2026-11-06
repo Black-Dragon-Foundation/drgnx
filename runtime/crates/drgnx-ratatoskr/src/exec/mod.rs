@@ -23,6 +23,7 @@ use crate::runners::local::{Admission, LocalRunner};
 use crate::runners::queue::{
     self, Machine, Origin, Outcome, Placement, Queue, QueueCfg, Submit, priority_of,
 };
+use crate::runners::sync;
 use crate::sandbox::SessionShape;
 use gleipnir::{Refusal, Rule};
 use runstav::methods::exec::{
@@ -354,6 +355,10 @@ const KEEP_DAYS: f64 = 14.0;
 const KEEP_GRACE_S: f64 = 3600.0;
 /// How long a stop waits for the job's end to be recorded.
 const STOP_WAIT: Duration = Duration::from_secs(5);
+/// The job folder's file naming the `shared` runner the job ran on: its result is labelled and never counts for a gate.
+const SHARED: &str = "shared";
+/// The job folder's file with the line saying how the job's rows split over its attempts (`summary::split_line`).
+const SPLIT: &str = "split";
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -493,6 +498,14 @@ impl Runner {
             exit: end.exit,
             summary: end.summary,
         })
+    }
+
+    /// Whether job ID's result may count for a gate or a job's `needs`: the job is known and didn't run on a `shared`
+    /// runner.
+    pub fn counts_for_gates(&self, id: &str) -> bool {
+        self.inner
+            .get()
+            .is_some_and(|i| i.meta(id).is_some() && !i.dir(id).join(SHARED).exists())
     }
 
     /// Whether the job's row says running but its process is gone (the supervisor's `dead-wait`).
@@ -768,6 +781,28 @@ impl Inner {
                     .map(|r| r.to_string())
             });
         }
+        // a runner's proxy reaches what the job's grant reaches here
+        place.net_hosts = net_hosts_of(spec.container.as_ref());
+        let fspec = spec.forseti_spec(id, &self.hooks.memory);
+        // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
+        // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
+        let mut inputs = None;
+        if self.queue.runners() > 0 && place.may_leave() {
+            let store = self.root.with_file_name("runner-store");
+            match sync::freeze(
+                &fspec.tree,
+                &[],
+                place.visibility,
+                place.shared_overlay,
+                &store,
+            ) {
+                Ok(f) => inputs = Some(f),
+                Err(why) => {
+                    tracing::info!("job {id} runs on this machine only: {why}");
+                    place.local_only = true;
+                }
+            }
+        }
         Submit {
             id: id.to_string(),
             session: match &spec.starter {
@@ -775,9 +810,10 @@ impl Inner {
                 Starter::User => None,
             },
             own: spec.priority(),
-            spec: spec.forseti_spec(id, &self.hooks.memory),
+            spec: fspec,
             place,
             pending: serde_json::to_value(Pending::of(spec)).unwrap_or_default(),
+            inputs,
         }
     }
 
@@ -786,7 +822,10 @@ impl Inner {
     /// hub left as `pending.json` is read into the queue once (the file goes once `rq_job` holds it).
     async fn restore(self: Arc<Self>, waiting: Vec<String>) {
         let (stored, attempts) = match &self.hooks.runtime {
-            Some(db) => queue::stored(db).await,
+            Some(db) => {
+                self.queue.restore_kept(queue::kept(db).await);
+                queue::stored(db).await
+            }
             None => (vec![], vec![]),
         };
         let known: HashSet<String> = stored.iter().map(|s| s.submit.id.clone()).collect();
@@ -875,12 +914,18 @@ impl Inner {
     }
 
     /// What ended on a runner: its verdict becomes the job's end (`exit` and `why` as a job here writes them), a lost
-    /// job ends lost, a late result stays in the folder as that attempt's.
+    /// job ends lost, a late result stays in the folder as that attempt's. A `shared` runner's name goes to the job's
+    /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict) = match o {
-                Outcome::Done { id, result, .. } => (id, queue::verdict_of(&result)),
-                Outcome::Lost { id } => (id, None),
+            let (id, verdict, shared, split) = match o {
+                Outcome::Done {
+                    id, result, shared, ..
+                } => {
+                    let split = result["split"].as_str().map(String::from);
+                    (id, queue::verdict_of(&result), shared, split)
+                }
+                Outcome::Lost { id } => (id, None, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -908,6 +953,12 @@ impl Inner {
                     },
                 ),
                 None => {}
+            }
+            if let Some(runner) = shared {
+                write(SHARED, &runner);
+            }
+            if let Some(line) = split {
+                write(SPLIT, &line);
             }
             let me = self.clone();
             crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });
@@ -1034,9 +1085,11 @@ impl Inner {
         self: Arc<Self>,
         id: &str,
         dir: &Path,
-        spec: ExecSpec,
+        mut spec: ExecSpec,
         permit: Option<queue::Slot>,
     ) -> Result<(), Refusal> {
+        // a suite whose rows a runner may split runs here whole
+        spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
         let mut proxy = None;
         let (inner, status) = match &spec.starter {
@@ -1270,12 +1323,22 @@ impl Inner {
             _ => ExecStatus::Lost,
         };
         let text = tail_of(&dir.join("log"));
-        let summary = summary::summarise(
+        let mut summary = summary::summarise(
             CheckKind::from_name(&meta.kind),
             exit,
             &text,
             &dir.join("log").display().to_string(),
         );
+        // rows that ran over several attempts: the split first
+        if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
+            summary.lines.insert(0, line);
+        }
+        // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
+        if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
+            summary
+                .lines
+                .insert(0, crate::runners::returned::shared_label(runner.trim()));
+        }
         let end = End {
             status,
             exit,
@@ -1320,6 +1383,16 @@ impl Inner {
             ed.broadcast("exec-done", json!(done));
         }
         self.live.remove(id);
+        // a job here that ran to its end is this machine's history, as a runner's run is the runner's
+        if status == ExecStatus::Done {
+            let verdict = if exit == Some(0) { "Pass" } else { "Red" };
+            let wall_s = (end.ended - meta.started).max(0.0);
+            self.queue.ran_here(
+                id,
+                &json!({"verdict": verdict, "wall_s": wall_s}),
+                end.ended as u64,
+            );
+        }
         self.queue.release(id);
         let _ = self.events.send(JobEvent::Done(done));
         self.prune();
@@ -1635,6 +1708,14 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             hooks.admission = Admission::Fixed(n);
         }
         r.open(dirs.hub.join("exec"), hooks);
+        // the job keys' events go to the user's connections, their audit to the graph
+        if let Some(q) = r.queue() {
+            let editors = f.editors.clone();
+            q.keys()
+                .set_tell(move |event, data| editors.broadcast(event, data));
+            q.keys()
+                .set_sink(crate::runners::keys::graph_sink(f.writer.db.clone()));
+        }
     }
     Ok(r)
 }
@@ -1663,6 +1744,14 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
     let weight = setting("drgnx-runners-weight")
         .and_then(|v| v.as_f64())
         .unwrap_or(1.0);
+    let visibility = setting("drgnx-runners-project-visibility")
+        .and_then(|v| v.as_str().map(crate::runners::sync::Visibility::parse))
+        .unwrap_or_default();
+    let shared_overlay =
+        setting("drgnx-runners-shared-overlay").and_then(|v| v.as_bool()) == Some(true);
+    let origin_key = setting("drgnx-runners-origin-key")
+        .and_then(|v| v.as_str().map(String::from))
+        .filter(|s| !s.is_empty());
     // the project's heavy patterns mark a job whose command line holds one; nothing else marks a job heavy
     let line = p
         .argv
@@ -1720,7 +1809,71 @@ async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: 
         machines_cell,
         image,
         weight,
+        visibility,
+        shared_overlay,
+        origin_key,
+        suite: suite_of(p),
+        net_hosts: vec![],
     }
+}
+
+/// The hosts a container job's network grant reaches (its cell over the caps' `drgnx-agents-net-hosts`): what its
+/// proxy allows here, and what a runner's proxy gets for it. None without a grant.
+fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
+    c.and_then(|c| {
+        c.net
+            .map(|n| crate::sandbox::allowed_hosts(n, &c.caps.net_hosts))
+    })
+    .unwrap_or_default()
+}
+
+/// The request's `rows` as the queue's suite.
+fn suite_of(p: &StartParams) -> Option<queue::Suite> {
+    p.rows.as_ref().map(|r| queue::Suite {
+        parser: r.parser.to_string(),
+        listed: r.listed.iter().map(|l| l.to_string()).collect(),
+    })
+}
+
+/// ARGV as a run on this machine takes it: [`queue::ROWS`] becomes the selector of every row of SUITE (a job here
+/// runs once, whole).
+fn local_argv(argv: &[String], suite: Option<&queue::Suite>) -> Vec<String> {
+    let Some(s) = suite else {
+        return argv.to_vec();
+    };
+    let all = forseti::split::selector(&s.listed);
+    argv.iter().map(|a| a.replace(queue::ROWS, &all)).collect()
+}
+
+/// The keys REQUESTED by name, when each is on the project's `drgnx-runners-job-keys` list and, for a session's job,
+/// the matrix's `job.keys` allows it (an Ask refuses the start with its card, as `code.edit`'s does).
+async fn job_keys(
+    f: &Front,
+    c: &Caller,
+    p: &StartParams,
+    cwd: &std::path::Path,
+) -> Result<(), Error> {
+    let names: Vec<String> = p
+        .keys
+        .iter()
+        .flat_map(|k| k.iter())
+        .map(|k| k.to_string())
+        .collect();
+    if names.is_empty() {
+        return Ok(());
+    }
+    let list = f
+        .settings
+        .effective("drgnx-runners-job-keys", None)
+        .and_then(|(v, _)| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default();
+    crate::runners::keys::on_the_project_list(&names, &list)
+        .map_err(|why| error(ErrorCode::InvalidParams, format!("keys: {why}")))?;
+    if let Some(sid) = &c.sid {
+        let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
+        gate_session_job(f, sid, cwd, &argv, norn::matrix::Action::JobKeys).await?;
+    }
+    Ok(())
 }
 
 /// A session's job runs commands in its worktree: the matrix's `code.edit` decides, as for the session's own tool
@@ -1845,6 +1998,7 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         let argv: Vec<String> = p.argv.iter().map(|a| a.to_string()).collect();
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
+    job_keys(f, c, &p, &cwd).await?;
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
     // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.

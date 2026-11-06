@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 25] = [
+    let rows: [(Action, [Verdict; 3]); 26] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -41,6 +41,7 @@ fn balanced_is_the_mockups_table() {
         (CodeCiConfig, [Ask, Ask, Never]),
         (Machines, [Allow, Allow, Never]),
         (JobContainer, [Allow, Allow, Never]),
+        (JobKeys, [Ask, Ask, Never]),
         (Network, [Allow, Allow, Allow]),
         (Browser, [Allow, Allow, Ask]),
         (BrowserWeb, [Ask, Ask, Ask]),
@@ -51,7 +52,7 @@ fn balanced_is_the_mockups_table() {
         (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
     ];
-    assert_eq!(p.cells.len(), 25 * 3);
+    assert_eq!(p.cells.len(), 26 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -101,7 +102,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 25);
+    assert_eq!(Action::ALL.len(), 26);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -219,6 +220,22 @@ fn job_container_follows_the_users_call() {
     for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
         assert_eq!(jc(p, Role::Chat), Verdict::Never);
     }
+}
+
+/// [D] `job.keys` (the manager's call 11): Ask in Cautious and Balanced, Allow in Autonomous, Never for chat.
+#[test]
+fn job_keys_presets_are_the_managers_call() {
+    use Verdict::*;
+    let jk = |p| {
+        let m = preset(p);
+        [Role::Manager, Role::Worker, Role::Chat]
+            .map(|r| m.cells[&(Action::JobKeys, Column::Role(r))].verdict)
+    };
+    assert_eq!(jk(Preset::Cautious), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Balanced), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Autonomous), [Allow, Allow, Never]);
+    assert_eq!(Action::JobKeys.id(), "job.keys");
+    assert_eq!(Action::from_id("job.keys"), Some(Action::JobKeys));
 }
 
 #[test]

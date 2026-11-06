@@ -123,6 +123,20 @@ pub fn link_error(stderr: &str) -> LinkError {
     }
 }
 
+/// E as it applies to R. A cloud machine has no login a terminal could do: its host keys are pinned from its console,
+/// so a key ssh doesn't know is a changed one, never accepted, and any other login ssh asks for is a refusal.
+pub fn for_runner(r: &RunnerCfg, e: LinkError) -> LinkError {
+    match (&r.cloud, e) {
+        (Some(_), LinkError::NeedsLogin(Login::UnknownHostKey | Login::HostKeyChanged)) => {
+            LinkError::HostKeyChanged
+        }
+        (Some(_), LinkError::NeedsLogin(l)) => {
+            LinkError::Refused(format!("a cloud machine asked for a login ({l:?})"))
+        }
+        (_, e) => e,
+    }
+}
+
 /// Redial with backoff after a lost link.
 pub struct Redial;
 
@@ -532,9 +546,9 @@ mod openssh_impl {
                 ssh_config::write(&self.runtime_dir, &r.name, &ssh_config::render(r)).map_err(
                     |e| LinkError::Refused(format!("writing {}'s ssh config: {e}", r.name)),
                 )?;
-                let handle = self.master(&mut l).await?;
+                let handle = self.master(&mut l).await.map_err(|e| for_runner(r, e))?;
                 // the link answers, and no login stands in the way, before any session of ours starts
-                noop(&handle).await?;
+                noop(&handle).await.map_err(|e| for_runner(r, e))?;
                 let heard = Arc::new(Heard::default());
                 let (p1, p2) = (permits.split(1), permits.split(1));
                 let (Some(p1), Some(p2)) = (p1, p2) else {
@@ -589,7 +603,7 @@ mod openssh_impl {
                 let owner = builder(&config, &dir)
                     .connect_mux(&l.cfg.host)
                     .await
-                    .map_err(from_ssh)?;
+                    .map_err(|e| for_runner(&l.cfg, from_ssh(e)))?;
                 l.master = Some(Master::new(owner));
                 Ok(())
             })
@@ -715,6 +729,25 @@ mod tests {
                        Host key verification failed.\n";
         assert_eq!(classify_stderr(changed), Some(Login::HostKeyChanged));
         assert_eq!(link_error(changed), LinkError::HostKeyChanged);
+        // a cloud machine's keys are pinned: one ssh doesn't know is a changed one, and no login is ever asked for
+        let mut cloud = crate::runners::tests::ssh_runner("c1", "runner@10.0.0.9");
+        cloud.cloud = Some(crate::runners::CloudSsh {
+            identity_agent: "/r/agent.sock".into(),
+            identity_file: "/r/id.pub".into(),
+            certificate: "/r/id-cert.pub".into(),
+            known_hosts: "/r/known_hosts".into(),
+        });
+        let unknown = LinkError::NeedsLogin(Login::UnknownHostKey);
+        assert_eq!(
+            for_runner(&cloud, unknown.clone()),
+            LinkError::HostKeyChanged
+        );
+        assert!(matches!(
+            for_runner(&cloud, LinkError::NeedsLogin(Login::Passphrase)),
+            LinkError::Refused(_)
+        ));
+        let ssh = crate::runners::tests::ssh_runner("desktop", "desktop");
+        assert_eq!(for_runner(&ssh, unknown.clone()), unknown);
         // the file never lets ssh learn or replace a key on its own
         let text = super::super::ssh_config::render(&crate::runners::tests::ssh_runner(
             "desktop", "desktop",

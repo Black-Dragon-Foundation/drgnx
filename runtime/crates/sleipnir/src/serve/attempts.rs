@@ -3,7 +3,8 @@
 //! - `attempt.json`: who placed it (the hub id and the `JobRef` with its nonce), the spec, the grant, the bundle its
 //!   job-exec runs from, its unit;
 //! - `job.json`, `log`, `result.json`, `kill_reason`: job-exec's (`linux::jobexec`);
-//! - `src/`, `target/`: the job's source and target dir until slots come from sync;
+//! - `src/`, `target/`: the job's source (when the hub synced none: an empty folder) and its target dir; a synced
+//!   attempt reads its slot (`<root>/slots/<id>/`), or its private copy `tree/` when it writes the tree;
 //! - `cancelled`: the hub cancelled it; `collected`: the hub has its result, so the folder may go.
 //!
 //! The folders are the runner's whole memory of its attempts: a new `serve` lists them at `hello`.
@@ -39,6 +40,12 @@ pub struct Meta {
     pub admitted: u64,
     #[serde(default)]
     pub started: Option<u64>,
+    /// The offer's frozen input key (empty: the hub sent none).
+    #[serde(default)]
+    pub input_key: String,
+    /// The checkout slot the attempt reads (its id), once it started on one.
+    #[serde(default)]
+    pub slot: Option<String>,
 }
 
 /// `<root>/jobs`.

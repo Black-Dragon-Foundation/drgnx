@@ -9,6 +9,9 @@
 //! runner trust NAME mine|my-cloud|shared
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--since T]
+//! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
+//! runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]   (prints the role and its binding; no hub call)
+//! runner cloud cost | rotate-ca | off [--yes]
 //! ```
 //!
 //! The output is plain text in 60 columns ([`format_list`]); a runner that is out of rotation shows its reason.
@@ -54,6 +57,42 @@ pub enum RunnerCommand {
         key: Option<String>,
         since: Option<String>,
     },
+    /// `cloud setup aws`: the IAM policy the user creates for drgnx's role, printed (no hub call; drgnx never creates
+    /// IAM itself).
+    CloudSetupAws {
+        hub: String,
+        regions: Vec<String>,
+        sizes: Vec<String>,
+    },
+    /// `cloud off`, which ends machines and deletes images: without `--yes` it says what it would do.
+    CloudOff {
+        yes: bool,
+    },
+    /// `cloud setup gcp`: the custom role and the `gcloud` commands that create and bind it, printed (no hub call).
+    CloudSetupGcp {
+        hub: String,
+        project: String,
+        member: Option<String>,
+    },
+}
+
+/// What `cloud setup gcp` prints: the role to save, the command that creates it, and the binding for a project of
+/// drgnx's own and for one shared with other VMs (with the condition). MEMBER is who drgnx acts as.
+pub fn setup_gcp_text(hub: &str, project: &str, member: Option<&str>) -> String {
+    use crate::runners::cloud::gcp;
+    let member = member.unwrap_or("user:YOUR-ACCOUNT");
+    let own = gcp::setup_commands(project, member, false);
+    let shared = gcp::setup_commands(project, member, true);
+    format!(
+        "# drgnx's role in {project}: save it as drgnx-gcp-role.json\n{}\n\
+         # create it, then bind it to the account drgnx acts as, in a project of drgnx's own:\n{}\n{}\n\
+         # in a project shared with other VMs, bind it with the condition instead (instances named drgnx-… only):\n{}\n\
+         # drgnx labels its machines and disks drgnx-hub={hub}; it never creates IAM itself\n",
+        gcp::ROLE.trim_end(),
+        own[0],
+        own[1],
+        shared[1]
+    )
 }
 
 fn one_of(what: &str, v: String, allowed: &[&str]) -> Result<String, String> {
@@ -77,7 +116,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         Some(Word(v)) => v.string().map_err(e)?,
         Some(other) => return Err(other.unexpected().to_string()),
         None => {
-            return Err("runner needs a subcommand (list, add, check, bench, trust, unbench, remove, audit)".into());
+            return Err("runner needs a subcommand (list, add, check, bench, trust, unbench, remove, audit, cloud)".into());
         }
     };
     let mut words: Vec<String> = Vec::new();
@@ -88,6 +127,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "add" => &["trust", "name", "profile", "accept", "root", "prefix"],
         "remove" => &["yes"],
         "audit" => &["key", "since"],
+        "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
         "check" | "bench" | "trust" | "unbench" => &[],
         other => return Err(format!("unknown runner subcommand {other:?}")),
     };
@@ -182,6 +222,66 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
                 since: opt("since"),
             })
         }
+        "cloud" => {
+            let usage = "usage: runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]\n       \
+                         runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]";
+            // the id the hub's runner code tags with today (runners::methods)
+            let hub = opt("hub").unwrap_or_else(|| "hub".into());
+            let plain = opt("hub").is_none()
+                && opt("regions").is_none()
+                && opt("sizes").is_none()
+                && opt("project").is_none()
+                && opt("member").is_none();
+            if words == ["off"] && plain {
+                return Ok(RunnerCommand::CloudOff { yes });
+            }
+            if yes {
+                return Err("usage: runner cloud off [--yes]".into());
+            }
+            for (word, method) in [
+                ("cost", "runners/cloud/cost"),
+                ("rotate-ca", "runners/cloud/rotate-ca"),
+            ] {
+                if words == [word] && plain {
+                    return Ok(RunnerCommand::Call {
+                        method,
+                        params: json!({}),
+                    });
+                }
+            }
+            if words == ["setup", "gcp"] {
+                let project = opt("project").ok_or(usage)?;
+                if opt("regions").is_some() || opt("sizes").is_some() {
+                    return Err(usage.into());
+                }
+                return Ok(RunnerCommand::CloudSetupGcp {
+                    hub,
+                    project,
+                    member: opt("member"),
+                });
+            }
+            if words != ["setup", "aws"] || opt("project").is_some() || opt("member").is_some() {
+                return Err(usage.into());
+            }
+            let list = |k: &str| -> Vec<String> {
+                opt(k)
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            };
+            let (regions, sizes) = (list("regions"), list("sizes"));
+            if regions.is_empty() || sizes.is_empty() {
+                return Err(usage.into());
+            }
+            Ok(RunnerCommand::CloudSetupAws {
+                hub,
+                regions,
+                sizes,
+            })
+        }
         _ => unreachable!("the subcommand was checked above"),
     }
 }
@@ -266,6 +366,13 @@ fn remove_note(name: &str) -> String {
     )
 }
 
+/// What `cloud off` without `--yes` says.
+fn cloud_off_note() -> String {
+    "runner cloud off: ends every cloud machine of ours and deletes our images, snapshots and security group.\n\
+     nothing changed: run again with --yes\n"
+        .into()
+}
+
 /// `runner …`: the exit code.
 pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
     let (method, params, within, json_out) = match cmd {
@@ -288,11 +395,37 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
                 true,
             )
         }
+        RunnerCommand::CloudOff { yes } => {
+            if !yes {
+                print!("{}", cloud_off_note());
+                return 0;
+            }
+            ("runners/cloud/off", json!({}), ADD, true)
+        }
         RunnerCommand::Audit { .. } => {
             eprintln!(
                 "ratatoskr runner: the key audit comes with the key handover, which isn't built yet: no key was ever sent"
             );
             return 1;
+        }
+        RunnerCommand::CloudSetupAws {
+            hub,
+            regions,
+            sizes,
+        } => {
+            println!(
+                "{}",
+                crate::runners::cloud::aws::policy_for(&hub, &regions, &sizes)
+            );
+            return 0;
+        }
+        RunnerCommand::CloudSetupGcp {
+            hub,
+            project,
+            member,
+        } => {
+            print!("{}", setup_gcp_text(&hub, &project, member.as_deref()));
+            return 0;
         }
     };
     let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
@@ -408,5 +541,81 @@ mod tests {
             assert!(p(bad).is_err(), "{bad:?} should not parse");
         }
         assert!(remove_note("desk").contains("run again with --yes"));
+        assert_eq!(
+            p(&[
+                "cloud",
+                "setup",
+                "aws",
+                "--regions",
+                "eu-west-1,us-east-1",
+                "--sizes",
+                "m7g.large"
+            ]),
+            Ok(RunnerCommand::CloudSetupAws {
+                hub: "hub".into(),
+                regions: vec!["eu-west-1".into(), "us-east-1".into()],
+                sizes: vec!["m7g.large".into()],
+            })
+        );
+        assert_eq!(
+            p(&["cloud", "cost"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/cloud/cost",
+                params: json!({})
+            })
+        );
+        assert_eq!(
+            p(&["cloud", "rotate-ca"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/cloud/rotate-ca",
+                params: json!({})
+            })
+        );
+        assert_eq!(
+            p(&["cloud", "off"]),
+            Ok(RunnerCommand::CloudOff { yes: false })
+        );
+        assert_eq!(
+            p(&["cloud", "off", "--yes"]),
+            Ok(RunnerCommand::CloudOff { yes: true })
+        );
+        assert!(p(&["cloud", "cost", "--yes"]).is_err());
+        assert!(cloud_off_note().contains("run again with --yes"));
+        assert!(p(&["cloud", "setup", "aws", "--sizes", "m7g.large"]).is_err());
+        assert!(p(&["cloud", "setup", "gcp", "--regions", "r", "--sizes", "s"]).is_err());
+        assert_eq!(
+            p(&["cloud", "setup", "gcp", "--project", "p1"]),
+            Ok(RunnerCommand::CloudSetupGcp {
+                hub: "hub".into(),
+                project: "p1".into(),
+                member: None,
+            })
+        );
+        assert_eq!(
+            p(&[
+                "cloud",
+                "setup",
+                "gcp",
+                "--project",
+                "p1",
+                "--member",
+                "user:me@example.org"
+            ]),
+            Ok(RunnerCommand::CloudSetupGcp {
+                hub: "hub".into(),
+                project: "p1".into(),
+                member: Some("user:me@example.org".into()),
+            })
+        );
+        let out = setup_gcp_text("hub", "p1", None);
+        assert!(out.contains("\"includedPermissions\""), "{out}");
+        assert!(
+            out.contains("gcloud iam roles create drgnxRunner --project=p1"),
+            "{out}"
+        );
+        assert!(
+            out.contains(&crate::runners::cloud::gcp::condition("p1")),
+            "{out}"
+        );
     }
 }

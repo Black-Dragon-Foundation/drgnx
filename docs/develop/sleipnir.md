@@ -35,8 +35,9 @@ tests point it at fixture trees; `Probe::system(name, scheduler, slice_root, fol
   (the workstation profile); disk free and size of the runner folder's filesystem (`statvfs`); mains power; the boot
   id; and the other schedulers' live reservations (below). What runs is the scheduler's to fill in. In a
   `test-hooks` build only, a `test-machine.json` in the runner folder (`{psi, disk_free_gb, disk_total_gb,
-  mem_available_mib}`, each optional) stands in for those figures: a fake runner shares its host's pressure files,
-  memory and disk, so the fleet rows set a quiet machine instead of admitting on the host's load. A file that doesn't
+  mem_available_mib, on_ac}`, each optional) stands in for those figures: a fake runner shares its host's pressure
+  files, memory, disk and power supplies, so the fleet rows set a quiet machine on mains power instead of admitting
+  on the host's load (or refusing a `workstation` job because the host shows a battery). A file that doesn't
   parse is an error, never the host's figures; the limits judging the figures are the profile's, unchanged.
 - **`cgroup(slice) -> CgroupStat`**: `memory.current`, `memory.stat`'s `file`, `memory.peak`, `memory.events`'
   `oom_kill` and `oom_group_kill`, `cpu.stat`'s `usage_usec` and `memory.pressure`. A slice's cgroup is found the way
@@ -169,7 +170,36 @@ containers sit beside it in the job slice at 1000.
 
 The verdict is `forseti::classify` over what job-exec saw: the kill reason, `oom_kill`, the exit code or signal, the
 timeout and the row parser's judgement. The helper's `key-timeout` record (a key request that got no key) makes it
-`infra: key not delivered`, never the job's own failure; a written kill reason still comes first.
+`infra: key not delivered`, never the job's own failure; a written kill reason still comes first. A scheduler that
+pauses or evicts a job first leaves `disturbed` in its folder (`jobexec::disturbed(dir, why)`): the result says
+`disturbed: true` (its time is no fair sample), and a red becomes `Suspect`, to be run again undisturbed.
+
+### Live resizing (`linux::resize`)
+
+The moves on a running job that never throttle it (the job scheduler's "grow and shrink while running"):
+
+- **Grow.** When the container's `memory.current` passes 85 % of its cap and the machine has room, the cap grows by a
+  quarter (at least 256 MiB), never past the job's `mem_mib.max` and never past the room: the budget now, and, on
+  the machine where the backfill head has its reserved start, what the head still needs then (`Head::of` takes the
+  reservation and `forseti::budget_at` at its start; the grow is taken from that budget). `grow(job, budget, head)`
+  decides; `apply` carries it out.
+- **Through the unit, never behind systemd.** `apply` sets the container's systemd scope (`set-property --runtime …
+  MemoryMax=`) and the container (`podman update --memory M --memory-swap M`, so still no swap), in the order that
+  keeps the scope at or above its container: scope first for a grow, container first for a shrink. No cgroup file is
+  written by sleipnir.
+- **A shrink below use is refused.** `shrink(job, to)` refuses a cap under the container's use, and `apply` reads the
+  use again just before a shrink and refuses it then too, never forcing the kernel to reclaim or kill.
+- **CPU weight.** `weights(running, waiting_p12)`: while P1–P2 jobs wait for CPU, the running P4–P5 job slices get
+  `CPUWeight=20`; once they no longer wait, 100 again.
+- **Pause.** At the ladder's pressure level a dedicated machine pauses its lowest-priority long builds (`podman
+  pause`, the cgroup freezer) and lets them go on once the pressure is gone; a workstation never pauses.
+
+In `serve`, a grow is judged under the admission lock (`admit::grow`) against the machine as it is, the others'
+reservations counted; once applied, the job's reservation holds what it added, so no scheduler admits into it, and the
+grown grant is written to the attempt's `attempt.json`. A grow that can't be applied leaves the reservation as it was.
+The hub's head reservation doesn't reach runners yet, so on a runner only the machine's room holds a grow. CPU weights
+follow the offers: a P1–P2 offer refused for CPU since the last `ready` makes the P4–P5 jobs yield at the next one.
+Builds count as long builds for the ladder.
 
 ## The job helper (`helper`)
 
@@ -415,9 +445,9 @@ blobs the hub must send (each once); `put(sha, bytes)` keeps a blob only when it
 aside and renamed. It is the `Blobs` a slot update reads.
 
 **The frames** (`sync-have`, `sync-need`, `blob`, `bundle {offset}`, `origin-fetch`) map onto these calls:
-`Store::missing` and `Mirror::has_commit` answer a `sync-have`, `Receiver::offset` and `append` take a `bundle`, and
-`fetch_origin` serves an `origin-fetch`. Until `serve` handles them, `sleipnir sync-bundle` (`test-hooks` only) takes
-one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
+`Store::missing`, `Mirror::has_commit` and `Mirror::ref_tips` answer a `sync-have`, `Receiver::offset` and `append`
+take a `bundle`, and `fetch_origin` serves an `origin-fetch` ("serve" below). `sleipnir sync-bundle` (`test-hooks`
+only) takes one bundle on stdin and announces `at OFFSET` after every chunk, for the fleet row.
 
 ## Disk and caches
 
@@ -498,7 +528,7 @@ does not parse.
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
-| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit; a blob; a bundle chunk at its offset (the last with the bundle's hash); a fetch from the project's origin |
+| `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
 | `row` | runner → hub | a test row's name and verdict |
@@ -519,10 +549,11 @@ and the value is zeroed when the frame drops.
 ## serve
 
 ```
-sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation
+sleipnir serve --root DIR --prefix P --hub-id H --profile dedicated|workstation [--watchdog DIR]
 ```
 
-The runner's end of the hub's control channel. It lives on stdin and stdout and exits at their end, at `bye`, or
+The runner's end of the hub's control channel. On a cloud machine `--watchdog DIR` names the watchdog's folder ("The
+watchdog"). It lives on stdin and stdout and exits at their end, at `bye`, or
 after 45 s without a frame (the hub pings every 10 s, and so does `serve`). Nothing is installed or enabled: between
 connections the runner has its folder and, with linger, the attempts still running in their own units. It is blocking
 and threaded (one thread reads frames, the main loop handles them and ticks every 100 ms); no async runtime.
@@ -536,14 +567,17 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
 | `helper.sock`, `key.sock`, `proxy.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
 | `drgnx-key`, `drgnx-fwd`, `net-allow`, `key-use.sent` | the job's own copies of the bundle's binaries, the hub's allow-list, the `key-use` lines sent |
-| `src/`, `target/` | the job's source (mounted `ro,z`) and target dir, until slots come from sync |
+| `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
+| `tree/` | a synced job that writes its tree: its private copy of the slot |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
 
 **`hello`** must come first; a hub id other than `--hub-id` gets `bye`. Each `hello` re-probes the runner contract
 (`missing`) and linger (logind's live answer), and lists this hub's attempts from the folder: `finished` when
 `result.json` is there, `running` while the unit is active, `lost` otherwise, each with its log's length. A `ready`
 follows, then one every 2 s and at every job end: free memory and CPU from `forseti::budget` over the live machine
-(this hub's running attempts counted, the others' through their reservations), PSI and the running attempts.
+(this hub's running attempts counted, the others' through their reservations), PSI, the running attempts, the slots
+present (the folders under `<root>/slots`, sorted: `sync::slot::present`) and the images the attempts this `serve`
+started ran in. The hub counts a start warm where both are there.
 
 **`offer`** is admitted by `forseti::admit` under the machine's admission lock (`linux::reserve::with_admit_lock`):
 it reads the machine with the others' live reservations, decides, sizes the grant (`forseti::size`) and writes the
@@ -551,9 +585,26 @@ reservation (`drgnx-<hub id>`, job `<id>-<attempt>`) before it lets go, so two s
 memory. The answer is `admit {grant}` or `refuse {why, reason}`. An offer whose folder exists is answered again from
 it when it is the same placement (hub and nonce), and refused otherwise. While the memory ladder is above normal, no
 offer is admitted. `forseti`'s 10 s gap between starts counts from this hub's latest start in the folder, so it
-holds across `serve` processes.
+holds across `serve` processes. An offer whose slot (`SlotKey` of its project, the hub's worktree and its trust) a
+running job reads at another input key is refused: a slot moves only between jobs (a job that writes the tree reads
+its own copy).
 
-**`start`** writes `job.json` (the shared podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
+**Sync.** Between `admit` and `start` the hub sends `sync-have`: the repository's mirror id, the commit and the overlay
+the runner's trust may get. `serve` answers `sync-need` with the overlay's blobs the store lacks, whether the mirror
+lacks the commit, and the mirror's ref tips (what a bundle may leave out). The hub sends blobs (chunks of at most
+1 MiB at an offset of the total; one is kept only whole and hashing to its name), a bundle (`bundle::Receiver`: a
+chunk past what is held is dropped, an overlap is skipped; at its total it is checked and fetched into the mirror) or
+`origin-fetch` (`Mirror::fetch_origin` in a thread of its own, so pings go on; its end comes back to the loop), and
+`serve` answers `sync-need` again after each. An `origin-fetch` with `cred` names the deploy key or token the hub sent
+just before in a `key` frame of the attempt: a `key` frame for a syncing attempt that hasn't started is held in memory
+for that fetch only (`Live::origin_cred`), never handed to the job, and goes to `fetch_origin` as `OriginCred::Https`
+for an `http(s)://` origin or `OriginCred::SshKey` otherwise; a fetch naming a key that didn't come fails the sync. A sync that fails (a bad repository id, a bundle that doesn't check, a
+fetch that fails) ends the attempt `infra: setup`, with why in its log.
+
+**`start`** of a synced attempt first moves its slot to the inputs (`slot::update` under the slot's update lock: the
+mirror's commit, then the overlay from the blob store) and runs the job on the slot, or on `slot::private_copy` in
+`tree/` when it writes the tree; it records the slot's id in `attempt.json`. Then it writes `job.json` (the shared
+podman argv, `RunnerArgs::runner(prefix, hub id, slice)`, in the job's
 slice `drgnx-runner-work-<id>.slice`) and starts the unit `<prefix>-<id>-<attempt>` running `sleipnir job-exec` with
 `RuntimeMaxSec` = the timeout + 60 s (job-exec's own timeout writes the verdict first). The reservation passes to the
 unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its job helper (the disk watch); a keyed
@@ -574,8 +625,10 @@ job-exec writes the verdict, which `serve` reports as `Cancelled`.
 
 **The ladder** runs at every `ready` on the runner's slice tree: `tight` stops admissions; at `pressure` and
 `danger` the scheduler holding the most memory (`forseti::ladder_actor`, over the reservations) evicts (dedicated) or
-kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. Pausing a long
-build waits for live resizing.
+kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
+runner it pauses the lowest-priority long builds at `pressure` and lets them go on below it; a paused or evicted job
+is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
+resizing, above).
 
 **The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
 (`serve::cleanup::plan`, pure):
@@ -610,6 +663,54 @@ them with its own `memory.max` and `cpu.max`. The result, as JSON on stdout:
 The run is bounded at 120 s, start-up included: past it the bench fails and removes its container. The caps it ran
 under go to stderr.
 
+## The watchdog
+
+```
+sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root RUNNER_ROOT --dir DIR
+```
+
+A cloud machine's own end (design §6.7.6), a system unit in drgnx's image, so it works with the hub gone, asleep or
+without credentials. In the image the unit (`drgnx-watchdog.service`) runs it with `--root
+/var/lib/drgnx/runner` (the runner folder the image build makes, owned by the `runner` user) and `--dir
+/var/lib/drgnx/watchdog` (its `StateDirectory`), so `serve` on that machine runs with the same root and
+`--watchdog /var/lib/drgnx/watchdog`. Every 5 s (`watchdog::POLL`) it looks at three things:
+
+- **the jobs:** the attempt folders under `RUNNER_ROOT/jobs/` without `collected`: running, or a result waiting for the
+  hub. It reads the folder, so it needs no `serve`.
+- **the hub:** `RUNNER_ROOT/heartbeat.json`, `{contact, offer}` in Unix seconds, which `serve --watchdog DIR` writes:
+  `contact` at the hub's frames (at most every 5 s), `offer` at each offer (at once).
+- **the provider's notice:** AWS IMDSv2 (`PUT /latest/api/token`, then `spot/instance-action` with the token; the
+  instance's hop limit of 1 is enough on the machine itself), or GCE's `computeMetadata/v1/instance/preempted` with
+  `Metadata-Flavor: Google`.
+
+What it does is `watchdog::decide(provider, limits, look)`, pure (`Look {now, booted, last_job, jobs, heartbeat}`;
+times before the boot count as the boot):
+
+| | AWS | GCP |
+|---|---|---|
+| no job for the idle time, counted from the last job and the hub's last offer | `systemctl poweroff`, `Why::Idle` | writes `DIR/idle` (since when); `serve` sends `idle {since}` and the hub deletes the machine |
+| the unattended lifetime since the hub's last contact (or the boot), whatever runs | `poweroff`, `Why::Unattended` | nothing: the provider's `terminationTime` |
+| the lifetime since the boot, whatever runs | `poweroff`, `Why::Lifetime` | nothing: the provider's `terminationTime` |
+
+Pings alone never keep an idle machine: the hub stops a machine it has no work for by sending it no offer, so "the
+idle stop through the watchdog" needs no call. It never runs `halt` (that leaves an AWS instance running); a power-off
+of an instance started with `InstanceInitiatedShutdownBehavior=terminate` ends it and its volumes. On GCP a guest stop
+would leave a stopped VM with a billed disk and clear its deadline, so it never powers off. The boot time comes from
+`/proc/uptime`, so a restarted watchdog keeps the lifetime; its idle time counts from its own start (it can't know when
+the last job ended before it). A failed power-off is tried again at the next look; `DIR/poweroff` says why.
+
+A notice is written once to `DIR/preempting` (the time the machine goes, Unix seconds; GCE gives none, so its time is
+the moment it was seen). `serve --watchdog DIR` reads `DIR/preempting` and `DIR/idle` every 2 s and sends
+`preempting {at}` once and `idle {since}` at each new value. The hub stops offering to that runner, and its attempts end
+`infra: preempted` and requeue at once: neither a strike nor an eviction.
+
+It writes only in `DIR`, its own folder (root's in the image), each file by a new temporary file and a rename, and reads
+the runner's files with `O_NOFOLLOW | O_NONBLOCK`, regular files only, at most 64 KiB (`watchdog::read_small`), so a
+job that plants a link or a FIFO there can't steer a root process. The metadata requests are plain HTTP with a 2 s
+limit. A test build adds `--clock-file F` (the time is F's number, and the boot its first reading), `--poweroff-cmd PATH`
+and `--metadata-url URL` (`ratatoskr-mock cloud`'s `/__metadata/<instance>`). Built with `runner` on Linux only; any
+other build refuses the mode.
+
 ## Tests
 
 `cargo test -p sleipnir --no-default-features --features linux` runs the pure rows: the contract's refusals from
@@ -621,7 +722,8 @@ protocol's rows `[D]`: every frame round-trips, unknown fields and frames are ig
 or printed, chunks over 1 MiB are refused, a job frame without its nonce doesn't parse, and a property that the reader
 never panics on any bytes. The default features add `serve`'s rows: admission waits for the admission lock and
 writes the reservation another scheduler then counts (`[B]`, the lock as the gate), the cleanup's plan matches
-prefix and label only (`[D]`), and the bench's readings, speed, result shape and capped argv (`[D]`). The bench's
+prefix and label only (`[D]`), the bench's readings, speed, result shape and capped argv (`[D]`), and the watchdog's
+table on AWS and GCP, its notices, answers and options (`watchdog::`, `[D]`, a test clock). The bench's
 runner-host row (`bench_runs_capped_and_under_2_minutes`, `[C]`) needs the default features: build `runner_host`
 without `--no-default-features` for it.
 
@@ -629,7 +731,10 @@ without `--no-default-features` for it.
 `test/runners/README.md`, "Fleet rows"), every row `[C]`: a new `serve` lists the running attempt after a cut
 channel and reattaches it; `serve` ends at `bye` and at an EOF and leaves nothing enabled, loaded or written outside
 its root; two hubs on one root and prefix never clean each other's; an update keeps the old bundle while its job runs;
-the log after a reconnect comes from the file by offset, byte for byte; linger is reported at every `hello`.
+the log after a reconnect comes from the file by offset, byte for byte; linger is reported at every `hello`. The
+hub's `tests/fleet_runners.rs` `watchdog::a_spot_notice_requeues_at_once_with_no_strike` (`[C]`, `fleet.sh up
+--runners 1 --cloud MOCK`) runs a real watchdog on a fake runner against the mock's metadata for a seeded instance:
+the mock's spot notice reaches the hub as `preempting`, and the parked job's attempt requeues with no strike.
 
 `tests/runner_host.rs` holds the rows that need a real user manager, cgroups and podman. They are
 `#[ignore = "runner-host"]` and run only inside a fake runner (`test/runners/README.md`), never on a developer's

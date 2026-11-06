@@ -162,6 +162,48 @@ manual dispatch of `runtime.yml` that names it, never on a push or in a gate:
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
 ```
 
+## Runners in CI
+
+Where each part of the runners work (`docs/guide/runners.md`, `docs/develop/hub.md`, `docs/develop/sleipnir.md`) is
+proven on CI:
+
+| Lane | What it runs | Gates |
+|---|---|---|
+| `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and `tests/macos.rs`' four rows that need no sshd | yes |
+| `android` | `forseti` and the hub (with the cloud code) type-check for `aarch64-linux-android` with the other pure-Rust crates; `forseti` and `sleipnir --no-default-features --features proto,sync` (the shape jobq and the Android door take) also pass clippy `-D warnings` on their test builds | yes |
+| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below) | yes |
+| `fleet` | the fake runners (`test/runners/`): the spike's checks and linger over ssh | no: on demand only (`only=rt-fleet`) |
+
+`fleet` stays on demand because its checks have never run on CI: the fake runner (systemd as PID 1 and rootless podman
+inside a container) is proven on the desktop only, and the runner image's flags (`--cap-add SYS_ADMIN`, `--security-opt
+unmask=ALL`) may not be allowed on GitHub's hosted runners. The first dispatch decides: it is a diagnostic run of one
+lane on a `ci/*` branch. When it passes, the drills (`tests/fleet_drills.rs`, `test/runners/drills.sh`) and the other
+`fleet` feature rows (`fleet_keys`, `fleet_runners`, `fleet_registry`, `fleet_sync`, `fleet_link`) are added to the job
+and it joins the gate. Until then the fleet rows run on the desktop (`test/runners/README.md`).
+
+### macOS
+
+A Mac is a hub, never a runner (`docs/guide/runners.md`): OpenSSH ships with macOS and the private agent's socket is
+under `$TMPDIR`. `runtime/crates/drgnx-ratatoskr/tests/macos.rs` holds the five rows that say the hub works there:
+
+- `placement_and_trust_filter`: the trust table and the pick, with the Mac as the local candidate;
+- `an_agents_job_with_no_runner_runs_here_with_its_reason`: a job no runner may take is placed on the Mac with the
+  design's "runs here: …" words, and a queue with no runner starts it there;
+- `sync_into_a_local_mirror`: a commit reaches a mirror (real git), the hub measures the gap, and the plan is a push;
+- `runner_add_of_a_macos_host_is_refused_with_the_contract`: the host's `uname` says Darwin, so the add is refused
+  with what a runner is and nothing is recorded (the row stands in a `uname` that says Darwin, so it runs on Linux
+  too);
+- `the_generated_config_against_a_localhost_sshd`: the generated ssh config's forced options win over the user's
+  file, and the transport opens a session over it. It is `#[ignore = "macos-sshd"]` and needs a real `sshd`.
+
+The first four run with the workspace tests on every platform. The last one runs as its own step of the `macos` job:
+`.github/ci/macos-sshd.sh up` turns Remote Login on (`launchctl enable system/com.openssh.sshd`), makes a throwaway
+key that may log in as the runner user, adds a `Host drgnx-sshd-test` entry to `~/.ssh/config` and the host key to
+`known_hosts`, and prints the host name; the step passes it as `DRGNX_TEST_SSHD_HOST` and runs `cargo test --test macos
+-- --ignored`. `down` removes the key, the entry and the service again, whatever the step said. Run it by hand on a
+Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) runs in the `macos` tier of
+`drgnx-tiers.yml`, which runs the whole unit suite.
+
 ## The tiers workflow
 
 `.github/workflows/drgnx-tiers.yml` is the one definition of drgnx's Emacs-side jobs (`workflow_call`). drgnx's

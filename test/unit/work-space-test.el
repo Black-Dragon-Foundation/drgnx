@@ -159,6 +159,39 @@ directories."
                                 drgnx-work-space-test--calls))
           (should (equal 1 (length (drgnx-work-client-needs-you (drgnx-work-space-test--state buf))))))))))
 
+(ert-deftest drgnx-work-space/enter-on-a-runner-opens-its-queue ()
+  ;; pattern B: a machine of the frame that is a runner, with an agent whose job runs on it; Enter on the machine opens
+  ;; the side panel, and the panel holds the queue: the job's runner, state, the keys sent and its time
+  (drgnx-work-space-test--with
+    (let* ((buf (drgnx-work-space-open workspace t)) (id (drgnx-work-space-test--start-agent))
+           (item-id (concat "agent:" id)) (machine "machine:local"))
+      (drgnx-work-space-test--map-ready buf 1)
+      (let* ((state (drgnx-work-space-test--state buf)) (v (drgnx-work-client-version state))
+             (view (buffer-local-value 'drgnx-work-space--view buf))
+             (agent (copy-sequence (drgnx-work-client-item state item-id)))
+             (box (copy-sequence (drgnx-work-client-item state machine))))
+        (drgnx-work-client-event
+         "work-map"
+         (list :view view :version (1+ v) :base v
+               :changed (list (plist-put box :fields (list :slots '(1 4) :runner (list :trust "mine" :state "ready" :jobs 1
+                                                                                       :icon "server")))
+                              (plist-put agent :fields
+                                         (plist-put (copy-sequence (plist-get agent :fields)) :job
+                                                    (list :id "x1" :name "suite" :runner "local" :state "running"
+                                                          :started 100.0 :limit_min 6 :keys (list "token")))))))
+        (with-current-buffer buf (drgnx-work-map-select (cons 'machine machine)))
+        (let ((shown nil))
+          (cl-letf (((symbol-function 'drgnx-pane-show) (lambda (kind &rest _) (push kind shown))))
+            (with-current-buffer buf (drgnx-work-map-open-selection)))
+          (should (equal '(work-detail) shown)))
+        (let ((queue (cdr (assq :queue (drgnx-work-detail-sections (drgnx-work-space-test--state buf)
+                                                                   (cons 'machine machine))))))
+          (should (string-search "suite" queue))
+          (should (string-search "local" queue))
+          (should (string-search "running" queue))
+          (should (string-search "keys: token" queue))
+          (should (string-search "l live log" queue)))))))
+
 (ert-deftest drgnx-work-space/focus-arrows-send-no-relayout ()
   (drgnx-work-space-test--with
     (let* ((buf (drgnx-work-space-open workspace t)) (a (drgnx-work-space-test--start-agent)))

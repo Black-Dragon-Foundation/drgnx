@@ -36,7 +36,9 @@ it does not depend on the agent that started it or on the editor, and it survive
 - **The end.** The `exec-done` event carries the exit code and a summary: the names of the failing tests (read from
   `cargo test`, ERT and domr output, by the job's kind: `cargo`, `ert`, `domr`, `other`) and at most 20 lines of the log
   (failure lines first, then the end of the log), plus the log's path. Nothing is polled: the agent that started the job
-  waits at no cost and is woken by the end.
+  waits at no cost and is woken by the end. A job that ran on a `shared` runner has a summary that begins "output from
+  runner NAME (shared)", so the woken agent reads it as untrusted, and its result never counts for a gate (see
+  `docs/guide/runners.md`, "What comes back").
 - **Methods.** `exec/start`, `exec/get`, `exec/list`, `exec/stop`, `exec/log` (at most 1000 lines a call from line
   `from`, or with `tail_bytes` the log's last bytes, up to 1 MiB, read from the file's end; bytes that are not UTF-8
   come back replaced), `exec/bump` (yours only: a queued job to priority 1); agents use the `job_*` tools.
