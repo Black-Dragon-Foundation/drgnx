@@ -20,6 +20,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 80, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "supervisor", "data": {"rule": "manager-context", "session": "$sid", "card": "$number", "text": "$string"}}, "within_ms": 40000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"session/new\"", "count": 3, "at_most": 3, "within_ms": 20000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "[you are a manager agent]", "count": 2, "at_most": 2, "within_ms": 20000}
 {"do": "sql_expect", "sql": "select count(*) from card where kind = 'supervisor' and title like '%rotated%'", "rows": [[1]]}
 {"do": "send", "conn": "c", "json": {"id": 81, "method": "agents/list"}}
 {"do": "expect", "conn": "c", "json": {"id": 81, "result": {"sessions": {"$contains": [{"id": "$sid", "role": "manager"}]}}}}

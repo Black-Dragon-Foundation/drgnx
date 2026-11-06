@@ -938,6 +938,31 @@ else (Gemini, an agent without the capability) `summary`.
   `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
   refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
   `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
+  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
 
 ## The store
 
@@ -1369,7 +1394,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,

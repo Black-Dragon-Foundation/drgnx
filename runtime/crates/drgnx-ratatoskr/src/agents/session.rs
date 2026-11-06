@@ -10,7 +10,7 @@
 //! per 50 ms.
 
 #[cfg(test)]
-mod attach_tests;
+pub(crate) mod attach_tests;
 mod turn_core;
 
 use super::launch;
@@ -781,8 +781,8 @@ pub struct Session {
     stamps: Arc<crate::work::conclusions::Stamps>,
 }
 
-/// What `Conn::prompt` answered.
-struct TurnEnd(Result<hermod::PromptOutcome, hermod::Error>);
+/// What `Conn::prompt` answered for a turn.
+struct TurnEnd(u64, Result<hermod::PromptOutcome, hermod::Error>);
 
 /// Where a session's steps are written and announced.
 #[derive(Clone)]
@@ -830,7 +830,7 @@ pub(crate) enum Attach {
     Resume(String),
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "attached by the rewind and the fork")
+        allow(dead_code, reason = "made by the rewind and the fork")
     )]
     Fork {
         source: String,
@@ -1522,6 +1522,21 @@ pub(crate) async fn open_as(
     parent: Option<String>,
     sid: Option<String>,
 ) -> Result<Started, Error> {
+    open_with(hub, front, p, caller, parent, sid, &Attach::New)
+        .await
+        .map(|(started, _)| started)
+}
+
+/// [`open_as`] on the conversation ATTACH names (a fork from a step): the session, and the level a fork landed at.
+pub(crate) async fn open_with(
+    hub: &super::Hub,
+    front: &Front,
+    p: StartParams,
+    caller: &Caller,
+    parent: Option<String>,
+    sid: Option<String>,
+    attach: &Attach,
+) -> Result<(Started, Option<RestoreLevel>), Error> {
     if caller.class != Class::User {
         return Err(refuse("only the user starts a session"));
     }
@@ -1571,7 +1586,7 @@ pub(crate) async fn open_as(
         role,
         &sid,
         &cwd,
-        &Attach::New,
+        attach,
         (
             p.task.as_ref().map(|t| t.as_str()),
             p.job.as_ref().map(|j| j.as_str()),
@@ -1591,6 +1606,7 @@ pub(crate) async fn open_as(
         about: p.about.as_ref().map(|a| a.to_string()),
         document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if let Some(store) = &s.store {
         // the module env too: a restart or resume of the session passes it again (`kept_env`)
@@ -1613,7 +1629,7 @@ pub(crate) async fn open_as(
     // its starter's ask is its own: the manager that started it, or the session that made its plan run
     s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
-    Ok(Started { id: sid, name })
+    Ok((Started { id: sid, name }, level))
 }
 
 /// The `mcpServers` entry that gives the session SID the coordination tools (`job_start` among them): Ratatoskr's
@@ -1985,7 +2001,7 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
 }
 
 /// A recorded session: sid, name, profile, role, cwd, task, job, acp id, parent, started.
-type Row = (
+pub(crate) type Row = (
     String,
     String,
     String,
@@ -1999,7 +2015,7 @@ type Row = (
 );
 
 /// The recorded sessions (only ONLY when given), oldest first.
-async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
+pub(crate) async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
     let Some(db) = hub.db() else {
         return Vec::new();
     };
@@ -2050,13 +2066,19 @@ pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: St
     let Ok(old) = hub.find(sid) else {
         return false;
     };
-    old.close_now().await;
-    gateway_gone(front, sid).await;
-    let _ = front.mcp.close(sid).await;
+    close_for_swap(front, &old).await;
     let Some(row) = read_rows(hub, Some(sid)).await.into_iter().next() else {
         return false;
     };
     resume_row_with(hub, front, row, Some(first)).await
+}
+
+/// OLD's agent ends so another conversation can take its hub session (a rotation, a rewind): its transcript and queue
+/// kept on disk, its gateway registration and MCP session closed.  Its row stays.
+pub(crate) async fn close_for_swap(front: &Front, old: &Session) {
+    old.close_now().await;
+    gateway_gone(front, &old.id).await;
+    let _ = front.mcp.close(&old.id).await;
 }
 
 /// Session SID's recorded role is now ROLE (the user made it a manager).
@@ -2153,6 +2175,40 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
 /// [`resume_row`], or with FIRST (a manager's restart or rotation, Task 25): a new agent session in the same hub
 /// session, no `session/resume`, that is told FIRST (its digest and open decisions) instead of [`RESTART_NOTICE`].
 async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Option<String>) -> bool {
+    let again = match first {
+        Some(f) => Again::Fresh(f),
+        None => Again::Resume,
+    };
+    relaunch(hub, front, row, again).await.is_ok()
+}
+
+/// How [`relaunch`] brings a recorded session back.
+pub(crate) enum Again {
+    /// Its recorded conversation (`session/resume`, else `session/load`), else a fresh one told what happened.
+    Resume,
+    /// A fresh conversation told this first (a manager's restart or rotation).
+    Fresh(String),
+    /// A fork (a rewind): ATTACH, its new conversation told TOLD first when the fork lands at its own level.  When it
+    /// lands at Summary instead (the agent cannot fork, or the fork failed), it is told SUMMARY and the user's
+    /// MESSAGE; with no message the summary waits, held, at the queue's front, so no turn starts unasked.
+    #[cfg_attr(not(test), allow(dead_code, reason = "made by the rewind"))]
+    Fork {
+        attach: Attach,
+        told: Option<String>,
+        summary: String,
+        message: Option<String>,
+    },
+}
+
+/// ROW's session running again as AGAIN says, under its own id, row, transcript and queue: the level a fork landed at
+/// (none for any other way back), or why it is not running.  The row's conversation is written only once the launch
+/// has landed, so a launch that fails leaves the row as it was, resumable.
+pub(crate) async fn relaunch(
+    hub: &super::Hub,
+    front: &Front,
+    row: Row,
+    again_how: Again,
+) -> Result<Option<RestoreLevel>, Error> {
     let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
     // a worker a manager started gets back what the manager delegated, before its first tool call
     if parent.is_some() {
@@ -2163,7 +2219,10 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             sid,
             "session not resumed: no agent profile {profile_name:?}"
         );
-        return false;
+        return Err(invalid(
+            "profile",
+            format!("no agent profile {profile_name:?}"),
+        ));
     };
     let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
     let meta = store
@@ -2217,18 +2276,24 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
     // session that is told what happened (its transcript stays)
     let mut handoff: Option<String> = None;
-    let tried = match first {
-        Some(_) => None,
-        None => Some(again(Attach::Resume(acp.clone())).await),
+    let tried = match &again_how {
+        Again::Resume => Some(again(Attach::Resume(acp.clone())).await),
+        Again::Fresh(_) | Again::Fork { .. } => None,
     };
     let (l, rx, fresh) = match tried {
-        None => match again(Attach::New).await {
-            Ok((l, rx)) => (l, rx, true),
-            Err(e) => {
-                tracing::warn!(sid, "session not started afresh: {}", e.message);
-                return false;
+        None => {
+            let attach = match &again_how {
+                Again::Fork { attach, .. } => attach.clone(),
+                _ => Attach::New,
+            };
+            match again(attach).await {
+                Ok((l, rx)) => (l, rx, true),
+                Err(e) => {
+                    tracing::warn!(sid, "session not started afresh: {}", e.message);
+                    return Err(e);
+                }
             }
-        },
+        }
         Some(Ok((l, rx))) => (l, rx, false),
         Some(Err(e)) if e.code == ErrorCode::Internal => {
             tracing::warn!(
@@ -2237,28 +2302,56 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 e.message
             );
             // the summary handoff (Task 26): a new session on the same hub id, told what the old one left
-            handoff =
-                Some(super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref()).await);
+            handoff = Some(
+                super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref(), None).await,
+            );
             match again(Attach::New).await {
                 Ok((l, rx)) => (l, rx, true),
                 Err(e) => {
                     tracing::warn!(sid, "session not resumed: {}", e.message);
-                    return false;
+                    return Err(e);
                 }
             }
         }
         Some(Err(e)) => {
             tracing::warn!(sid, "session not resumed: {}", e.message);
-            return false;
+            return Err(e);
         }
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-    let told = fresh.then(|| match (first, handoff) {
-        (Some(f), _) => f,
-        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-        (None, None) => RESTART_NOTICE.to_string(),
-    });
+    // a manager's restart or rotation is told FIRST; a fork what its level needs; any other fresh start the notice
+    // and the summary handoff
+    let (told, hold, reattach) = match again_how {
+        Again::Fork {
+            attach,
+            told,
+            summary,
+            message,
+        } => {
+            let wanted = match attach {
+                Attach::Fork { level, .. } => Some(level),
+                _ => Some(RestoreLevel::Summary),
+            };
+            if level == wanted {
+                (told, false, true)
+            } else {
+                match message {
+                    Some(m) => (Some(format!("{summary}\n\n{m}")), false, true),
+                    None => (Some(summary), true, true),
+                }
+            }
+        }
+        Again::Fresh(f) => (fresh.then_some(f), false, false),
+        Again::Resume => (
+            fresh.then(|| match handoff {
+                Some(h) => format!("{RESTART_NOTICE}\n\n{h}"),
+                None => RESTART_NOTICE.to_string(),
+            }),
+            false,
+            false,
+        ),
+    };
     if fresh && let Some(db) = hub.db() {
         insert_row(db, &s).await;
     }
@@ -2274,7 +2367,15 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
         None => Default::default(),
     };
-    lock(&s.state).core.resume(queue, paused, told);
+    // a fork's first words come through the core's reattach, after the queue the swap kept
+    let (resume_told, reattach_told) = if reattach {
+        (None, Some(told))
+    } else {
+        (told, None)
+    };
+    lock(&s.state)
+        .core
+        .resume(queue, paused || hold, resume_told);
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2290,8 +2391,11 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     if waiting {
         s.close_when_idle();
     }
-    s.next();
-    true
+    match reattach_told {
+        Some(told) => s.reattach(told),
+        None => s.next(),
+    }
+    Ok(level)
 }
 
 /// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
@@ -3677,6 +3781,26 @@ impl Session {
         });
     }
 
+    /// What its agent answered to `initialize` (`agentCapabilities`).
+    #[cfg_attr(not(test), allow(dead_code, reason = "read by the rewind"))]
+    pub(crate) fn capabilities(&self) -> Option<&Value> {
+        self.capabilities.as_ref()
+    }
+
+    /// Its conversation is about to be swapped (a rewind): the running turn is cancelled and cut off, a prompt that
+    /// has not reached the agent goes back to the queue, and the queue is kept on disk for the session that follows.
+    #[cfg_attr(not(test), allow(dead_code, reason = "called by the rewind"))]
+    pub(crate) fn detach(self: &Arc<Self>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Detach);
+        self.perform(fx);
+    }
+
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.
+    fn reattach(self: &Arc<Self>, told: Option<String>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
+        self.perform(fx);
+    }
+
     pub(crate) async fn close_now(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.flush_transcript();
@@ -3837,11 +3961,11 @@ impl Session {
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
         // the reader task ends the turn, after the updates the agent sent before its answer
-        let _ = self.done.send(TurnEnd(out));
+        let _ = self.done.send(TurnEnd(turn, out));
     }
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
-        let out = end.0;
+        let TurnEnd(turn, out) = end;
         let mut message: Option<String> = None;
         let jobs = self.has_jobs();
         // ENDING as the step saw it, under its lock: a hub that begins ending after the step ends what it started
@@ -3875,17 +3999,23 @@ impl Session {
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
                     TurnEvent::PromptDone {
+                        turn,
                         cancelled: serde_json::to_value(o.stop).ok() == Some(json!("cancelled")),
                         jobs,
                     }
                 }
-                Err(hermod::Error::Closed) => TurnEvent::PromptFailed { closed: true, jobs },
+                Err(hermod::Error::Closed) => TurnEvent::PromptFailed {
+                    turn,
+                    closed: true,
+                    jobs,
+                },
                 Err(e) => {
                     rest.insert("text".into(), json!(e.to_string()));
                     // the editor tells this error, which ends the turn, from one inside a turn (a refused wait)
                     rest.insert("stop".into(), json!("Error"));
                     st.push(EntryType::Error, rest);
                     TurnEvent::PromptFailed {
+                        turn,
                         closed: false,
                         jobs,
                     }
@@ -4341,7 +4471,7 @@ pub async fn move_session(
         }
         crate::clock::sleep(Duration::from_millis(50)).await;
     }
-    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref()).await;
+    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref(), None).await;
     let start: StartParams = serde_json::from_value(json!({
         "profile": profile,
         "cwd": old.cwd,
