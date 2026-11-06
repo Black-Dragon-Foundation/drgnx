@@ -837,3 +837,43 @@ reads at most 1 ms. It is `#[ignore]`, run once and alone on a pinned host, opti
 
 In CI the `huginn_read` fuzz target runs in `runtime.yml`'s fuzz job, and `ci.yml`'s Nidhogg job builds huginn's `dump`
 example so the ERT differential (`drgnx-huginn/differential-fresh-seed`) compares it with Emacs's reader.
+
+## Extensions
+
+The Extensions view's rows are the workloads of `harness/drgnx-perf-extensions.el`, in the form of the settings rows: a
+library evaluated in the session builds the fixture under temporary data, config, state and cache directories, times the
+real functions against a hub stub that answers from memory, and puts everything back. The four archives are local
+directories of `archive-contents` at their 2026-11-06 sizes (gnu 420, nongnu 480, melpa 5,500, melpa-stable 750: 7,150
+rows), written by `drgnx-perf-extensions-write-archives`; no network. To write them for a look by hand:
+`emacs --batch -l harness/drgnx-perf-extensions.el -f drgnx-perf-extensions-fixture-main [DIR]`
+(default `test/fixtures/extensions/full`, written on demand and not committed).
+
+| Workload | What it measures | Budget (`:report-only ext-pass`) |
+|---|---|---|
+| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started | `:open_ms` 100, `:processes` 0 |
+| `extensions-search` | each key of a search over 7,150 rows, to the painted results | `:key_p50_ms` 8, `:key_max_ms` 16 |
+| `extensions-scroll` | scrolling the whole catalog by name (`@sort:name`, pages of 200), per key: the command, the list's own `post-command-hook` and the redisplay; the slices that draw a next page are timed apart (`:slice_max_ms`) | `:key_max_ms` 16 |
+| `extensions-details` | opening a details page, to its painted rows | `:open_ms` 50 |
+| `extensions-progress` | a running job's progress-file reads while it writes a step every key (each event names the file): the smallest gap between two reads (`:read_gap_min_ms`, `:reads`), how many gaps fall under 240 ms, whether the last write was read; and typing's p95 against idle | `:reads_too_close` 0, `:last_unread` 0, `:typing_delta_ms` 1 |
+| `activate-live` | a job's plan step: repointing the 40 package directories of a running session into the generation that holds the old copies (one walk of `load-path`) | `:activate_ms` 20 |
+| `activate-live-new` | a job's end that added a package, as the job layer passes it (`drgnx-extensions-live-after` of `(:status done)`): the new package activated from its own descriptor, the session holding 40 others | `:activate_ms` 20 |
+| `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |
+| `refresh-job` | the catalog refresh from the archives | none (reported) |
+| `list-packages-compare` | `list-packages` on the same fixtures, offline: first render, a `package-menu-filter-by-name` keystroke, scrolling, memory | none; `:beats_*` flags say whether the view wins each |
+
+The view draws from timers (`:delay 0`, then slices of at most `drgnx-view-slice`), so a timed form ends with the
+harness's settle: it fires the draw timers the view armed through the timer layer's own wrapper until none is left,
+draws what is still marked and redisplays. The clock stops on painted rows, never on armed timers.
+
+The rows are provisional: they report and never fail until `DRGNX_PERF_LANDED` names `ext-pass`, the combined gate pass
+that judges them. Run them pinned, alone on the perf island:
+`DRGNX_PERF_WORKLOADS='extensions-open extensions-search extensions-scroll extensions-details extensions-progress activate-live activate-live-new install-overhead refresh-job list-packages-compare' perf-exclusive.sh env DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf`.
+
+The hub's side is a Rust bench, `runtime/crates/drgnx-ratatoskr/benches/extensions.rs`: `catalog-load` (parse and merge
+7,150 rows) at most 100 ms and 15 MB, and `extensions/search` at most 3 ms at the 95th percentile. The 15 MB is what
+the hub's cache keeps (the parsed file and the index): live bytes counted by the bench's own global allocator, not
+resident memory, which a warm process's arenas hide. It is `#[ignore]`d;
+run it once, optimized and alone on a pinned host:
+`perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
+
+Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).

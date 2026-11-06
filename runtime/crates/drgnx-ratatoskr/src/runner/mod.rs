@@ -528,6 +528,10 @@ pub trait RunGit: std::marker::Send + Sync {
     fn touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+    /// Whether a sandboxed agent worked in FOLDER (plain git never runs there).
+    fn is_touched<'a>(&'a self, _folder: &'a Path) -> GitFuture<'a, bool> {
+        Box::pin(async { Ok(false) })
+    }
 }
 
 // ---- small helpers ------------------------------------------------------------------------------------------

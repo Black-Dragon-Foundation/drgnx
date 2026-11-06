@@ -114,4 +114,7 @@
  (drgnx-search-builtin t)
  (drgnx-search-include nil)
  (drgnx-search-exclude nil)
- (drgnx-search-off nil))
+ (drgnx-search-off nil)
+ (drgnx-agents-plugins nil)
+ (drgnx-agents-hook-rules nil)
+ (drgnx-agents-hook-rules-off nil))

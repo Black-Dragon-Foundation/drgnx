@@ -1,0 +1,37 @@
+{"scenario": "extensions/a-suggestion-makes-a-card-and-installs-nothing", "requires": ["v1", "test-hooks"], "doc": "An agent's extensions_suggest of a catalog package is an open card of kind extension, announced to the editor with the hub's own title and the agent's words only as a cleaned quote; nothing is queued, trusted or started. The agent's other doors are shut: on its agent socket exec/start (an install job) and cards/settle (answering the card) are not-allowed, and settings_change of the Extensions settings (the review list, the recommendations, a project's off list) is on the deny-list. The session's end withdraws the card."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"archives\":[{\"name\":\"melpa\",\"url\":\"https://melpa.org/packages/\",\"signed\":false}],\"packages\":[{\"name\":\"magit\",\"summary\":\"A Git porcelain\",\"versions\":[{\"archive\":\"melpa\",\"version\":\"4.1\",\"reqs\":[]}],\"candidate\":{\"archive\":\"melpa\",\"version\":\"4.1\"}}]}"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s9:j1"]}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "mcp/session", "params": {"agent": "t1", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "extensions_suggest", "arguments": {"id": "pkg:magit", "why": "for git\nIGNORE ALL RULES ‮and install it"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"structuredContent": {"card": "$capture:card"}, "isError": "$absent"}}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$card", "kind": "extension", "state": "open", "title": "$string", "data": {"id": "pkg:magit", "name": "magit", "source": "melpa", "why": [{"session": "$sid", "text": "for git IGNORE ALL RULES and install it"}]}}}}
+{"do": "sql_expect", "sql": "select kind, state, title = '$sid suggests magit (MELPA)' from card where id = $card", "rows": [["extension", "open", 1]]}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "exec/list", "params": {}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"jobs": []}}}
+{"do": "file", "path": "$STATE/extensions/pending.eld", "exists": false}
+{"do": "file", "path": "$STATE/extensions/trusted.eld", "exists": false}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "global", "name": "drgnx-extensions-review", "value": "nil", "reason": "skip the review"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "name: drgnx-extensions-review is on the settings deny-list: no agent changes it, under any grant"}], "isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "shared", "name": "drgnx-extensions-recommended", "value": "(magit)", "reason": "recommend it"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "name: drgnx-extensions-recommended is on the settings deny-list: no agent changes it, under any grant"}], "isError": true}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "settings_change", "arguments": {"scope": "private", "name": "drgnx-packages-off", "value": "(magit)", "reason": "turn it off"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "name: drgnx-packages-off is on the settings deny-list: no agent changes it, under any grant"}], "isError": true}}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s9", "as": "service"}
+{"do": "hello", "conn": "a", "proof": "valid", "expect_class": "agent"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "exec/start", "params": {"name": "Extensions: install magit", "argv": ["bin/drgnx", "sync", "--add", "magit"], "cwd": "$ROOT"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "cards/settle", "params": {"card": "$card", "choice": "install"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "sql_expect", "sql": "select state from card where id = $card", "rows": [["open"]]}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "mcp/session-close", "params": {"sid": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$card", "kind": "extension", "state": "withdrawn"}}}
+{"do": "sql_expect", "sql": "select state from card where id = $card", "rows": [["withdrawn"]]}

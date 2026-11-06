@@ -162,9 +162,120 @@ pub struct Snapshot {
         skip_serializing_if = "Option::is_none"
     )]
     pub waiting_on: Option<String>,
+    /// Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooked: Option<Hooked>,
+    /// The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent
+    /// starts, so a new set reaches it only through a new session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plugins_changed: bool,
+    /// What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent
+    /// offers nothing; an editor hides the actions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<Panel>,
 }
 
-/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved).
+/// The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,
+/// `compact-preview`, `before-tool`) and its last `_drgnx/context`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Panel {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<Context>,
+}
+
+/// What a part of the context window holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContextKind {
+    System,
+    Tools,
+    Files,
+    ToolOutput,
+    Conversation,
+}
+
+/// One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContextItem {
+    pub id: Bounded<String, 256>,
+    pub label: Bounded<String, 256>,
+    pub tokens: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ContextPart {
+    pub kind: ContextKind,
+    pub tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Bounded<Vec<ContextItem>, 200>>,
+}
+
+/// The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by
+/// part, and what a compaction would free.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Context {
+    pub used: u64,
+    pub size: u64,
+    pub parts: Bounded<Vec<ContextPart>, 8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_frees: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContextDropParams {
+    pub id: Id,
+    /// The item's `id` in the session's context breakdown.
+    pub item: Bounded<String, 256>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContextPinParams {
+    pub id: Id,
+    pub item: Bounded<String, 256>,
+    /// True pins it (a compaction keeps it), false unpins it.
+    pub pinned: bool,
+}
+
+/// What a compaction would do now, as the agent says (nothing is compacted): the tokens it would free, the items it
+/// keeps and the ones it summarises, and a note (e.g. "costs one model call").
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompactPreview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frees: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<Bounded<Vec<ContextItem>, 200>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summarised: Option<Bounded<Vec<ContextItem>, 200>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Bounded<String, 1024>>,
+}
+
+/// The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the
+/// permission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the
+/// agent runs them without asking). Fixed at the session's start; never faked.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Hooked {
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub before_tool: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub by_adapter: Vec<String>,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub unhooked: Vec<String>,
+    /// Why the unhooked kinds are (shown as "not hooked: KINDS (WHY)").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+}
+
+/// What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under
+/// its step).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryType {
@@ -178,6 +289,7 @@ pub enum EntryType {
     Usage,
     Notice,
     Compaction,
+    Note,
 }
 
 /// One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).
@@ -481,6 +593,21 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "whether a profile's agent starts and answers initialize (it is started in its sandbox, asked, and ended; no session is made)",
             check: check_probe,
+        ),
+        method!(
+            "agents/context-drop", AgentsContextDrop(ContextDropParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
+        ),
+        method!(
+            "agents/context-pin", AgentsContextPin(ContextPinParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+        ),
+        method!(
+            "agents/compact-preview", AgentsCompactPreview(ById) -> CompactPreview,
+            classes: [User], writes: false,
+            doc: "what a compaction would free, keep and summarise now, as the agent says (`_drgnx/compact/preview`, 10 s; nothing is compacted); an agent without the `compact-preview` feature: invalid-params",
         ),
     ]
 }

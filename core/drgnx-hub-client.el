@@ -738,6 +738,7 @@ closes it when this Emacs dies."
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+  (remove-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-records-review--event)
   (remove-hook 'drgnx-hub-event-functions #'drgnx-say-event))
@@ -1100,6 +1101,7 @@ end is said by its sentinel."
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--need-keys)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--keys-changed)
     (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-card)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-hub--note-plugin)
     (when (require 'drgnx-settings-agents nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-settings-agents--event))
     (when (require 'drgnx-records-review nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-records-review--event))
     (when (require 'drgnx-say nil t) (add-hook 'drgnx-hub-event-functions #'drgnx-say-event))
@@ -1209,10 +1211,40 @@ gone (`drgnx-hub--card-choices-live').")
   "Non-nil when the event now handled came on a connection of a hub that proved itself."
   (and (processp (bound-and-true-p drgnx-hub--event-conn)) (process-get drgnx-hub--event-conn :drgnx-proven)))
 
+(defconst drgnx-hub--quote-max 280 "The most of an agent's words a suggestion's notice quotes, in characters.")
+
+(defun drgnx-hub--quote (text)
+  "TEXT, an agent's words, as one inert line: no control, bidi or zero-width character, at most
+`drgnx-hub--quote-max' characters."
+  (let* ((line (replace-regexp-in-string "[\n\r\t  ]" " " text t t))
+         (clean (replace-regexp-in-string
+                 "[[:cntrl:]­؜᠎​-‏‪-‮⁠-⁤⁦-⁩﻿]" "" line t t)))
+    (substring-no-properties (truncate-string-to-width (string-trim clean) drgnx-hub--quote-max))))
+
+(defun drgnx-hub--note-extension-card (data)
+  "An agent's suggestion (an `extension' card): an open one is a notice whose command opens the package's page, with
+the hub's title as its text and the agents' words only quoted in its detail; nothing on it installs.  A withdrawn or
+settled one takes its notice away."
+  (let ((key (intern (format "extension-card-%d" (plist-get data :id))))
+        (id (plist-get (plist-get data :data) :id)))
+    (if (not (equal (plist-get data :state) "open"))
+        (drgnx-notice-clear 'hub key)
+      (when (and (stringp id) (string-match-p "\\`\\(?:pkg\\|plugin\\):[^[:space:][:cntrl:]]\\{1,200\\}\\'" id)
+                 (stringp (plist-get data :title)))
+        (drgnx-notify 'hub 'info (drgnx-hub--quote (plist-get data :title))
+                      :id key :life 'condition
+                      :detail (mapconcat (lambda (q)
+                                           (format "%s says: “%s”"
+                                                   (drgnx-hub--quote (format "%s" (plist-get q :session)))
+                                                   (drgnx-hub--quote (format "%s" (plist-get q :text)))))
+                                         (plist-get (plist-get data :data) :why) "; ")
+                      :command (list 'drgnx-extensions-show-suggestion id))))))
+
 (defun drgnx-hub--note-card (event data)
-  "In an editor: a `matrix' card (the permission matrix asks) or a `supervisor' pause from a hub that proved itself is
-a notice.  Nothing asks and nothing waits: a card that lists its answers (a browser row's) keeps them here and its
-notice carries Agents: Answer Permission Card with the card's id; the cockpit's cards answer the others.
+  "In an editor: a `matrix' card (the permission matrix asks), an `extension' card (an agent's suggestion:
+`drgnx-hub--note-extension-card') or a `supervisor' pause from a hub that proved itself is a notice.  Nothing asks
+and nothing waits: a card that lists its answers (a browser row's) keeps them here and its notice carries Agents:
+Answer Permission Card with the card's id; the cockpit's cards answer the others.
 `agent-step' is not handled here: it matters only to a subscriber that asked for it."
   (when (drgnx-hub--event-proven-p)
     (cond
@@ -1224,10 +1256,38 @@ notice carries Agents: Answer Permission Card with the card's id; the cockpit's 
                       :scope (plist-get data :job)
                       :command (and choices (list 'drgnx-agents-answer-card id)))
         (when choices (drgnx-hub--card-choices-put id data choices))))
+     ((and (equal event "card") (equal (plist-get data :kind) "extension") (natnump (plist-get data :id)))
+      (drgnx-hub--note-extension-card data))
      ((and (equal event "supervisor") (stringp (plist-get data :text)))
       (drgnx-notify 'hub 'warn (format "An agent was paused: %s" (plist-get data :text))
                     :id (intern (format "supervisor-%s" (or (plist-get data :card) (plist-get data :session) "rule")))
                     :life 'condition)))))
+
+(defun drgnx-hub--plugin-notice-id (name)
+  "The notice id of plugin NAME."
+  (intern (format "plugin-%s" name)))
+
+(defun drgnx-hub--note-plugin (event data)
+  "In an editor: a `plugin' event from a hub that proved itself, or a `card' of kind `plugin', becomes a notice of
+source `hub' for a plugin that waits for your approval (`unapproved', `changed') or is `broken'; any other state
+takes the notice away.  The click opens the plugin's page (`drgnx-plugins-page-open', when the module
+`tools/plugins' runs).  Nothing asks and nothing is approved here."
+  (when (and (drgnx-hub--event-proven-p)
+             (or (equal event "plugin")
+                 (and (equal event "card") (equal (plist-get data :kind) "plugin"))))
+    (let* ((name (or (plist-get data :name) (plist-get data :subject)))
+           (state (or (plist-get data :state) "unapproved"))
+           (id (and (stringp name) (drgnx-hub--plugin-notice-id name))))
+      (when id
+        (if (not (member state '("unapproved" "changed" "broken")))
+            (drgnx-notice-clear 'hub id)
+          (drgnx-notify 'hub (if (equal state "broken") 'warn 'info)
+                        (pcase state
+                          ("unapproved" (format "Plugin %s waits for your approval" name))
+                          ("changed" (format "Plugin %s changed since you approved it: it does not run until you approve it again" name))
+                          (_ (format "Plugin %s does not load" name)))
+                        :id id :life 'condition
+                        :command (and (fboundp 'drgnx-plugins-page-open) (list 'drgnx-plugins-page-open name))))))))
 
 (provide 'drgnx-hub-client)
 ;;; drgnx-hub-client.el ends here

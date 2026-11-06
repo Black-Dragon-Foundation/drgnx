@@ -470,6 +470,44 @@ ROOT)` reads it.
   `packages-wanted.eld` (a bare list of names, a state file) is changed with `drgnx-file-update … :on-unreadable
   'backup :timeout 0` from `drgnx-pkg--record-want`, which runs at startup: it never prompts or waits, skips a file
   another process holds (the next startup records the want), and turns an error into one message.
+- **Wants and the queue** (`core/drgnx-pkg-wants.el`, loaded by `drgnx-pkg`; the batch sync needs them without the
+  editor). A lock entry may carry `:wanted user`; `drgnx-pkg-manifest` reads those names as its fourth source, and
+  every lock write passes each entry through `drgnx-pkg--marked` (ADD sets the mark, REMOVE clears it, anything else
+  keeps the old entry's), so a rebuilt entry (`drgnx-pkg--desc-entry` after an upgrade) never drops it;
+  `drgnx-pkg-ship-lock` strips it. The queue `<state>/extensions/pending.eld`, `(:next N :entries (ENTRY…))`, is
+  changed only with `drgnx-file-update`: `drgnx-pkg-pending-add ENTRY` (→ the ticket) and `drgnx-pkg-pending-cancel
+  TICKET` with `:timeout 0` (the editor never waits: `drgnx-file-busy` passes up), `drgnx-pkg-pending-take` (→ the
+  entries; `:next` kept) by `drgnx sync --pending` while it holds `sync.lock`. `drgnx-pkg-removal-plan NAMES` →
+  `(:remove NAMES… :refused ((NAME . WHY)…))` reads the modules, `packages.eld`, `packages-wanted.eld` and the lock.
+- `drgnx-pkg-sync`'s `:add ((NAME . VERSION)…)`, `:remove NAMES` and `:strict` (set by either): the requested part
+  of `MISSING` (`drgnx-pkg--asked`: the names and what they bring) is checked before the swap, so a failed request
+  changes nothing; a strict run writes the lock and the generation even when an unrelated package is missing.
+  A version asked for is a pin of its own (never soft). The order of a run is swap → quickstart → lock → snapshot →
+  native compilation. `drgnx-pkg--take-sync-lock` waits under `drgnx-pkg--sync-wait` (`--wait`): another holder is a
+  `drgnx-pkg-sync-busy` (a `drgnx-pkg-error`), retried every 0.5 s. Tests hook a batch child through
+  `drgnx-pkg--after-lock-function` (`wait`, `held`) and `drgnx-pkg--step-function` (`native`), set by
+  `test/fixtures/pkg-child-fixture.el`.
+- **Progress** (`core/drgnx-pkg-progress.el`): `(drgnx-pkg-progress STEP &rest PLIST)` replaces
+  `drgnx-pkg--progress-file` (the CLI's `--progress FILE`, bound in `drgnx-pkg-cli-run`) with one JSON object of at
+  most 1 KiB (long lists dropped first), never failing the run, then calls `drgnx-pkg--step-function` (the child
+  fixture logs each step there). `drgnx-pkg-progress-plan GENERATION REPLACES REMOVES ADDS` writes `FILE.plan.json`,
+  then the plan step, before every swap: a sync computes it from its plan and the removals against the staging
+  directory as loaded (`drgnx-pkg--plan-swap`, before the downloads), a rollback (and an upgrade's restore) from the
+  generation against `elpa/` (`drgnx-pkg--dirs-change`). `drgnx-pkg-sync`'s `:only NAMES` (`drgnx-pkg--plan`'s
+  NEWEST; a pin too old for them, its TOO-OLD, is dropped and the plan made again), `:stage` (fetch into the cache,
+  write `drgnx-pkg-staged-file`, return before the swap) and `:staged ENTRIES` (exact pins with their hashes; their
+  `:verified` carried into the lock) back `drgnx upgrade --only/--stage/--staged`. `drgnx-pkg-generations-in-use`
+  reads `<state>/elpa-in-use/PID.eld` (live stamps only; with SWEEP the others are deleted): snapshot rotation and
+  an upgrade's restore keep those generations. `drgnx-pkg--after-change` (settings index, then
+  `drgnx-pkg-after-change-functions`) follows a sync, upgrade or rollback of the CLI that worked.
+- **Signatures**: `drgnx-pkg-with-archive-settings` is the one place that binds `package-check-signature` to `t`,
+  `package-unsigned-archives` (`drgnx-pkg-unsigned-archives`: MELPA by name or host, directory archives —
+  `drgnx-pkg--directory-archive-p`, which the signed tests override — and `packages.eld`'s `:unsigned-archives`), the
+  keyring and the priorities; the sync runs inside it. `drgnx-pkg--refresh` checks for gpg first and turns a failed
+  check of an archive's contents (package.el only logs it) into a `drgnx-pkg-error`. `drgnx-pkg--install` writes
+  `:verified t` for a file fetched from a signing archive, or a cache hit whose hash is a verified entry's (a staged
+  entry is the pin of a `--staged` run). The guard (`drgnx-pkg--guard`) takes `sync.lock` around a stock install a
+  user runs, never waiting (`user-error` while a sync holds it).
 
 **The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
 name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
@@ -924,7 +962,14 @@ stack — the code that knows what it changed knows how to change it back):
   writes it and, when the report shows the module's stage has run, calls `drgnx-modules--run-one` (which checks
   packages and requirements) and runs `drgnx-modules-after-teardown-functions` (not the after-stage hook, whose
   subscriber skips `startup`) so keys and menus follow whatever the stage. Neither prompts; the question "Also turn off X, Y?" belongs to the
-  command `drgnx-modules-list-toggle`. `drgnx-modules-toggle` (onboarding) only writes.
+  command `drgnx-modules-list-toggle`, which then saves the choice as the Settings page saves a value
+  (`drgnx-settings-editors-commit` of each module setting that changes) and applies it through the settings'
+  `:apply` (`drgnx-modules--settings-apply`), the path the Extensions view's Built-in rows take, so the two never
+  disagree: turning a module back on also brings back the dependents that went with it. `drgnx-modules-toggle`
+  (onboarding) only writes.
+- `(drgnx-modules-retry-waiting)` runs the setup of every module waiting for packages (status `missing-packages`)
+  whose packages now load, and returns them; live activation calls it after an Extensions job installed packages
+  (`modules/tools/drgnx-extensions-live.el`, [Extensions](extensions.md#live-activation)).
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that

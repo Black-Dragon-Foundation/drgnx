@@ -157,6 +157,13 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-include", "Vec<String>", OnError::Strict),
     setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
     setting("drgnx-search-off", "bool", OnError::Strict),
+    setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
+    setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
+    setting(
+        "drgnx-agents-hook-rules-off",
+        "Vec<String>",
+        OnError::Strict,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -240,6 +247,38 @@ pub struct RuntimeValues {
     pub search_include: Vec<String>,
     pub search_exclude: Vec<String>,
     pub search_off: bool,
+    /// The plugins that run, in hook order (`drgnx-agents-plugins`). A project's list replaces it
+    /// ([`overrides::PER_PROJECT`]); a plugin runs only when the user approved it too ([`crate::plugins`]).
+    pub agents_plugins: Vec<String>,
+    /// The user's hook rules as a JSON list of rule objects (`drgnx-agents-hook-rules`), checked by [`hook_rules`]; a
+    /// project's rules are added to these.
+    pub agents_hook_rules: Value,
+    /// The ids of rules a project switches off (`drgnx-agents-hook-rules-off`).
+    pub agents_hook_rules_off: Vec<String>,
+}
+
+/// A hook rule list as the settings hold it, checked by `norn::hooks::parse_rules` (a rule's keys may be written with
+/// `-`, as in the Lisp, or `_`); the list with `_` keys. A bad one is its JSON path and why. `null` is no rules.
+pub(crate) fn hook_rules(v: &Value) -> Result<Value, (String, String)> {
+    let fixed = match v {
+        Value::Null => json!([]),
+        Value::Array(rules) => Value::Array(
+            rules
+                .iter()
+                .map(|r| match r {
+                    Value::Object(o) => Value::Object(
+                        o.iter()
+                            .map(|(k, x)| (k.replace('-', "_"), x.clone()))
+                            .collect(),
+                    ),
+                    other => other.clone(),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    };
+    norn::hooks::parse_rules(&fixed).map_err(|e| (e.path, e.message))?;
+    Ok(fixed)
 }
 
 /// The browser program setting: absolute, or none.
@@ -476,6 +515,16 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-include" => values.search_include = de(node)?,
         "drgnx-search-exclude" => values.search_exclude = de(node)?,
         "drgnx-search-off" => values.search_off = de(node)?,
+        "drgnx-agents-plugins" => values.agents_plugins = de(node)?,
+        "drgnx-agents-hook-rules" => {
+            let v: Value = de(node)?;
+            values.agents_hook_rules = hook_rules(&v).map_err(|(path, message)| Bad {
+                path: (!path.is_empty()).then_some(path),
+                message,
+                span: node.span,
+            })?;
+        }
+        "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(node)?,
         "drgnx-agents-browser-program" => {
             let v = de(node)?;
             check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
@@ -741,6 +790,18 @@ impl Settings {
             None => overrides::to_json(name, &self.current().loaded.values)?,
         };
         Some((value, seen))
+    }
+
+    /// NAME's value in PROJECT's own set, or none when PROJECT never sent one for it (unlike [`Self::effective`], which
+    /// falls back to the global value): a setting a project's value is added to, not put in place of.
+    pub fn project_value(&self, name: &str, project: &str) -> Option<Value> {
+        let overrides = self.overrides.lock().expect("settings");
+        overrides
+            .scope(Some(project))?
+            .iter()
+            .rev()
+            .find(|o| o.name == name)
+            .map(|o| o.value.clone())
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that

@@ -68,6 +68,8 @@ pub struct StepNew {
     pub turn_id: Option<String>,
     pub snapshot: Option<String>,
     pub log_version: Option<i64>,
+    /// The agent conversation (ACP session id) the step ran in: a session can run several, one after a revert.
+    pub acp: Option<String>,
 }
 
 /// How a step ended.
@@ -99,8 +101,8 @@ pub fn open(tx: &WTx<'_>, new: StepNew) -> Result<i64, CoordError> {
     )?;
     tx.sql().execute(
         "insert into step (session, task, plan, project, agent, provider, seq, class, start, tool, tool_kind, \
-         message_id, turn_id, snapshot, log_version) \
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         message_id, turn_id, snapshot, log_version, acp) \
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         (
             &new.session,
             &new.task,
@@ -117,6 +119,7 @@ pub fn open(tx: &WTx<'_>, new: StepNew) -> Result<i64, CoordError> {
             &new.turn_id,
             &new.snapshot,
             new.log_version,
+            &new.acp,
         ),
     )?;
     Ok(tx.sql().last_insert_rowid())
@@ -148,6 +151,43 @@ pub fn close(tx: &WTx<'_>, id: i64, end: StepEnd) -> Result<(), CoordError> {
         )));
     }
     Ok(())
+}
+
+/// Record HEAD, the worktree's commit when step ID's snapshot was taken (an object id read from ref files).
+pub fn set_head(tx: &WTx<'_>, id: i64, head: &str) -> Result<(), CoordError> {
+    let n = tx
+        .sql()
+        .execute("update step set head = ?2 where id = ?1", (id, head))?;
+    found(n, id)
+}
+
+/// Record OP, the edit history's record step ID anchors.
+pub fn set_history_op(tx: &WTx<'_>, id: i64, op: i64) -> Result<(), CoordError> {
+    let n = tx
+        .sql()
+        .execute("update step set history_op = ?2 where id = ?1", (id, op))?;
+    found(n, id)
+}
+
+fn found(changed: usize, id: i64) -> Result<(), CoordError> {
+    if changed == 0 {
+        return Err(CoordError::Refused(format!("no step {id}")));
+    }
+    Ok(())
+}
+
+/// Mark SESSION's steps after AFTER_SEQ as abandoned by the revert record OP; a step an earlier revert marked keeps
+/// its mark.  Answers how many were marked.
+pub fn mark_undone(
+    tx: &WTx<'_>,
+    session: &str,
+    after_seq: i64,
+    op: i64,
+) -> Result<usize, CoordError> {
+    Ok(tx.sql().execute(
+        "update step set undone_by = ?3 where session = ?1 and seq > ?2 and undone_by is null",
+        (session, after_seq, op),
+    )?)
 }
 
 #[cfg(test)]
@@ -212,7 +252,60 @@ mod tests {
             turn_id: Some("t1".into()),
             snapshot: None,
             log_version: Some(3),
+            acp: Some("acp-1".into()),
         }
+    }
+
+    /// Pattern D: a revert marks the session's steps after its point; the steps before it, another session's, and the
+    /// ones an earlier revert marked keep theirs.
+    #[test]
+    fn mark_undone_marks_only_after_seq() {
+        let mut c = db7();
+        let tx = tx_of(&mut c);
+        for i in 0..4 {
+            open(&tx, new("s1", "task:a", StepClass::Tool, f64::from(i))).unwrap();
+        }
+        open(&tx, new("s2", "task:a", StepClass::Tool, 0.0)).unwrap();
+        assert_eq!(mark_undone(&tx, "s1", 2, 77).unwrap(), 2);
+        // a second revert, to a point before the first
+        assert_eq!(mark_undone(&tx, "s1", 1, 78).unwrap(), 1);
+        assert_eq!(mark_undone(&tx, "s1", 4, 79).unwrap(), 0);
+        let marks: Vec<(String, i64, Option<i64>)> = tx
+            .sql()
+            .prepare("select session, seq, undone_by from step order by session, seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                ("s1".into(), 1, None),
+                ("s1".into(), 2, Some(78)),
+                ("s1".into(), 3, Some(77)),
+                ("s1".into(), 4, Some(77)),
+                ("s2".into(), 1, None),
+            ]
+        );
+        // the conversation, the head and the history record read back
+        let all = for_session(tx.sql(), "s1", 0).unwrap();
+        assert_eq!(all[0].acp.as_deref(), Some("acp-1"));
+        set_head(&tx, all[0].id, "0123456789abcdef0123456789abcdef01234567").unwrap();
+        set_history_op(&tx, all[0].id, 5).unwrap();
+        let s = &for_session(tx.sql(), "s1", 0).unwrap()[0];
+        assert_eq!(
+            (s.head.as_deref(), s.history_op, s.undone_by),
+            (
+                Some("0123456789abcdef0123456789abcdef01234567"),
+                Some(5),
+                None
+            )
+        );
+        assert_eq!(
+            for_session(tx.sql(), "s1", 0).unwrap()[1].undone_by,
+            Some(78)
+        );
     }
 
     fn end(at: f64, tin: i64, cost: Option<(f64, &str)>) -> StepEnd {

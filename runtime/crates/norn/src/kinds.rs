@@ -124,6 +124,8 @@ pub const LINKS: &[LinkKind] = &[
         &["spec", "plan", "task", "session"],
         false,
     ),
+    // schema 12: a session forked from another one's conversation
+    link("forked_from", &["session"], &["session"], false),
 ];
 
 /// Whether KIND is one of [`ENTITY_KINDS`].
@@ -250,6 +252,7 @@ mod tests {
                 vec!["spec", "plan", "task", "session"],
                 false,
             ),
+            ("forked_from", vec!["session"], vec!["session"], false),
         ];
         assert_eq!(rows, expect);
         // Every named end is an entity kind, and only the two readiness links affect ready.

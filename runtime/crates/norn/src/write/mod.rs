@@ -14,6 +14,7 @@ pub mod exec;
 pub mod jobs;
 pub mod messages;
 pub mod meta;
+pub mod notes;
 pub mod notices;
 pub mod options;
 pub mod prune;

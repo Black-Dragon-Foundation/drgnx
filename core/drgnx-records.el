@@ -297,16 +297,24 @@ never called."
          (:exit integer "The agent process's exit status") (:stderr string) (:entries-count natnum)
          (:turns natnum "Turns the hub has started for it: whole turns between two snapshots are counted")
          (:enforced boolean)
-         (:enforced_why string "Why the provider's lock is not enforced"))
+         (:enforced_why string "Why the provider's lock is not enforced")
+         (:hooked (plist (:before_tool (list-of string)) (:by_adapter (list-of string)) (:unhooked (list-of string))
+                         (:why string))
+                  "Which tool kinds the hook rules reach: through the permission seam, the adapter, or not at all")
+         (:plugins_changed boolean "The approved plugin set changed since the session started")
+         (:panel (plist (:features (list-of string)) (:context any))
+                 "What the agent's `_drgnx/panel' extension offers, and its last context breakdown"))
  "What an editor mirrors of an agent session, everything but its transcript: the keys of the hub's `agents/get' answer.")
 
 (drgnx-schema-deftype
  'drgnx-records-entry
- '(plist (:type (enum user agent thought tool plan stop error usage notice compaction)
-                "What the entry is (usage, notice and compaction are reserved)")
+ '(plist (:type (enum user agent thought tool plan stop error usage notice compaction note)
+                "What the entry is (usage, notice and compaction are reserved; a note is a hook's, under its step)")
          (:text string "The entry's whole text (no :chunks)") (:length natnum) (:id drgnx-records-rpc-id) (:title string)
          (:kind string) (:status string) (:content any) (:url string) (:children (list-of drgnx-records-entry))
-         (:entries (list-of any)) (:stop string) (:steer boolean) (:done boolean))
+         (:entries (list-of any)) (:stop string) (:steer boolean) (:done boolean)
+         (:source string "Who a note is from: rule:ID, or plugin:NAME@VERSION#HASH") (:step integer)
+         (:refused_by_hook (plist (:hook string) (:reason string)) "A hook refused the edit this step made"))
  "One entry of a session's transcript, its text joined.")
 
 (drgnx-schema-deftype

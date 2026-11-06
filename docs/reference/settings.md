@@ -232,6 +232,44 @@ The profile New Agent Session offers on Return: a profile's name, or nil for cla
 | `:agents` | `never` |
 | `:schema` | `(or null string)` |
 
+## drgnx-agents-hook-rules
+
+Rules the hub checks at the hook points, before any plugin: each is a plist with :point, :verdict (deny or annotate)
+and :reason, and optionally :id, :tool-kinds, :paths and :command, which all have to match.  A rule only narrows what
+the permissions matrix allows; it is a guardrail, not a boundary.  In one project the project's rules are added to
+these.  Only you can set it, never a repository or an agent.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat sexp)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `append` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<HookRule>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of (plist (:id string "A name to switch the rule off in one project: 1 to 32 lowercase letters, digits and `-'") (:point (enum before-tool after-edit before-commit at-review) "Where the rule looks" :required t) (:tool-kinds (list-of string) "ACP tool kinds (read, edit, delete, move, search, execute, think, fetch, switch_mode, other), or drgnx for the hub's own tools") (:paths (list-of string) "Path globs: * within one segment, ** across segments, ? one character") (:command string "A regular expression the tool's command text must match") (:verdict (enum deny annotate) "What the rule says; a rule never changes anything" :required t) (:reason string "Shown with the refusal or the note" :required t)))` |
+
+## drgnx-agents-hook-rules-off
+
+The ids of hook rules that are switched off in this project (a list of strings).  Only a rule with an :id can be
+switched off.  Only you can set it, in your private workspace file.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
 ## drgnx-agents-job-cpus
 
 How many CPUs one job may use.
@@ -349,7 +387,9 @@ own model, or change one when prices move.  Only you can set it, never a reposit
 The hosts a job that was granted network may reach, per tier: an alist TIER → list of "host:port" strings.
 `packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
 reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  A sandboxed agent session's proxy
-allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  Only you can set it, never a
+allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  `plugin' is the tier of the
+plugins' HTTP requests (never the agent's): a host the plugin's approved manifest names, where the session's network
+is not open, must also be listed there.  Only you can set it, never a
 repository.
 
 | Key | Value |
@@ -420,6 +460,25 @@ at all.
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-agents-plugins
+
+The plugins that run, in hook order: a list of plugin names.  A plugin runs only when it is listed here and you
+approved it (Extensions, or Settings → Plugins).  In one project the list is the project's own and replaces this one
+(Workspace tab).  Only you can set it, never a repository or an agent.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
 
 ## drgnx-agents-profiles
 

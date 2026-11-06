@@ -1,4 +1,4 @@
-# The store (Urdr): `work.db` schema 11
+# The store (Urdr): `work.db` schema 12
 
 `work.db` holds one knowledge graph across projects: entities and immutable links with transaction-time history,
 written by Ratatoskr only. The graph layer is the generic `urdr::graph` (kinds, link names and policy are the
@@ -628,14 +628,15 @@ result. What the rule answers for the file it finds:
 
 | The file | The answer |
 |---|---|
-| missing (or empty) | made at schema 7 and moved to 11: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
-| schema 6 | migrated (below), then moved to 8, 9, 10 and 11, then `Ready { 11 }` |
-| schema 7 | moved to 8, 9, 10 and 11 (next sections), then `Ready { 11 }` |
-| schema 8 | moved to 9, 10 and 11, then `Ready { 11 }` |
-| schema 9 | moved to 10 and 11, then `Ready { 11 }` |
-| schema 10 | moved to 11, then `Ready { 11 }` |
-| schema 11 | `Ready { 11 }` |
-| above 11 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
+| missing (or empty) | made at schema 7 and moved to 12: schema 6's tables, then shaped as a migrated file is, so both have the same schema |
+| schema 6 | migrated (below), then moved to 8, 9, 10, 11 and 12, then `Ready { 12 }` |
+| schema 7 | moved to 8, 9, 10, 11 and 12 (next sections), then `Ready { 12 }` |
+| schema 8 | moved to 9, 10, 11 and 12, then `Ready { 12 }` |
+| schema 9 | moved to 10, 11 and 12, then `Ready { 12 }` |
+| schema 10 | moved to 11 and 12, then `Ready { 12 }` |
+| schema 11 | moved to 12, then `Ready { 12 }` |
+| schema 12 | `Ready { 12 }` |
+| above 12 | `ReadOnly { schema }`: writes answer `schema`; nothing is changed or copied |
 | below 6 | `NotReady`: "work.db is schema N; open it once with drgnx 6 first, or remove it (installs are disposable)" |
 | a migration that failed | `Failed { reason }`, never tried again in this process (call 18) |
 
@@ -767,6 +768,28 @@ when a job was proposed (p50 and p90 of tokens, seconds and cost, its basis and 
 derived from `step`, `spend` and the job and session entities (`norn::forecast::sample`), so they are rebuilt by the
 same sweep after a restart. Tests: `the_previous_top_moves_to_11_and_a_second_open_changes_nothing`,
 `a_schema_7_file_goes_through_to_the_top`, `a_failed_move_changes_nothing`.
+
+## Schema 12: the timeline's step facts (agent system part 4)
+
+`norn::migrate12` moves a schema-11 file to 12 in one `BEGIN IMMEDIATE` transaction (a crash leaves 11): four
+nullable `step` columns, so old rows keep every value and read the new ones as empty.
+
+- `acp`: the agent conversation (its ACP session id) the step ran in. A revert keeps the hub session and starts
+  another conversation under it, so one session's steps can name several.
+- `head`: the worktree's commit when the step's snapshot was taken. It is read from the worktree's ref files, never
+  by running git there (`timeline::snapshot::head_of`: `HEAD`, the loose ref, then `packed-refs`, each without
+  following a link, a FIFO refused at once; a linked worktree's `.git` file is followed through `gitdir:` and
+  `commondir`). The agent writes those files, so a ref name must stay under `refs/` with no `..`, and only a full hex
+  object id is kept: a hint, checked before it is used.
+- `history_op`: the edit history's record the step anchors.
+- `undone_by`: the revert record that abandoned the step. `norn::write::steps::mark_undone(session, after_seq, op)`
+  marks the steps after a sequence number, and a step an earlier revert marked keeps its mark.
+
+The link kind `forked_from` (session → session) is added for a session forked from another's conversation. The
+timeline's wire `Step` carries the four facts and `revertible`: true while the step has a history record and its
+session's snapshots were not removed at the checkpoint cap in this hub's run. Tests:
+`upgrade_keeps_rows_and_is_idempotent`, `a_schema_7_file_goes_through_to_the_top` (in `migrate12`),
+`mark_undone_marks_only_after_seq`, `step_carries_acp_head_and_revertible` and the `head_of_*` tests.
 
 ## Parsed entities (Task 15a)
 

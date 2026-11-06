@@ -3,6 +3,142 @@
     {
       "data": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "Mode": {
             "description": "What a message sent while the session works does.",
             "enum": [
@@ -11,6 +147,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -168,6 +328,17 @@
                   "null"
                 ]
               },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
+              },
               "id": {
                 "type": "string"
               },
@@ -193,6 +364,17 @@
                   "null"
                 ]
               },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -212,6 +394,10 @@
                   "$ref": "#/$defs/Permission"
                 },
                 "type": "array"
+              },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
               },
               "profile": {
                 "type": [
@@ -388,7 +574,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -399,7 +585,8 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
           }
@@ -579,6 +766,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -639,6 +833,27 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -675,6 +890,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -734,6 +954,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -1525,6 +1754,30 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "The event `plugin`: a plugin's state changed.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "description": "A [`PluginState`], or `removed` when its folder is gone.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginChanged",
+        "type": "object"
+      },
+      "doc": "a plugin's state changed (installed, approved, changed on disk, disabled, broken or removed): its name and new state",
+      "name": "plugin"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "One request the gateway forwarded, and what it cost.",
         "properties": {
           "agent": {
@@ -2193,6 +2446,190 @@
       "classes": [
         "user"
       ],
+      "doc": "what a compaction would free, keep and summarise now, as the agent says (`_drgnx/compact/preview`, 10 s; nothing is compacted); an agent without the `compact-preview` feature: invalid-params",
+      "name": "agents/compact-preview",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a compaction would do now, as the agent says (nothing is compacted): the tokens it would free, the items it\nkeeps and the ones it summarises, and a note (e.g. \"costs one model call\").",
+        "properties": {
+          "frees": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kept": {
+            "items": {
+              "$ref": "#/$defs/ContextItem"
+            },
+            "maxItems": 200,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "note": {
+            "maxLength": 1024,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summarised": {
+            "items": {
+              "$ref": "#/$defs/ContextItem"
+            },
+            "maxItems": 200,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "CompactPreview",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
+      "name": "agents/context-drop",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "description": "The item's `id` in the session's context breakdown.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "ContextDropParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+      "name": "agents/context-pin",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "pinned": {
+            "description": "True pins it (a compaction keeps it), false unpins it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "item",
+          "pinned"
+        ],
+        "title": "ContextPinParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
       "name": "agents/do",
       "params": {
@@ -2399,6 +2836,107 @@
       },
       "result": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
           "Entry": {
             "additionalProperties": true,
             "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
@@ -2413,7 +2951,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -2424,9 +2962,45 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
+          },
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
           },
           "Mode": {
             "description": "What a message sent while the session works does.",
@@ -2436,6 +3010,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -2593,6 +3191,17 @@
                   "null"
                 ]
               },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
+              },
               "id": {
                 "type": "string"
               },
@@ -2618,6 +3227,17 @@
                   "null"
                 ]
               },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -2637,6 +3257,10 @@
                   "$ref": "#/$defs/Permission"
                 },
                 "type": "array"
+              },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
               },
               "profile": {
                 "type": [
@@ -2848,6 +3472,142 @@
       },
       "result": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "Hooked": {
+            "additionalProperties": false,
+            "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
+            "properties": {
+              "before_tool": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "by_adapter": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unhooked": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "why": {
+                "description": "Why the unhooked kinds are (shown as \"not hooked: KINDS (WHY)\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
           "Mode": {
             "description": "What a message sent while the session works does.",
             "enum": [
@@ -2856,6 +3616,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -3013,6 +3797,17 @@
                   "null"
                 ]
               },
+              "hooked": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hooked"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Which tool kinds the `before-tool` hooks of its plugin set at start see, and how (none: nothing subscribes)."
+              },
               "id": {
                 "type": "string"
               },
@@ -3038,6 +3833,17 @@
                   "null"
                 ]
               },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
+              },
               "parent": {
                 "description": "The manager session that started it.",
                 "type": [
@@ -3057,6 +3863,10 @@
                   "$ref": "#/$defs/Permission"
                 },
                 "type": "array"
+              },
+              "plugins_changed": {
+                "description": "The plugins that run for the session differ from the ones it started with: abilities are fixed when the agent\nstarts, so a new set reaches it only through a new session.",
+                "type": "boolean"
               },
               "profile": {
                 "type": [
@@ -3936,7 +4746,7 @@
             "type": "object"
           },
           "EntryType": {
-            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved).",
+            "description": "What a transcript entry is (`usage`, `notice` and `compaction` are reserved; a `note` is a hook's annotation under\nits step).",
             "enum": [
               "user",
               "agent",
@@ -3947,7 +4757,8 @@
               "error",
               "usage",
               "notice",
-              "compaction"
+              "compaction",
+              "note"
             ],
             "type": "string"
           },
@@ -3955,6 +4766,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -4015,6 +4833,27 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -4051,6 +4890,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -4110,6 +4954,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -8323,6 +9176,1139 @@
     },
     {
       "classes": [
+        "user",
+        "agent"
+      ],
+      "doc": "one row with its requirements, who needs it, where it comes from and its cached readme",
+      "name": "extensions/details",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "DetailsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Kind": {
+            "description": "What a row is.",
+            "enum": [
+              "package",
+              "plugin",
+              "module",
+              "emacs"
+            ],
+            "type": "string"
+          },
+          "Requirement": {
+            "additionalProperties": false,
+            "description": "A requirement.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          },
+          "Row": {
+            "additionalProperties": false,
+            "description": "One line of the list.",
+            "properties": {
+              "downloads": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/Kind"
+              },
+              "latest": {
+                "description": "The version the update would install, when one is.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "signed": {
+                "$ref": "#/$defs/Signed"
+              },
+              "source": {
+                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/State"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "version": {
+                "description": "What is installed (a module has none).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "why": {
+                "items": {
+                  "$ref": "#/$defs/Why"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "name",
+              "summary",
+              "state",
+              "source",
+              "signed"
+            ],
+            "type": "object"
+          },
+          "Signed": {
+            "description": "How far the user can trust where a row comes from (the trust words of the details page).",
+            "oneOf": [
+              {
+                "enum": [
+                  "unsigned-archive",
+                  "git-commit",
+                  "hash-approved",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "signed",
+                "description": "The lock entry says `:verified t`.",
+                "type": "string"
+              },
+              {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "A directory archive.",
+                "type": "string"
+              }
+            ]
+          },
+          "State": {
+            "description": "Where a row stands.",
+            "oneOf": [
+              {
+                "enum": [
+                  "installed",
+                  "on",
+                  "off",
+                  "built-in"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "available",
+                "description": "In an archive, not installed.",
+                "type": "string"
+              },
+              {
+                "const": "update",
+                "description": "Installed, and the update plan takes a newer version.",
+                "type": "string"
+              },
+              {
+                "const": "dependency",
+                "description": "Installed only because another installed package needs it.",
+                "type": "string"
+              },
+              {
+                "const": "held",
+                "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
+                "type": "string"
+              },
+              {
+                "const": "incompat",
+                "description": "Installed, and the newest version needs a newer Emacs than this one.",
+                "type": "string"
+              },
+              {
+                "const": "missing",
+                "description": "Named by a module, `packages.eld`, the wanted file or the lock's `:wanted`, and not in the lock.",
+                "type": "string"
+              },
+              {
+                "const": "needs-package",
+                "description": "A module waiting for a package.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
+                "type": "string"
+              }
+            ]
+          },
+          "Why": {
+            "description": "Why a package is wanted or installed.",
+            "oneOf": [
+              {
+                "enum": [
+                  "packages-eld"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A module names it.",
+                "properties": {
+                  "module": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "module"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "you",
+                "description": "The user asked for it (`:wanted user` in the lock).",
+                "type": "string"
+              },
+              {
+                "const": "ensure",
+                "description": "A `use-package :ensure` recorded it in the wanted file.",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Installed packages that require it.",
+                "properties": {
+                  "needed-by": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "needed-by"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "by-hand",
+                "description": "Its lock entry has no hash: installed by hand or seeded.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "maintainer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notes": {
+            "description": "What the hub could not read, in its own words (a catalog or lock it refused and kept the last good one of).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "readme": {
+            "description": "The readme the refresh job cached, as text (at most 256 KiB).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required_by": {
+            "description": "Installed packages that require it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "items": {
+              "$ref": "#/$defs/Requirement"
+            },
+            "type": "array"
+          },
+          "revdesc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "row": {
+            "$ref": "#/$defs/Row"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "row",
+          "requires",
+          "required_by",
+          "keywords"
+        ],
+        "title": "DetailsResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's module table (name, doc, packages, flags, state), held in memory so the list can show modules; replaces the last table",
+      "name": "extensions/modules",
+      "params": {
+        "$defs": {
+          "ModuleEntry": {
+            "description": "One module of the editor's table.",
+            "properties": {
+              "doc": {
+                "default": "",
+                "type": "string"
+              },
+              "flags": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "packages": {
+                "default": [],
+                "description": "The packages it names.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "state": {
+                "$ref": "#/$defs/ModuleState"
+              }
+            },
+            "required": [
+              "name",
+              "state"
+            ],
+            "type": "object"
+          },
+          "ModuleState": {
+            "description": "A module's state as the editor knows it.",
+            "enum": [
+              "on",
+              "off",
+              "needs-package",
+              "failed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "modules": {
+            "items": {
+              "$ref": "#/$defs/ModuleEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "modules"
+        ],
+        "title": "ModulesParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the rows of these ids, in their order; an unknown id is left out",
+      "name": "extensions/rows",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "RowsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Kind": {
+            "description": "What a row is.",
+            "enum": [
+              "package",
+              "plugin",
+              "module",
+              "emacs"
+            ],
+            "type": "string"
+          },
+          "Row": {
+            "additionalProperties": false,
+            "description": "One line of the list.",
+            "properties": {
+              "downloads": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/Kind"
+              },
+              "latest": {
+                "description": "The version the update would install, when one is.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "signed": {
+                "$ref": "#/$defs/Signed"
+              },
+              "source": {
+                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/State"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "version": {
+                "description": "What is installed (a module has none).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "why": {
+                "items": {
+                  "$ref": "#/$defs/Why"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "name",
+              "summary",
+              "state",
+              "source",
+              "signed"
+            ],
+            "type": "object"
+          },
+          "Signed": {
+            "description": "How far the user can trust where a row comes from (the trust words of the details page).",
+            "oneOf": [
+              {
+                "enum": [
+                  "unsigned-archive",
+                  "git-commit",
+                  "hash-approved",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "signed",
+                "description": "The lock entry says `:verified t`.",
+                "type": "string"
+              },
+              {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "A directory archive.",
+                "type": "string"
+              }
+            ]
+          },
+          "State": {
+            "description": "Where a row stands.",
+            "oneOf": [
+              {
+                "enum": [
+                  "installed",
+                  "on",
+                  "off",
+                  "built-in"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "available",
+                "description": "In an archive, not installed.",
+                "type": "string"
+              },
+              {
+                "const": "update",
+                "description": "Installed, and the update plan takes a newer version.",
+                "type": "string"
+              },
+              {
+                "const": "dependency",
+                "description": "Installed only because another installed package needs it.",
+                "type": "string"
+              },
+              {
+                "const": "held",
+                "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
+                "type": "string"
+              },
+              {
+                "const": "incompat",
+                "description": "Installed, and the newest version needs a newer Emacs than this one.",
+                "type": "string"
+              },
+              {
+                "const": "missing",
+                "description": "Named by a module, `packages.eld`, the wanted file or the lock's `:wanted`, and not in the lock.",
+                "type": "string"
+              },
+              {
+                "const": "needs-package",
+                "description": "A module waiting for a package.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
+                "type": "string"
+              }
+            ]
+          },
+          "Why": {
+            "description": "Why a package is wanted or installed.",
+            "oneOf": [
+              {
+                "enum": [
+                  "packages-eld"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A module names it.",
+                "properties": {
+                  "module": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "module"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "you",
+                "description": "The user asked for it (`:wanted user` in the lock).",
+                "type": "string"
+              },
+              {
+                "const": "ensure",
+                "description": "A `use-package :ensure` recorded it in the wanted file.",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Installed packages that require it.",
+                "properties": {
+                  "needed-by": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "needed-by"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "by-hand",
+                "description": "Its lock entry has no hash: installed by hand or seeded.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "description": "In the ids' order; an unknown id is left out.",
+            "items": {
+              "$ref": "#/$defs/Row"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "RowsResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user",
+        "agent"
+      ],
+      "doc": "rows of the extensions catalog (packages, modules, Emacs built-ins) matching words, filters and an order; reads the refresh job's catalog, the lock and the modules, never the network",
+      "name": "extensions/search",
+      "params": {
+        "$defs": {
+          "Filters": {
+            "description": "What a search keeps; every field off or absent keeps everything.",
+            "properties": {
+              "archive": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "builtin": {
+                "default": false,
+                "type": "boolean"
+              },
+              "disabled": {
+                "default": false,
+                "description": "Modules that are off.",
+                "type": "boolean"
+              },
+              "enabled": {
+                "default": false,
+                "description": "Modules that are on.",
+                "type": "boolean"
+              },
+              "ids": {
+                "description": "Only these rows (`@failed`, `@restart`, `@this-project` and `@recommended` arrive this way: the editor knows\nthem).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "installed": {
+                "default": false,
+                "type": "boolean"
+              },
+              "keyword": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Kind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "plugins": {
+                "default": false,
+                "type": "boolean"
+              },
+              "unsigned": {
+                "default": false,
+                "description": "Packages from an archive that does not sign.",
+                "type": "boolean"
+              },
+              "updates": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "Kind": {
+            "description": "What a row is.",
+            "enum": [
+              "package",
+              "plugin",
+              "module",
+              "emacs"
+            ],
+            "type": "string"
+          },
+          "Sort": {
+            "description": "How the rows are ordered.",
+            "oneOf": [
+              {
+                "enum": [
+                  "name",
+                  "downloads",
+                  "installed"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "relevance",
+                "description": "The query's rank, then installed first, then downloads, then name (the default).",
+                "type": "string"
+              },
+              {
+                "const": "updated",
+                "description": "Newest version first (an archive's version strings carry the date).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "filters": {
+            "$ref": "#/$defs/Filters",
+            "default": {
+              "builtin": false,
+              "disabled": false,
+              "enabled": false,
+              "installed": false,
+              "plugins": false,
+              "unsigned": false,
+              "updates": false
+            }
+          },
+          "limit": {
+            "description": "1 to 500; default 200.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "default": "",
+            "description": "Words; a row matches when every word is a prefix of a word of its name, or inside its name, keywords or\nsummary.  Empty keeps all rows.",
+            "type": "string"
+          },
+          "sort": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Sort"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SearchParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Kind": {
+            "description": "What a row is.",
+            "enum": [
+              "package",
+              "plugin",
+              "module",
+              "emacs"
+            ],
+            "type": "string"
+          },
+          "Row": {
+            "additionalProperties": false,
+            "description": "One line of the list.",
+            "properties": {
+              "downloads": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "`pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`.",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/Kind"
+              },
+              "latest": {
+                "description": "The version the update would install, when one is.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "signed": {
+                "$ref": "#/$defs/Signed"
+              },
+              "source": {
+                "description": "The archive (`gnu`, `melpa`, …), `git`, `emacs` or `module`.",
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/State"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "version": {
+                "description": "What is installed (a module has none).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "why": {
+                "items": {
+                  "$ref": "#/$defs/Why"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "name",
+              "summary",
+              "state",
+              "source",
+              "signed"
+            ],
+            "type": "object"
+          },
+          "Signed": {
+            "description": "How far the user can trust where a row comes from (the trust words of the details page).",
+            "oneOf": [
+              {
+                "enum": [
+                  "unsigned-archive",
+                  "git-commit",
+                  "hash-approved",
+                  "none"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "signed",
+                "description": "The lock entry says `:verified t`.",
+                "type": "string"
+              },
+              {
+                "const": "signing-archive",
+                "description": "From an archive that signs, with no verified lock entry: the sync checks its signature before it installs.",
+                "type": "string"
+              },
+              {
+                "const": "local",
+                "description": "A directory archive.",
+                "type": "string"
+              }
+            ]
+          },
+          "State": {
+            "description": "Where a row stands.",
+            "oneOf": [
+              {
+                "enum": [
+                  "installed",
+                  "on",
+                  "off",
+                  "built-in"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "available",
+                "description": "In an archive, not installed.",
+                "type": "string"
+              },
+              {
+                "const": "update",
+                "description": "Installed, and the update plan takes a newer version.",
+                "type": "string"
+              },
+              {
+                "const": "dependency",
+                "description": "Installed only because another installed package needs it.",
+                "type": "string"
+              },
+              {
+                "const": "held",
+                "description": "A newer version exists that the update plan does not take (a pin or a dependant's bound).",
+                "type": "string"
+              },
+              {
+                "const": "incompat",
+                "description": "Installed, and the newest version needs a newer Emacs than this one.",
+                "type": "string"
+              },
+              {
+                "const": "missing",
+                "description": "Named by a module, `packages.eld`, the wanted file or the lock's `:wanted`, and not in the lock.",
+                "type": "string"
+              },
+              {
+                "const": "needs-package",
+                "description": "A module waiting for a package.",
+                "type": "string"
+              },
+              {
+                "const": "failed",
+                "description": "A module the editor reported failed.  A failed job is the editor's overlay, never a hub state.",
+                "type": "string"
+              },
+              {
+                "const": "unapproved",
+                "description": "A plugin installed and never approved.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "A plugin whose files are not the ones the user approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "A plugin the user switched off in the hub.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "A plugin whose manifest does not read.",
+                "type": "string"
+              }
+            ]
+          },
+          "Why": {
+            "description": "Why a package is wanted or installed.",
+            "oneOf": [
+              {
+                "enum": [
+                  "packages-eld"
+                ],
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A module names it.",
+                "properties": {
+                  "module": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "module"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "you",
+                "description": "The user asked for it (`:wanted user` in the lock).",
+                "type": "string"
+              },
+              {
+                "const": "ensure",
+                "description": "A `use-package :ensure` recorded it in the wanted file.",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Installed packages that require it.",
+                "properties": {
+                  "needed-by": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "needed-by"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "by-hand",
+                "description": "Its lock entry has no hash: installed by hand or seeded.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/$defs/Row"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Every row that matched, before `offset` and `limit`.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "total"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
         "user"
       ],
       "doc": "how past forecasts fared against the finished tasks: coverage of the p90 and the median actual over p50, per role and profile",
@@ -12000,6 +13986,235 @@
       "classes": [
         "user"
       ],
+      "doc": "the changes of a tracked buffer as the user's (or a merged-in agent's) operations; resync when the hash differs",
+      "name": "history/batch",
+      "params": {
+        "$defs": {
+          "BatchChange": {
+            "additionalProperties": false,
+            "description": "One change of a batch: OLD_LEN characters at START (offsets in the document's LF text) replaced by INSERTED.",
+            "properties": {
+              "inserted": {
+                "type": "string"
+              },
+              "old_len": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`user` (the default) or `agent:<session>` for a change merged in from an agent.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "old_len",
+              "inserted"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          },
+          "changes": {
+            "description": "At most 1 MiB of inserted text; more is refused as `split-required` and the editor splits it.",
+            "items": {
+              "$ref": "#/$defs/BatchChange"
+            },
+            "type": "array"
+          },
+          "region_hash": {
+            "description": "SHA-256 in hex of the buffer's whole text after the batch.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id",
+          "changes",
+          "region_hash"
+        ],
+        "title": "BatchParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`{ok: true}`, or `{resync: true}` when the buffer and the document disagree (send `history/resync`).",
+        "properties": {
+          "ok": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "resync": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "title": "BatchResult",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor tracks a buffer's file: its document, or why it is not tracked (ignored, secret, personal)",
+      "name": "history/register",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A buffer the editor starts tracking.",
+        "properties": {
+          "buffer_id": {
+            "description": "The editor's name for the buffer, used by every later call.",
+            "type": "string"
+          },
+          "path": {
+            "description": "The file's path, relative to the worktree.",
+            "type": "string"
+          },
+          "worktree_root": {
+            "description": "The worktree's folder.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "worktree_root",
+          "buffer_id"
+        ],
+        "title": "RegisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "doc": {
+            "description": "The file's document (0 when untracked).",
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "description": "Why not: `ignored`, `secret`, `personal` or `agent-tree`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracked": {
+            "description": "False for a gitignored file, a credentials file and the personal-notes deny-list: the editor sends no batches.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "doc",
+          "tracked"
+        ],
+        "title": "Registered",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a tracked buffer's whole text, as the user's change to its document",
+      "name": "history/resync",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          },
+          "text": {
+            "description": "The buffer's whole text (LF line ends).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id",
+          "text"
+        ],
+        "title": "ResyncParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Done",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor stops tracking a buffer",
+      "name": "history/unregister",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "buffer_id"
+        ],
+        "title": "UnregisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "Done",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a proposed job runs, with an optional budget",
       "name": "job/approve",
       "params": {
@@ -13935,7 +16150,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "plugin.abilities"
             ],
             "type": "string"
           },
@@ -14163,7 +16379,8 @@
               "settings.change",
               "user.private",
               "user.emacs",
-              "chat.project-read"
+              "chat.project-read",
+              "plugin.abilities"
             ],
             "type": "string"
           },
@@ -15496,6 +17713,683 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "approve the plugin whose files hash to hash (the hash the user was shown; a stale one is refused); only the user does",
+      "name": "plugins/approve",
+      "params": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/approve`'s params: the plugin and the hash the user was shown.",
+        "properties": {
+          "hash": {
+            "$ref": "#/$defs/Hex64",
+            "description": "The hash `plugins/list` gave and the editor displayed; a plugin whose files are not these any more is refused."
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "hash"
+        ],
+        "title": "ApproveParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One installed plugin.",
+        "properties": {
+          "abilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "approved_reach": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reach"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+          },
+          "hash": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Hex64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookReach"
+            },
+            "type": "array"
+          },
+          "hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kv_bytes": {
+            "description": "The bytes its key-value store may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "problem": {
+            "description": "With `state` `broken`: why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/PluginState"
+          },
+          "version": {
+            "description": "The manifest's version; none when the manifest does not read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "switch a plugin off until the user approves it again",
+      "name": "plugins/disable",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/disable`'s params.",
+        "properties": {
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DisableParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "One installed plugin.",
+        "properties": {
+          "abilities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "approved_reach": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reach"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+          },
+          "hash": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Hex64"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+          },
+          "hooks": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HookReach"
+            },
+            "type": "array"
+          },
+          "hosts": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kv_bytes": {
+            "description": "The bytes its key-value store may hold.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "problem": {
+            "description": "With `state` `broken`: why.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/PluginState"
+          },
+          "version": {
+            "description": "The manifest's version; none when the manifest does not read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "PluginRow",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the installed plugins (the folder is read again): state, hash, what each reaches, and for a changed one the reach that was approved",
+      "name": "plugins/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Hex64": {
+            "description": "64 lowercase hex digits",
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "HookReach": {
+            "additionalProperties": false,
+            "description": "What one hook of a plugin may see and say: the manifest's declaration, as written.",
+            "properties": {
+              "paths": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "point": {
+                "description": "`before-tool`, `after-edit`, `before-commit` or `at-review`.",
+                "type": "string"
+              },
+              "tool_kinds": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tools": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdicts": {
+                "default": [],
+                "description": "`allow`, `deny`, `change` and `annotate`, those the hook may return.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "PluginRow": {
+            "additionalProperties": false,
+            "description": "One installed plugin.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "approved_reach": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Reach"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "With `state` `changed`: the reach the user approved, in the shape of the current entry's."
+              },
+              "hash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Hex64"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "SHA-256 over the manifest and the component on disk now (the hash `plugins/approve` takes); none when they\ncannot be read."
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "kv_bytes": {
+                "description": "The bytes its key-value store may hold.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "problem": {
+                "description": "With `state` `broken`: why.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "$ref": "#/$defs/PluginState"
+              },
+              "version": {
+                "description": "The manifest's version; none when the manifest does not read.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "state"
+            ],
+            "type": "object"
+          },
+          "PluginState": {
+            "description": "Where a plugin stands.  Only `approved` runs.",
+            "oneOf": [
+              {
+                "const": "unapproved",
+                "description": "Installed, never approved.",
+                "type": "string"
+              },
+              {
+                "const": "approved",
+                "description": "Approved at the hash on disk now.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The files on disk are not the ones that were approved.",
+                "type": "string"
+              },
+              {
+                "const": "disabled",
+                "description": "Switched off by the user.",
+                "type": "string"
+              },
+              {
+                "const": "broken",
+                "description": "The manifest does not read; `problem` says why.",
+                "type": "string"
+              }
+            ]
+          },
+          "Reach": {
+            "additionalProperties": false,
+            "description": "Everything a manifest lets a plugin do.",
+            "properties": {
+              "abilities": {
+                "default": [],
+                "description": "The abilities' names (the tools it offers).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hooks": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/HookReach"
+                },
+                "type": "array"
+              },
+              "hosts": {
+                "default": [],
+                "description": "The hosts it may reach over https, `host:port`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`plugins/list`'s answer.",
+        "properties": {
+          "plugins": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PluginRow"
+            },
+            "type": "array"
+          }
+        },
+        "title": "PluginList",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -20508,6 +23402,13 @@
             "additionalProperties": false,
             "description": "One row of the `step` table.",
             "properties": {
+              "acp": {
+                "description": "The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "agent": {
                 "type": [
                   "string",
@@ -20568,6 +23469,27 @@
                   "null"
                 ]
               },
+              "head": {
+                "description": "The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "history_op": {
+                "description": "The edit history's record the step anchors.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "hooks": {
+                "description": "Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:\n[{source, verdict, ms, reason?}], outcome, …}`), oldest first.",
+                "items": true,
+                "type": "array"
+              },
               "id": {
                 "format": "int64",
                 "type": "integer"
@@ -20604,6 +23526,11 @@
                   "string",
                   "null"
                 ]
+              },
+              "revertible": {
+                "default": false,
+                "description": "Whether \"Revert to here\" can act on the step: it has an edit history record and its checkpoint is kept.",
+                "type": "boolean"
               },
               "seq": {
                 "description": "The step's place in its session.",
@@ -20663,6 +23590,15 @@
               "turn_id": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "undone_by": {
+                "description": "The revert record that abandoned the step (the session went back to a step before it).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               }
@@ -21586,5 +24522,5 @@
   "proto": 1,
   "proto_min": 1,
   "records": 2,
-  "schema": 11
+  "schema": 12
 }

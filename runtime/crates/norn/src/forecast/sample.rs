@@ -587,6 +587,7 @@ mod tests {
                 turn_id: turn.map(str::to_string),
                 snapshot: None,
                 log_version: None,
+                acp: None,
             },
         )
         .unwrap();
@@ -831,6 +832,7 @@ mod tests {
                 turn_id: None,
                 snapshot: None,
                 log_version: None,
+                acp: None,
             },
         )
         .unwrap();

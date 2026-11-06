@@ -173,6 +173,12 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-include" => values.search_include = de(v)?,
         "drgnx-search-exclude" => values.search_exclude = de(v)?,
         "drgnx-search-off" => values.search_off = de(v)?,
+        "drgnx-agents-plugins" => values.agents_plugins = de(v)?,
+        "drgnx-agents-hook-rules" => {
+            values.agents_hook_rules =
+                super::hook_rules(v).map_err(|(path, message)| refused(path, message))?;
+        }
+        "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(v)?,
         "drgnx-agents-browser-program" => {
             let p = de(v)?;
             super::check_browser_program(&p).map_err(|m| refused("", m))?;
@@ -306,6 +312,12 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-include" => json!(values.search_include),
         "drgnx-search-exclude" => json!(values.search_exclude),
         "drgnx-search-off" => json!(values.search_off),
+        "drgnx-agents-plugins" => json!(values.agents_plugins),
+        "drgnx-agents-hook-rules" => match &values.agents_hook_rules {
+            Value::Null => json!([]),
+            rules => rules.clone(),
+        },
+        "drgnx-agents-hook-rules-off" => json!(values.agents_hook_rules_off),
         "drgnx-agents-browser-program" => json!(values.agents_browser_program),
         "drgnx-agents-browser-local-ports" => json!(values.agents_browser_local_ports),
         "drgnx-agents-browser-deny-hosts" => json!(values.agents_browser_deny_hosts),
@@ -344,6 +356,11 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-search-include",
     "drgnx-search-exclude",
     "drgnx-search-off",
+    // the user's own per-project plugin choice and hook rules: the Lisp declares them `:scope project :workspace never`,
+    // and only the user's private workspace file holds a project's value
+    "drgnx-agents-plugins",
+    "drgnx-agents-hook-rules",
+    "drgnx-agents-hook-rules-off",
 ];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
@@ -368,6 +385,8 @@ pub fn validate(list: &[Override], project: bool) -> Result<(), (usize, Refused)
         from_json(&o.name, &o.value, &mut RuntimeValues::default()).map_err(|mut e| {
             e.path = if e.path.is_empty() {
                 "value".into()
+            } else if e.path.starts_with('[') {
+                format!("value{}", e.path)
             } else {
                 format!("value.{}", e.path)
             };
@@ -631,7 +650,10 @@ mod tests {
                     || [
                         "drgnx-search-include",
                         "drgnx-search-exclude",
-                        "drgnx-search-off"
+                        "drgnx-search-off",
+                        "drgnx-agents-plugins",
+                        "drgnx-agents-hook-rules",
+                        "drgnx-agents-hook-rules-off"
                     ]
                     .contains(&name),
                 "{name}"

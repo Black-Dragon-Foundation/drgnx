@@ -543,14 +543,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 11, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 11. A newer file (above 11) makes the hub read-only; a
+missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 11,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 12,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -925,9 +925,55 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
+  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
+  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
+  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
+
 ## The store
 
-The front serves the store (`work.db`, schema 11) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1037,6 +1083,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
+| `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
+| `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
@@ -1084,6 +1133,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
 | `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
 | `forecast/get` | user | `{job: Id}` | `Forecast` | no |
 | `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
@@ -1112,6 +1165,10 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
@@ -1127,7 +1184,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1139,6 +1196,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
 | `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
+| `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
+| `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
 | `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
@@ -1271,6 +1331,7 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
@@ -1361,7 +1422,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
@@ -1942,7 +2004,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
@@ -2235,6 +2297,102 @@ Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
 
+## Extensions
+
+`extensions/*` (`drgnx-ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
+and never reaches the network here: the refresh job (`drgnx extensions refresh`) writes
+`<cache>/extensions/catalog.json` (docs/develop/extensions.md), `drgnx sync` writes the lock, and the hub reads them.
+
+- **Sources, merged into rows:** the catalog; the user's lock (`<config>/drgnx.lock.eld`, read up to 8 MiB); the wanted
+  file (`<state>/packages-wanted.eld`); `packages.eld`'s `:packages` and `:git` names; the modules the editor sent with
+  `extensions/modules` (held in memory, replaced by each call); and Emacs's built-ins from the catalog. All Lisp files
+  are read as data with `huginn`, never evaluated.
+- **Reload:** each call looks at the four files' `(mtime, size)` in a blocking task and reads only those that changed,
+  so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
+  `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
+  is gone is empty.
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`. A plugin's row comes from the plugins' last look
+  (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
+  `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.
+- **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
+  plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
+  another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock
+  does not have it), `available`, `built-in`, and for modules `on`, `off`, `needs-package`, `failed`.
+- **Signed:** `signed` only for a lock entry with `:verified t`; a row of an archive that signs without one (GNU or
+  NonGNU, not installed yet) is `signing-archive` (no trust card: the sync checks its signature); a MELPA package is
+  `unsigned-archive`, a directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
+- **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
+  its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
+  (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows` and
+  `extensions/modules` are the user's.
+
+Tests: `extensions::catalog::` [D, one every-order test A] and `extensions::rank::` [D]; conformance
+`extensions/search-ranks-the-fixture`, `details-of-an-installed-package`, `rows-keep-their-order`,
+`a-new-catalog-is-read-on-the-next-call` and `an-agent-may-search-but-not-send-modules` [B].
+
+## Plugins
+
+`plugins/list`, `plugins/approve` and `plugins/disable` are the user's alone (`runstav::methods::plugins`); no agent
+connection and no tool reaches them, and `plugins/approve` takes the hash the editor displayed and refuses it when the
+files on disk hash differently. The plugins live in `<data>/plugins/NAME/` (`ratatoskr plugins install PATH
+[--replace] | list | remove NAME` puts them there); the hub reads that folder with `brokkr::scan` at its start and at
+every `plugins/list`.
+
+**`runtime.db`** (migration 10): `plugin` (`name`, `hash` last seen on disk, `approved_hash`, `approved_at`, `enabled`,
+`approved_reach` the manifest's whole reach as JSON) and `plugin_kv` (`plugin`, `key`, `value`: the plugins' key-value
+stores). A plugin is `unapproved`, `approved`, `changed`, `disabled` or `broken`; a `changed` entry of `plugins/list`
+also carries `approved_reach`. A change of state sends the event `plugin {name, state}` (`state` also `removed`) and
+keeps one card of kind `plugin` for each plugin that is `unapproved` or `changed`.
+
+Which approved plugins run for a project, and the hook rules in force, come from three settings the Lisp declares
+`:scope project :workspace never :agents never` (`drgnx-agents-plugins`, `drgnx-agents-hook-rules`,
+`drgnx-agents-hook-rules-off`; `overrides::PER_PROJECT`): `Plugins::enabled_for` and `Plugins::rules_for` read the
+global value and the project's own set from `config/settings` (`Settings::project_value`). A rule list that
+`norn::hooks::parse_rules` refuses refuses the whole set at `overrides[N].value[I].KEY`. `plugins::io` holds the
+decisions a plugin's imports need (the store's quota, `judge_http`); `docs/develop/plugins.md` ("Plugins in the hub")
+has the whole account.
+
+## The _drgnx/panel extension
+
+An ACP extension between the hub and an agent's adapter, for what standard ACP does not give: the context breakdown,
+dropping and pinning what is in it, a compaction preview, and the `before-tool` hooks on steps the agent allows itself.
+The org's adapter forks speak it; any other agent simply does not advertise it, and the panel then shows none of it
+(hidden, never faked). The hub's side is `agents/session/panel.rs`.
+
+- **Handshake.** `initialize` sends `clientCapabilities._meta["_drgnx/panel"] = {"version": 1}`. The agent answers
+  in `agentCapabilities._meta["_drgnx/panel"] = {version, features}`, features among `context`, `drop`, `pin`,
+  `compact-preview` and `before-tool`. Only version 1 counts, and only those names: they become the snapshot's
+  `panel.features` (in that order). An agent that advertises none has no `panel` in its snapshot.
+- **`_drgnx/context`** (agent → hub notification) `{sessionId, used, size, parts: [{kind, tokens, items?: [{id, label,
+  tokens}]}], compact_frees?}`, `kind` one of `system`, `tools`, `files`, `tool-output`, `conversation`: the
+  snapshot's `panel.context`, at most 4 times a second (the first at once, then the latest after the quarter second;
+  the last one is never lost). At most 8 parts, 200 items a part and 256 characters a label.
+- **User actions.** `agents/context-drop {id, item}`, `agents/context-pin {id, item, pinned}` and
+  `agents/compact-preview {id}` (user class) go to the agent as `_drgnx/context/drop {sessionId, item}`,
+  `_drgnx/context/pin {sessionId, item, pinned}` and `_drgnx/compact/preview {sessionId}`, each with a 10 s deadline.
+  The preview's answer is `{frees?, kept?, summarised?, note?}` (items as in the breakdown); nothing is compacted. A
+  session whose agent does not offer the feature gets `invalid-params` "this agent does not offer it" (the editor hides
+  the action instead). An agent's error is `not-allowed` with its message quoted; no answer in time, or an answer that
+  does not fit its schema, is `internal`.
+- **`_drgnx/before_tool`** (agent → hub request) `{sessionId, toolCall}`, `toolCall` as in
+  `session/request_permission`: the session's `before-tool` rules and hooks run at the adapter site
+  (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with
+  one hook row as at the seam. The answer is `{outcome: "allow"}`, or `{outcome: "deny", reason}` with the hub's words
+  and the hook's quoted, and a deny is also steered into the turn. A hub tool's step answers `allow`: it is hooked at its
+  server. The adapter runs inside the agent's sandbox, so these kinds are enforced by the agent's side: the snapshot
+  lists them under `hooked.by_adapter` (the kinds the lock leaves unhooked), apart from the lock's `before_tool`.
+- **What the agent sends is untrusted.** Every params object is checked against its schema with unknown fields
+  refused, so an `outcome` or a verdict of the agent's own in a `_drgnx/before_tool` is refused (`-32602`, the field
+  named) and runs nothing: the answer is the hooks' outcome, never the agent's say. A `sessionId` that is not the
+  agent's own session, and a message over 256 KiB, are refused. A request the hub does not take from an agent (one it
+  sends, such as `_drgnx/context/drop`, or one it does not know) gets `-32601` "drgnx refuses it: it takes no METHOD
+  from an agent"; a feature the agent did not advertise is refused too. A notification that does not fit is dropped
+  with a warning in the hub's log. Nothing in the extension changes a session's matrix, grants or lock.
+- **Tests.** `agents::session::panel::tests` (the checks and the context gate, pure), hermod's
+  `an_extension_request_comes_with_a_responder` and `ext_request_returns_the_answer_or_ends_at_its_deadline`, and the
+  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`.
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
@@ -2248,7 +2406,11 @@ column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
-decision log's version when the step closed) and `snapshot`.
+decision log's version when the step closed) and `snapshot`; from schema 12 also `acp` (the agent conversation the
+step ran in), `head` (the worktree's commit when its snapshot was taken, read from the ref files without git), and
+`history_op` and `undone_by` (the edit history's record it anchors, and the revert that abandoned it). The wire step
+adds `revertible`: it has a history record and its session's snapshots were not removed at the cap in this hub's run
+([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
 tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each

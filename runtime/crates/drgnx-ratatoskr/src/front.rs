@@ -81,6 +81,8 @@ pub struct Front {
     pub editors: Arc<crate::settings::agents::Editors>,
     /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
     pub search: crate::search::Hub,
+    /// The Extensions view's catalog, the lock and the module table, merged in memory ([`crate::extensions`]).
+    pub extensions: crate::extensions::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -167,6 +169,7 @@ impl Front {
             settings,
             editors,
             search: crate::search::Hub::default(),
+            extensions: crate::extensions::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
@@ -622,6 +625,9 @@ impl Front {
             | Params::AgentsEntriesUnsubscribe(_)
             | Params::AgentsToolInput(_)
             | Params::AgentsPause(_)
+            | Params::AgentsContextDrop(_)
+            | Params::AgentsContextPin(_)
+            | Params::AgentsCompactPreview(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -674,8 +680,15 @@ impl Front {
             | Params::RunnersCheck(_)
             | Params::RunnersBench(_)
             | Params::RunnersSet(_)
+            | Params::HistoryRegister(_)
+            | Params::HistoryBatch(_)
+            | Params::HistoryResync(_)
+            | Params::HistoryUnregister(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
+            | Params::PluginsList(_)
+            | Params::PluginsApprove(_)
+            | Params::PluginsDisable(_)
             | Params::WorkConclusions(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
@@ -697,6 +710,13 @@ impl Front {
             | Params::SearchServerStart(_)
             | Params::SearchServerStop(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // the Extensions view's catalog (`extensions/*`)
+            p @ (Params::ExtensionsSearch(_)
+            | Params::ExtensionsDetails(_)
+            | Params::ExtensionsRows(_)
+            | Params::ExtensionsModules(_)) => crate::extensions::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
@@ -747,6 +767,7 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal

@@ -370,6 +370,94 @@ impl LaunchPlan {
     }
 }
 
+// ------------------------------------------------------------------------------------- hooks before a tool call
+
+/// Claude Code's built-in tools of the ACP kind KIND, the names an ask rule can give (design addendum §4.10). The
+/// pinned adapter has no `mcp__acp__*` replacements to add.
+pub fn claude_ask_tools(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "read" => &["Read"],
+        "search" => &["Grep", "Glob"],
+        "fetch" => &["WebFetch", "WebSearch"],
+        "execute" => &["Bash"],
+        "edit" => &["Edit", "Write", "NotebookEdit"],
+        _ => &[],
+    }
+}
+
+impl LaunchPlan {
+    /// Makes the agent ask the hub for every step of KINDS (the kinds the session's `before-tool` hooks and rules
+    /// subscribe to, at its launch), so those steps reach the permission seam and its hooks even where the agent
+    /// would allow itself. Claude only: managed ask rules beside the user's own (Claude evaluates deny, then ask, then
+    /// allow), never an allow rule. A no-op for a plan with no Claude options.
+    pub fn with_hook_asks(mut self, kinds: &[String]) -> Self {
+        let tools: Vec<&str> = kinds
+            .iter()
+            .flat_map(|k| claude_ask_tools(k).iter().copied())
+            .collect();
+        if tools.is_empty() {
+            return self;
+        }
+        if let Some(perms) = self
+            .session_meta
+            .as_mut()
+            .and_then(|m| m.pointer_mut("/claudeCode/options/managedSettings/permissions"))
+            .and_then(Value::as_object_mut)
+            && let Some(ask) = perms
+                .entry("ask")
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+        {
+            for t in tools {
+                if !ask.iter().any(|a| a == t) {
+                    ask.push(json!(t));
+                }
+            }
+        }
+        self
+    }
+}
+
+/// Which of KINDS (the subscribed kinds; none: `None`) reach the session's `before-tool` hooks under PROFILE's lock,
+/// and which do not, and why. `drgnx` is hooked at the hub's servers whatever the agent. The adapter's
+/// `_drgnx/before_tool` (`by_adapter`) is added by the panel extension once the adapter advertises it.
+pub fn hooked(p: &AgentProfile, kinds: &[String]) -> Option<runstav::methods::agents::Hooked> {
+    if kinds.is_empty() {
+        return None;
+    }
+    let (asks, why): (&dyn Fn(&str) -> bool, &str) = match p.provider() {
+        // `other` at Claude's seam is its internal tools (TodoWrite …), which never ask: MCP tools are the hub's,
+        // hooked at their server, and a notebook edit counts as `edit`
+        Some(Provider::Claude) => (
+            &|k: &str| !claude_ask_tools(k).is_empty(),
+            "Claude Code runs them without asking: no ask rule can name them",
+        ),
+        Some(Provider::Gemini) => (
+            &|k: &str| !matches!(k, "read" | "search"),
+            "Gemini runs them without asking",
+        ),
+        Some(Provider::Codex) => (
+            &|k: &str| !matches!(k, "read" | "search"),
+            "Codex runs them inside its own policy without asking",
+        ),
+        None => (&|_: &str| false, "drgnx has no lock for this agent's CLI"),
+    };
+    let mut h = runstav::methods::agents::Hooked::default();
+    for k in kinds {
+        if k == "drgnx" || asks(k) {
+            h.before_tool.push(k.clone());
+        } else {
+            h.unhooked.push(k.clone());
+        }
+    }
+    for l in [&mut h.before_tool, &mut h.unhooked] {
+        l.sort();
+        l.dedup();
+    }
+    h.why = (!h.unhooked.is_empty()).then(|| why.to_owned());
+    Some(h)
+}
+
 impl LaunchPlan {
     /// Codex only: the worktree CWD is marked `untrusted` (`projects."<cwd>".trust_level`), so a `.codex/config.toml`
     /// in it is not loaded as the user's (ledger D9-3).  A no-op for another provider's plan.

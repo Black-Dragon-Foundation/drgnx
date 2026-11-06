@@ -24,7 +24,8 @@
 (defconst drgnx-agents-matrix-actions
   '(agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit
                  merge.integration push.ci push.main code.ci-config machines job.container network browser
-                 browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read)
+                 browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read
+                 plugin.abilities)
   "The matrix's rows, as the hub spells them (`Action::id' in runstav::methods::matrix).")
 
 (defconst drgnx-agents-matrix-schema
@@ -103,7 +104,9 @@ tasks go first."
   "The hosts a job that was granted network may reach, per tier: an alist TIER → list of \"host:port\" strings.
 `packages' (the tier of a granted network) is the package registries of crates.io, npm and PyPI; `provider-only'
 reaches nothing unless you list hosts.  A tier you leave out reaches nothing.  A sandboxed agent session's proxy
-allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  Only you can set it, never a
+allows its tier's hosts (`provider-only') beside its provider's and its CLI's own.  `plugin' is the tier of the
+plugins' HTTP requests (never the agent's): a host the plugin's approved manifest names, where the session's network
+is not open, must also be listed there.  Only you can set it, never a
 repository."
   :type 'sexp :group 'drgnx :scope 'global :workspace 'never :on-error 'strict :agents 'never
   :runtime "NetHosts" :schema '(alist symbol (list-of (string :match ":[0-9]+\\'"))))
@@ -229,6 +232,43 @@ own model, or change one when prices move.  Only you can set it, never a reposit
   "\"public\" or \"private\": a public project's job whose commit the public origin has may run on a shared runner."
   :type '(choice (const "public") (const "private")) :group 'drgnx :scope 'project :workspace 'data
   :on-error 'strict :agents 'never :runtime "String" :schema '(string :match "\\`\\(?:public\\|private\\)\\'"))
+
+;; Plugins and hook rules (docs/guide/plugins.md).  Each is `:scope project' and `:workspace never': a project's value
+;; is yours alone.  Neither a repository's files (`.drgnx/settings.el', `.dir-locals.el') nor an agent can write
+;; them (a hook only narrows what the matrix allows, so taking one away would widen); only your private workspace
+;; file holds a project's value (`drgnx-plugins-project-set' writes it).  Approvals are not settings: the hub keeps
+;; them, so a settings file copied to another machine approves nothing.
+
+(defconst drgnx-agents-hook-rules-schema
+  '(list-of (plist (:id string "A name to switch the rule off in one project: 1 to 32 lowercase letters, digits and `-'")
+                   (:point (enum before-tool after-edit before-commit at-review) "Where the rule looks" :required t)
+                   (:tool-kinds (list-of string) "ACP tool kinds (read, edit, delete, move, search, execute, think, fetch, switch_mode, other), or drgnx for the hub's own tools")
+                   (:paths (list-of string) "Path globs: * within one segment, ** across segments, ? one character")
+                   (:command string "A regular expression the tool's command text must match")
+                   (:verdict (enum deny annotate) "What the rule says; a rule never changes anything" :required t)
+                   (:reason string "Shown with the refusal or the note" :required t)))
+  "The schema of `drgnx-agents-hook-rules'.")
+
+(drgnx-defsetting drgnx-agents-plugins nil
+  "The plugins that run, in hook order: a list of plugin names.  A plugin runs only when it is listed here and you
+approved it (Extensions, or Settings → Plugins).  In one project the list is the project's own and replaces this one
+\(Workspace tab).  Only you can set it, never a repository or an agent."
+  :type '(repeat string) :group 'drgnx :scope 'project :merge 'replace :workspace 'never :on-error 'strict
+  :agents 'never :runtime "Vec<String>" :schema '(list-of string))
+
+(drgnx-defsetting drgnx-agents-hook-rules nil
+  "Rules the hub checks at the hook points, before any plugin: each is a plist with :point, :verdict (deny or annotate)
+and :reason, and optionally :id, :tool-kinds, :paths and :command, which all have to match.  A rule only narrows what
+the permissions matrix allows; it is a guardrail, not a boundary.  In one project the project's rules are added to
+these.  Only you can set it, never a repository or an agent."
+  :type '(repeat sexp) :group 'drgnx :scope 'project :merge 'append :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<HookRule>" :schema drgnx-agents-hook-rules-schema)
+
+(drgnx-defsetting drgnx-agents-hook-rules-off nil
+  "The ids of hook rules that are switched off in this project (a list of strings).  Only a rule with an :id can be
+switched off.  Only you can set it, in your private workspace file."
+  :type '(repeat string) :group 'drgnx :scope 'project :workspace 'never :on-error 'strict :agents 'never
+  :runtime "Vec<String>" :schema '(list-of string))
 
 (provide 'drgnx-agents-matrix)
 ;;; drgnx-agents-matrix.el ends here

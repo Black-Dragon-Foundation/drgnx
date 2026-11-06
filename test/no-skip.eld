@@ -107,4 +107,5 @@
   "drgnx-say/approve-starts-and-ends-the-session"
   "drgnx-say/reject-stops-the-job"
   "drgnx-say/an-unproven-connection-raises-nothing"
+  "drgnx-extensions-hub/a-suggestion-card-opens-details-and-has-no-install"
 ))

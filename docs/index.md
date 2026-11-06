@@ -12,7 +12,9 @@ Using drgnx.
 - [Keys](guide/keys.md): VS Code, Emacs and Vim key profiles — Vim on evil with states, the `SPC` leader, ex commands and mixed stacks (M12d) — the Mac keys (⌘P, ⌘⇧P, …), layers, keys.eld, conflicts.
 - [Command palette](guide/palette.md): `#` for a code question, and the floating, rounded, blurred palette under Glitnir (`drgnx-look-palette`).
 - [Modules](guide/modules.md): stages, packages, flags, modules.eld, Preferences: Modules, writing a module.
+- [Extensions](guide/extensions.md): one list of packages, plugins and modules — install, update and remove from one place, with filters and live progress.
 - [Packages](guide/packages.md): `drgnx sync`, the lock, the cache, generations, rollback, upgrade, safe mode, bisect.
+- [Extensions](guide/extensions.md): what works at once after a change, and when a restart is needed.
 - [Agents](guide/agents.md): agents over ACP, input that queues and never cancels, the Agents tab, edit review, durable jobs, what a job's Claude ignores of your settings, agents outside drgnx that report to it, Say it (one prompt to a proposed plan), reading a forecast, plans ↔ board.
 - [AI](guide/ai.md): one provider registry (OpenRouter and local runners), roles with fallback, keys read from the environment or auth-source, stored only in your Keychain or keyring when you ask, agent profiles.
 - [Runners](guide/runners.md): your other machines run jobs; how drgnx reaches them through your own ssh (the options it always sets, one connection per runner, a lost link never a result), logins it never answers, host keys it never accepts; adding, checking and removing a machine (`drgnx runner …`).
@@ -35,6 +37,7 @@ Using drgnx.
 - [The look](guide/look.md): drgnx Dark, Light and High Contrast, generated from one table of colours; what a theme paints, the terminal tier, the faces a theme author sets.
 - [Editor features vs VS Code, Zed and Cursor](guide/editor-matrix.md): what drgnx has, where it is described, its GUI test and perf workload.
 - [Trusted folders](guide/security.md): Trust This Folder, the "Restricted Mode" mark, what files from untrusted folders cannot make Emacs do.
+- [Plugins, rules and hooks](guide/plugins.md): installing and approving a plugin, choosing the plugins of one project, how your hook rules and plugins' hooks decide an agent's step (first deny wins, changes chain, the point's time, failures refuse); the rule format; rules are guardrails; the hooks before an agent's tool call (the seam, the hub's own tools, the lock's ask rules, what the agent is told) (being written).
 - [In a terminal](guide/terminal.md): the graphical window, a capable terminal and a legacy one (Alt+Shift and F6); what each terminal can do (kitty, WezTerm, foot, Ghostty, Ptyxis, tmux …) and which rows a test ran, the lines that fix what is missing, SSH, tmux, `EDITOR`, the clipboard, the mouse, colours.
 - [Settings](guide/settings.md): settings.el, the Settings page, and how your settings meet your Lisp, Customize and packages (being written).
 - [Your files](guide/files.md): when a settings file has a mistake (the last good copy, Open and Reset), backups, locks and `config-good/`, two machines sharing one folder.
@@ -57,7 +60,7 @@ How drgnx is built, tested and measured.
 - [Core](develop/core.md): paths, staged hooks, no-prompt guard, command registry, surfaces, palette, modules (every module turns off cleanly: the rule and its check).
 - [Harness](develop/harness.md): headless GUI test sessions, test tiers (each unit test file in an Emacs of its
   own), CLI and MCP tools for agents.
-- [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning.
+- [Performance](develop/perf.md): the perf lab — input latency, frames, GC, startup, memory, budgets, the soak, tuning; the Extensions view's rows and its comparison with `list-packages`.
 - [Scenarios](develop/scenarios.md): behaviour scenarios and the evidence behind the workbench design.
 - [Formatting](develop/formatting.md): `bin/drgnx fmt` — the Emacs Lisp formatter, and where it is enforced.
 - [bin/drgnx check](develop/check.md): build and every test tier in one parallel run; shards, GUI slots, phases, the leak census, the shuffled test order and the polluter bisect.
@@ -68,11 +71,14 @@ How drgnx is built, tested and measured.
 - [sleipnir](develop/sleipnir.md): the runner — the machine probe and the runner contract, the reservation files two schedulers share, the one podman argv, the slice tree, job units, job-exec and `result.json`, the row parsers, jobq's shim; a job's inputs frozen at submit, the hardened git (no hook, fsmonitor or outside config ever runs), and checkout slots whose git dirs no job can reach.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
-- [The store (Urdr)](develop/store.md): `work.db` schema 11 — one knowledge graph with history, written by Ratatoskr only.
+- [Extensions](develop/extensions.md): the catalog file the refresh job writes for the Extensions view, and what the refresh may touch.
+- [The store (Urdr)](develop/store.md): `work.db` schema 12 — one knowledge graph with history, written by Ratatoskr only.
 - [The Work space](develop/work-space.md): how the map is built — the map core `vegvisir` (its events, model, chains, overlaps, effects and tests), its layout (plan blocks, lanes with a capacity, ports) and the 30-agent fixture; the hub's facts (worktree bases, live specs, machines, shell reads).
+- [The edit history (verdandi)](develop/history.md): every change to a project's text as operations on a Loro document per file and branch, the operation log, revert to here on element ids.
 - [Records (saga)](develop/records.md): reading and writing a project's plan, ledger, deferred-list and board files without changing a byte.
 - [Agent coordination](develop/coordination.md): jobs, tasks and leases, the decision log, messages, the MCP tools (and the identity and limits of agents outside drgnx), delivery.
 - [The job sandbox](develop/sandbox.md): where the job sandbox's documentation is, and the VC guard (no git of yours runs in a task's folder).
+- [Plugins](develop/plugins.md): the plugin host `brokkr` — the manifest, the approval hash, the install scan and the WIT world plugins implement; the hook engine (`norn::hooks`); what a plugin can reach (the WASM host); the hub's plugins (install, approval, cards, the lists per project, the host's I/O); the hook points (`hook_points.rs`: the seam's order, the hook row and provenance, the lock's ask rules).
 - [Gleipnir](develop/gleipnir.md): the Rust sandbox in `runtime/` that every agent session runs in — its spec and what it refuses, bwrap, the inner helper, Landlock, seccomp, Seatbelt, the relay and the proxy, the check, and the escape rows that prove it.
 
 Docs are updated in the same commit as the code they describe.

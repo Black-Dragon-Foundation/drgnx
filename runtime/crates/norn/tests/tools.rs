@@ -259,9 +259,9 @@ async fn outside_is_refused_the_job_tools() {
             "ask the user with ask_user",
         ),
     ];
-    let names: Vec<&str> = tools().iter().map(|t| t.name()).collect();
+    let names: Vec<String> = tools().iter().map(|t| t.name().to_owned()).collect();
     for (name, args, says) in job_tools {
-        if names.contains(&name) {
+        if names.iter().any(|n| n == name) {
             let (error, text) = w.call(&out, name, args).await;
             assert!(error && text.contains(says), "{name}: {text}");
         }

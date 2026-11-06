@@ -746,6 +746,16 @@ when it loads (`drgnx-settings-workspace-enable`, undone by `-disable`).
 - **Refusals** (`drgnx-settings-workspace-problems FILE`, one notice condition per file): an entry of a `:scope
   global` setting, of a `:workspace never` setting (`drgnx-setting-meta`, which holds the deny-list of design §13), and
   the pseudo-variables `eval` and `mode`. `:scope project` entries are never buffer values.
+  `drgnx-settings-workspace--refusal ENTRY SOURCE` and `--usable FILE SOURCE` take the file's source, `private` (W2,
+  your file under `<config>`, which no repository writes and the agent sandbox closes) or `shared` (W1, the
+  `.drgnx/*.eld` shims and `.dir-locals*.el`; the default). `private` lets a `:workspace never` entry through when the
+  setting's `:scope` is `project`, so a project's value of a security setting (`drgnx-agents-plugins`,
+  `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`) has a home that only you write: `drgnx-setting-for-root`
+  reads it, and `drgnx-settings-runtime-overrides ROOT` sends it to the hub as the project's `config/settings` set.
+  `shared` still refuses every `:workspace never` entry, `:scope global` stays refused everywhere, and a `:scope
+  buffer` never-setting stays refused in W2 too. The usable-entries memo is keyed by file and source. The Settings
+  page gives such a setting the tabs `(user workspace)` only (`drgnx-settings-page-tabs-for`), and
+  `drgnx-settings-editors-check` refuses `shared` for it as it does for `code`.
 - **W1's filter:** `drgnx-settings-workspace-filter-function`, called with ROOT, FILE and the entries left after the
   refusals, returns those to apply: workspace trust's `drgnx-settings-trust-filter` (below);
   `drgnx-settings-workspace-safe-only` passes `safe-local-variable-p` values and never an `:eval`.

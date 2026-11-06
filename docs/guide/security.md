@@ -416,6 +416,8 @@ Three rows are about the agent's own browser, which runs inside its sandbox ([ag
   asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.
 - **`browser.web`**: that browser may open any public site (HTTPS and plain HTTP, ports 80 and 443). Only
   Autonomous allows it; the other presets ask.
+- **`plugin.abilities`**: an approved plugin's tools (its abilities) are offered to the session and may run. Never
+  hides them; Ask shows a card with the tool and its arguments for every call.
 - **`browser.private`**: that browser may reach a private address you name (your LAN, your tailnet, this computer).
   It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
   card off.
@@ -455,7 +457,9 @@ project).
     `chatgpt.com` and `auth.openai.com`; Gemini's API, `oauth2.googleapis.com` and `cloudcode-pa.googleapis.com`;
   - the hosts you list under `agents-net-hosts` for the session's network tier (`provider-only`; none by default).
 
-  Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
+  A plugin's HTTP is not the agent's: it reaches only the hosts its approved manifest names, and where the session's
+  network is not open, only those you also list on the `plugin` tier of `agents-net-hosts`
+  ([plugins.md](plugins.md)). Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
   host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
   (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to
@@ -491,6 +495,17 @@ again, so the agent's retry goes through without a second card.
   settles the card and writes the grant. Nothing ever asks you from the background. In the Work cockpit, Allow is
   the narrowest answer (once) and Deny is Refuse.
 - A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
+
+### Hooks never widen
+
+Your hook rules and your plugins' hooks ([plugins.md](plugins.md#rules-and-hooks)) look at a step after the matrix
+has, and they can only narrow what it says. A hook's `allow` means "no objection": a step the matrix asks about is
+still asked about, and a step it refuses is refused before any hook runs. A hook can turn Allow or Ask into a refusal,
+never the other way. A hook that fails (it times out, crashes, is busy, or answers something its manifest did not
+declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step. Only
+at the hub's own tools may a hook change a call, only for the tools it names, and the tool checks the changed
+arguments, against its schema and its own matrix checks, before anything runs; at the permission seam a change is a
+failure ([plugins.md](plugins.md#before-a-tool-call)).
 
 ## Checking it
 

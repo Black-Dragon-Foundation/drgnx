@@ -1,16 +1,20 @@
-{"scenario": "runners/exec-start-priority-refused-from-a-session", "requires": ["v1", "test-hooks"], "doc": "[B] A job's priority is the hub's to set: a session (an agent) that asks job_start for a priority is refused (an unknown field) and no job starts; the user's connection may set one (exec/get shows it), and one outside 1-5 is refused with invalid-params at priority."}
+{"scenario": "runners/exec-start-priority-refused-from-a-session", "requires": ["v1", "test-hooks"], "doc": "[B] A job's priority is the hub's to set: an agent session the hub holds (its own worktree, code.edit allowed) that asks job_start for a priority is refused (an unknown key) and no job starts; the user's connection may set one (exec/get shows it), and one outside 1-5 is refused with invalid-params at priority."}
 {"do": "root"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkfifo $ROOT/gate"], "expect_code": 0}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
-{"do": "send", "conn": "c", "json": {"id": 1, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$HOME", "owner": "$HARNESS_PID"}}}
-{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
-{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-matrix", "source": "row", "value": {"cells": [{"action": "code.edit", "column": {"role": "chat"}, "verdict": "allow"}]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["true"], "priority": 1}}}}
-{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": true}}, "within_ms": 10000}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "priority: unknown key"}], "isError": true}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/list", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"jobs": []}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "priority": 9}}}

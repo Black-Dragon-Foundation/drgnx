@@ -1,0 +1,30 @@
+{"scenario": "exec/an-agent-job-cannot-write-package-state", "requires": ["v1", "test-hooks"], "doc": "Under the real sandbox, a job of an agent session the hub holds runs a disguised script (no package command or name in its argv; every path built at run time from the root) that tries to write drgnx's package dir, a generation, the lock, pending.eld, trusted.eld, staged.eld and settings.el.  Inside the sandbox those dirs are not the real ones (drgnx's data, config and state dirs are closed to every job, whatever its argv), so the script may think it wrote; on disk only its own worktree changed (ok) and nothing of the package state did."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && export GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_DATE='@1700000000 +0000' GIT_COMMITTER_DATE='@1700000000 +0000' && git -c init.defaultBranch=main init -q && git -c user.name=t -c user.email=t@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-matrix", "source": "row", "value": {"cells": [{"action": "code.edit", "column": {"role": "chat"}, "verdict": "allow"}]}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"applied": 1}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["sh", "-c", "r=$1; e=ext; e=${e}ensions; set -- \"$r/data/elpa/x\" \"$r/data/generations/1/x\" \"$r/config/drgnx.lock.eld\" \"$r/state/drgnx/$e/pending.eld\" \"$r/state/drgnx/$e/trusted.eld\" \"$r/state/drgnx/$e/staged.eld\" \"$r/config/settings.el\"; w=; if printf x > ./ok 2>/dev/null; then w=' 0'; fi; i=0; for f in \"$@\"; do i=$((i+1)); if (mkdir -p \"${f%/*}\" && printf x >> \"$f\") 2>/dev/null; then w=\"$w $i\"; fi; done; echo \"wrote:$w\"", "sh", "$ROOT"]}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"status": "done", "summary": {"exit": 0}}}, "within_ms": 60000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(tail -c 1 $CONFIG/settings.el)\" != x"], "expect_code": 0}
+{"do": "file", "path": "$ROOT/data/elpa", "exists": false}
+{"do": "file", "path": "$ROOT/state/drgnx/extensions", "exists": false}
+{"do": "file", "path": "$DATA/elpa/x", "exists": false}
+{"do": "file", "path": "$DATA/generations/1/x", "exists": false}
+{"do": "file", "path": "$CONFIG/drgnx.lock.eld", "exists": false}
+{"do": "file", "path": "$STATE/extensions/pending.eld", "exists": false}
+{"do": "file", "path": "$STATE/extensions/trusted.eld", "exists": false}
+{"do": "file", "path": "$STATE/extensions/staged.eld", "exists": false}
+{"do": "file", "path": "$ROOT/work/ok", "exists": true}

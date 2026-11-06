@@ -3,20 +3,23 @@
 //! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
 //! ([`tasks`]) and the coordination tools' sockets ([`mcp`]); the agent core's (agent system part 1): jobs
 //! ([`exec`]), the permissions matrix ([`matrix`]), plans, briefs and reports ([`plans`]), records ([`records`]) and
-//! time, budgets and the supervisor ([`timeline`]).  [`crate::registry`] puts them in one sorted table.
+//! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod config;
 pub mod coord;
 pub mod exec;
+pub mod extensions;
 pub mod forecast;
 pub mod gateway;
 pub mod graph;
+pub mod history;
 pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
 pub mod plans;
+pub mod plugins;
 pub mod records;
 pub mod runners;
 pub mod say;
@@ -201,6 +204,9 @@ params! {
     AgentsToolInput(agents::ToolInputParams),
     AgentsPause(agents::ById),
     AgentsProbe(agents::ProbeParams),
+    AgentsContextDrop(agents::ContextDropParams),
+    AgentsContextPin(agents::ContextPinParams),
+    AgentsCompactPreview(agents::ById),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),
@@ -257,8 +263,19 @@ params! {
     RunnersCheck(runners::ByName),
     RunnersBench(runners::ByName),
     RunnersSet(runners::SetParams),
+    HistoryRegister(history::RegisterParams),
+    HistoryBatch(history::BatchParams),
+    HistoryResync(history::ResyncParams),
+    HistoryUnregister(history::UnregisterParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    ExtensionsSearch(extensions::SearchParams),
+    ExtensionsDetails(extensions::DetailsParams),
+    ExtensionsRows(extensions::RowsParams),
+    ExtensionsModules(extensions::ModulesParams),
+    PluginsList(Empty),
+    PluginsApprove(plugins::ApproveParams),
+    PluginsDisable(plugins::DisableParams),
 }
 
 /// Every method, in no order.
@@ -283,6 +300,9 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(work::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
+    v.extend(extensions::methods());
+    v.extend(plugins::methods());
+    v.extend(history::methods());
     v
 }
 
