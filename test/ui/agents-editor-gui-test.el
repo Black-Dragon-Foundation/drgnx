@@ -392,7 +392,6 @@ update and flydiff; unwrapped, the owner is whichever the display engine takes (
                   (if (eq mode 'flydiff) (diff-hl-flydiff-update) (diff-hl-update))
                   (drgnx-test-wait (lambda () (cl-some (lambda (o) (overlay-get o 'diff-hl)) (overlays-in 1 (point-max))))
                                    :what "diff-hl overlays")
-                  (drgnx-test-pause 0.3 "diff-hl finishes its run")
                   (when (eq mode 'unwrapped-late)
                     (agents-editor-gui--rebuild win (save-excursion (goto-char (point-min)) (forward-line 5) (point)))))
                 (let ((agent-line (agents-editor-gui--fringe-line-owner win 13 cands))

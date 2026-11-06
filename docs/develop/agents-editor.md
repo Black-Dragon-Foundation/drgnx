@@ -25,3 +25,22 @@ Measured in the GUI harness (`test/ui/agents-editor-gui-test.el`, mutter, Glitni
   `before-string` overlay priority 100. The wrapper alone won in every mode measured; the priority covers creation
   order. The user's own changed lines keep diff-hl's mark.
 - **Terminal:** a one-column left margin with a `(margin left-margin)` before-string.
+
+## The client
+
+`modules/tools/drgnx-agents-editor.el` is the module. Its core, `drgnx-agents-editor--core-step (state event)`, is pure and
+returns `(state . effects)`:
+
+- events: `watch`, `unwatch`, `frame`, `delta`, `buffer-changed`, `restart`;
+- a delta whose `version` is not newer than the state's is dropped; one whose `base` is not the state's version asks for
+  a full frame (the effect `call-watch`); a frame or delta whose `doc_version` is older than the buffer's last change
+  sent to the hub (`drgnx-agents-editor-note-change`) is dropped; after a restart no delta has a base;
+- the shell watches a file buffer when a window shows it (`window-buffer-change-functions`,
+  `window-size-change-functions`), unwatches it when none does, and asks again from `drgnx-hub-connected-functions`.
+
+`drgnx-agents-editor-frame (buffer)` is the cached frame. Frames are applied at once, by calling
+`drgnx-agents-editor-apply-functions` with (buffer frame); the hub already coalesces them to one per 50 ms. The module
+sets `drgnx-agent-identity-watched-function` to the ordinals present in watched buffers and clears it when it goes.
+`drgnx-agents-editor-probe` times N frame applies (the probe for `agents-cursor-tick`; the verdict waits for the gate).
+The hub's `agents/buffer/watch` and `agents/buffer/unwatch` come with the hub's buffer view; until then a call finds
+no method and the buffer simply has no frame.
