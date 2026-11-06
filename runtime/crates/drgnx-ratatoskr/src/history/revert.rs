@@ -9,8 +9,10 @@
 //! holds as it is now takes the history's own keep mine instead (its records tell the agent's operations from the
 //! user's typing, also typing done between two agent steps, which a later checkpoint holds).  `roll-back-mine` writes
 //! every path back.  What the files held before is kept under `refs/drgnx/undone/<op>` in the shadow repository
-//! either way.
+//! either way.  The revert's own writes are the user's operations in its record, so the history goes on holding the
+//! files as they are.
 
+use super::capture::{self, Seen};
 use super::revert_core::{Pending, RevertCore, RevertEffect, RevertEvent, RevertStep};
 use crate::agents::rewind::{self, Target};
 use crate::agents::session::{self, internal, invalid};
@@ -758,24 +760,73 @@ fn write_files(s: &Saved) -> Result<Wrote, String> {
     Ok((written, skipped))
 }
 
-/// The revert's history record (`revert`, its parents the records the session caused after the step, or one record
-/// standing for those steps when the history has none), its pending record, and the files as they were kept under
-/// `refs/drgnx/undone/<op>`.
+/// What S leaves at each path it writes, as capture reads a file: the merged or edited text, or the checkpoint's
+/// entry by its mode (a file's bytes, a link's target, nothing where the checkpoint has none).  A gitlink, or a
+/// checkpoint the shadow repository cannot read, is left out.
+fn written_by(s: &Saved) -> Vec<(String, Seen)> {
+    let p = &s.plan;
+    let entries: HashMap<PathBuf, snapshot::TreeChange> =
+        snapshot::changed(&p.root, &p.cwd, &p.now, &p.checkpoint)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.path.clone(), c))
+            .collect();
+    let mut out = Vec::new();
+    for path in targets(s) {
+        let rel = path.to_string_lossy().into_owned();
+        let seen = match goes(s, &path) {
+            Goes::Stays => continue,
+            Goes::Text(t) => Seen::Bytes(t.into_bytes()),
+            Goes::Checkpoint => {
+                let Some(c) = entries.get(&path) else {
+                    continue;
+                };
+                let bytes = || snapshot::blob(&p.root, &p.cwd, &p.checkpoint, &rel).ok();
+                match c.to_mode {
+                    0 => Seen::Gone,
+                    0o100644 | 0o100755 => match bytes() {
+                        Some(b) => Seen::Bytes(b),
+                        None => continue,
+                    },
+                    0o120000 => match bytes() {
+                        Some(b) => Seen::Link(String::from_utf8_lossy(&b).into_owned()),
+                        None => continue,
+                    },
+                    _ => continue,
+                }
+            }
+        };
+        out.push((rel, seen));
+    }
+    out
+}
+
+/// The revert's history record (`revert`, by the user's peer, its parents the records the session caused after the
+/// step, or one record standing for those steps when the history has none), with the revert's writes as the user's
+/// operations on the documents (so the history holds the files as the revert leaves them), its pending record, and
+/// the files as they were kept under `refs/drgnx/undone/<op>`.
 async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
     let dirs = f.dirs.get().ok_or("the hub has no state folder")?;
-    let (hub, _) = f
+    let (hub, tree) = f
         .core
         .history
         .of_tree(&dirs.hub, &s.plan.cwd)
         .map_err(|e| e.message)?;
     let json = serde_json::to_string(s).map_err(|e| e.to_string())?;
-    let (p, now) = (s.plan.clone(), crate::clock::wall_secs());
-    crate::clock::blocking(move || {
+    let (s2, now) = (s.clone(), crate::clock::wall_secs());
+    let h2 = hub.clone();
+    let (op, versions) = crate::clock::blocking(move || {
         use verdandi::{Cause, Kind, Record};
-        let mut g = hub.lock();
-        let h = &mut g.h;
+        let p = &s2.plan;
         let e = |e: verdandi::Error| e.to_string();
-        let author = h.peer(&json!({"kind": "user"}), None).map_err(e)?;
+        let writes = written_by(&s2);
+        let mut g = h2.lock();
+        let author = g.user_peer(&tree).map_err(e)?;
+        let mut staged = Vec::new();
+        for (rel, seen) in writes {
+            staged.extend(g.stage_users(&tree, &rel, seen).map_err(e)?);
+        }
+        let h = &mut g.h;
         let cause = |step: i64| Cause {
             session: Some(p.sid.clone()),
             step: Some(step.to_string()),
@@ -807,7 +858,7 @@ async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
                 kind: Kind::Revert,
                 author,
                 cause: cause(p.seq),
-                spans: Vec::new(),
+                spans: capture::spans_of(&staged),
                 parents,
                 git: None,
                 summary: format!("revert to step {} of session {}", p.seq, p.sid),
@@ -821,10 +872,12 @@ async fn record(f: &Front, s: &Saved) -> Result<i64, String> {
             &p.now,
         )?;
         h.mark_pending(op, &json, now).map_err(e)?;
-        Ok(op.0)
+        Ok::<_, String>((op.0, capture::versions(&tree, staged, op.0)))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    hub.publish(&versions);
+    Ok(op)
 }
 
 /// What the revert writes at a path.
@@ -858,7 +911,8 @@ fn goes(s: &Saved, path: &Path) -> Goes {
 
 /// The paths the revert writes, told to the tree's origin core as the hub's own versions first (the checkpoint's
 /// blob or gone, or the blob of the merged or edited text, hashed as the watcher hashes what it reads), so the
-/// watcher's event about them is no outside edit.
+/// watcher's event about them is no outside edit.  The record step told it already; this tells it again for a revert
+/// finished after a restart, whose core is new.
 async fn expect(f: &Front, s: &Saved, path: &Path) {
     let Some(dirs) = f.dirs.get() else { return };
     let Ok((hub, tree)) = f.core.history.of_tree(&dirs.hub, &s.plan.cwd) else {

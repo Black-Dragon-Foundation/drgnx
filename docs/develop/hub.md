@@ -1004,7 +1004,11 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
 - **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
   after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
-  none; the pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  none. A revert is the user's act: the record is by the user's peer, and what the revert is about to write at each
+  path (the checkpoint's file, link or nothing, or the merged or edited text) is applied onto the path's document
+  first as the user's operations, which the record holds (and each version is published as `history/file-version`).
+  So the history holds the files as the revert leaves them, and a later revert of them is decided by the history
+  again. The pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
   At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
   revert from the files on.
 
@@ -1102,7 +1106,8 @@ budget chain; the forecast line the user saw is the editor's).
   against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
   since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
   user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
-  revert, one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  revert, by the user's peer and holding what the redo writes as the user's operations on the documents (as a
+  revert's record does), one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
   hub: its conversation is not restored.
 - The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
   session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.

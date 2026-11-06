@@ -378,7 +378,10 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   typing still waiting for the 30 s settle is flushed into its record first (`FlushReason::Revert`). Any other path (no
   record of the session's, a CRLF or binary file, a history behind the file on disk) is read from the checkpoints
   alone: a path that differs from the agent's newest checkpoint is the user's, so there an edit between two steps still
-  counts as the agent's.
+  counts as the agent's. A revert's (and a redo's) own writes are the user's operations in its record, applied onto
+  the documents before the files are written, so after a revert the history still holds the files as they are and a
+  second revert, earlier or later, is decided by the history too; the second's scope may hold the first's record, and
+  the span revert then leaves out what the first deleted of the scope's own text.
 - An agent's write outside ACP (its own tools, a shell command) cannot be told from an edit in another program: both
   reach the history only through the watcher, as `external:disk`. Neither inotify nor FSEvents names the writer
   (fanotify does, with `CAP_SYS_ADMIN`, which the hub does not have), the agent runs as the user, and the user may save
