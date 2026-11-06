@@ -8,7 +8,8 @@ trace. Editor groups split the editor, several windows each keep their own workb
 restart.
 
 **How the dock looks.** The three sections are headed **Open** (the Buffers panel), **Files** (the Explorer) and
-**Outline**, in the heading face with a chevron, in sentence case. Their rows are drawn in the UI font at the density's
+**Outline**, in the heading face with a chevron, in sentence case. Their rows are drawn in the UI font (`drgnx-ui-text`
+under each row's own faces, put on as the rows are painted; the buffers' `default` face is not remapped) at the density's
 row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
 indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a pixel position that
 is the same on every row: `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the

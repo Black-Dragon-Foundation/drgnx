@@ -186,12 +186,27 @@ again.  Cheap: two overlays are touched."
 (defvar-local drgnx-wb--rows-key nil
   "What this dock buffer's row spacing was made for (`drgnx-wb--rows-fit'), an integer; nil: none made yet.")
 
+(defun drgnx-wb--rows-face (beg end)
+  "jit-lock, after the buffer's own painting (its hook depth puts it last): `drgnx-ui-text' under the faces of the
+characters from BEG to END that lack it, the newlines too, so the rows (and the strings of their overlays, which take
+the face of the text under them) are in the UI font.  A remap of `default' did it before, and merged the UI font into
+every face lookup of the buffer at every redisplay."
+  (let ((inhibit-read-only t) (p beg))
+    (with-silent-modifications
+      (while (< p end)
+        (let ((next (next-single-property-change p 'face nil end)) (face (get-text-property p 'face)))
+          (unless (or (eq face 'drgnx-ui-text) (and (consp face) (memq 'drgnx-ui-text face)))
+            (add-face-text-property p next 'drgnx-ui-text t))
+          (setq p next)))))
+  nil)
+
 (defun drgnx-wb-rows-setup ()
-  "Make the current dock buffer's rows UI rows: `default' remapped to the UI text face and the row height of the
-density, on the graphical frame that shows it (or the selected one).  Call it from the buffer's major mode; a density
-change, a scale change and the buffer's first showing on a graphical frame fit the rows again
-\(`drgnx-wb-rows-follow')."
-  (face-remap-add-relative 'default 'drgnx-ui-text)
+  "Make the current dock buffer's rows UI rows: the UI text face under the rows' own faces (`drgnx-wb--rows-face',
+from jit-lock) and the row height of the density, on the graphical frame that shows it (or the selected one).  Call it
+from the buffer's major mode; a density change, a scale change and the buffer's first showing on a graphical frame
+fit the rows again (`drgnx-wb-rows-follow')."
+  (add-hook 'jit-lock-functions #'drgnx-wb--rows-face 90 t)
+  (jit-lock-mode t)
   (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
   (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
