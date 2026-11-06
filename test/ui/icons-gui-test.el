@@ -30,7 +30,7 @@
     (let* ((rgb (lambda (name attr) (mapcar (lambda (c) (/ c 257)) (color-values (funcall attr name nil t)))))
            (want (funcall rgb 'shadow #'face-foreground))
            (bg (funcall rgb 'default #'face-background))
-           (s (drgnx-uitest-device-scale))
+           (s (drgnx-uitest-device-scale (selected-frame)))
            (edges (window-pixel-edges))
            (snap (drgnx-uitest-snapshot))
            (best nil) (best-d nil))
