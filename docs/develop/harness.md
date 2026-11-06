@@ -341,8 +341,9 @@ skip redisplay and hide the very jank we want to see.
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
 - **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
-  some visible text; the click lands in the middle of the first character of the first visible occurrence.
-  An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
+  some visible text; the click lands in the middle of the first character of the first visible occurrence —
+  the middle of that glyph as drawn, so a narrow glyph in a proportional font (a `t` in the Explorer's UI
+  font is half a column) is hit too. An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
   (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
   is not shown, or text with no such occurrence, is an error — never a click somewhere else.
 - **Clicks** are `down-mouse-N` + a release; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;

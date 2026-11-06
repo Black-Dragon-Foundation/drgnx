@@ -45,8 +45,9 @@ section header shows its title in the heading face."
         (should (memq 'drgnx-ui-heading (ensure-list (get-text-property i 'face header))))))))
 
 (ert-deftest drgnx-look-explorer/marks-coloured-and-pixel-aligned ()
-  "Pattern D: a modified file's mark is `M' in the warning status face, behind a spacer measured in pixels; the
-measure is made once and not again for another redraw of the same rows."
+  "Pattern D: a modified file's mark is `M' in the warning status face, behind a spacer placed in columns worked out
+from measured pixels (a column is each frame's own cell, so a terminal showing the rows reads it right); the measure is
+made once and not again for another redraw of the same rows."
   (drgnx-explorer-edge--with root
     (drgnx-look-explorer-test--as 'gui 'modified
       (drgnx-wb-mark-memo-clear)
@@ -56,7 +57,7 @@ measure is made once and not again for another redraw of the same rows."
         (let ((align (plist-get (cdr spacer) :align-to)))
           (should (eq '- (car align)))
           (should (eq 'right (nth 1 align)))
-          (should (integerp (car (nth 2 align)))))           ; (N): pixels
+          (should (floatp (nth 2 align))))                   ; N: columns, not (N) pixels
         (should i)
         (should (memq 'drgnx-status-warn (ensure-list (get-text-property i 'face tail))))
         (should (= 1 drgnx-wb--mark-measures))
