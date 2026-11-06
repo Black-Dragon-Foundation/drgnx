@@ -85,6 +85,14 @@ done
 check "the first-boot unit runs the baked script" grep -q 'ExecStart=/usr/local/libexec/drgnx-first-boot' "$img/drgnx-first-boot.service"
 check "the watchdog starts after the first boot, from its limits" \
   bash -c "grep -q 'Requires=drgnx-first-boot.service' '$img/drgnx-watchdog.service' && grep -q 'EnvironmentFile=/etc/drgnx/watchdog.env' '$img/drgnx-watchdog.service'"
+# every option `sleipnir watchdog` refuses to start without is on the unit's command line
+wd_src=$here/../../runtime/crates/sleipnir/src/watchdog.rs
+wd_exec=$(grep '^ExecStart=' "$img/drgnx-watchdog.service")
+needed=$(grep -o '"--[a-z-]* is needed"' "$wd_src" | cut -d' ' -f1 | tr -d '"' | sort -u)
+check "the watchdog's source names the options it needs" test -n "$needed"
+for o in $needed; do
+  check "the watchdog unit passes $o" grep -q -- " $o " <<< "$wd_exec "
+done
 if command -v systemd-analyze > /dev/null; then
   # verify wants the ExecStart binaries to exist; a stand-in tree is enough for a syntax check
   check "systemd-analyze reads the units" bash -c "systemd-analyze verify --man=no '$img/drgnx-first-boot.service' 2>&1 | grep -v -e 'Command .* not found' -e 'is not executable' | grep -q -i -e 'unknown section' -e 'unknown key' && exit 1 || exit 0"

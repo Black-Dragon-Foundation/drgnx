@@ -670,7 +670,10 @@ sleipnir watchdog --provider aws|gcp --idle S --lifetime S --unattended S --root
 ```
 
 A cloud machine's own end (design §6.7.6), a system unit in drgnx's image, so it works with the hub gone, asleep or
-without credentials. Every 5 s (`watchdog::POLL`) it looks at three things:
+without credentials. In the image the unit (`drgnx-watchdog.service`) runs it with `--root
+/var/lib/drgnx/runner` (the runner folder the image build makes, owned by the `runner` user) and `--dir
+/var/lib/drgnx/watchdog` (its `StateDirectory`), so `serve` on that machine runs with the same root and
+`--watchdog /var/lib/drgnx/watchdog`. Every 5 s (`watchdog::POLL`) it looks at three things:
 
 - **the jobs:** the attempt folders under `RUNNER_ROOT/jobs/` without `collected`: running, or a result waiting for the
   hub. It reads the folder, so it needs no `serve`.

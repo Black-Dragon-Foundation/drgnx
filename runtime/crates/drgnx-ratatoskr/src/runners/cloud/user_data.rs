@@ -129,7 +129,7 @@ impl BuildInputs {
     pub fn steps(&self) -> Result<Vec<String>, CloudError> {
         self.check()?;
         let mut s: Vec<String> = vec![
-            "install -d -m 0755 /usr/local/libexec /usr/local/bin /etc/drgnx /var/lib/drgnx/mirrors /var/lib/drgnx/cache/cargo".into(),
+            "install -d -m 0755 /usr/local/libexec /usr/local/bin /etc/drgnx /var/lib/drgnx/runner /var/lib/drgnx/mirrors /var/lib/drgnx/cache/cargo".into(),
             "id runner >/dev/null 2>&1 || useradd -m -u 1000 -s /bin/bash runner".into(),
             "passwd -l runner".into(),
             "echo 'runner:20000:30000' > /etc/subuid; echo 'runner:20000:30000' > /etc/subgid".into(),
