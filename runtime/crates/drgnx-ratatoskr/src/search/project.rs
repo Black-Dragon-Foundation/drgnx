@@ -170,6 +170,8 @@ struct Inner {
     tier1: tokio::sync::Mutex<()>,
     settle: Mutex<Settle>,
     events: Mutex<Option<Receiver<WatchEvent>>>,
+    /// Others reading the same events (the edit history): each event is copied to them as `tick` takes it.
+    taps: Mutex<Vec<std::sync::mpsc::Sender<WatchEvent>>>,
     opened: tokio::time::Instant,
     #[cfg(feature = "test-hooks")]
     permits: Option<Arc<tokio::sync::Semaphore>>,
@@ -229,6 +231,7 @@ impl Project {
                 tier1: tokio::sync::Mutex::new(()),
                 settle: Mutex::new(Settle::new(GIT_QUIET, SAVE_DEBOUNCE)),
                 events: Mutex::new(None),
+                taps: Mutex::new(Vec::new()),
                 opened: clock::now(),
                 #[cfg(feature = "test-hooks")]
                 permits: spec.test_permits,
@@ -261,6 +264,16 @@ impl Project {
         }
     }
 
+    /// A second reader of the watcher's events from now on (one watcher per project): every event `tick` takes is
+    /// copied to it.  Dropping the receiver ends the tap.
+    pub fn tap(&self) -> Receiver<WatchEvent> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Ok(mut t) = self.inner.taps.lock() {
+            t.push(tx);
+        }
+        rx
+    }
+
     /// Tier 1 now: the file list, and the rows of the files whose blob changed.
     pub async fn refresh_now(&self) -> Result<Refresh, ProjectError> {
         let inner = self.inner.clone();
@@ -286,6 +299,9 @@ impl Project {
                     .map_or_else(Vec::new, |rx| rx.try_iter().collect()),
                 Err(_) => vec![],
             };
+            if let Ok(mut taps) = self.inner.taps.lock() {
+                taps.retain(|t| events.iter().all(|e| t.send(e.clone()).is_ok()));
+            }
             let now = clock::now() - self.inner.opened;
             let mut settle = self
                 .inner

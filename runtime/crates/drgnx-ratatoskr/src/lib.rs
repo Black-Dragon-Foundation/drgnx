@@ -85,6 +85,7 @@ pub mod gateway;
 pub mod graph;
 pub mod graph_cli;
 pub mod hello;
+pub mod history;
 pub mod idle;
 pub mod job_cli;
 pub mod legacy;

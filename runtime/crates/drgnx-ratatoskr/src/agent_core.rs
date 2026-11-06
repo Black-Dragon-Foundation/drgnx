@@ -61,6 +61,8 @@ pub struct Core {
     pub map: std::sync::Arc<crate::work::map::Map>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
+    /// The edit history of each open project ([`crate::history`]).
+    pub history: crate::history::wire::Hubs,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
@@ -141,6 +143,10 @@ pub async fn serve(
         Params::RunnersCheck(p) => answer(runners::methods::check(f, c, p).await),
         Params::RunnersBench(p) => answer(runners::methods::bench(f, c, p).await),
         Params::RunnersSet(p) => answer(runners::methods::set(f, c, p).await),
+        Params::HistoryRegister(p) => answer(crate::history::wire::register(f, c, p).await),
+        Params::HistoryBatch(p) => answer(crate::history::wire::batch(f, c, p).await),
+        Params::HistoryResync(p) => answer(crate::history::wire::resync(f, c, p).await),
+        Params::HistoryUnregister(p) => answer(crate::history::wire::unregister(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
