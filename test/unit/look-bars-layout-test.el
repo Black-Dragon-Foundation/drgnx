@@ -203,5 +203,24 @@ fields are the ones its docstring lists; the vector gives each field a value of 
       (should (equal (cons (funcall at 'ASCENT) (funcall at 'DESCENT))
                      (drgnx-pixels-font-extent 'default))))))
 
+(ert-deftest drgnx-look-bars/lead-takes-the-font-ascent ()
+  "Pattern D: when the row less the text is odd (compact: 22 pixels on a 17 pixel font), the bar's lead is a spacer
+whose ascent is the font's ASCENT (`drgnx-pixels-font-extent'), the box (2) and the leftover pixel (1), of the row:
+not the font's MAX-WIDTH, which put the spacer wholly above the baseline and grew the bar by the descent."
+  (drgnx-statusbar-test--with
+    (let* ((fields drgnx-look-bars-test--font-info-fields)
+           (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
+           (drgnx-look-density 'compact))
+      (aset info (seq-position fields 'ASCENT) 13)
+      (aset info (seq-position fields 'DESCENT) 4)
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                ((symbol-function 'face-font) (lambda (&rest _) "a font"))
+                ((symbol-function 'font-info) (lambda (&rest _) info))
+                ((symbol-function 'window-font-height) (lambda (&rest _) 17))
+                ((symbol-function 'drgnx-statusbar--scale) (lambda (&optional _f) 1.0)))
+        (let ((spec (get-text-property 0 'display (drgnx-statusbar--lead (selected-window) 12))))
+          (should (equal '(22) (plist-get (cdr spec) :height)))
+          (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

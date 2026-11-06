@@ -345,10 +345,9 @@ pixel: the text then sits a pixel lower, and the row is exactly `status-bar' hig
     (propertize
      " " 'face drgnx-statusbar--bar-face
      'display
-     (if (and (> leftover 0) (display-graphic-p (window-frame w)))
-         (let* ((frame (window-frame w))
-                (ascent (aref (font-info (face-font drgnx-statusbar--bar-face frame ?x) frame) 7))
-                (target (+ ascent box leftover)))
+     (if-let* (((> leftover 0))
+               (extent (drgnx-pixels-font-extent drgnx-statusbar--bar-face (window-frame w))))
+         (let ((target (+ (car extent) box leftover)))
            `(space :width (,pad) :height (,height) :ascent ,(min 100 (ceiling (* 100.0 target) height))))
        `(space :width (,pad))))))
 
