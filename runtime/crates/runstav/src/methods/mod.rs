@@ -199,6 +199,7 @@ params! {
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
     AgentsToolInput(agents::ToolInputParams),
+    AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
     AgentsProbe(agents::ProbeParams),
     ExecStart(exec::StartParams),

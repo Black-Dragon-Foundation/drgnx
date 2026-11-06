@@ -880,6 +880,7 @@ dependencies = [
  "norn",
  "openssh",
  "proptest",
+ "pulldown-cmark",
  "rmcp",
  "runstav",
  "rustix",

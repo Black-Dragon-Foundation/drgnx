@@ -18,6 +18,18 @@ pub fn public_entry(entry: &Entry) -> Entry {
     {
         e.rest.insert("url".into(), url.clone());
     }
+    // a long output goes as its head and tail with the whole size; `agents/tool-output` pages the rest
+    if let Some(content) = e.rest.get_mut("content")
+        && let Some(total) = super::tool_output::fold(
+            content,
+            super::tool_output::EVENT_HEAD,
+            super::tool_output::EVENT_TAIL,
+        )
+    {
+        e.rest
+            .entry("outputBytes".to_string())
+            .or_insert(Value::from(total));
+    }
     e
 }
 
