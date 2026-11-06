@@ -167,7 +167,8 @@ again.  Cheap: two overlays are touched."
       (overlay-put drgnx-wb--selected-overlay 'priority 5))
     (move-overlay drgnx-wb--selected-overlay beg end)
     (overlay-put drgnx-wb--selected-overlay 'face (if focused '(drgnx-selected drgnx-focus) 'drgnx-selected-quiet))
-    (let ((now (seq-find (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in beg end))))
+    (let ((now nil))                    ; post-command: a primitive loop, no closure
+      (dolist (o (overlays-in beg end)) (when (and (not now) (overlay-get o 'drgnx-row-tail)) (setq now o)))
       (unless (eq now drgnx-wb--tail-shown)
         (drgnx-wb--set-tail-shown drgnx-wb--tail-shown nil)
         (drgnx-wb--set-tail-shown now t)
