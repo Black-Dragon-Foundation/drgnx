@@ -613,26 +613,26 @@ idle for a while, a focused frame, and `drgnx-quickhelp--request' recording its 
      ,@body))
 
 (ert-deftest drgnx-quickhelp/the-card-stands-out-from-the-editor ()
-  (should (= (drgnx-quickhelp--contrast "#000000" "#ffffff") 21.0))
-  (should-not (drgnx-quickhelp--contrast "unspecified-bg" "#ffffff"))
+  (should (= (drgnx-color-contrast "#000000" "#ffffff") 21.0))
+  (should-not (drgnx-color-contrast "unspecified-bg" "#ffffff"))
   ;; a dark theme whose tooltip is the editor's own background (kusanagi's): the card is lighter, and its
   ;; border is a third colour between the text and the card
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#050810") ((default :foreground) . "#68b8cc")
                                       ((drgnx-quickhelp :background) . "#050810") ((drgnx-quickhelp :foreground) . "#68b8cc"))
     (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
       (should-not (equal bg "#050810"))
-      (should (>= (drgnx-quickhelp--contrast bg "#050810") drgnx-quickhelp--distinct))
-      (should (> (drgnx-quickhelp--contrast bg "#68b8cc") 4.5))             ; the text stays readable
+      (should (>= (drgnx-color-contrast bg "#050810") drgnx-quickhelp--distinct))
+      (should (> (drgnx-color-contrast bg "#68b8cc") 4.5))             ; the text stays readable
       (should-not (member border (list bg "#68b8cc" "#050810")))
-      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+      (should (>= (drgnx-color-contrast border bg) 1.3))))
   ;; a light theme with the same: the card is darker than the page, not lighter than white
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
                                       ((drgnx-quickhelp :background) . "#ffffff") ((drgnx-quickhelp :foreground) . "#000000"))
     (pcase-let ((`(,bg . ,border) (drgnx-quickhelp-colors)))
       (should-not (equal bg "#ffffff"))
-      (should (>= (drgnx-quickhelp--contrast bg "#ffffff") drgnx-quickhelp--distinct))
-      (should (> (drgnx-quickhelp--contrast bg "#000000") 7))
-      (should (>= (drgnx-quickhelp--contrast border bg) 1.3))))
+      (should (>= (drgnx-color-contrast bg "#ffffff") drgnx-quickhelp--distinct))
+      (should (> (drgnx-color-contrast bg "#000000") 7))
+      (should (>= (drgnx-color-contrast border bg) 1.3))))
   ;; a face background that already stands out (modus-operandi's tooltip) is kept
   (drgnx-quickhelp-test--with-faces '(((default :background) . "#ffffff") ((default :foreground) . "#000000")
                                       ((drgnx-quickhelp :background) . "#c4c4c4") ((drgnx-quickhelp :foreground) . "#000000"))
