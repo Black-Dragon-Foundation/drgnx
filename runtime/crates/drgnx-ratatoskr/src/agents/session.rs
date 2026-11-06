@@ -19,6 +19,7 @@ use super::lock as plock;
 use super::queue::{Origin, Queued};
 use super::rewind::RestoreLevel;
 use super::transcript;
+use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
@@ -29,8 +30,9 @@ use hermod::{Conn, ConnOpts, Event, Incoming, SessionId};
 use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
-    AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
-    RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
+    AgentOp, AgentWheel, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission,
+    PermissionParams, RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript,
+    Usage, Via, WheelSaved, WheelState,
 };
 use runstav::methods::hub::{EnvVar, refused_env_name};
 use runstav::methods::matrix::{Role, Unit};
@@ -54,6 +56,8 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_ANSWER: Duration = Duration::from_secs(2);
 /// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
 pub(crate) const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
+/// How long a give waits for the editor's `agents/wheel/saved`.
+const WHEEL_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -133,6 +137,15 @@ impl Pending {
     }
 }
 
+/// An agent message's Markdown blocks, and what the editors have not been told of them yet.
+struct MdMessage {
+    entry: usize,
+    stream: super::markdown::Stream,
+    /// The editors have the whole `blocks` of the message (else the next event carries them, not a patch).
+    sent: bool,
+    patch: std::collections::BTreeMap<usize, super::markdown::Block>,
+}
+
 struct State {
     /// The turn, the queue, the Stop and the permission requests' choices (`turn_core.rs`).
     core: TurnCore,
@@ -147,6 +160,8 @@ struct State {
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
     dirty: BTreeSet<usize>,
+    /// The agent message still streaming, as Markdown blocks.
+    md: Option<MdMessage>,
     permissions: Vec<Pending>,
     usage: Option<Usage>,
     commands: Vec<Value>,
@@ -182,6 +197,45 @@ struct State {
     steps_begun: i64,
     /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
     mcp_begun: Vec<(i64, String)>,
+    /// What the updates since the reader last looked tell the presence model, by tool call.
+    live_out: Vec<(String, LiveOut)>,
+    /// Who drives: the agent, or the user holding (or taking) its wheel ([`super::wheel`]).
+    wheel: Wheel,
+    /// The step snapshot taken when the hold began: what the give measures the user's changes from.
+    wheel_base: Option<String>,
+    /// The tool entry the last update changed, for the follow feed ([`crate::editor::follow`]).
+    follow_tool: Option<usize>,
+    /// The plan's `in_progress` entry, the follow feed's line when the agent sends plans.
+    plan_now: Option<String>,
+}
+
+/// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
+/// lock, applied after it.
+#[derive(Clone, Debug)]
+enum LiveOut {
+    /// It runs: its detail as it stands now (the path as the agent gave it), its status, and its content's `diff` items
+    /// (path, oldText, newText): an edit's lines, and its `pending` while it has not landed.
+    At {
+        detail: Box<norn::write::work::StepDetail>,
+        status: crate::work::presence::CallStatus,
+        diffs: Diffs,
+    },
+    /// It failed, or it ended with no step of its own open: its live entry goes.
+    Gone,
+}
+
+/// A tool call's `diff` content items: (path, oldText, newText).
+type Diffs = Vec<(String, Option<String>, String)>;
+
+/// A tool call entry's ACP status (absent: pending).
+fn call_status(rest: &Map<String, Value>) -> crate::work::presence::CallStatus {
+    use crate::work::presence::CallStatus;
+    match rest.get("status").and_then(Value::as_str) {
+        Some("in_progress") => CallStatus::InProgress,
+        Some("completed") => CallStatus::Completed,
+        Some("failed") => CallStatus::Failed,
+        _ => CallStatus::Pending,
+    }
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -192,6 +246,8 @@ struct Stepped {
     answered: Vec<Pending>,
     /// To answer cancelled.
     cancelled: Vec<Pending>,
+    /// The turn the take stopped ended: the wheel is held now.
+    held: bool,
 }
 
 /// A step that has begun.
@@ -231,6 +287,11 @@ struct ClosedStep {
     context: Option<i64>,
     /// On a turn's first step: the tree the worktree held before the prompt went to the agent, its checkpoint.
     before: Option<String>,
+    /// A tool step's call had ended when the step closed (completed or failed); none: the step was cut (a wait, the
+    /// next call) while the call runs on, and its live presence entry still stands for it.
+    call_end: Option<crate::work::presence::CallStatus>,
+    /// A tool step's `diff` content items: where an edit's lines are found when the step is written.
+    diffs: Diffs,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -269,6 +330,11 @@ impl State {
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
+            live_out: Vec::new(),
+            wheel: Wheel::Free,
+            wheel_base: None,
+            follow_tool: None,
+            plan_now: None,
             closed: Vec::new(),
             before: None,
             seq: 0,
@@ -277,6 +343,7 @@ impl State {
             tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
+            md: None,
             permissions: Vec::new(),
             usage: None,
             commands: Vec::new(),
@@ -322,9 +389,25 @@ impl State {
                     .parent_tool = Some(p.clone());
             }
             let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
+            let call_end = open
+                .tool_id
+                .as_deref()
+                .and_then(|id| self.entries.get(*self.tools.get(id)?))
+                .map(|e| call_status(&e.rest))
+                .filter(|s| {
+                    use crate::work::presence::CallStatus;
+                    matches!(s, CallStatus::Completed | CallStatus::Failed)
+                });
+            let diffs = open
+                .tool_id
+                .as_deref()
+                .map(|id| self.tool_diffs(id))
+                .unwrap_or_default();
             self.closed.push(ClosedStep {
                 detail,
                 command,
+                call_end,
+                diffs,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -354,6 +437,15 @@ impl State {
             locations,
             rest.get("rawInput"),
         )
+    }
+
+    /// The `diff` items of tool call ID's content as the entry holds it now.
+    fn tool_diffs(&self, id: &str) -> Diffs {
+        self.tools
+            .get(id)
+            .and_then(|i| self.entries.get(*i))
+            .map(|e| crate::work::edit_lines::diffs(e.rest.get("content")))
+            .unwrap_or_default()
     }
 
     /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
@@ -493,6 +585,7 @@ impl State {
                 self.wait_end();
             }
         }
+        out.held = wheel::turn_ended(&mut self.wheel, &fx);
         out.fx = fx;
         out
     }
@@ -528,6 +621,9 @@ impl State {
         self.entries.truncate(at);
         self.dirty.retain(|i| *i < at);
         self.tools.retain(|_, i| *i < at);
+        if self.md.as_ref().is_some_and(|m| m.entry >= at) {
+            self.md = None;
+        }
         self.open = None;
         self.cur = None;
         self.stash = None;
@@ -552,6 +648,7 @@ impl State {
                 .insert("length".into(), json!(joined.chars().count()));
             e.rest.insert("text".into(), json!(joined));
             self.dirty.insert(i);
+            self.md_follow(kind, i);
             return;
         }
         let mut rest = Map::new();
@@ -562,6 +659,33 @@ impl State {
         }
         let i = self.push(kind, rest);
         self.open = Some((kind, i));
+        self.md_follow(kind, i);
+    }
+
+    /// Entry I, an agent message, has more text: only its last block is parsed again, and the blocks that changed wait
+    /// for the next event.  The message before it is no longer followed.
+    fn md_follow(&mut self, kind: EntryType, i: usize) {
+        if kind != EntryType::Agent {
+            return;
+        }
+        if self.md.as_ref().is_none_or(|m| m.entry != i) {
+            self.md = Some(MdMessage {
+                entry: i,
+                stream: super::markdown::Stream::default(),
+                sent: false,
+                patch: Default::default(),
+            });
+        }
+        let text = self.entries[i]
+            .rest
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(m) = self.md.as_mut() {
+            for b in m.stream.update(text) {
+                m.patch.insert(b.block, b);
+            }
+        }
     }
 
     /// One `session/update` of the agent (its JSON), as entries, commands and usage.
@@ -621,6 +745,7 @@ impl State {
                     m.name = s("toolName").or(m.name.take());
                     m.parent = s("parentToolUseId").or(m.parent.take());
                 }
+                self.follow_tool = Some(idx);
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -631,7 +756,23 @@ impl State {
                     "rawInput",
                 ] {
                     if let Some(v) = u.get(k).filter(|v| !v.is_null()) {
-                        e.rest.insert(k.into(), v.clone());
+                        let mut v = v.clone();
+                        if k == "content" {
+                            // a huge output keeps its head and tail and the whole size
+                            match super::tool_output::fold(
+                                &mut v,
+                                super::tool_output::KEEP_HEAD,
+                                super::tool_output::KEEP_TAIL,
+                            ) {
+                                Some(total) => {
+                                    e.rest.insert("outputBytes".into(), json!(total));
+                                }
+                                None => {
+                                    e.rest.remove("outputBytes");
+                                }
+                            }
+                        }
+                        e.rest.insert(k.into(), v);
                     }
                 }
                 self.dirty.insert(idx);
@@ -641,6 +782,27 @@ impl State {
                     (s("title"), s("kind"), s("status"))
                 };
                 let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                // the live presence feed: a running call where it is now; one that ended gives way to its step's
+                // close, or goes now when no step of its own is open to close (cut by the next call)
+                {
+                    use crate::work::presence::CallStatus;
+                    let step_open = [self.cur.as_ref(), self.stash.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|c| c.tool_id.as_deref() == Some(id));
+                    let out = match call_status(&self.entries[idx].rest) {
+                        CallStatus::Failed => Some(LiveOut::Gone),
+                        CallStatus::Completed => (!step_open).then_some(LiveOut::Gone),
+                        status => self.tool_detail(id).map(|detail| LiveOut::At {
+                            detail: Box::new(detail),
+                            status,
+                            diffs: self.tool_diffs(id),
+                        }),
+                    };
+                    if let Some(out) = out {
+                        self.live_out.push((id.to_string(), out));
+                    }
+                }
                 if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) != Some(id)
                     && !matches!(status.as_deref(), Some("completed" | "failed"))
                 {
@@ -686,6 +848,16 @@ impl State {
             }
             "plan" => {
                 self.open = None;
+                self.plan_now = u
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .and_then(|a| {
+                        a.iter()
+                            .find(|e| e.get("status") == Some(&json!("in_progress")))
+                    })
+                    .and_then(|e| e.get("content"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 let mut rest = Map::new();
                 rest.insert(
                     "entries".into(),
@@ -757,8 +929,14 @@ pub struct Session {
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a project chat's writes of the checkout go through the editor ([`crate::pair`]).
+    pair: Arc<crate::pair::door::Door>,
     /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
     map: Arc<crate::work::map::Map>,
+    /// The presence model: its tool calls feed it as they run ([`Session::feed_live`]).
+    presence: Arc<crate::work::presence::Live>,
+    /// The follow feed: each tool call's place reaches it ([`crate::editor::follow`]).
+    follows: Arc<crate::editor::follow::Follows>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -782,6 +960,9 @@ pub struct Session {
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
+    /// Step snapshots: a turn's tree is taken before its prompt goes, and the tree at a hold on its wheel (none: the
+    /// hub has no state folder).
+    snap: Option<crate::timeline::Snap>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
     /// The count of those steps sent and written.
@@ -806,8 +987,8 @@ pub struct Session {
     /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
     /// agent is recorded there (none: the hub has no state folder).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
-    /// Step snapshots: a turn's tree is taken before its prompt goes (none: the hub has no state folder).
-    snap: Option<crate::timeline::Snap>,
+    /// The hub's identities: this session holds one from its start until it ends ([`super::identity`]).
+    identities: Arc<super::identity::Pool>,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -891,11 +1072,13 @@ struct Launched {
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
 /// chat in a project writes nothing (the hub serves `fs/write_text_file` outside the sandbox, which binds the project
-/// read-only).
+/// read-only).  While the user holds the session's wheel it writes nothing at all.
 pub(crate) struct Fence {
     pub cwd: PathBuf,
     pub document: Option<PathBuf>,
     pub read_only: bool,
+    /// The user holds the wheel ([`Fence::held`]).
+    pub held: bool,
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -934,10 +1117,19 @@ fn resolve(p: &Path) -> PathBuf {
 }
 
 impl Fence {
+    /// Whether the user holds SESSION's wheel (the turn the take stopped has ended): every write of it is refused,
+    /// by this fence and by the pair door alike.
+    pub(crate) fn held(session: &Session) -> bool {
+        lock(&session.state).wheel == Wheel::Held
+    }
+
     fn check(&self, path: &str, write: bool) -> Result<PathBuf, String> {
         let p = Path::new(path);
         if !p.is_absolute() {
             return Err(format!("{path}: not an absolute path"));
+        }
+        if write && self.held {
+            return Err(format!("{path}: {}", wheel::HELD));
         }
         let real = resolve(p);
         if write && let Some(doc) = &self.document {
@@ -960,6 +1152,50 @@ impl Fence {
             Ok(real)
         } else {
             Err(format!("{path}: outside the session's directory"))
+        }
+    }
+}
+
+/// Whether a session in ROLE (a BRAINSTORM, working in its SCRATCH folder) is a chat in a project, whose `fs/*` calls
+/// in the project go to the pair door: every other session keeps the fence and the inline write.
+fn is_project_chat(role: Role, brainstorm: bool, scratch: bool) -> bool {
+    role == Role::Chat && !brainstorm && !scratch
+}
+
+/// An ACP `fs/*` request's `path`.
+fn path_of(req: &Value) -> String {
+    req.get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// TEXT from the request's `line` (1-based), at most `limit` lines.
+fn slice_lines(text: String, req: &Value) -> String {
+    let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+    let limit = req.get("limit").and_then(Value::as_u64);
+    if line == 1 && limit.is_none() {
+        return text;
+    }
+    let it = text.split_inclusive('\n').skip(line - 1);
+    match limit {
+        Some(n) => it.take(n as usize).collect(),
+        None => it.collect(),
+    }
+}
+
+/// The answer to an `fs/read_text_file`: GOT's text, or its error.
+fn answer_read(resp: hermod::Responder<ReadTextFileResponse>, got: Result<String, String>) {
+    match got {
+        Ok(content) => {
+            if let Ok(r) =
+                serde_json::from_value::<ReadTextFileResponse>(json!({"content": content}))
+            {
+                let _ = resp.respond(r);
+            }
+        }
+        Err(m) => {
+            let _ = resp.fail(-32602, &m);
         }
     }
 }
@@ -1435,6 +1671,15 @@ pub(super) async fn prepare(
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        // its edits of the checkout go through the pair door only: Claude's own edit tools are off from the start
+        plan = plan.with_project_chat();
+        // paired from the start when the cell allows it; the user's toggle decides under an ask
+        front.pair.started(
+            sid,
+            norn::matrix::decide(&eff, Action::ChatProjectEdit, None),
+        );
+    }
     // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
     let cell = eff.cell(Action::Browser).verdict;
     let (spec, status, unsandboxed, browser) =
@@ -1805,6 +2050,11 @@ async fn launch(
             front.mcp.mark_before_tool(sid);
         }
     }
+    // a chat in a project gets the pair tools from its start (read_file, edit_file, write_file), paired or not
+    let scratch = launch::scratch_path(&runstav::paths::Env::process(), sid);
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        front.mcp.mark_project_chat(sid);
+    }
     let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
@@ -2031,6 +2281,18 @@ fn assemble(
             ),
         );
     }
+    // its identity: the lowest free ordinal of its workspace, and a handle unique there
+    let identities = front.core.agents.identities.clone();
+    let provider = profile.provider().and_then(|p| {
+        serde_json::to_value(p)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+    });
+    identities.take(
+        &super::identity::workspace_of(&i.cwd),
+        &i.id,
+        &super::identity::model_short(profile.model.as_deref(), provider.as_deref()),
+    );
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
@@ -2072,7 +2334,10 @@ fn assemble(
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        pair: front.pair.clone(),
         map: front.core.map.clone(),
+        presence: front.core.presence.clone(),
+        follows: front.follows.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -2087,6 +2352,7 @@ fn assemble(
         gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
+        snap: crate::timeline::Snap::of(front),
         steps,
         flow,
         done,
@@ -2101,7 +2367,7 @@ fn assemble(
             .dirs
             .get()
             .map(|d| (front.core.history.clone(), d.hub.clone())),
-        snap: crate::timeline::Snap::of(front),
+        identities,
     });
     (s, done_rx)
 }
@@ -2282,7 +2548,7 @@ impl Session {
                     .is_some_and(|m| mids.contains(m))
             })
             .take(cap)
-            .map(|(i, e)| (i as u64, e.clone()))
+            .map(|(i, e)| (i as u64, super::wire::with_blocks(e.clone())))
             .collect()
     }
 }
@@ -2497,6 +2763,17 @@ pub(crate) async fn relaunch(
     lock(&s.state)
         .core
         .resume(queue, paused || hold, resume_told);
+    // the user held its wheel when the hub ended: still held, from the same snapshot
+    if let Some(store) = &s.store
+        && let (true, base) = store.load_wheel(&sid)
+    {
+        let mut st = lock(&s.state);
+        st.wheel = Wheel::Held;
+        st.wheel_base = base;
+        st.core.set_wheel(true);
+        drop(st);
+        s.pair.hold(&sid, true);
+    }
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2591,8 +2868,25 @@ async fn write_steps(
     };
     let mut local = 0u64;
     let mut turn_start = true;
-    while let Some(c) = rx.recv().await {
+    while let Some(mut c) = rx.recv().await {
         local += 1;
+        // an edit's lines: where its diff content is in the file now (off the async threads)
+        let mut edit_col = None;
+        if !c.diffs.is_empty()
+            && let Some(d) = c.detail.clone()
+        {
+            let (dir, diffs) = (ctx.cwd.clone(), std::mem::take(&mut c.diffs));
+            if let Ok((d, r)) = crate::clock::blocking(move || {
+                let mut d = d;
+                let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+                (d, r)
+            })
+            .await
+            {
+                c.detail = Some(d);
+                edit_col = r.map(|r| r.col);
+            }
+        }
         let class_name = serde_json::to_value(c.open.class)
             .ok()
             .and_then(|v| v.as_str().map(str::to_string))
@@ -2702,27 +2996,65 @@ async fn write_steps(
             revertible: history_op.is_some(),
             hooks: Vec::new(),
         };
-        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+        // the files the step was in: the presence model (a shell step's command looked up off the async threads).  A
+        // tool call's own file is its live entry while it runs: the call's end replaces that with the step's entry
+        // (none when it failed), and a step cut while its call runs on leaves it standing.
         if let Some(live) = &sink.presence
-            && id != 0
-            && (c.detail.is_some() || c.command.is_some())
+            && (c.detail.is_some() || c.command.is_some() || c.open.tool_id.is_some())
         {
+            use crate::work::presence::{self as presence, CallStatus};
             let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
-            let files = crate::clock::blocking(move || {
-                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+            let (mine, mut files) = crate::clock::blocking(move || {
+                (
+                    d.as_ref()
+                        .map(|d| presence::touches_of_detail(d, &dir))
+                        .unwrap_or_default(),
+                    presence::touches_of_step(None, cmd.as_deref(), &dir),
+                )
             })
             .await
             .unwrap_or_default();
-            if !files.is_empty() {
-                let changed = live.apply(crate::work::presence::PresenceEv::Step {
+            let mut changed = Vec::new();
+            match (&c.open.tool_id, c.call_end) {
+                (Some(call), Some(end)) => {
+                    let closed = mine
+                        .into_iter()
+                        .next()
+                        .filter(|_| end == CallStatus::Completed && id != 0)
+                        .map(|t| presence::Entry {
+                            session: ctx.session.clone(),
+                            file: t.file,
+                            mode: t.mode,
+                            line: t.line,
+                            line_end: c
+                                .detail
+                                .as_ref()
+                                .and_then(|d| d.line_end)
+                                .and_then(|l| u32::try_from(l).ok()),
+                            col: edit_col,
+                            source: t.source,
+                            step: id,
+                            at: step.start,
+                            live: false,
+                            tool_call: None,
+                        });
+                    changed.extend(live.close_live(&ctx.session, call, closed));
+                }
+                (Some(_), None) => {}
+                (None, _) => files.extend(mine),
+            }
+            if id != 0 && !files.is_empty() {
+                changed.extend(live.apply(presence::PresenceEv::Step {
                     session: ctx.session.clone(),
                     step: id,
                     at: step.start,
                     files,
-                });
-                if let Some(map) = &sink.map {
-                    map.presence(&live.now_in(&changed));
-                }
+                }));
+            }
+            if !changed.is_empty()
+                && let Some(map) = &sink.map
+            {
+                map.presence(&live.now_in(&changed));
             }
         }
         // the step's class is the agent card's activity
@@ -3144,7 +3476,10 @@ impl Session {
     /// caller's.
     fn perform(self: &Arc<Self>, s: Stepped) {
         for p in s.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
+        }
+        if s.held {
+            self.wheel_held();
         }
         for e in s.fx {
             match e {
@@ -3214,10 +3549,24 @@ impl Session {
         let (seq, entries) = {
             let mut st = lock(&self.state);
             let idx: Vec<usize> = std::mem::take(&mut st.dirty).into_iter().collect();
-            let entries: Vec<(u64, Entry)> = idx
+            let mut entries: Vec<(u64, Entry)> = idx
                 .into_iter()
                 .filter_map(|i| st.entries.get(i).map(|e| (i as u64, e.clone())))
                 .collect();
+            // an agent message arrives as Markdown blocks: all of them the first time (and for a new subscriber), after
+            // that the patch of the ones that changed
+            if let Some(m) = st.md.as_mut()
+                && let Some((_, e)) = entries.iter_mut().find(|(i, _)| *i == m.entry as u64)
+            {
+                if !m.sent {
+                    e.rest.insert("blocks".into(), json!(m.stream.blocks()));
+                    m.sent = true;
+                } else if !m.patch.is_empty() {
+                    let patch: Vec<_> = m.patch.values().collect();
+                    e.rest.insert("patch".into(), json!(patch));
+                }
+                m.patch.clear();
+            }
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
@@ -3248,9 +3597,35 @@ impl Session {
     /// Connection CONN gets this session's entries from now on; the change number they continue from.
     pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
         // the number is read under the same lock the dirty set is drained under, so no entry falls between
-        let st = lock(&self.state);
+        let mut st = lock(&self.state);
         self.editors.subscribe_entries(&self.id, conn);
+        // the next event of the message streaming now carries all its blocks, whoever had the earlier ones
+        if let Some(m) = st.md.as_mut() {
+            m.sent = false;
+        }
         st.seq
+    }
+
+    /// Bytes FROM..TO of tool call TOOL_CALL's output, at most a page of them.
+    pub(crate) fn tool_output(
+        &self,
+        tool_call: &str,
+        from: u64,
+        to: u64,
+    ) -> Option<super::tool_output::Page> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let rest = &st.entries.get(idx)?.rest;
+        let parts = rest
+            .get("content")
+            .map(super::tool_output::text_parts)
+            .unwrap_or_default();
+        let kept: u64 = parts.iter().map(|p| p.len() as u64).sum();
+        let total = rest
+            .get("outputBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(kept);
+        Some(super::tool_output::page(&parts, total, from, to))
     }
 
     /// The raw input of tool call TOOL_CALL, capped.
@@ -3261,9 +3636,19 @@ impl Session {
         Some(super::wire::capped_tool_input(raw))
     }
 
+    /// Its running step's title (none between steps).
+    pub fn doing(&self) -> Option<String> {
+        lock(&self.state).cur.as_ref().and_then(|c| c.tool.clone())
+    }
+
     pub fn snapshot(&self) -> Snapshot {
+        let identity = self.identities.get(&self.id);
         let st = lock(&self.state);
         Snapshot {
+            ordinal: identity.as_ref().map(|i| i.ordinal),
+            handle: identity.as_ref().map(|i| i.handle.clone()),
+            monogram: identity.map(|i| i.monogram),
+            last_active: Some(st.last_update),
             id: self.id.clone(),
             name: Some(self.name.clone()),
             profile: Some(self.profile.clone()),
@@ -3274,7 +3659,8 @@ impl Session {
             via: Some(self.via),
             mode: self.mode,
             queue: st.core.queue().texts(),
-            paused: st.core.paused().then_some(true),
+            // a take holds the queue at once, though the turn it stops ends after its tool call
+            paused: (st.core.paused() || st.wheel != Wheel::Free).then_some(true),
             permissions: st.permissions.iter().map(|p| p.public.clone()).collect(),
             reviews: Vec::new(),
             usage: st.usage.clone(),
@@ -3300,6 +3686,9 @@ impl Session {
             },
             hooked: self.hooked.clone(),
             panel: self.panel.snapshot(),
+            waiting: self.pair.waiting(&self.id),
+            paired: self.pair.paired_now(&self.id),
+            held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
         }
     }
 
@@ -3308,7 +3697,12 @@ impl Session {
         let st = lock(&self.state);
         Transcript {
             session: snap,
-            entries: st.entries.clone(),
+            entries: st
+                .entries
+                .iter()
+                .cloned()
+                .map(super::wire::with_blocks)
+                .collect(),
             seq: st.seq,
         }
     }
@@ -3319,6 +3713,7 @@ impl Session {
             document: self.document.clone(),
             read_only: self.role == Role::Chat
                 && self.cwd != launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+            held: Fence::held(self),
         }
     }
 
@@ -3344,6 +3739,8 @@ impl Session {
             let Some(ev) = ev else { break };
             self.handle(ev).await;
         }
+        // the agent is gone: a follow view keeps where it was, a new follow starts from nothing
+        self.follows.session_gone(&self.id);
     }
 
     async fn handle(self: &Arc<Self>, ev: Event) {
@@ -3396,17 +3793,33 @@ impl Session {
                             lock(&self.state).add_turn_cost(booked.delta);
                             self.budgets.notify(booked.hits);
                         }
-                        let (stepped, begun) = {
+                        let (stepped, begun, live_out, moved) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
                             let begun = std::mem::take(&mut st.mcp_begun);
+                            let live_out = std::mem::take(&mut st.live_out);
+                            let moved = st.follow_tool.take().and_then(|i| {
+                                crate::editor::follow::of_tool(
+                                    &self.id,
+                                    &self.cwd,
+                                    &st.entries[i].rest,
+                                    st.plan_now.as_deref(),
+                                )
+                            });
                             (
                                 std::mem::take(&mut st.tool_ended)
                                     .then(|| st.turn_step(TurnEvent::ToolCompleted)),
                                 begun,
+                                live_out,
+                                moved,
                             )
                         };
                         self.hook_own_edits(&v);
+                        // the cursor moves as the call runs, before its step closes
+                        self.feed_live(live_out).await;
+                        if let Some(m) = moved {
+                            self.follows.moved(m);
+                        }
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
@@ -3442,6 +3855,19 @@ impl Session {
                 }
                 Event::Request(Incoming::ReadFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // the pair door asks the editor: on a task of its own, so this loop never waits on one
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-read", async move {
+                            let got = match me.pair_read(path_of(&v)).await {
+                                Ok(text) => Ok(slice_lines(text, &v)),
+                                Err(m) => Err(m),
+                            };
+                            answer_read(resp, got);
+                        });
+                        return;
+                    }
                     match self.read_file(&v).await {
                         Ok(content) => {
                             if let Ok(r) = serde_json::from_value::<ReadTextFileResponse>(
@@ -3457,6 +3883,35 @@ impl Session {
                 }
                 Event::Request(Incoming::WriteFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // a chat's write of its project goes through the pair door, on a task of its own
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-write", async move {
+                            let w = norn::tools::pair::PairWrite::Whole {
+                                path: path_of(&v),
+                                content: v
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            };
+                            let r = me.pair_write(w).await;
+                            match r {
+                                Ok(_) => {
+                                    if let Ok(ok) =
+                                        serde_json::from_value::<WriteTextFileResponse>(json!({}))
+                                    {
+                                        let _ = resp.respond(ok);
+                                    }
+                                }
+                                Err(m) => {
+                                    let _ = resp.fail(-32602, &m);
+                                }
+                            }
+                        });
+                        return;
+                    }
                     // in a task of its own: the after-edit hooks may take their whole budget, and this loop
                     // must keep serving the agent's other events meanwhile
                     let me = self.clone();
@@ -3496,6 +3951,8 @@ impl Session {
                         self.schedule();
                         return;
                     }
+                    // it is no longer live: its ordinal and handle are free
+                    self.identities.free(&self.id);
                     let stepped = {
                         let mut st = lock(&self.state);
                         st.exit =
@@ -3516,6 +3973,139 @@ impl Session {
                     self.schedule();
                 }
             }
+        }
+    }
+
+    /// What the updates said of the running tool calls, into the presence model's live feed (and the map's presence).
+    async fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
+        let mut changed = Vec::new();
+        for (call, out) in outs {
+            match out {
+                LiveOut::At {
+                    detail,
+                    status,
+                    diffs,
+                } => {
+                    // an edit with diff content that has not landed is pending, on the lines it will change
+                    let pending = !diffs.is_empty()
+                        && matches!(status, CallStatus::Pending | CallStatus::InProgress);
+                    let Some(mut update) = self.live_update(*detail, diffs, status).await else {
+                        continue;
+                    };
+                    if pending && update.mode == Mode::Edit {
+                        update.mode = Mode::Pending;
+                    }
+                    changed.extend(self.presence.apply_live(&self.id, &call, update));
+                }
+                LiveOut::Gone => changed.extend(self.presence.close_live(&self.id, &call, None)),
+            }
+        }
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// A running call's presence from its DETAIL: its file and line, and for an edit with DIFFS the lines they change
+    /// in the file now (found off the async threads); none when it names no file.
+    async fn live_update(
+        &self,
+        detail: norn::write::work::StepDetail,
+        diffs: Diffs,
+        status: crate::work::presence::CallStatus,
+    ) -> Option<crate::work::presence::LiveUpdate> {
+        let dir = self.cwd.clone();
+        let (detail, range) = if diffs.is_empty() {
+            (detail, None)
+        } else {
+            let (dir, fallback) = (dir.clone(), detail.clone());
+            crate::clock::blocking(move || {
+                let mut d = detail;
+                let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+                (d, r)
+            })
+            .await
+            .unwrap_or((fallback, None))
+        };
+        let t = crate::work::presence::touches_of_detail(&detail, &dir)
+            .into_iter()
+            .next()?;
+        Some(crate::work::presence::LiveUpdate {
+            path: t.file,
+            mode: t.mode,
+            line: t.line,
+            line_end: detail.line_end.and_then(|l| u32::try_from(l).ok()),
+            col: range.map(|r| r.col),
+            status,
+            source: t.source,
+            at: crate::clock::wall_secs(),
+        })
+    }
+
+    /// A permission request whose tool call carries `diff` content: the edit it asks for shows as pending on its lines
+    /// from now until the request is answered ([`Session::settle`]).
+    async fn feed_pending(&self, req: &Value) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
+        let Some(tool) = req.get("toolCall") else {
+            return;
+        };
+        let Some(call) = tool.get("toolCallId").and_then(Value::as_str) else {
+            return;
+        };
+        let diffs = crate::work::edit_lines::diffs(tool.get("content"));
+        let Some(path) = tool
+            .pointer("/locations/0/path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| diffs.first().map(|d| d.0.clone()))
+        else {
+            return;
+        };
+        let detail = norn::write::work::StepDetail {
+            kind: Some("edit".into()),
+            path: Some(path),
+            origin: "acp".into(),
+            ..Default::default()
+        };
+        let Some(mut update) = self.live_update(detail, diffs, CallStatus::Pending).await else {
+            return;
+        };
+        update.mode = Mode::Pending;
+        let changed = self.presence.apply_live(&self.id, call, update);
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// Permission request P answered with ANSWER (none: cancelled), and its pending presence settled: refused, the call
+    /// will not run and its entry goes; allowed, the call's own updates carry it on (an id the agent has not reported
+    /// is the request's own: its entry goes, the call left open).
+    fn settle(&self, p: Pending, answer: Option<String>) {
+        let allowed = answer.as_deref().is_some_and(|a| {
+            p.options
+                .iter()
+                .any(|(id, k)| id == a && k.starts_with("allow"))
+        });
+        let call = p
+            .public
+            .tool
+            .as_ref()
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        reply(p.resp, answer);
+        let Some(call) = call else { return };
+        let changed = if !allowed {
+            self.presence.close_live(&self.id, &call, None)
+        } else if lock(&self.state).tools.contains_key(&call) {
+            Vec::new()
+        } else {
+            self.presence.withdraw_live(&self.id, &call)
+        };
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
         }
     }
 
@@ -3586,10 +4176,15 @@ impl Session {
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
                 Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
-                Gate::Ask(card) if card > 0 => {
-                    s.hold_permission(&req, options, resp, Some(card), turn)
+                gate => {
+                    // held for the user: an edit it asks for is pending meanwhile
+                    s.feed_pending(&req).await;
+                    let card = match gate {
+                        Gate::Ask(card) if card > 0 => Some(card),
+                        _ => None,
+                    };
+                    s.hold_permission(&req, options, resp, card, turn)
                 }
-                _ => s.hold_permission(&req, options, resp, None, turn),
             }
         });
     }
@@ -3645,7 +4240,7 @@ impl Session {
             });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
-                reply(pending.resp, None);
+                self.settle(pending, None);
                 // nobody answers its card either
                 self.withdraw_later(Self::withdrawn(&fx));
                 return;
@@ -3696,7 +4291,7 @@ impl Session {
                     drop(st);
                     for p in std::mem::take(&mut stepped.answered) {
                         let answer = p.option(allow, option);
-                        reply(p.resp, answer);
+                        self.settle(p, answer);
                     }
                     self.perform(stepped);
                     self.changed();
@@ -3753,7 +4348,7 @@ impl Session {
         let allow = gate == Gate::Allow;
         for p in waiting {
             let answer = p.option(allow, chosen);
-            reply(p.resp, answer);
+            self.settle(p, answer);
         }
         self.changed();
     }
@@ -3837,6 +4432,114 @@ impl Session {
         Ok(())
     }
 
+    /// The user takes the wheel ([`super::wheel`]): the turn running stops after its tool call, no turn starts until
+    /// the give, and once no turn runs the wheel is held.  A second take changes nothing.
+    pub(crate) fn wheel_take(self: &Arc<Self>) -> Result<(), Error> {
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let (taken, fx) =
+                wheel::take(&mut st.wheel, &mut st.core).map_err(|m| invalid("id", m))?;
+            if taken == wheel::Taken::Already {
+                return Ok(());
+            }
+            let mut stepped = st.stepped(fx);
+            stepped.held |= taken == wheel::Taken::Held;
+            stepped
+        };
+        // a paired chat's door closes at the take: its writes still queued in an editor are dropped
+        self.pair.hold(&self.id, true);
+        self.persist_wheel();
+        self.perform(stepped);
+        self.changed();
+        Ok(())
+    }
+
+    /// The wheel is held (the turn the take stopped has ended, or none ran): the step snapshot first, kept with the
+    /// hold for a restart, then `agent-wheel held`.
+    fn wheel_held(self: &Arc<Self>) {
+        let me = self.clone();
+        crate::clock::spawn("session:wheel-held", async move {
+            let base = match &me.snap {
+                Some(s) => s.wheel_held(&me.id, &me.cwd).await,
+                None => None,
+            };
+            lock(&me.state).wheel_base = base;
+            me.persist_wheel();
+            me.changed();
+            me.editors.broadcast(
+                "agent-wheel",
+                json!(AgentWheel {
+                    id: me.id.clone(),
+                    state: WheelState::Held,
+                }),
+            );
+        });
+    }
+
+    /// The user gives the wheel back: refused until held.  A session in a worktree of its own has the editor save
+    /// its buffers there first (refused while one stays unsaved); then the user's changes since the hold go to the
+    /// agent first ([`wheel::give_text`]), its queue after, and `agent-wheel free`.
+    pub(crate) async fn wheel_give(self: &Arc<Self>) -> Result<(), Error> {
+        let base = {
+            let st = lock(&self.state);
+            wheel::can_give(st.wheel).map_err(refuse)?;
+            st.wheel_base.clone()
+        };
+        let diff = if wheel::saves_on_give(self.role) {
+            let cwd = self.cwd.to_string_lossy().into_owned();
+            let unsaved = self
+                .editors
+                .wheel_save(&self.id, &cwd, WHEEL_SAVE_WAIT)
+                .await;
+            if !unsaved.is_empty() {
+                return Err(refuse(&format!(
+                    "not given back: save these files first: {}",
+                    unsaved.join(", ")
+                )));
+            }
+            match (&self.snap, base) {
+                (Some(s), Some(b)) => s
+                    .changes_since(&self.id, &self.cwd, &b)
+                    .await
+                    .unwrap_or_default(),
+                _ => String::new(),
+            }
+        } else {
+            // a chat works in the user's checkout: its edits there reach it from the edit history, not from here
+            String::new()
+        };
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let fx = wheel::give(&mut st.wheel, &mut st.core, wheel::give_text(&diff))
+                .map_err(refuse)?;
+            st.wheel_base = None;
+            st.stepped(fx)
+        };
+        self.pair.hold(&self.id, false);
+        self.persist_wheel();
+        self.perform(stepped);
+        self.editors.broadcast(
+            "agent-wheel",
+            json!(AgentWheel {
+                id: self.id.clone(),
+                state: WheelState::Free,
+            }),
+        );
+        Ok(())
+    }
+
+    /// The hold on the wheel, kept for a restart.
+    fn persist_wheel(&self) {
+        let Some(store) = &self.store else { return };
+        let st = lock(&self.state);
+        let held = st.wheel != Wheel::Free;
+        if let Err(e) = store.save_wheel(&self.id, held, st.wheel_base.as_deref()) {
+            tracing::warn!(sid = self.id, "the wheel's hold not kept: {e}");
+        }
+    }
+
     /// What the supervisor reads of this session.
     pub(crate) fn observe(&self) -> crate::supervisor::Obs {
         let st = lock(&self.state);
@@ -3857,6 +4560,7 @@ impl Session {
                 .as_ref()
                 .and_then(|u| Some(u.used? / u.size.filter(|s| *s > 0.0)?)),
             jobs: self.live.ids(&self.id),
+            held: st.wheel != Wheel::Free,
         }
     }
 
@@ -4176,16 +4880,108 @@ impl Session {
         let text = tokio::fs::read_to_string(&real)
             .await
             .map_err(|e| format!("{path}: {e}"))?;
-        let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-        let limit = req.get("limit").and_then(Value::as_u64);
-        if line == 1 && limit.is_none() {
-            return Ok(text);
+        Ok(slice_lines(text, req))
+    }
+
+    /// A chat in a project (not its scratch folder, not a brainstorm): its edits of the checkout go through the pair
+    /// door, its own tools see the checkout read-only.
+    pub(crate) fn project_chat(&self) -> bool {
+        is_project_chat(
+            self.role,
+            self.document.is_some(),
+            self.cwd == launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+        )
+    }
+
+    /// Whether PATH (absolute) is inside the session's project: a chat's `fs/*` call there goes to the pair door.
+    fn in_project(&self, path: &str) -> bool {
+        let p = Path::new(path);
+        p.is_absolute() && resolve(p).starts_with(resolve(&self.cwd))
+    }
+
+    /// The session's matrix cells now.
+    async fn cells_now(&self) -> Result<norn::matrix::Effective, String> {
+        let who = Who {
+            role: Some(self.role),
+            agent: Some(self.profile.clone()),
+            provider: self.provider.clone(),
+        };
+        self.gate
+            .effective_now(
+                &self.settings,
+                &self.writer,
+                who,
+                ActionCtx::of_session(&self.scopes, &self.id),
+            )
+            .await
+            .map_err(|e| format!("the matrix: {e:?}"))
+    }
+
+    /// The chat's read of PATH through the pair door (`read_file`, `fs/read_text_file` in the project).
+    pub(crate) async fn pair_read(&self, path: String) -> Result<String, String> {
+        if !self.project_chat() {
+            return Err(
+                "read_file is a chat's in a project; read the file with your own tools".into(),
+            );
         }
-        let it = text.split_inclusive('\n').skip(line - 1);
-        Ok(match limit {
-            Some(n) => it.take(n as usize).collect(),
-            None => it.collect(),
-        })
+        let eff = self.cells_now().await?;
+        self.pair
+            .read(&self.id, &self.cwd, &eff, &path)
+            .await
+            .map(|s| s.text)
+            .map_err(|r| r.0)
+    }
+
+    /// The chat's write W through the pair door (`edit_file`, `write_file`, `fs/write_text_file` in the project).
+    pub(crate) async fn pair_write(
+        &self,
+        w: norn::tools::pair::PairWrite,
+    ) -> Result<String, String> {
+        use crate::pair::door::WriteKind;
+        use norn::tools::pair::PairWrite;
+        if !self.project_chat() {
+            return Err("only a chat in your project edits your checkout through drgnx".into());
+        }
+        let eff = self.cells_now().await?;
+        let (path, kind) = match w {
+            PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
+            PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
+        };
+        self.pair
+            .write(&self.id, &self.cwd, &eff, &path, kind)
+            .await
+            .map_err(|r| r.0)
+    }
+
+    /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once
+    /// and queues a note to the agent, cancelling nothing.
+    pub(crate) async fn pair_toggle(self: &Arc<Self>, on: bool) -> Result<(), Error> {
+        if !self.project_chat() {
+            return Err(refuse("pair mode is a chat's in a project"));
+        }
+        let eff = self.cells_now().await.map_err(|e| refuse(&e))?;
+        self.pair
+            .toggle(&self.id, on, &eff)
+            .map_err(|r| refuse(&r.0))?;
+        if !on {
+            self.prompt(crate::pair::door::OFF_NOTE.to_string(), Origin::Hub)?;
+        }
+        self.changed();
+        Ok(())
+    }
+
+    /// The matrix may have changed: this chat's `chat.project-edit` decided again; one that became never closes its
+    /// pair door now ([`crate::pair::door::Door::recheck`]), cancelling nothing.
+    pub(crate) async fn pair_recheck(self: &Arc<Self>) {
+        if !self.project_chat() {
+            return;
+        }
+        let Ok(eff) = self.cells_now().await else {
+            return;
+        };
+        if self.pair.recheck(&self.id, &eff) {
+            self.changed();
+        }
     }
 
     /// The agent's `fs/write_text_file`: the after-edit hooks see the content first. A deny refuses the write (-32000),
@@ -4608,7 +5404,7 @@ impl Session {
             return;
         }
         for p in stepped.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
         }
         self.changed();
     }
@@ -4846,6 +5642,60 @@ pub fn tool_input(
     Ok(runstav::methods::agents::ToolInput {
         raw_input,
         truncated,
+    })
+}
+
+/// `agents/wheel/take`: the user takes the session's wheel.
+pub fn wheel_take(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user takes an agent's wheel"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_take()?;
+    Ok(true)
+}
+
+/// `agents/wheel/give`: the user gives the session's wheel back.
+pub async fn wheel_give(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user gives an agent's wheel back"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_give().await?;
+    Ok(true)
+}
+
+/// `agents/wheel/saved`: the editor's answer to `wheel-save`.
+pub fn wheel_saved(f: &Front, _: &Caller, p: WheelSaved) -> Result<bool, Error> {
+    let unsaved = p.unsaved.iter().map(|a| a.as_str().to_string()).collect();
+    Ok(f.editors.wheel_saved(p.req, unsaved))
+}
+
+/// `agents/pair`: the user turns pair mode on or off for a chat in a project.
+pub async fn pair(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::pair::PairToggle,
+) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user turns pair mode on or off"));
+    }
+    f.core.agents.find(p.id.as_str())?.pair_toggle(p.on).await?;
+    Ok(true)
+}
+
+/// `agents/tool-output`: a range of a tool call's output, at most a page.
+pub fn tool_output(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolOutputParams,
+) -> Result<runstav::methods::agents::ToolOutput, Error> {
+    let s = f.core.agents.find(p.id.as_str())?;
+    let page = s
+        .tool_output(&p.tool_call, p.from, p.to)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session"))?;
+    Ok(runstav::methods::agents::ToolOutput {
+        text: page.text,
+        total_bytes: page.total_bytes,
+        truncated: page.truncated,
     })
 }
 
@@ -5456,6 +6306,8 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
@@ -5553,6 +6405,8 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
@@ -5728,6 +6582,8 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
@@ -5876,6 +6732,30 @@ mod tests {
         assert_eq!(st.core.status(), SessionStatus::Starting);
     }
 
+    /// [D] Only a chat in a project goes to the pair door: a worker's or a manager's `fs/write_text_file` keeps the
+    /// session fence and its inline write, as do a chat in its scratch folder and a brainstorm.
+    #[test]
+    fn a_workers_fs_write_keeps_the_fence() {
+        for role in [Role::Worker, Role::Manager] {
+            assert!(!is_project_chat(role, false, false), "{role:?}");
+        }
+        assert!(!is_project_chat(Role::Chat, false, true), "a scratch chat");
+        assert!(!is_project_chat(Role::Chat, true, false), "a brainstorm");
+        assert!(is_project_chat(Role::Chat, false, false));
+        // the fence still writes a worker's own worktree inline
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fence {
+            cwd: dir.path().to_path_buf(),
+            document: None,
+            read_only: false,
+            held: false,
+        };
+        assert!(
+            f.check(&dir.path().join("a.rs").to_string_lossy(), true)
+                .is_ok()
+        );
+    }
+
     #[test]
     fn the_fence_keeps_files_inside_the_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -5887,6 +6767,7 @@ mod tests {
             cwd: cwd.clone(),
             document: None,
             read_only: false,
+            held: false,
         };
         let s = |p: &Path| p.to_string_lossy().into_owned();
         assert!(f.check(&s(&cwd.join("a.txt")), true).is_ok());
@@ -5895,6 +6776,16 @@ mod tests {
         assert!(f.check(&s(&cwd.join("../secret")), false).is_err());
         assert!(f.check(&s(&cwd.join("link")), false).is_err());
         assert!(f.check("relative.txt", false).is_err());
+        // while the user holds the wheel nothing is written; reads stay
+        let held = Fence {
+            cwd: cwd.clone(),
+            document: None,
+            read_only: false,
+            held: true,
+        };
+        let refused = held.check(&s(&cwd.join("a.txt")), true).unwrap_err();
+        assert!(refused.contains(wheel::HELD), "{refused}");
+        assert!(held.check(&s(&cwd.join("a.txt")), false).is_ok());
     }
 
     #[test]
@@ -5905,6 +6796,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: Some(doc.clone()),
             read_only: true,
+            held: false,
         };
         assert!(f.check(&doc.to_string_lossy(), true).is_ok());
         assert!(
@@ -5925,6 +6817,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: None,
             read_only: true,
+            held: false,
         };
         let src = dir.path().join("src.rs");
         assert!(f.check(&src.to_string_lossy(), false).is_ok());

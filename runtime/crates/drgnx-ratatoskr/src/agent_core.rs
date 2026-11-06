@@ -27,6 +27,7 @@
 //! | `plugins/*` | [`crate::plugins`] |
 //! | `work/conclusions` | [`crate::work::conclusions`] |
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
+//! | `agents/buffer/{watch,unwatch}` | [`crate::editor`] |
 //! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
 //! | `work/map/{subscribe,set,close}` | [`crate::work::map`] |
 
@@ -64,6 +65,8 @@ pub struct Core {
     pub presence: std::sync::Arc<crate::work::presence::Live>,
     /// The Work map's views and the model behind them ([`crate::work::map`]).
     pub map: std::sync::Arc<crate::work::map::Map>,
+    /// The editors' buffer views: the agents in each watched buffer ([`crate::editor`]).
+    pub buffers: std::sync::Arc<crate::editor::Buffers>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
     /// The edit history of each open project ([`crate::history`]).
@@ -106,12 +109,19 @@ pub async fn serve(
             answer(agents::session::entries_unsubscribe(f, c, p))
         }
         Params::AgentsToolInput(p) => answer(agents::session::tool_input(f, c, p)),
+        Params::AgentsToolOutput(p) => answer(agents::session::tool_output(f, c, p)),
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::AgentsContextDrop(p) => answer(agents::session::panel::context_drop(f, c, p).await),
         Params::AgentsContextPin(p) => answer(agents::session::panel::context_pin(f, c, p).await),
         Params::AgentsCompactPreview(p) => {
             answer(agents::session::panel::compact_preview(f, c, p).await)
         }
+        Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
+        Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
+        Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),
+        Params::AgentsPair(p) => answer(agents::session::pair(f, c, p).await),
+        Params::AgentsFollow(p) => answer(crate::editor::follow(f, c, p)),
+        Params::AgentsUnfollow(p) => answer(crate::editor::unfollow(f, c, p)),
         Params::ExecStart(p) => answer(exec::start(f, c, p).await),
         Params::ExecGet(p) => answer(exec::get(f, c, p).await),
         Params::ExecList(p) => answer(exec::list(f, c, p).await),
@@ -188,6 +198,8 @@ pub async fn serve(
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
+        Params::AgentsBufferWatch(p) => answer(crate::editor::watch(f, c, p).await),
+        Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),

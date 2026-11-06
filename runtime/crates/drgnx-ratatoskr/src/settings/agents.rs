@@ -25,6 +25,8 @@ pub struct Editors {
     pacers: Mutex<HashMap<u64, crate::agents::wire::Pacer>>,
     confirms: Mutex<HashMap<i64, oneshot::Sender<EditorAnswer>>>,
     explains: Mutex<HashMap<u64, oneshot::Sender<Vec<Value>>>>,
+    /// The gives waiting for the editor's `agents/wheel/saved`, by request.
+    saves: Mutex<HashMap<u64, oneshot::Sender<Vec<String>>>>,
     next: AtomicU64,
 }
 
@@ -187,6 +189,11 @@ impl Editors {
         false
     }
 
+    /// The oldest editor connection, if any.
+    pub fn first(&self) -> Option<u64> {
+        lock(&self.subscribers).keys().next().copied()
+    }
+
     /// Whether an editor is connected.
     pub fn present(&self) -> bool {
         !lock(&self.subscribers).is_empty()
@@ -254,6 +261,37 @@ impl Editors {
         let got = crate::clock::timeout(wait, rx).await;
         lock(&self.explains).remove(&req);
         got.ok()?.ok()
+    }
+
+    /// `wheel-save` to the editors (the user gives back session SID's wheel; it works in WORKTREE), and the first
+    /// `agents/wheel/saved` waited for at most WAIT: the files left unsaved.  No editor, or none that answers in time
+    /// (an editor that does not know the event), has nothing unsaved to say: empty.
+    pub async fn wheel_save(&self, sid: &str, worktree: &str, wait: Duration) -> Vec<String> {
+        if !self.present() {
+            return Vec::new();
+        }
+        let req = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let (s, rx) = oneshot::channel();
+        lock(&self.saves).insert(req, s);
+        self.broadcast(
+            "wheel-save",
+            json!(runstav::methods::agents::WheelSave {
+                req,
+                id: sid.to_string(),
+                worktree: worktree.to_string(),
+            }),
+        );
+        let got = crate::clock::timeout(wait, rx).await;
+        lock(&self.saves).remove(&req);
+        got.ok().and_then(Result::ok).unwrap_or_default()
+    }
+
+    /// The editor's `agents/wheel/saved` for REQ: true when a give was waiting for it.
+    pub fn wheel_saved(&self, req: u64, unsaved: Vec<String>) -> bool {
+        match lock(&self.saves).remove(&req) {
+            Some(s) => s.send(unsaved).is_ok(),
+            None => false,
+        }
     }
 
     /// The editor's `settings/explained` for REQ: true when a tool was waiting for it.

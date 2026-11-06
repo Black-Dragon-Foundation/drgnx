@@ -77,11 +77,13 @@ pub enum Action {
     ChatProjectRead,
     #[serde(rename = "plugin.abilities")]
     PluginAbilities,
+    #[serde(rename = "chat.project-edit")]
+    ChatProjectEdit,
 }
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 28] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -109,6 +111,7 @@ impl Action {
         Action::UserEmacs,
         Action::ChatProjectRead,
         Action::PluginAbilities,
+        Action::ChatProjectEdit,
     ];
 
     /// The action's id, as the wire and the `agents-matrix` setting spell it.
@@ -141,6 +144,7 @@ impl Action {
             Action::UserEmacs => "user.emacs",
             Action::ChatProjectRead => "chat.project-read",
             Action::PluginAbilities => "plugin.abilities",
+            Action::ChatProjectEdit => "chat.project-edit",
         }
     }
 

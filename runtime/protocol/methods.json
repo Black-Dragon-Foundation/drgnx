@@ -328,6 +328,20 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "hooked": {
                 "anyOf": [
                   {
@@ -348,6 +362,14 @@
                   "null"
                 ]
               },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -358,9 +380,32 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },
@@ -487,6 +532,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -528,6 +584,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -556,6 +638,293 @@
       },
       "doc": "a session's snapshot changed (at most one per session per 50 ms)",
       "name": "agent"
+    },
+    {
+      "data": {
+        "$defs": {
+          "BufferAgent": {
+            "additionalProperties": false,
+            "description": "One agent in the buffer.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "handle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running.",
+                "type": "boolean"
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "ordinal": {
+                "description": "Its ordinal in the workspace (the display maps it to a colour and a mark).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan_entry": {
+                "description": "The plan entry it works on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Present for an agent working in another worktree, mapped onto this buffer: no bar or ring is drawn for it."
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step_title": {
+                "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "session",
+              "mode",
+              "source"
+            ],
+            "type": "object"
+          },
+          "GutterKind": {
+            "description": "What a gutter range says.",
+            "oneOf": [
+              {
+                "const": "changed",
+                "description": "Lines the agent's peer wrote.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "Lines an edit is about to change.",
+                "type": "string"
+              },
+              {
+                "const": "conflict",
+                "description": "Lines the agent changed that the user changed too (a projection only).",
+                "type": "string"
+              }
+            ]
+          },
+          "GutterRange": {
+            "additionalProperties": false,
+            "description": "One gutter range: lines START to END (1-based, inclusive) of one session, merged per session and kind.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "help": {
+                "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/GutterKind"
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "kind",
+              "start",
+              "end",
+              "help"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          },
+          "Projected": {
+            "additionalProperties": false,
+            "description": "Where a projected item comes from: the agent's worktree.",
+            "properties": {
+              "worktree_label": {
+                "description": "The worktree's folder name (\"editing in rp-df-hub\").",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree_label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BufferAgent"
+            },
+            "type": "array"
+          },
+          "approximate": {
+            "description": "The user's text was read from disk: unsaved changes are not in the projection.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "base": {
+            "description": "The version this frame follows; 0: a full frame (a watch's answer).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "doc_version": {
+            "description": "The buffer's change count the frame was computed against (the last the editor sent).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gutter": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "BufferFrame",
+        "type": "object"
+      },
+      "doc": "a watched buffer view's frame changed: the agents in it and the gutter, at most once per view per 50 ms of the hub's clock, to the watching connection only (agents/buffer/watch)",
+      "name": "agent-buffer"
     },
     {
       "data": {
@@ -636,14 +1005,138 @@
     {
       "data": {
         "$defs": {
+          "FollowMode": {
+            "description": "What the agent is doing where the follow window shows it.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read",
+                  "write",
+                  "edit"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A search or a glob: the files it lists (it never moves the window to one).",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "An edit about to land (a permission request, or an edit call still pending).",
+                "type": "string"
+              }
+            ]
+          },
+          "WhySource": {
+            "description": "Which of the agent's own words the line shows.",
+            "oneOf": [
+              {
+                "const": "plan_entry",
+                "description": "The agent's `in_progress` plan entry.",
+                "type": "string"
+              },
+              {
+                "const": "step_title",
+                "description": "The tool call's title.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agent-follow`: where the session VIEW follows is now.  `file` in `worktree` (the session's folder), at `line` and\n`col` (1-based; none: the file only); `changed`: the file changed on disk since the last move, so the window\nrefreshes it.",
+        "properties": {
+          "changed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "col": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/$defs/FollowMode"
+          },
+          "plan_entry": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "step_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          },
+          "why_source": {
+            "$ref": "#/$defs/WhySource"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "session",
+          "worktree",
+          "mode",
+          "why_source"
+        ],
+        "title": "AgentFollow",
+        "type": "object"
+      },
+      "doc": "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title",
+      "name": "agent-follow"
+    },
+    {
+      "data": {
+        "$defs": {
           "PresenceEntry": {
             "additionalProperties": false,
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -658,6 +1151,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -668,9 +1174,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -695,6 +1207,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -748,6 +1265,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1141,6 +1672,39 @@
       },
       "doc": "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)",
       "name": "agent-step"
+    },
+    {
+      "data": {
+        "$defs": {
+          "WheelState": {
+            "description": "Where a session's wheel is: `held` once the turn the take stopped has ended, `free` once it is given back.",
+            "enum": [
+              "held",
+              "free"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agent-wheel`: session ID's wheel is now in STATE.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/WheelState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "AgentWheel",
+        "type": "object"
+      },
+      "doc": "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back",
+      "name": "agent-wheel"
     },
     {
       "data": {
@@ -1749,6 +2313,226 @@
       },
       "doc": "a message for the user from the hub itself",
       "name": "notice"
+    },
+    {
+      "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "Edit": {
+            "description": "One edit of a write, as the editor applies it.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "`old` must match exactly once in the buffer's text when the editor applies it; it becomes `new`.",
+                "properties": {
+                  "kind": {
+                    "const": "replace",
+                    "type": "string"
+                  },
+                  "new": {
+                    "type": "string"
+                  },
+                  "old": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "old",
+                  "new"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Lines `line ..< line + delete` (1-based) of the text read at the write's `version` become `text`.",
+                "properties": {
+                  "delete": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "kind": {
+                    "const": "lines",
+                    "type": "string"
+                  },
+                  "line": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "line",
+                  "delete",
+                  "text"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-apply`: write WRITE of session SESSION to FILE, to the editor that has it open.  `version` is the buffer's\nchange counter the edits are based on (none: `edit_file`, or a new file), `floor` the oldest version the hub\nstill holds for a read of this file (the editor keeps its change log back to it), `ttl_ms` how long the write\nmay wait in the editor's queue, counted from its arrival.",
+        "properties": {
+          "edits": {
+            "items": {
+              "$ref": "#/$defs/Edit"
+            },
+            "type": "array"
+          },
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "floor": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "description": "The writes to FILE in the order the hub sends them (1, 2, …).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          },
+          "ttl_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "session",
+          "ordinal",
+          "file",
+          "edits",
+          "ttl_ms"
+        ],
+        "title": "PairApply",
+        "type": "object"
+      },
+      "doc": "a paired chat's write, to the editor that has the file open: it applies it whole or refuses it whole and answers pair/answer; ttl_ms counts from its arrival",
+      "name": "pair-apply"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair\noff or took the wheel, or the matrix made the chat's `chat.project-edit` never.",
+        "properties": {
+          "reason": {
+            "description": "Why, as the editor's answer gives it back (`pair-off`, `held`, `never`).",
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reason"
+        ],
+        "title": "PairDrop",
+        "type": "object"
+      },
+      "doc": "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason",
+      "name": "pair-drop"
+    },
+    {
+      "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-read`: the editor's text of FILE, answered by `pair/read-answer` with the same REQ.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "req",
+          "file"
+        ],
+        "title": "PairRead",
+        "type": "object"
+      },
+      "doc": "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version",
+      "name": "pair-read"
+    },
+    {
+      "data": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair-reconcile`: write WRITE's answer did not come in its time to live; the editor answers `pair/answer` from\nwhat it applied (by write id and buffer hash).",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "file"
+        ],
+        "title": "PairReconcile",
+        "type": "object"
+      },
+      "doc": "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied",
+      "name": "pair-reconcile"
     },
     {
       "data": {
@@ -2382,6 +3166,35 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the\neditor saves its buffers there and answers `agents/wheel/saved` with the same REQ.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "req",
+          "id",
+          "worktree"
+        ],
+        "title": "WheelSave",
+        "type": "object"
+      },
+      "doc": "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved",
+      "name": "wheel-save"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "The data of `work-map`: what changed in one view since version `base`.",
         "properties": {
           "base": {
@@ -2470,6 +3283,361 @@
     }
   ],
   "methods": [
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one buffer view of this connection (false: none was open; a connection's views end with it)",
+      "name": "agents/buffer/unwatch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/buffer/unwatch`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "BufferUnwatch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one buffer view of this connection shows a file: the answer is its full frame (the agents in it, the gutter), and agent-buffer events follow, to this connection only; a watch again with a newer doc_version says the user changed the buffer",
+      "name": "agents/buffer/watch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/buffer/watch`'s params: VIEW (the editor's id for a buffer shown in a window) shows FILE.",
+        "properties": {
+          "doc_version": {
+            "description": "The buffer's own change count: a watch of a view already watched with a newer one says the user changed it\n(the projection follows after 300 ms without another).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "The buffer's absolute path.",
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "worktree": {
+            "description": "The edit history's worktree id, when the buffer is tracked.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "file"
+        ],
+        "title": "BufferWatch",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BufferAgent": {
+            "additionalProperties": false,
+            "description": "One agent in the buffer.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "handle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running.",
+                "type": "boolean"
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "ordinal": {
+                "description": "Its ordinal in the workspace (the display maps it to a colour and a mark).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan_entry": {
+                "description": "The plan entry it works on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Present for an agent working in another worktree, mapped onto this buffer: no bar or ring is drawn for it."
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step_title": {
+                "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "session",
+              "mode",
+              "source"
+            ],
+            "type": "object"
+          },
+          "GutterKind": {
+            "description": "What a gutter range says.",
+            "oneOf": [
+              {
+                "const": "changed",
+                "description": "Lines the agent's peer wrote.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "Lines an edit is about to change.",
+                "type": "string"
+              },
+              {
+                "const": "conflict",
+                "description": "Lines the agent changed that the user changed too (a projection only).",
+                "type": "string"
+              }
+            ]
+          },
+          "GutterRange": {
+            "additionalProperties": false,
+            "description": "One gutter range: lines START to END (1-based, inclusive) of one session, merged per session and kind.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "help": {
+                "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/GutterKind"
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "kind",
+              "start",
+              "end",
+              "help"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          },
+          "Projected": {
+            "additionalProperties": false,
+            "description": "Where a projected item comes from: the agent's worktree.",
+            "properties": {
+              "worktree_label": {
+                "description": "The worktree's folder name (\"editing in rp-df-hub\").",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree_label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BufferAgent"
+            },
+            "type": "array"
+          },
+          "approximate": {
+            "description": "The user's text was read from disk: unsaved changes are not in the projection.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "base": {
+            "description": "The version this frame follows; 0: a full frame (a watch's answer).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "doc_version": {
+            "description": "The buffer's change count the frame was computed against (the last the editor sent).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gutter": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "BufferFrame",
+        "type": "object"
+      },
+      "writes": false
+    },
     {
       "classes": [
         "user"
@@ -2826,6 +3994,46 @@
           "session"
         ],
         "title": "SessionRef",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection's view follows a session: agent-follow events to it alone (at most one move per 200 ms; a read's file switch after a 500 ms dwell; a search never switches; an edit at once), the session's latest place first",
+      "name": "agents/follow",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/follow`: the editor's VIEW (a follow window) follows SESSION from now on; a view follows one session.",
+        "properties": {
+          "session": {
+            "$ref": "#/$defs/Id"
+          },
+          "view": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "session"
+        ],
+        "title": "FollowParams",
         "type": "object"
       },
       "result": {
@@ -3219,6 +4427,20 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "hooked": {
                 "anyOf": [
                   {
@@ -3239,6 +4461,14 @@
                   "null"
                 ]
               },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -3249,9 +4479,32 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },
@@ -3378,6 +4631,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -3419,6 +4683,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3825,6 +5115,20 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "hooked": {
                 "anyOf": [
                   {
@@ -3845,6 +5149,14 @@
                   "null"
                 ]
               },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
               "mode": {
                 "anyOf": [
                   {
@@ -3855,9 +5167,32 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "paired": {
+                "description": "A chat in a project: whether pair mode is on for it (its edits of your checkout go through the editor).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },
@@ -3984,6 +5319,17 @@
                   }
                 ]
               },
+              "waiting": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Waiting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "A paired chat whose writes of one file were refused twice within a minute: it waits for the user (or asks)\nuntil a write of that file applies."
+              },
               "waiting-on": {
                 "description": "The job it waits on.",
                 "type": [
@@ -4025,6 +5371,32 @@
               "direct"
             ],
             "type": "string"
+          },
+          "Waiting": {
+            "additionalProperties": false,
+            "description": "The file (and the user's lines in it) a paired chat waits on.",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "lines": {
+                "items": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4095,6 +5467,46 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "pair mode on or off for a chat in a project: on needs chat.project-edit not never; off refuses its later writes and drops those queued in the editor, cancelling nothing",
+      "name": "agents/pair",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/pair` (the user): pair mode on or off for chat ID.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "on"
+        ],
+        "title": "PairToggle",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -4217,9 +5629,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -4234,6 +5655,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -4244,9 +5678,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -4271,6 +5711,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -4324,6 +5769,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4403,6 +5862,20 @@
               },
               "file": {
                 "type": "string"
+              },
+              "rel": {
+                "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -4415,9 +5888,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -4432,6 +5914,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -4442,9 +5937,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -4469,6 +5970,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -5449,6 +6955,221 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "bytes `from`..`to` of a tool call's output, at most 256 KiB an answer (beyond what the hub kept: its head and tail, `truncated`), with the whole size",
+      "name": "agents/tool-output",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "from": {
+            "description": "The first byte of the output wanted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/$defs/Id",
+            "description": "The session."
+          },
+          "to": {
+            "description": "The byte after the last one wanted.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tool_call": {
+            "description": "The tool call's id (the `id` of its `tool` entry).",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "tool_call",
+          "from",
+          "to"
+        ],
+        "title": "ToolOutputParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A range of a tool call's output: bytes `from..to` of it (cut at character boundaries), the size of the whole, and\nwhether the answer holds less than was asked (the page cap, or output the hub did not keep).",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "total_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text",
+          "total_bytes",
+          "truncated"
+        ],
+        "title": "ToolOutput",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "this connection's view follows nothing any more (true when it followed a session)",
+      "name": "agents/unfollow",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/unfollow`: VIEW follows nothing any more.",
+        "properties": {
+          "view": {
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "UnfollowParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user gives the wheel back (refused until held, and while the editor has unsaved buffers in the session's own worktree): the user's changes since the take go to the agent first, then its queue",
+      "name": "agents/wheel/give",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to wheel-save: the files it left unsaved (true when a give was waiting for it)",
+      "name": "agents/wheel/saved",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/wheel/saved` (the editor): the answer to `wheel-save` REQ, with the files whose buffers stayed unsaved\n(empty: everything there is on disk).",
+        "properties": {
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsaved": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "req"
+        ],
+        "title": "WheelSaved",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user takes the session's wheel: it stops after its current step, and once that turn has ended (agent-wheel held) nothing of it is written until the give",
+      "name": "agents/wheel/take",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -17794,7 +19515,8 @@
               "user.private",
               "user.emacs",
               "chat.project-read",
-              "plugin.abilities"
+              "plugin.abilities",
+              "chat.project-edit"
             ],
             "type": "string"
           },
@@ -18024,7 +19746,8 @@
               "user.private",
               "user.emacs",
               "chat.project-read",
-              "plugin.abilities"
+              "plugin.abilities",
+              "chat.project-edit"
             ],
             "type": "string"
           },
@@ -18948,6 +20671,325 @@
         },
         "title": "Paces",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a pair-apply or pair-reconcile: applied (version, saved), refused (reason, lines) or dropped; true when the hub was waiting for it",
+      "name": "pair/answer",
+      "params": {
+        "$defs": {
+          "PairResult": {
+            "description": "What became of a write in the editor.",
+            "oneOf": [
+              {
+                "const": "applied",
+                "description": "Applied whole.",
+                "type": "string"
+              },
+              {
+                "const": "refused",
+                "description": "Refused whole: `reason` says why (`lines` the user's lines it would have touched).",
+                "type": "string"
+              },
+              {
+                "const": "dropped",
+                "description": "Dropped unapplied: its time to live ran out in the queue, or the door closed while it waited.",
+                "type": "string"
+              }
+            ]
+          },
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/answer` (the editor): write WRITE's end.  An applied write gives the buffer's `version` after it and whether\nit was saved (`saved`: true for a clean buffer saved, false for one the user's unsaved edits keep unsaved;\n`not_saved`: the save would have asked, or failed, and why).  A refusal names `reason` (`overlap`, `guard`,\n`no-match`, `several`, `gap`, `read-only`, `changed-on-disk`, `locked`, or the editor's own words) and the user's\n`lines` it would have touched.",
+        "properties": {
+          "lines": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "not_saved": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/$defs/PairResult"
+          },
+          "saved": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "write": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "write",
+          "result"
+        ],
+        "title": "PairAnswer",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor no longer has a file open",
+      "name": "pair/closed",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/closed` (the editor): it no longer has FILE open.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "ClosedParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor has a file open now (normal, large or remote): a pair write of it goes to this editor",
+      "name": "pair/open",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FileKind": {
+            "description": "How the editor has a file open: a pair write goes only to a `normal` buffer (a large-file or remote buffer refuses\nit).",
+            "enum": [
+              "normal",
+              "large",
+              "remote"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/open` (the editor): it has FILE open now, as KIND.",
+        "properties": {
+          "file": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "kind": {
+            "$ref": "#/$defs/FileKind"
+          }
+        },
+        "required": [
+          "file",
+          "kind"
+        ],
+        "title": "OpenParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every file the editor has open, at its setup and on every connection: it replaces what the hub held for that editor",
+      "name": "pair/open-set",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FileKind": {
+            "description": "How the editor has a file open: a pair write goes only to a `normal` buffer (a large-file or remote buffer refuses\nit).",
+            "enum": [
+              "normal",
+              "large",
+              "remote"
+            ],
+            "type": "string"
+          },
+          "OpenFile": {
+            "additionalProperties": false,
+            "description": "One file the editor has open.",
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/AbsPath"
+              },
+              "kind": {
+                "$ref": "#/$defs/FileKind"
+              }
+            },
+            "required": [
+              "file",
+              "kind"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/open-set` (the editor, at its module's setup and on every connection): every file it has open; it replaces\nwhat the hub held for that editor.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/$defs/OpenFile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "title": "OpenSetParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to a pair-read: the buffer's text and version, or why not; true when the hub was waiting for it",
+      "name": "pair/read-answer",
+      "params": {
+        "$defs": {
+          "Text": {
+            "description": "a text: at most 64 KiB (65536 characters)",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`pair/read-answer` (the editor): REQ's text and the buffer's version, or why the editor cannot give it.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "req"
+        ],
+        "title": "PairReadAnswer",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

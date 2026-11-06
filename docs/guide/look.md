@@ -86,6 +86,20 @@ or the first graphical frame of a daemon appears:
 - **Agents.** Agents 1 to 6 take the foregrounds of the function, keyword, string, type, constant and builtin faces,
   each only if it is at least 30 degrees of hue and a delta E of 15 away from the others and from the cursor (a grey
   has no hue to compare); otherwise drgnx's own colour for that agent stands.
+- **More agents.** Each of the six also gets a variant of the same hue, 0.13 lighter on a dark theme and darker on a light
+  one (`drgnx-agent-7` to `drgnx-agent-12`), kept only if it reads at 3:1 on the editor and is a delta E of 12 from every
+  other agent colour and the cursor. A colour that sits on the cursor's gives its slot to its variant. How many colours a
+  theme gives (6 to 12) is in `drgnx doctor`.
+
+### Agent colours, marks and handles
+
+Agents are told apart by a colour, a mark and a name, never by colour alone. The mark is one of circle, square, triangle,
+diamond, hexagon, star (Lucide icons in the UI, `●■▲◆⬢★` in text, `o # ^ < H *` where those do not display one column
+wide, and the first four as gutter bitmaps). With the look's six colours the first 36 agents get a distinct colour and
+mark pair, up to 72 with a full second ring; the first six also get six different marks. Past that an agent takes the pair
+of the least recently active one no buffer shows. `drgnx-agents-identity-walk` chooses the order: `diagonal` (the
+default) or `colour-first` (the six colours as circles, marks from the seventh agent). For code,
+`(drgnx-agent-identity ORDINAL)` is `(:face F :mark M :glyph G)` for the selected frame's display.
 
 A face your theme or your Customize settings set is left as you set it; a theme that is loaded but not enabled does not
 count. Colours are worked out for a graphical display and a 256-colour terminal separately, so a terminal client of a

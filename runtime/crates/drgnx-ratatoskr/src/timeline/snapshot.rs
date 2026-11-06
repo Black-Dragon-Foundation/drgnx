@@ -216,6 +216,33 @@ pub fn put_turn_tree(
     .map(drop)
 }
 
+/// A tree of WORKTREE when the user took SID's wheel, kept as `refs/drgnx/s/<SID>/wheel` (so it goes with the
+/// session's other refs); answers the tree id.  Blocking.
+pub fn take_held(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, sid, &[])?;
+    let name = format!("refs/drgnx/s/{}/wheel", safe(sid));
+    git(&repo, None, None, &["update-ref", &name, &tree])?;
+    Ok(tree)
+}
+
+/// The unified diff of every file of WORKTREE from FROM_TREE to what it holds now (a tree written through SID's index,
+/// kept nowhere).  Blocking.
+pub fn diff_now(
+    root: &Path,
+    worktree: &Path,
+    sid: &str,
+    from_tree: &str,
+) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, sid, &[])?;
+    let out = git_bytes(
+        &repo,
+        None,
+        None,
+        &["diff-tree", "-p", "-r", "--no-renames", from_tree, &tree],
+    )?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 /// The tree of WORKTREE with the persistent index of KEY, written into its shadow repository; the repository and the
 /// tree id.
 fn write_tree(

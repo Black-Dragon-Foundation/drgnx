@@ -23,6 +23,9 @@
 (require 'diff-mode)
 
 (declare-function tab-line-mode "tab-line")
+(defvar drgnx-agents-editor-here--on)
+(declare-function drgnx-agents-editor-here-row "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-here-choose "drgnx-agents-editor-here")
 (defvar tab-line-tabs-function)
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-work-nav-chain "drgnx-work-detail")
@@ -326,6 +329,7 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
 \"No agent in this file\", and nothing moves."
   (interactive)
   (let* ((file (or buffer-file-name (user-error "This buffer visits no file")))
+         (ask (called-interactively-p 'any))
          (key (drgnx-work-code--key file))
          (repo (car key)) (rel (cadr key))
          (paths (delete-dups
@@ -358,7 +362,10 @@ the popup lane unless NO-DISPLAY.  Returns the picker buffer, filled when the hu
                                          (pcase (plist-get e :mode) ("edit" "editing") ("write" "writing") ("read" "reading")
                                                 (m (or m "in")))
                                          (if-let* ((l (plist-get e :line))) (format "line %d" l) "(file only)")))
-                               now "; "))))))
+                               now "; "))
+           ;; with the editor's agents on, the agents are a list: RET follows the one chosen
+           (when (and ask (bound-and-true-p drgnx-agents-editor-here--on))
+             (drgnx-agents-editor-here-choose (mapcar (lambda (e) (drgnx-agents-editor-here-row e file)) now)))))))
     result))
 
 (defun drgnx-work-code--select-file (repo rel)

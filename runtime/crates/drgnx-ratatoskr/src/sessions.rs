@@ -264,6 +264,10 @@ pub struct Sessions {
     /// Codex sessions whose hooks subscribe to a kind: their socket also serves `before_tool`, which Codex's managed
     /// hook calls ([`crate::agents::before_tool_tool`]).
     before_tool: Mutex<BTreeSet<String>>,
+    /// Chats in a project: their socket also serves the pair tools (`read_file`, `edit_file`, `write_file`).
+    project_chats: Mutex<BTreeSet<String>>,
+    /// A project chat's list, without the tracker tools and with them.
+    pair_sets: [OnceLock<ToolList>; 2],
     /// Outside bridges connected now.
     outside: Arc<AtomicUsize>,
     /// The hub ends: every outside bridge's connection closes ([`Sessions::end_outside`]).
@@ -570,6 +574,8 @@ impl Sessions {
             managers: Mutex::new(BTreeSet::new()),
             manager_list: OnceLock::new(),
             before_tool: Mutex::new(BTreeSet::new()),
+            project_chats: Mutex::new(BTreeSet::new()),
+            pair_sets: [OnceLock::new(), OnceLock::new()],
             front: OnceLock::new(),
             search_tools: OnceLock::new(),
             whos: Mutex::new(BTreeMap::new()),
@@ -679,6 +685,14 @@ impl Sessions {
     /// wrapper of the other tools: it runs the hooks itself, and never hooks itself.
     pub fn mark_before_tool(&self, sid: &str) {
         self.before_tool
+            .lock()
+            .expect("sessions")
+            .insert(sid.to_owned());
+    }
+
+    /// Session SID is a chat in a project: its next socket serves the pair tools too.
+    pub fn mark_project_chat(&self, sid: &str) {
+        self.project_chats
             .lock()
             .expect("sessions")
             .insert(sid.to_owned());
@@ -806,6 +820,11 @@ impl Sessions {
             .lock()
             .expect("sessions")
             .contains(&row.sid);
+        let chat = self
+            .project_chats
+            .lock()
+            .expect("sessions")
+            .contains(&row.sid);
         if hooked && let Some(front) = self.front.get().cloned() {
             let mut all = if manager {
                 norn::tools::tools_for(norn::tools::ToolSets::default())
@@ -814,6 +833,10 @@ impl Sessions {
             };
             if manager {
                 all.extend(norn::tools::manager_tools());
+            }
+            // a hooked Codex chat in a project keeps the pair tools its edits go through
+            if chat {
+                all.extend(norn::tools::pair_tools());
             }
             let mut list: Vec<Box<dyn Tool<Ctx>>> = all
                 .into_iter()
@@ -830,6 +853,15 @@ impl Sessions {
                 .get_or_init(|| {
                     let mut all = norn::tools::tools_for(norn::tools::ToolSets::default());
                     all.extend(norn::tools::manager_tools());
+                    after_each(all)
+                })
+                .clone();
+        }
+        if chat {
+            return self.pair_sets[usize::from(sets.tracker)]
+                .get_or_init(|| {
+                    let mut all = norn::tools::tools_for(sets);
+                    all.extend(norn::tools::pair_tools());
                     after_each(all)
                 })
                 .clone();

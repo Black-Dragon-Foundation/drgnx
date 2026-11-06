@@ -59,6 +59,15 @@
 (defface drgnx-agent-5 '((t :inherit default)) "The fifth agent's colour." :group 'drgnx-look)
 (defface drgnx-agent-6 '((t :inherit default)) "The sixth agent's colour." :group 'drgnx-look)
 
+;; Ring 2: a tonal variant of each of the six, derived at theme load (`drgnx-look-derive'); a slot the theme gives no
+;; variant for is its ring-1 colour and is not in the display's ring.
+(defface drgnx-agent-7 '((t :inherit drgnx-agent-1)) "The first agent colour's lighter or darker variant." :group 'drgnx-look)
+(defface drgnx-agent-8 '((t :inherit drgnx-agent-2)) "The second agent colour's variant." :group 'drgnx-look)
+(defface drgnx-agent-9 '((t :inherit drgnx-agent-3)) "The third agent colour's variant." :group 'drgnx-look)
+(defface drgnx-agent-10 '((t :inherit drgnx-agent-4)) "The fourth agent colour's variant." :group 'drgnx-look)
+(defface drgnx-agent-11 '((t :inherit drgnx-agent-5)) "The fifth agent colour's variant." :group 'drgnx-look)
+(defface drgnx-agent-12 '((t :inherit drgnx-agent-6)) "The sixth agent colour's variant." :group 'drgnx-look)
+
 ;;;; The hover-revealed control
 
 (defface drgnx-control-hidden '((t :inherit shadow))

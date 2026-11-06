@@ -18,7 +18,33 @@ pub fn public_entry(entry: &Entry) -> Entry {
     {
         e.rest.insert("url".into(), url.clone());
     }
+    // a long output goes as its head and tail with the whole size; `agents/tool-output` pages the rest
+    if let Some(content) = e.rest.get_mut("content")
+        && let Some(total) = super::tool_output::fold(
+            content,
+            super::tool_output::EVENT_HEAD,
+            super::tool_output::EVENT_TAIL,
+        )
+    {
+        e.rest
+            .entry("outputBytes".to_string())
+            .or_insert(Value::from(total));
+    }
     e
+}
+
+/// ENTRY as history sends it: an agent message also carries its Markdown `blocks`, from a full parse of its text
+/// (the live shape, `[{block, kind, spans}]`).
+pub fn with_blocks(mut entry: Entry) -> Entry {
+    if entry.kind == runstav::methods::agents::EntryType::Agent
+        && let Some(text) = entry.rest.get("text").and_then(Value::as_str)
+    {
+        let blocks = super::markdown::Stream::default().update(text);
+        entry
+            .rest
+            .insert("blocks".into(), serde_json::json!(blocks));
+    }
+    entry
 }
 
 /// RAW, a tool call's raw input, within [`TOOL_INPUT_CAP`]: the input itself, or its JSON text cut short (a string)
@@ -145,6 +171,26 @@ mod tests {
         assert!(line.len() < 1024, "{} bytes", line.len());
         assert_eq!(e.rest.get("title"), Some(&json!("Write")));
         assert_eq!(e.rest.get("id"), Some(&json!("t1")));
+    }
+
+    /// [D] A history entry of an agent message carries its blocks from a full parse; other entries are unchanged.
+    #[test]
+    fn a_history_entry_carries_its_markdown_blocks() {
+        let msg: Entry = serde_json::from_value(
+            json!({"type": "agent", "text": "# Hi\n\nsome *words*\n\n```\ncode\n```\n"}),
+        )
+        .unwrap();
+        let e = with_blocks(msg);
+        let blocks = e.rest.get("blocks").and_then(Value::as_array).unwrap();
+        let kinds: Vec<_> = blocks.iter().map(|b| b["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["heading", "paragraph", "code"]);
+        assert_eq!(blocks[1]["block"], 1);
+        assert_eq!(
+            blocks[1]["spans"][1],
+            json!({"text": "words", "style": "emph"})
+        );
+        let t = tool(json!({}));
+        assert_eq!(with_blocks(t.clone()), t);
     }
 
     /// [D] A string `url` of the input stays, as `url`.

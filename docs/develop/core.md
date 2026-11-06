@@ -587,6 +587,18 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
 
+**Code that must not ask even from a command** — a pair write's save, a buffer event's handler — runs inside
+`(drgnx-with-no-prompts BODY…)` (`core/drgnx-no-prompt.el`), which returns nil when BODY ran to its end and else a
+string saying what it would have asked about. It binds `inhibit-interaction` to t (every minibuffer read, `read-char`,
+`read-event` and the C callers signal `inhibited-interaction`; `read-key`, which reads through
+`read-key-sequence-vector` and is not stopped by it, signals `drgnx-would-prompt`), `delete-old-versions` to `keep` where it is
+nil and `require-final-newline` to t where it is `ask` (so a save keeps old backups and adds the newline instead of
+asking), and replaces `ask-user-about-lock`, `ask-user-about-supersession-threat` and
+`userlock--ask-user-about-supersession-threat` (which `lock_file` calls from C) with functions that signal
+`drgnx-would-prompt` with their reason ("notes.txt changed on disk since it was read", "… is locked by …"). The
+replacements are `cl-letf` bindings inside BODY only: no global advice. The guard's own refusal in an automatic path
+is caught the same way.
+
 **Process callbacks and hooks run inside the guard.** Emacs calls a process filter or sentinel from C, so nothing
 can tell it from a command; the guard is put on where the callback is handed over:
 
@@ -2765,6 +2777,7 @@ unspecified never makes colour code signal.
 | `(drgnx-color-over FG BG ALPHA)` | FG at ALPHA over BG in sRGB, for tints |
 | `(drgnx-color-contrast A B)` | the WCAG 2.x ratio, 1..21 |
 | `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
+| `(drgnx-color-lch L C H)` | OKLCH as `#rrggbb`, clamped to the gamut; `(drgnx-color-oklch COLOR)` is the inverse, `(L C H)` |
 | `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
 | `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
 

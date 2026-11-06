@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod editor;
 pub mod exec;
 pub mod extensions;
 pub mod forecast;
@@ -18,6 +19,7 @@ pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod pair;
 pub mod plans;
 pub mod plugins;
 pub mod records;
@@ -202,7 +204,11 @@ params! {
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
     AgentsToolInput(agents::ToolInputParams),
+    AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
+    AgentsWheelTake(agents::ById),
+    AgentsWheelGive(agents::ById),
+    AgentsWheelSaved(agents::WheelSaved),
     AgentsProbe(agents::ProbeParams),
     AgentsContextDrop(agents::ContextDropParams),
     AgentsContextPin(agents::ContextPinParams),
@@ -242,6 +248,8 @@ params! {
     WorkConclusions(work::ConclusionsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
+    AgentsBufferWatch(editor::BufferWatch),
+    AgentsBufferUnwatch(editor::BufferUnwatch),
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
@@ -290,6 +298,14 @@ params! {
     RunnersKeys(runners::KeysParams),
     RunnersKeysHeld(Empty),
     RunnersAudit(runners::AuditParams),
+    PairAnswer(pair::PairAnswer),
+    PairReadAnswer(pair::PairReadAnswer),
+    PairOpen(pair::OpenParams),
+    PairClosed(pair::ClosedParams),
+    PairOpenSet(pair::OpenSetParams),
+    AgentsPair(pair::PairToggle),
+    AgentsFollow(editor::FollowParams),
+    AgentsUnfollow(editor::UnfollowParams),
 }
 
 /// Every method, in no order.
@@ -312,11 +328,13 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
+    v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());
     v.extend(history::methods());
+    v.extend(pair::methods());
     v
 }
 

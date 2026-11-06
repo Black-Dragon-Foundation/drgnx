@@ -369,8 +369,9 @@ in the windows that showed the buffer.  A modified buffer is refused: switching 
   "The size of the large file in this buffer as the header and the status bar show it (\"412 MB\").")
 
 (defvar drgnx-chrome-mode)
-(defvar drgnx-chrome-header-tail)
 (declare-function drgnx-chrome-apply "drgnx-chrome")
+(declare-function drgnx-chrome-add-tail-provider "drgnx-chrome")
+(declare-function drgnx-chrome-remove-tail-provider "drgnx-chrome")
 
 (defun drgnx-large-files--header-click (event)
   "Switch to the mode of the header button under the mouse EVENT, in the window it was clicked in."
@@ -394,11 +395,13 @@ in the windows that showed the buffer.  A modified buffer is refused: switching 
   (when (and (bound-and-true-p drgnx-chrome-mode) (fboundp 'drgnx-chrome-apply) (get-buffer-window))
     (drgnx-chrome-apply)))
 
+(defun drgnx-large-files--tail (w)
+  "The chrome's tail provider (depth 10, first): the large-file header of window W's buffer, or nil."
+  (and (bound-and-true-p drgnx-chrome-mode) (buffer-local-value 'drgnx-large-files--header (window-buffer w))))
+
 (defun drgnx-large-files--header-clear ()
   "Take the large-file header out of the current buffer."
   (when (eq header-line-format 'drgnx-large-files--header) (kill-local-variable 'header-line-format))
-  (when (and (boundp 'drgnx-chrome-header-tail) (eq drgnx-chrome-header-tail 'drgnx-large-files--header))
-    (kill-local-variable 'drgnx-chrome-header-tail))
   (when drgnx-large-files--header
     (kill-local-variable 'drgnx-large-files--header)
     (kill-local-variable 'drgnx-large-files--shown-size)
@@ -424,8 +427,7 @@ Outside a large file's buffer it takes the header out."
                                  ""))
                              drgnx-large-files--modes "")))
     (if (bound-and-true-p drgnx-chrome-mode)
-        (progn (when (eq header-line-format 'drgnx-large-files--header) (kill-local-variable 'header-line-format))
-               (setq-local drgnx-chrome-header-tail 'drgnx-large-files--header))
+        (when (eq header-line-format 'drgnx-large-files--header) (kill-local-variable 'header-line-format))   ; the tail provider shows it
       (setq-local header-line-format 'drgnx-large-files--header))
     (drgnx-large-files--chrome-apply)))
 
@@ -515,6 +517,7 @@ A revert, auto-revert's from a timer too, never asks: it replaces the text with 
   "Turn lean off in every lean or raw buffer, without running major modes again on huge buffers (it says so).
 Chunk buffers stay, without the header.  The status bar's segment and its place in the bar are the setup's (its
 `drgnx-statusbar-define-segment' and `drgnx-module-set' record their undo)."
+  (when (fboundp 'drgnx-chrome-remove-tail-provider) (drgnx-chrome-remove-tail-provider #'drgnx-large-files--tail))
   (let ((any nil))
     (dolist (b (buffer-list))
       (pcase (buffer-local-value 'drgnx-large-file b)
@@ -533,6 +536,9 @@ Chunk buffers stay, without the header.  The status bar's segment and its place 
                      :teardown #'drgnx-large-files--teardown
                      :setup (lambda ()
                               (drgnx-large-files--define-config)
+                              ;; the header shows first in the chrome's tail, so the agent line never replaces it
+                              (eval-after-load 'drgnx-chrome
+                                (drgnx-modules-with-owner (drgnx-chrome-add-tail-provider #'drgnx-large-files--tail 10)))
                               (drgnx-memo-activate 'drgnx-large-files--answers)
                               (drgnx-large-files--sync-threshold)
                               ;; the listener sets the threshold as this module, so each change is undone at teardown

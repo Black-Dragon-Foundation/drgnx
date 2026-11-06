@@ -9,6 +9,12 @@
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
+//! | `provider:edit-stream PATH OLD NEW` (Claude) | an `Edit`: the path first, then `rawInput` field by field, then completed with a `Diff` (quote an argument to keep its spaces) |
+//! | `provider:pending-edit PATH OLD NEW` | `session/request_permission` for an edit whose content is the `Diff`; when allowed the edit is reported and completed; says `permission: OPTION` |
+//! | `provider:diff-hunks PATH OLD NEW [OLD NEW ...]` (Codex) | one edit call whose content has one `Diff` per hunk |
+//! | `provider:whole-diff PATH` (Gemini) | `fs/read_text_file`, an edit call with the whole file as old and new text (no `rawInput`), `fs/write_text_file`, completed |
+//! | `provider:native-edit PATH` | the personality's own edit tool is tried: pending, then failed (nothing is written) |
+//! | `moves N [SECONDS]` | one read call whose `locations` line advances N times per second for SECONDS (default 1) |
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
 //! | `fs:write PATH TEXT` | an edit tool call during which the client writes TEXT (`\n` a line break) to PATH in the cwd (`fs/write_text_file`); its output says `written` or `refused: …` |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
@@ -201,6 +207,50 @@ fn send(v: &Value) {
 
 fn rpc_error(id: &Value, code: i64, message: &str) {
     send(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}));
+}
+
+/// A word-line's arguments split on whitespace; a double-quoted argument keeps its spaces.
+fn words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for c in s.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        out.push(cur);
+    }
+    out
+}
+
+/// ACP `Diff` content items for PATH, one per `(old, new)` hunk.
+fn diff_content(path: &str, hunks: &[(&str, &str)]) -> Value {
+    Value::Array(
+        hunks
+            .iter()
+            .map(|(o, n)| json!({"type": "diff", "path": path, "oldText": o, "newText": n}))
+            .collect(),
+    )
+}
+
+fn completed_diffs(tid: &str, path: &str, hunks: &[(&str, &str)]) -> Value {
+    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+        "content": diff_content(path, hunks)})
 }
 
 fn text_of(prompt: &Value) -> String {
@@ -748,6 +798,158 @@ impl Agent {
             _ if head.starts_with("panel:") => panel::word(self, sid, turn, &head[6..], rest),
             // Kimi Code switches its mode mid-turn, as its `mode` config option does (`session.ts:1138-1156`)
             "mode" if self.kind == Kind::Kimi => self.update(sid, kimi::mode_update(rest)),
+            // an edit as Claude streams it: the path, then the input field by field, then the completion
+            "provider:edit-stream" if self.kind == Kind::Claude => {
+                let w = words(rest);
+                let [path, old, new] = w.as_slice() else {
+                    self.say(sid, turn, "usage: provider:edit-stream PATH OLD NEW\n");
+                    return false;
+                };
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                self.update(sid, fields);
+                let meta = json!({"claudeCode": {"toolName": "Edit"}});
+                let step = |raw: Value| json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "rawInput": raw, "_meta": meta});
+                self.update(sid, step(json!({"file_path": path, "old_string": old})));
+                self.update(
+                    sid,
+                    step(json!({"file_path": path, "old_string": old, "new_string": new})),
+                );
+                self.update(
+                    sid,
+                    completed_diffs(&tid, path, &[(old.as_str(), new.as_str())]),
+                );
+            }
+            // an edit behind a permission request that carries the diff; reported only when allowed
+            "provider:pending-edit" => {
+                let w = words(rest);
+                let [path, old, new] = w.as_slice() else {
+                    self.say(sid, turn, "usage: provider:pending-edit PATH OLD NEW\n");
+                    return false;
+                };
+                let diff = diff_content(path, &[(old.as_str(), new.as_str())]);
+                let answer = self.permission_with(
+                    sid,
+                    turn,
+                    "edit",
+                    &format!("Edit {path}"),
+                    json!({"locations": [{"path": path}], "content": diff}),
+                );
+                if answer.starts_with("allow") {
+                    let tid = self.tool_id(turn);
+                    let mut fields = self.edit_fields(path);
+                    fields["sessionUpdate"] = json!("tool_call");
+                    fields["toolCallId"] = json!(tid);
+                    fields["status"] = json!("pending");
+                    fields["content"] = diff_content(path, &[(old.as_str(), new.as_str())]);
+                    self.update(sid, fields);
+                    self.update(
+                        sid,
+                        completed_diffs(&tid, path, &[(old.as_str(), new.as_str())]),
+                    );
+                }
+                self.say(sid, turn, &format!("permission: {answer}"));
+            }
+            // Codex: one `Diff` per hunk, hunks given as OLD NEW pairs
+            "provider:diff-hunks" if self.kind == Kind::Codex => {
+                let w = words(rest);
+                if w.len() < 3 || w.len().is_multiple_of(2) {
+                    self.say(
+                        sid,
+                        turn,
+                        "usage: provider:diff-hunks PATH OLD NEW [OLD NEW ...]\n",
+                    );
+                    return false;
+                }
+                let path = w[0].clone();
+                let hunks: Vec<(&str, &str)> = w[1..]
+                    .chunks(2)
+                    .map(|p| (p[0].as_str(), p[1].as_str()))
+                    .collect();
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                fields["content"] = diff_content(&path, &hunks);
+                self.update(sid, fields);
+                self.update(sid, completed_diffs(&tid, &path, &hunks));
+            }
+            // Gemini: the whole file as old and new text, no rawInput; the editor reads it, then writes it
+            "provider:whole-diff" if self.kind == Kind::Gemini => {
+                let path = words(rest).into_iter().next().unwrap_or_default();
+                let abs = cwd.join(&path).to_string_lossy().into_owned();
+                let rid = self.request("fs/read_text_file", json!({"sessionId": sid, "path": abs}));
+                let old = self
+                    .response(rid)
+                    .and_then(|r| r["result"]["content"].as_str().map(String::from))
+                    .or_else(|| std::fs::read_to_string(cwd.join(&path)).ok())
+                    .unwrap_or_default();
+                let new = format!("{old}edited by ratatoskr-mock\n");
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                fields["content"] = diff_content(&path, &[(old.as_str(), new.as_str())]);
+                self.update(sid, fields);
+                let rid = self.request(
+                    "fs/write_text_file",
+                    json!({"sessionId": sid, "path": abs, "content": new}),
+                );
+                self.response(rid);
+                self.update(
+                    sid,
+                    completed_diffs(&tid, &path, &[(old.as_str(), new.as_str())]),
+                );
+            }
+            // an attempt with the agent's own edit tool, which fails (nothing is written)
+            "provider:native-edit" => {
+                let path = words(rest).into_iter().next().unwrap_or_default();
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                self.update(sid, fields);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "failed",
+                    "content": [{"type": "content", "content": {"type": "text",
+                        "text": "blocked: the native edit tool is not available"}}]}),
+                );
+            }
+            // N cursor moves per second, for SECONDS (default 1): a read whose location advances one line per move
+            "moves" => {
+                let mut w = rest.split_whitespace();
+                let n: f64 = w.next().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                let n = n.max(1.0);
+                let secs: f64 = w.next().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                let total = (n * secs).round() as u64;
+                let tid = self.tool_id(turn);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": "Read mock-moves.txt",
+                    "kind": "read", "status": "pending", "rawInput": {"file_path": "mock-moves.txt"}}),
+                );
+                for line in 1..=total {
+                    self.update(
+                        sid,
+                        json!({"sessionUpdate": "tool_call_update", "toolCallId": tid,
+                        "locations": [{"path": "mock-moves.txt", "line": line}]}),
+                    );
+                    if self.sleep(sid, Duration::from_secs_f64(1.0 / n)) {
+                        return true;
+                    }
+                }
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed"}),
+                );
+            }
             // Kimi Code's and DeepSeek Harness's tools ask or run as their locks say
             _ if head.starts_with("provider:") && matches!(self.kind, Kind::Kimi | Kind::Dsh) => {
                 self.gated_tool(sid, turn, &head[9..], rest);
@@ -978,6 +1180,42 @@ impl Agent {
             json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
             "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]}),
         );
+    }
+
+    fn tool_id(&mut self, turn: u64) -> String {
+        let tid = format!("tc-{turn}-{}", self.next_out_id);
+        self.next_out_id += 1;
+        tid
+    }
+
+    /// The personality's `tool_call` fields for an edit of PATH (Kimi Code's and DeepSeek Harness's: their write
+    /// tool's, as `provider:write` reports it).
+    fn edit_fields(&self, path: &str) -> Value {
+        let own = |t: Option<(&'static str, Value, bool)>| t.map(|(_, f, _)| f).unwrap_or_default();
+        match self.kind {
+            Kind::Claude => claude::edit_shape(path),
+            Kind::Codex => codex::edit_shape(path),
+            Kind::Gemini => gemini::edit_shape(path),
+            Kind::Kimi => own(kimi::tool("write", path)),
+            Kind::Dsh => own(dsh::tool(&self.argv, "write", path)),
+        }
+    }
+
+    /// `permission` with the tool call's own fields (`rawInput`, `content`, `locations`) given: one request as
+    /// [`Agent::permission_for`] sends it (a fork's veto included).
+    fn permission_with(
+        &mut self,
+        sid: &str,
+        turn: u64,
+        kind: &str,
+        title: &str,
+        extra: Value,
+    ) -> String {
+        let mut call = json!({"title": title, "kind": kind, "status": "pending"});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            call[k] = v;
+        }
+        self.permission_for(sid, turn, call, Fold::No)
     }
 
     /// A tool of Kimi Code or DeepSeek Harness (`provider:WHAT ARG`): it asks the client when its lock says so (and

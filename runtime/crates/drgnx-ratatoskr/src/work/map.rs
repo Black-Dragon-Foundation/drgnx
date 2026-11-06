@@ -425,6 +425,8 @@ fn mode(m: PresenceMode) -> Mode {
     match m {
         PresenceMode::Listed => Mode::Listed,
         PresenceMode::Read => Mode::Read,
+        // an edit about to land changed nothing yet: the map shows the agent in the file, as a read
+        PresenceMode::Pending => Mode::Read,
         PresenceMode::Write => Mode::Write,
         PresenceMode::Edit => Mode::Edit,
     }

@@ -272,6 +272,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    // the editors' buffer views follow the presence model from now on
+    front.core.buffers.bind(&front);
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -339,6 +341,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
+    // a matrix change that makes a paired chat's chat.project-edit never closes its pair door at once
+    crate::clock::spawn(
+        "pair:follow-matrix",
+        crate::pair::door::follow_matrix(front.clone()),
+    );
     let mut git = crate::runner::git::HubGit::new(
         crate::sandbox::runs_root(&env),
         crate::runner::TreeMode::Snapshot,

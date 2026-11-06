@@ -628,6 +628,16 @@ impl ToolHub {
     pub fn front(&self) -> Option<Arc<Front>> {
         self.front.get().and_then(std::sync::Weak::upgrade)
     }
+
+    /// The hub's session SID (a tool's caller), or why not.
+    fn session(&self, sid: &str) -> Result<Arc<crate::agents::session::Session>, String> {
+        let front = self.front().ok_or("the hub is starting")?;
+        front
+            .core
+            .agents
+            .find(sid)
+            .map_err(|_| "only a chat drgnx runs edits your checkout".to_string())
+    }
 }
 
 impl Hub for ToolHub {
@@ -736,6 +746,22 @@ impl Hub for ToolHub {
         {
             s.refuse_wait();
         }
+    }
+
+    /// A chat's `read_file`: its session's read through the pair door.
+    fn pair_read(&self, sid: &str, path: String) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_read(path).await })
+    }
+
+    /// A chat's `edit_file` or `write_file`: its session's write through the pair door.
+    fn pair_write(
+        &self,
+        sid: &str,
+        w: norn::tools::pair::PairWrite,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_write(w).await })
     }
 
     fn propose(

@@ -268,6 +268,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a job needs keys the hub does not hold (names only; to user connections): answered only by a command the user runs"
         ),
         event!(
+            "agent-buffer",
+            crate::methods::editor::BufferFrame,
+            "a watched buffer view's frame changed: the agents in it and the gutter, at most once per view per 50 ms of the hub's clock, to the watching connection only (agents/buffer/watch)"
+        ),
+        event!(
             "agent-presence",
             crate::methods::work::FilePresence,
             "who is in a file now changed: its entries, at most once per file per 100 ms, to the connections that asked (agents/presence/subscribe)"
@@ -311,6 +316,41 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "say-failed",
             crate::methods::say::SayFailed,
             "a planning session gave up: its blocks did not hold, with the reasons"
+        ),
+        event!(
+            "agent-wheel",
+            crate::methods::agents::AgentWheel,
+            "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back"
+        ),
+        event!(
+            "wheel-save",
+            crate::methods::agents::WheelSave,
+            "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved"
+        ),
+        event!(
+            "pair-apply",
+            crate::methods::pair::PairApply,
+            "a paired chat's write, to the editor that has the file open: it applies it whole or refuses it whole and answers pair/answer; ttl_ms counts from its arrival"
+        ),
+        event!(
+            "pair-read",
+            crate::methods::pair::PairRead,
+            "a paired chat's read of a file the editor may have open: the editor answers pair/read-answer with the buffer's text and version"
+        ),
+        event!(
+            "pair-drop",
+            crate::methods::pair::PairDrop,
+            "the user turned pair off for a chat or took its wheel: the editor drops that session's queued writes, answering each pair/answer dropped with the reason"
+        ),
+        event!(
+            "pair-reconcile",
+            crate::methods::pair::PairReconcile,
+            "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
+        ),
+        event!(
+            "agent-follow",
+            crate::methods::editor::AgentFollow,
+            "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
         ),
     ];
     v.sort_by_key(|e| e.name);
@@ -377,10 +417,22 @@ mod tests {
                     "runners/need-keys",
                     "agent-presence",
                     "work-map",
+                    // agent system part 3
+                    "agent-buffer",
                     // agent system part 5
                     "say-proposal",
                     "say-message",
                     "say-failed",
+                    // agent system part 3: take the wheel
+                    "agent-wheel",
+                    "wheel-save",
+                    // agent system part 3: pair mode
+                    "pair-apply",
+                    "pair-drop",
+                    "pair-read",
+                    "pair-reconcile",
+                    // agent system part 3: the follow feed
+                    "agent-follow",
                 ]
                 .contains(&n.as_str())
             })
@@ -395,7 +447,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 29);
+        assert_eq!(events().len(), 37);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

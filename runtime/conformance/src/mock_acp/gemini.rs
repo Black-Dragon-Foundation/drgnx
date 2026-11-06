@@ -103,6 +103,11 @@ fn problem(text: &str) -> Option<String> {
     None
 }
 
+/// The `tool_call` fields of an edit of PATH: a title, a kind and `locations`, and no `rawInput`.
+pub fn edit_shape(path: &str) -> Value {
+    json!({"title": path, "kind": "edit", "locations": [{"path": path}]})
+}
+
 /// The `tool_call` fields Gemini CLI sends for WHAT (see the Claude personality): a title, a kind and, for files,
 /// `locations`; no tool name and no `rawInput`, so the query or URL is only in the title.
 pub fn tool_shape(what: &str, arg: &str) -> Option<Value> {

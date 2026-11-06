@@ -108,7 +108,7 @@ fn is_protected(p: &str) -> bool {
         .any(|q| p == *q || p.strip_prefix(q).is_some_and(|r| r.starts_with('/')))
 }
 
-fn is_ci_or_build(p: &str) -> bool {
+pub(crate) fn is_ci_or_build(p: &str) -> bool {
     let base = p.rsplit('/').next().unwrap_or(p);
     p.starts_with(".github/")
         || base.starts_with("Makefile")

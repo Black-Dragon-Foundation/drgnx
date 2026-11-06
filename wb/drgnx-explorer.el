@@ -281,6 +281,25 @@ buffer, and they keep both in step.")
 (defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
   :type 'boolean)
 
+(defvar drgnx-explorer-decorators nil
+  "Functions that decorate a row after the git decorator, in the order added: each gets (BOL EOL PATH DIRP NAME-START)
+as `drgnx-explorer--git-decorate' does.  An overlay a decorator makes carries the property `drgnx-git' so the next paint
+of the row removes it.  Add and remove with `drgnx-explorer-add-decorator' and `drgnx-explorer-remove-decorator'.")
+
+(defun drgnx-explorer--repaint ()
+  (when-let* ((b (get-buffer drgnx-explorer-buffer-name))) (with-current-buffer b (jit-lock-refontify))))
+
+(defun drgnx-explorer-add-decorator (fn)
+  "Call FN on every row the Explorer paints, after the git status (see `drgnx-explorer-decorators')."
+  (unless (memq fn drgnx-explorer-decorators)
+    (setq drgnx-explorer-decorators (append drgnx-explorer-decorators (list fn))))
+  (drgnx-explorer--repaint))
+
+(defun drgnx-explorer-remove-decorator (fn)
+  "Stop calling FN on the rows, and paint them again without it."
+  (setq drgnx-explorer-decorators (delq fn (copy-sequence drgnx-explorer-decorators)))
+  (drgnx-explorer--repaint))
+
 (defvar drgnx-explorer--fontify-point nil "Point of the Explorer buffer while `drgnx-explorer--fontify' paints.")
 
 (defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
@@ -333,7 +352,10 @@ name's face, the hover highlight, the icons, the git status and the ⋯ control.
             (unless (or (drgnx-explorer--placeholder-p v) (equal (aref v 0) drgnx-explorer--reading-row))
               (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
               (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0))
-              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
+              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
+              (dolist (d drgnx-explorer-decorators)
+                (condition-case nil (funcall d (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
+                  (error nil))))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
               (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)

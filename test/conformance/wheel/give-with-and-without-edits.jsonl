@@ -1,0 +1,45 @@
+{"scenario": "wheel/give-with-and-without-edits", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The user takes an idle worker's wheel (held at once), edits a file and gives it back: the editor is asked to save (wheel-save); a buffer it leaves unsaved refuses the give and the wheel stays held; once nothing is unsaved the user's diff since the held snapshot is the agent's next prompt (labelled wheel:edits), the message queued while held after it. Taken again with nothing changed, the give sends Continue. (wheel:resumed)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && echo one > $ROOT/work/a.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "echo two-by-the-user > $ROOT/work/a.txt"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "kept while held"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req", "id": "$sid", "worktree": "$ROOT/work"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/wheel/saved", "params": {"req": "$req", "unsaved": ["$ROOT/work/b.txt"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": {"status": "idle", "held_by": "user", "queue": ["kept while held"]}, "seq": "$number", "entries": "$any"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req2", "id": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/wheel/saved", "params": {"req": "$req2", "unsaved": []}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "free"}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 10, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 10, "result": {"session": {"status": "idle", "queue": []}, "seq": "$number", "entries": {"$contains": [{"type": "user", "key": "wheel:edits"}, {"type": "user", "text": "kept while held"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep -q '+two-by-the-user' $STATE/hub/transcripts/$sid.jsonl && grep -q -- '-one' $STATE/hub/transcripts/$sid.jsonl && grep -n -e wheel:edits -e 'kept while held' $STATE/hub/transcripts/$sid.jsonl | head -n 1 | grep -q wheel:edits"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req3", "id": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "agents/wheel/saved", "params": {"req": "$req3", "unsaved": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$sid", "entries": {"$contains": [["$any", {"type": "user", "text": "Continue.", "key": "wheel:resumed"}]]}}}, "within_ms": 10000}

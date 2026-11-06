@@ -88,9 +88,11 @@
 (ert-deftest drgnx-sticky/the-header-follows-the-mode ()
   (drgnx-sticky-test--in (drgnx-sticky-test--elisp 40) #'emacs-lisp-mode
     (drgnx-sticky-mode 1)
-    (should (local-variable-p 'drgnx-chrome-header-tail))
-    (drgnx-sticky-mode -1)
-    (should-not (local-variable-p 'drgnx-chrome-header-tail))))
+    (save-window-excursion
+      (set-window-buffer (selected-window) (current-buffer))
+      (should (stringp (drgnx-sticky--tail (selected-window))))
+      (drgnx-sticky-mode -1)
+      (should-not (drgnx-sticky--tail (selected-window))))))
 
 (ert-deftest drgnx-sticky/a-scroll-step-is-cheap ()
   ;; a 10k-line file: 200 new window starts allocate the same as they do in a file a tenth the size (the wall-clock

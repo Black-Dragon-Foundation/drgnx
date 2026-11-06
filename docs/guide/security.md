@@ -431,6 +431,15 @@ A chat started in a project (the Agents panel, Review Branch) sees the project r
 repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
 project).
 
+- **`chat.project-edit`** (pair mode): a chat in your project may edit your own checkout, live, through the editor
+  that has the file open. Cautious never; Balanced asks, which here means the Pair toggle is yours to turn on;
+  Autonomous allows it, so chats start paired. It replaces the chat's `code.edit`, which stays Never: the chat's own
+  edit tools and commands still cannot write the checkout. The hub's door also needs `chat.project-read`, and it
+  never writes `.git/`, the agents' own configuration (`.claude`, `.codex`, `.gemini`, `.envrc`, `mise.toml`), a CI
+  or build file (`.github/`, `Makefile*`, `build.rs`, `*.sh`: `code.ci-config` is Never for chats), a credential
+  file, or anything outside the checkout, links resolved. Every file the hub serves a chat (its `read_file`, an ACP
+  `fs/read_text_file`) skips the same credential files the sandbox hides.
+
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
   hash), never the agent's own description. The same question open twice is one card. An agent's permission request
   waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit

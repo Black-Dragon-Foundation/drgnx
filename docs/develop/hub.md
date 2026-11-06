@@ -422,7 +422,17 @@ between knows whole turns went by (a turn can be shorter than the update throttl
 for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
 `agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
 stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
-a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. `agents/pause` cancels a
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. A tool entry's `content`
+text over 64 KiB goes in an event as its first and last 32 KiB with `outputBytes`, the whole size; the hub itself keeps
+the first and last 8 MiB of an output past 16 MiB. `agents/tool-output {id, tool_call, from, to}` answers
+`{text, total_bytes, truncated}`: bytes `from..to` (cut at character boundaries, so the next `from` is `from` plus
+`text`'s length), at most 256 KiB; `truncated` says the answer holds less than was asked. A range that starts in
+output the hub did not keep gets the kept head and tail with a line saying how many bytes are gone. An agent message
+entry in an event carries `blocks`, `[{block, kind, spans: [{text, style}]}]`, the first time and for a connection
+that has just subscribed, then `patch`, the blocks that are new or changed (same shape; only the last block of the
+text is parsed again as it streams); `kind` is `paragraph`, `heading`, `code`, `quote`, `list`, `rule`, `table` or
+`html`, `style` is `text` or space-joined `emph`, `strong`, `strike`, `link`, `code`, `h1`..`h6`. `text` stays as it
+was. `agents/pause` cancels a
 busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
 transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
 for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
@@ -1276,19 +1286,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
+| `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
 | `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
 | `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
 | `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
-| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
 | `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
@@ -1297,6 +1311,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/tool-output` | user | `{from: natnum, id: Id, to: natnum, tool_call: string}` | `{text: string, total_bytes: natnum, truncated: boolean}` | no |
+| `agents/unfollow` | user | `{view: string}` | `boolean` | no |
+| `agents/wheel/give` | user | `{id: Id}` | `boolean` | yes |
+| `agents/wheel/saved` | user | `{req: natnum, unsaved?: [AbsPath]}` | `boolean` | no |
+| `agents/wheel/take` | user | `{id: Id}` | `boolean` | yes |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
@@ -1388,7 +1407,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1397,6 +1416,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
+| `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |
+| `pair/open-set` | user | `{files: [{file: AbsPath, kind: "normal" \| "large" \| "remote"}]}` | `boolean` | no |
+| `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
 | `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
@@ -1540,14 +1564,81 @@ result is (`event(NAME).check`):
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
-| `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
+| `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
+| `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
+| `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
+| `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
+| `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
+| `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held \| never}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
+
+## Pair mode
+
+A chat in a project edits your checkout only through the hub's door (`src/pair/`; user guide:
+[pair-mode.md](../guide/pair-mode.md); per agent: [pair-routing.md](pair-routing.md)). The sandbox still binds the
+checkout read-only for it.
+
+- **Its tools.** Every chat in a project gets `read_file {path}`, `edit_file {path, old, new}` and `write_file {path,
+  content}` on its `mcp.sock` (`norn::tools::pair`, through `Hub::pair_read` / `Hub::pair_write`); a Claude chat also
+  starts with `disallowedTools` = `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`lock::LaunchPlan::with_project_chat`;
+  its `Read` stays). A chat's ACP `fs/read_text_file` and `fs/write_text_file` inside the project go to the same door,
+  on a task of their own so the session's reader loop never waits on an editor; every other session keeps the fence.
+- **The gates.** `pair::gate`: `chat.project-edit` decides (never: refused; ask: the Pair toggle is the user's;
+  allow: paired from the start), never the chat's `code.edit`; `chat.project-read` too; an absolute path inside the
+  checkout, links resolved, never `.git/`, the protected agent-config paths, a CI or build file or a credential file.
+  `pair::read_gate` (every hub-served read): `chat.project-read`, inside the checkout, never a credential file.
+- **A write** goes to the editor as `pair-apply` with a relative `ttl_ms` (2000) the editor counts from its arrival.
+  `edit_file` travels as it is (the editor needs one match at apply time); `write_file` of an existing file needs a
+  read the editor served to that session (`read_file`, `fs/read_text_file`), and is diffed into line hunks against it
+  at its version; a new file needs none. One file's writes go one at a time, in order (`pair::writes::FileQueue`).
+- **The verdict is the editor's** (`pair/answer {write, result: applied | refused | dropped, version?, reason?, lines?,
+  saved?, not_saved?}`), from the connection the write went to. At `ttl_ms` plus a second with no answer the hub sends
+  `pair-reconcile`, which the editor answers from what it applied; the hub's timer never refuses. An editor that goes
+  away leaves a write in flight unknown ("read it with read_file to see"), never refused.
+- **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
+  them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
+- **The open set** (`pair::open_set`): the editor tells the hub which files it has open, `pair/open {file, kind:
+  normal | large | remote}` and `pair/closed {file}`, and sends its full set (`pair/open-set {files: [{file, kind}]}`)
+  at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
+  to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
+  editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
+  has refuses "not open in the editor" (this version never writes the disk itself), and its read comes from the disk.
+- **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
+  door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
+  holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
+  is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel"), and
+  `Door::recheck` when the matrix makes the session's `chat.project-edit` never (a preset or a cell changed, reason
+  `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
+  answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
+  write.
+- **Presence**: the door shares the hub's presence model (`work::presence::Live`). A write it sends is the session's
+  live entry `pair:WRITE` in `pending` mode on the lines it will change (`edit_lines::of_diff` over the session's served
+  read, else the file on disk up to `EDIT_TEXT_MAX`; the file only when `old` is not there once), in place before
+  `pair-apply` goes out. Applied, the entry closes into the session's `edit` entry on the lines the new text covers,
+  ranked at the session's step in that file (`Presence::step_in`), so it replaces the read before it and a later step
+  replaces it; refused, dropped or lost, it goes. The editor's buffer views and `agent-presence` follow; the Work map
+  hears it with the session's next step.
+- **The editor's side** is `modules/tools/drgnx-agent-pair.el` (module `tools/agent-pair`). Every pair call goes on
+  the subscribed connection, the one the door sends to. The event handler only queues a `pair-apply` in the buffer
+  visiting the file (deadline: arrival plus `ttl_ms` on Emacs's clock); `drgnx-agent-pair--drain` takes the queues
+  from `post-command-hook` (when `drgnx-agent-pair--pending` is set) or a zero-delay wall timer, only when
+  `drgnx-agent-pair-slot-open-p` holds: no command runs (a count kept by `pre-`/`post-command-hook`,
+  `drgnx-agent-pair-command-step`, since minibuffer commands run inside another), recursion and minibuffer depth 0, no
+  keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
+  `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
+  `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
+  `pair-read` is answered with the buffer's text and `buffer-chars-modified-tick` as its version. Until the edit
+  history's shift is here, `drgnx-agent-pair--apply` refuses every write ("pair needs the edit history").
 
 ## Per-session sockets
 
@@ -1736,6 +1827,8 @@ write `command` and `opened` details). The detail is the step's `detail` on `age
 (`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
 send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
 `Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
+Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
+`provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
 
 ### The presence model
 
@@ -1750,21 +1843,92 @@ and badges build on it). This is its contract.
   known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
   (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
   its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
-  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `read` >
-  `listed`).
-- **Now:** an entry is now while its session is live and it is younger than 120 s (`presence-stale-after`) or it is
-  its session's latest entry. Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in
-  no file.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `pending` >
+  `read` > `listed`). Part 3 adds `line_end` (the range's last line), `col` (the column after an edit's last inserted
+  character, where its cursor sits) and `pending` (an edit about to land).
+- **Edit lines and read ranges** (part 3, `work::edit_lines`): an edit's lines come from its ACP `diff` content, never
+  from `rawInput`. A fragment (Claude's `Edit`, Codex's one `diff` per hunk) is placed where its `oldText` is found
+  exactly once in the file's text now, or its `newText` once it has landed; a whole file (Gemini's diff, a `Write`, a
+  new file) is its old text diffed against its new, line by line. A call with several hunks sits on its last one.
+  Lines count on LF (a CRLF file is read as LF); found nowhere, or more than once, or in a file over 8 MiB, the entry
+  is the file only. The step's detail records the lines (`line_start`, `line_end`), so they survive a restart. A
+  read's range is its location's line (else its `offset`) through `limit` lines.
+- **Pending:** an edit call with `diff` content that is still `pending` or `in_progress`, and a permission request
+  for one that waits for the user, show as `pending` on the lines the diff will change. A refused request's entry
+  goes at once; an allowed one gives way to the call's own updates.
+- **The live feed** (part 3): the session's reader applies each `tool_call` and `tool_call_update` as it arrives, not
+  only when the step closes. Such an entry has `live: true`, `tool_call` (the call's id) and `step: 0`, and stands in
+  for the session's closed entry in that file while the call runs. The call's end replaces it: the closed step's entry
+  when it completed, nothing when it failed or was denied; a step cut while its call runs on (a permission wait, the
+  next call starting) leaves the live entry standing, and a call that ends with no step of its own open drops it at
+  once. An update for a call already closed is dropped, so the reader and the step writer may come in either order.
+  Live entries are never rebuilt after a restart.
+- **Now:** a session's running call in a file is now; otherwise an entry is now while its session is live and it is
+  younger than 120 s (`presence-stale-after`) or it is its session's latest entry (a running call's, if it has one).
+  Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in no file.
 - **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
-  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file,
-  entries}]}`, who is in them now; `agents/presence/get {file} -> {file, entries}`. The names keep clear of
-  `presence/set`, the user's away state. A connection's subscriptions end with it.
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file, rel?,
+  repo?, entries}]}`, who is in them now; `agents/presence/get {file} -> {file, rel?, repo?, entries}`. `rel` is the
+  file's path from the top of its git checkout and `repo` the checkout's project id (16 hex digits of the main
+  checkout's real path, as the code index's), so a badge lands on the user's tree whatever worktree the agent is in;
+  both are read from the `.git` entries, with no git run. The names keep clear of `presence/set`, the user's away
+  state. A connection's subscriptions end with it.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### Identity
+
+Every live session holds an identity from its start until it ends (`agents::identity`, part 3), so every surface
+names and colours an agent the same way:
+
+- **Ordinal:** the lowest number from 1 that no other live session of its workspace holds, kept for its life. A
+  workspace is the session's git repository (the project id of its checkout's common directory, the same for every
+  worktree of it), else its folder. The hub never gives a live ordinal twice; a display that has fewer
+  colour-and-mark pairs than agents reuses one by its own rule, reading `last_active`.
+- **Handle:** the model's short name (Claude's families by name, `Opus`, `Sonnet`, `Haiku`; another model by the first
+  word of its name; else the provider: `Claude`, `Codex`, `Gemini`), numbered from the second live agent of that model
+  in the workspace on (`Opus`, `Opus 2`, `Opus 3`; a freed number is given again, lowest first). The **monogram** is
+  its initial and that number (`O`, `O2`).
+- **Where:** the `agent` snapshot (`agents/list`, the `agent` event) carries `ordinal`, `handle`, `monogram` and
+  `last_active` (the hub's time of its latest update); an ended session has none. A session frees its identity when it
+  is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
+  Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
+  parent's; subagents have no snapshot, so none is shown yet.
+
+### The buffer view
+
+What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
+overlays from it):
+
+- **Views:** `agents/buffer/watch {view, file, worktree?, doc_version?}` (user connections) opens view VIEW of this
+  connection on FILE, or opens it again, and answers its full frame (`base` 0); `agents/buffer/unwatch {view}` ends it
+  (`false`: none was open). Views are keyed by (connection, view), like the Work map's, and a connection's views end
+  with it. A view matches its file's true name and `REPO:REL` (the same file in every worktree of its repository, the
+  presence model's `rel` and `repo`).
+- **Frames:** a presence change in a matched file makes the view due, and one flush 50 ms of the hub's clock later
+  (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
+  (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
+  frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
+  a newer `doc_version` (the buffer's own change count) is the user typing: that view's frame follows after 300 ms
+  without another (task `editor:quiet`). Nothing is built while no view matches, and an unwatched file costs nothing.
+- **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
+  session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
+  and kind: `pending` for an edit about to land, and `changed` for the lines the session's latest step snapshot changed
+  in its own worktree against its base (the interim before the edit history), with a hover that names the handle, the
+  step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
+  repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
+  copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
+  meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
+  entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
+  ranges are `changed` or `conflict`, also `projected`. The user's text is read from disk until the edit history
+  mirrors buffers, so such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
+- **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
 ### The Work map
 
@@ -1803,6 +1967,28 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The follow feed
+
+A follow window in the editor shows where one agent is (`editor::follow`). `agents/follow {view, session}` (user
+connections) makes the connection's VIEW follow SESSION from now on, its latest place first; `agents/unfollow {view}`
+ends it (true when it followed one), and a connection's views end with it. The event `agent-follow {view, session,
+file?, worktree, line?, col?, mode, step_title?, plan_entry?, why_source, changed?}` goes by `Front::send_to` to the
+view's connection only.
+
+- **Source:** each tool call update of the session (`tool_call`, `tool_call_update`), as the transcript merges it:
+  its first location is the place, its kind the mode (`read`; `search` → `listed`; `edit`, `delete`, `move` →
+  `pending` until completed, then `edit`, or `write` for a whole-file write). A failed call and other kinds (a
+  command, a fetch) do not move the window.
+- **The rules** (`editor::follow::Core`, pure, tested in every order on the hub's clock): at most one move per 200 ms
+  per view (the latest one held goes when the window ends); a read of another file switches only after the agent has
+  stayed in it 500 ms (a third file starts the dwell again, a move back cancels it); a search or a glob never switches
+  files: its query (the step's title) goes in the line and the window stays; an edit, a write or a pending edit
+  switches at once (the throttle still holds). `changed` is set when a completed edit changed the file shown, so the
+  window reverts it from disk.
+- **The line is the agent's own words:** the plan's `in_progress` entry when the agent sends plans
+  (`why_source: plan_entry`), else the tool call's title (`step_title`). Nothing is generated.
+- **Restart:** nothing is kept; the editor follows again.
 
 ### After a restart
 

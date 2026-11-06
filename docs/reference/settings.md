@@ -2,6 +2,24 @@
 
 The settings drgnx declares with `drgnx-defsetting`, and the keys that say where each may be set, whether a workspace may set it, how it merges and whether an agent may change it. Generated from the declarations: do not edit; see docs/develop/core.md for how to regenerate it, and [Declaring a setting](../develop/settings.md) for the keys.
 
+## drgnx-agent-panel-disclosure
+
+The step types whose detail a new agent panel opens: thinking, read, search, edit, execute, fetch, other.
+A failed step opens whatever this says.  `M' in a panel makes its current choice the default.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(set (const thinking) (const read) (const search) (const edit) (const execute) (const fetch) (const other))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (enum thinking read search edit execute fetch other))` |
+
 ## drgnx-agents-allow-unsandboxed
 
 Non-nil: agents may run without the sandbox.  Off unless you turn it on; no workspace and no agent can.
@@ -270,6 +288,25 @@ switched off.  Only you can set it, in your private workspace file.
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
+## drgnx-agents-identity-walk
+
+How agents are given a colour and a mark: `diagonal' (the look's six colours each with its own mark, then the
+rest) or `colour-first' (every colour with the circle first, marks from the agent after the last colour).  A change
+applies to the agents shown from then on.
+
+| Key | Value |
+| --- | --- |
+| Default | `diagonal` |
+| Type | `(choice (const :tag "Diagonal" diagonal) (const :tag "Colour first" colour-first))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agent-identity-clear` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum diagonal colour-first)` |
+
 ## drgnx-agents-job-cpus
 
 How many CPUs one job may use.
@@ -339,7 +376,7 @@ column that matches wins.  Set it in Settings → User; no workspace and no agen
 | `:apply` | - |
 | `:runtime` | `"AgentsMatrix"` |
 | `:agents` | `never` |
-| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
+| `:schema` | `(plist (:preset (enum cautious balanced autonomous) "The base preset; absent: balanced") (:time (list-of (plist (:when (or (enum away) (pred drgnx-agents-matrix--between-p "(between FROM TO), minutes of the day")) "While you are away, or between two minutes of the day (local time)" :required t) (:preset (enum cautious balanced autonomous) "The preset that applies then" :required t))) "Presets that replace the base one at some times") (:cells (list-of (plist (:action (enum agents.start agents.model agents.control graph.change task.done spend spend.over code.read code.edit commit merge.integration push.ci push.main code.ci-config machines job.container job.keys network browser browser.web browser.private unsandboxed settings.change user.private user.emacs chat.project-read plugin.abilities chat.project-edit) "What the agent does" :required t) (:column (pred drgnx-agents-matrix--column-p "(:role manager\|worker\|chat), (:agent NAME) or (:provider NAME)") "Whose cell" :required t) (:verdict (enum allow ask never) "What happens" :required t) (:limit (plist (:amount number "How much" :required t) (:unit (enum count usd usd-est tokens limit-share) "Of what" :required t)) "An amount over which the cell is decided by spend.over"))) "Cell overrides"))` |
 
 ## drgnx-agents-mcp
 
@@ -609,17 +646,36 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
+## drgnx-agents-tags
+
+When an agent's name tag shows beside its cursor: `activity' (for 2 s after it moves), `always' or `never'.
+Two agents of one colour, and the agent you follow, keep their tags on whatever this says (except `never').
+
+| Key | Value |
+| --- | --- |
+| Default | `activity` |
+| Type | `(choice (const :tag "After a move" activity) (const :tag "Always" always) (const :tag "Never" never))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-agents-editor-draw--tags-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum activity always never)` |
+
 ## drgnx-agents-trace-opens
 
 The agents whose shell commands' opens the hub sees on Linux ("seen open" in the Work space), by provider:
-"claude", "codex", "gemini".  Claude Code is traced per shell step; Codex and Gemini over their whole process
-tree, which costs every command they run (a test suite run as one command: about a third longer), so they are off
-unless listed.  An agent not listed shows only the files its commands name.  Read when a session starts.
+"claude", "codex", "gemini", "kimi" (Kimi Code), "deepseek" (DeepSeek Harness).  Claude Code is traced per
+shell step; the others over their whole process tree, which costs every command they run (a test suite run as one
+command: about a third longer), so they are off unless listed.  An agent not listed shows only the files its
+commands name.  Read when a session starts.
 
 | Key | Value |
 | --- | --- |
 | Default | `("claude")` |
-| Type | `(repeat (choice (const "claude") (const "codex") (const "gemini")))` |
+| Type | `(repeat (choice (const "claude") (const "codex") (const "gemini") (const "kimi") (const "deepseek")))` |
 | `:scope` | `global` |
 | `:workspace` | `never` |
 | `:merge` | `replace` |
@@ -681,6 +737,58 @@ the provider's own.  A role you do not name has the shipped default chain.
 | `:runtime` | `"Vec<RoleChain>"` |
 | `:agents` | `never` |
 | `:schema` | `(alist symbol (alist symbol (or string null)))` |
+
+## drgnx-extensions-check-updates
+
+How the Extensions view learns of updates: `daily' reads the archives in the background once a day, `manual' only
+when you ask (the Refresh command).
+
+| Key | Value |
+| --- | --- |
+| Default | `daily` |
+| Type | `(choice (const daily) (const manual))` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-extensions--check-updates-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum daily manual)` |
+
+## drgnx-extensions-recommended
+
+Packages this project recommends: the Extensions view lists them under Recommended, with an Install button.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat symbol)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of symbol)` |
+
+## drgnx-extensions-review
+
+Packages and archives ("melpa") whose updates you review before they install.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat sexp)` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (or symbol string))` |
 
 ## drgnx-keys-bind
 
@@ -1171,6 +1279,24 @@ else `echo').  A terminal frame always echoes.  A change applies to the next not
 | `:agents` | `never` |
 | `:schema` | `(enum auto echo float)` |
 
+## drgnx-packages-off
+
+Packages whose file modes and buffer modes are off in this project (Extensions, a package's page).  A package
+that changes Emacs as a whole cannot be off in one project.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat symbol)` |
+| `:scope` | `project` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of symbol)` |
+
 ## drgnx-popup-style
 
 How the popup lane shows: `window' (the panel's window, or one under the editors), `float' (one child frame
@@ -1241,6 +1367,24 @@ repository's own files.
 | `:runtime` | `"Vec<String>"` |
 | `:agents` | `never` |
 | `:schema` | `(list-of (string :match "\\`[A-Za-z_][A-Za-z0-9_]*\\'"))` |
+
+## drgnx-runners-key-host
+
+The host a job key is filed under in your key store (auth-source): a key named CRATES_IO_TOKEN is the entry with this
+host and that user.  Read only by the commands you run (Runners: Load Keys), never by the editor on its own.
+
+| Key | Value |
+| --- | --- |
+| Default | `"drgnx-runner-keys"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
 
 ## drgnx-runners-origin-key
 

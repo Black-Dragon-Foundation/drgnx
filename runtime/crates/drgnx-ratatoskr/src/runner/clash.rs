@@ -44,6 +44,8 @@ pub struct RunSession {
     pub exited: bool,
     /// Coordination writes held in a row (`held:AGENT`).
     pub held: u32,
+    /// The user holds its wheel: it is stopped on purpose, never stale.
+    pub held_by_user: bool,
 }
 
 /// What a scan needs of a plan run.
@@ -329,8 +331,12 @@ pub fn scan(run: &RunState, decisions: &[Decision], diffs: &DiffIndex) -> Vec<Cl
             ));
         }
     }
-    // stale: two held writes in a row
-    for s in run.sessions.iter().filter(|s| !s.exited && s.held >= 2) {
+    // stale: two held writes in a row (a session whose wheel the user holds is stopped on purpose)
+    for s in run
+        .sessions
+        .iter()
+        .filter(|s| !s.exited && !s.held_by_user && s.held >= 2)
+    {
         let mut c = blank(
             format!("stale:{}:{}", s.id, s.held),
             Rule::Stale,
@@ -637,18 +643,21 @@ mod tests {
                 task: Some("t1".into()),
                 exited: false,
                 held: 2,
+                held_by_user: false,
             },
             RunSession {
                 id: "s2".into(),
                 task: None,
                 exited: false,
                 held: 1,
+                held_by_user: false,
             },
             RunSession {
                 id: "s3".into(),
                 task: None,
                 exited: true,
                 held: 5,
+                held_by_user: false,
             },
         ];
         let cs = scan(&r, &[], &DiffIndex::new());
@@ -742,6 +751,7 @@ mod tests {
             task: None,
             exited: false,
             held: 3,
+            held_by_user: false,
         }];
         let mut h = H(vec![]);
         start_reviewers(&mut h, &scan(&r, &ds, &DiffIndex::new()));

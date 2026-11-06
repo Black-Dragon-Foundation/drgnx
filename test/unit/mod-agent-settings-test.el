@@ -739,4 +739,19 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
       (should-not (plist-member spec :env)))        ; no token or key travels with it
     (should-error (drgnx-agent-settings--outside-spec "Bad Kind"))))
 
+(ert-deftest drgnx-agent-settings/project-edit-row-explains-never ()
+  ;; the Pair row of the matrix: never names the preset or the column that made it so; ask and allow say what the
+  ;; toggle does
+  (should (equal (car drgnx-agent-settings-pair-row) 'chat.project-edit))
+  (let ((preset (drgnx-agent-settings-project-edit-explain 'never 'cautious))
+        (column (drgnx-agent-settings-project-edit-explain 'never 'balanced '(:agent "claude")))
+        (role (drgnx-agent-settings-project-edit-explain 'never 'autonomous '(:role chat))))
+    (should (string-search "chat.project-edit is never" preset))
+    (should (string-search "Cautious preset" preset))
+    (should (string-search "the column of agent claude" column))
+    (should-not (string-search "preset" column))
+    (should (string-search "the chat column" role)))
+  (should (string-search "turn Pair on" (drgnx-agent-settings-project-edit-explain 'ask 'balanced)))
+  (should (string-search "start paired" (drgnx-agent-settings-project-edit-explain 'allow 'autonomous))))
+
 ;;; mod-agent-settings-test.el ends here

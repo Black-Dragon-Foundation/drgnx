@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 27] = [
+    let rows: [(Action, [Verdict; 3]); 28] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -52,8 +52,9 @@ fn balanced_is_the_mockups_table() {
         (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
         (PluginAbilities, [Allow, Allow, Ask]),
+        (ChatProjectEdit, [Never, Never, Ask]),
     ];
-    assert_eq!(p.cells.len(), 27 * 3);
+    assert_eq!(p.cells.len(), 28 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -103,7 +104,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 27);
+    assert_eq!(Action::ALL.len(), 28);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -113,6 +114,43 @@ fn browser_rows_per_preset() {
         [Browser.id(), BrowserWeb.id(), BrowserPrivate.id()],
         ["browser", "browser.web", "browser.private"]
     );
+}
+
+/// `chat.project-edit` (a chat edits your checkout): only the chat column ever opens, and only as the preset says:
+/// Cautious never, Balanced ask (the Pair toggle is allowed), Autonomous allow (paired from the start).  The chat's
+/// `code.edit` stays never in every preset.
+#[test]
+fn chat_project_edit_per_preset_and_column() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [
+        (Cautious, [Never, Never, Never]),
+        (Balanced, [Never, Never, Ask]),
+        (Autonomous, [Never, Never, Allow]),
+    ] {
+        let m = preset(p);
+        for (r, v) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(want)
+        {
+            let c = m.cells[&(Action::ChatProjectEdit, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (v, None), "{p:?} {r:?}");
+            assert_eq!(
+                decide(&eff(&[&m], &who(r)), Action::ChatProjectEdit, None),
+                v
+            );
+        }
+        assert_eq!(
+            m.cells[&(Action::CodeEdit, Column::Role(Role::Chat))].verdict,
+            Never,
+            "{p:?}"
+        );
+    }
+    assert_eq!(
+        Action::from_id("chat.project-edit"),
+        Some(Action::ChatProjectEdit)
+    );
+    assert_eq!(Action::ALL.last(), Some(&Action::ChatProjectEdit));
 }
 
 #[test]
