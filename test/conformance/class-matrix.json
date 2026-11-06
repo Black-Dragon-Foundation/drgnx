@@ -1,4 +1,6 @@
 {
+  "agents/buffer/unwatch": ["user"],
+  "agents/buffer/watch": ["user"],
   "agents/do": ["user"],
   "agents/entries/subscribe": ["user"],
   "agents/entries/unsubscribe": ["user"],

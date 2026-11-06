@@ -3067,6 +3067,11 @@ impl Session {
         Some(super::wire::capped_tool_input(raw))
     }
 
+    /// Its running step's title (none between steps).
+    pub fn doing(&self) -> Option<String> {
+        lock(&self.state).cur.as_ref().and_then(|c| c.tool.clone())
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let identity = self.identities.get(&self.id);
         let st = lock(&self.state);

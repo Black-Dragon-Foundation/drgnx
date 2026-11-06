@@ -101,6 +101,13 @@ impl Hub {
         lock(&self.sessions).get(sid).map(|s| s.worktree())
     }
 
+    /// What session SID is doing now: its running step's title, the agent's own words (none: between steps, or a
+    /// session the hub does not hold).
+    pub fn doing(&self, sid: &str) -> Option<String> {
+        let s = lock(&self.sessions).get(sid).cloned()?;
+        s.doing()
+    }
+
     /// A session on PROFILE, started by CALLER (the user's connection), in the directory and role of P.
     pub async fn start(
         &self,

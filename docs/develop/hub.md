@@ -1030,6 +1030,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
+| `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
@@ -1266,6 +1268,7 @@ result is (`event(NAME).check`):
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
+| `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
@@ -1529,6 +1532,29 @@ names and colours an agent the same way:
   is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
   Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
   parent's; subagents have no snapshot, so none is shown yet.
+
+### The buffer view
+
+What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
+overlays from it):
+
+- **Views:** `agents/buffer/watch {view, file, worktree?, doc_version?}` (user connections) opens view VIEW of this
+  connection on FILE, or opens it again, and answers its full frame (`base` 0); `agents/buffer/unwatch {view}` ends it
+  (`false`: none was open). Views are keyed by (connection, view), like the Work map's, and a connection's views end
+  with it. A view matches its file's true name and `REPO:REL` (the same file in every worktree of its repository, the
+  presence model's `rel` and `repo`).
+- **Frames:** a presence change in a matched file makes the view due, and one flush 50 ms of the hub's clock later
+  (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
+  (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
+  frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
+  a newer `doc_version` (the buffer's own change count) is the user typing: that view's frame follows after 300 ms
+  without another (task `editor:quiet`). Nothing is built while no view matches, and an unwatched file costs nothing.
+- **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
+  session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
+  and kind: `pending` for an edit about to land, and `changed` for the lines the session's latest step snapshot changed
+  in its own worktree against its base (the interim before the edit history), with a hover that names the handle, the
+  step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
 ### The Work map
 

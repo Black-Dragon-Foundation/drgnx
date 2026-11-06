@@ -74,6 +74,8 @@ struct Ground {
     worktree: PathBuf,
     base: String,
     snaps: Vec<(u64, String)>,
+    /// The hub's time of the latest snapshot's step (its end, else its start).
+    last_at: Option<f64>,
 }
 
 async fn ground(f: &Front, session: &str) -> Result<Ground, Error> {
@@ -104,6 +106,11 @@ async fn ground(f: &Front, session: &str) -> Result<Ground, Error> {
         .await
         .map_err(|e| fail(e.to_string()))?;
     let base = base.ok_or_else(|| fail(format!("session {session} has no base snapshot")))?;
+    let last_at = steps
+        .iter()
+        .rev()
+        .find(|s| s.snapshot.is_some())
+        .map(|s| s.end.unwrap_or(s.start));
     let snaps = steps
         .into_iter()
         .filter_map(|s| Some((s.seq as u64, s.snapshot?)))
@@ -113,6 +120,7 @@ async fn ground(f: &Front, session: &str) -> Result<Ground, Error> {
         worktree,
         base,
         snaps,
+        last_at,
     })
 }
 
@@ -178,6 +186,40 @@ pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error
     .map_err(|e| fail(e.to_string()))?
     .map_err(fail)?;
     Ok(Hunks { diff })
+}
+
+/// The lines of one file its latest step snapshot changed against the base, on the snapshot's text.
+pub struct ChangedLines {
+    /// The snapshot's step.
+    pub seq: u64,
+    /// The hub's time of that step.
+    pub at: Option<f64>,
+    /// (first, last), 1-based.
+    pub ranges: Vec<(u32, u32)>,
+}
+
+/// The lines PATH (relative to session SESSION's worktree) changed in its latest step snapshot against the base (the
+/// buffer view's gutter, the interim before the edit history); none before the first snapshot, or when it changed
+/// nothing there.
+pub async fn changed_lines(
+    f: &Front,
+    session: &str,
+    path: &str,
+) -> Result<Option<ChangedLines>, Error> {
+    check_path(path).map_err(fail)?;
+    let g = ground(f, session).await?;
+    let Some((seq, tree)) = g.snaps.last().cloned() else {
+        return Ok(None);
+    };
+    let (at, path) = (g.last_at, path.to_string());
+    let diff = crate::clock::blocking(move || {
+        snapshot::patch(&g.root, &g.worktree, &g.base, &tree, &path)
+    })
+    .await
+    .map_err(|e| fail(e.to_string()))?
+    .map_err(fail)?;
+    let ranges = crate::editor::buffer_view::changed_ranges(&diff);
+    Ok((!ranges.is_empty()).then_some(ChangedLines { seq, at, ranges }))
 }
 
 /// `work/file-at`.

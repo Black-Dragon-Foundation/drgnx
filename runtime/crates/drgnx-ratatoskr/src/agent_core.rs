@@ -26,6 +26,7 @@
 //! | `runners/*` | [`crate::runners::methods`] |
 //! | `work/conclusions` | [`crate::work::conclusions`] |
 //! | `agents/presence/{subscribe,get}` | [`crate::work::presence`] |
+//! | `agents/buffer/{watch,unwatch}` | [`crate::editor`] |
 //! | `work/{files,hunks,file-at}` | [`crate::work::edits`] |
 //! | `work/map/{subscribe,set,close}` | [`crate::work::map`] |
 
@@ -61,6 +62,8 @@ pub struct Core {
     pub presence: std::sync::Arc<crate::work::presence::Live>,
     /// The Work map's views and the model behind them ([`crate::work::map`]).
     pub map: std::sync::Arc<crate::work::map::Map>,
+    /// The editors' buffer views: the agents in each watched buffer ([`crate::editor`]).
+    pub buffers: std::sync::Arc<crate::editor::Buffers>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
@@ -157,6 +160,8 @@ pub async fn serve(
         Params::WorkConclusions(p) => answer(work::conclusions::get(f, c, p).await),
         Params::AgentsPresenceSubscribe(p) => answer(work::presence::subscribe(f, c, p).await),
         Params::AgentsPresenceGet(p) => answer(work::presence::get(f, c, p).await),
+        Params::AgentsBufferWatch(p) => answer(crate::editor::watch(f, c, p).await),
+        Params::AgentsBufferUnwatch(p) => answer(crate::editor::unwatch(f, c, p)),
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),

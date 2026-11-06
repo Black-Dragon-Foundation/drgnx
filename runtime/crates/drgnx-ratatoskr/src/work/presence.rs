@@ -482,7 +482,7 @@ impl Sub {
 
 /// A file or folder a caller names (an editor's buffer, a workspace root) as the model keys it: the model's files come
 /// from [`place`], so one that exists is known by its true name (macOS's `/tmp/…` is `/private/tmp/…`).
-fn true_name(asked: &str) -> RepoPath {
+pub fn true_name(asked: &str) -> RepoPath {
     place(Path::new("/"), asked)
 }
 
@@ -505,7 +505,12 @@ pub struct Live {
     editors: OnceLock<Arc<crate::settings::agents::Editors>>,
     /// Each folder's checkout ([`checkout_of`]), at most [`CHECKOUTS_MAX`] (emptied when full).
     checkouts: Mutex<BTreeMap<PathBuf, Option<(PathBuf, String)>>>,
+    /// Told the files each change touched, at once (the editors' buffer views, [`crate::editor`]).
+    listener: OnceLock<Listener>,
 }
+
+/// What [`Live::on_change`] calls with the files a change touched.
+pub type Listener = Arc<dyn Fn(&[RepoPath]) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -576,7 +581,17 @@ impl Live {
         if !files.is_empty() && !lock(&self.subs).is_empty() {
             self.pending_flush(&files);
         }
+        if !files.is_empty()
+            && let Some(l) = self.listener.get()
+        {
+            l(&files);
+        }
         files
+    }
+
+    /// L is told the files each change touches from now on (one listener; a second is ignored).
+    pub fn on_change(&self, l: Listener) {
+        let _ = self.listener.set(l);
     }
 
     /// Who is in each of FILES now (at the hub's time), file by file.
