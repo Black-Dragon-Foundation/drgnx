@@ -1212,6 +1212,17 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         )));
     }
     plan::check(&tasks).map_err(invalid)?;
+    // a task's profile, which a plan an agent wrote may name, goes through the check `job/reassign` and Say make
+    for t in &tasks {
+        if let Some(p) = &t.profile
+            && let Some(why) = review::profile_refusal(
+                p,
+                crate::agents::session::find_profile(front, p).as_ref(),
+            )
+        {
+            return Err(invalid(format!("task {}: {why}", t.n)));
+        }
+    }
     let repo = read
         .repo
         .clone()
@@ -1248,16 +1259,24 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         MergeGate::Review => "review",
         MergeGate::ReviewAccept => "review+accept",
     };
-    // a task that names its profile runs on it (the job's reassignment for it); its model is then only a hint, and
-    // one that differs from what the profile runs is said, never silently dropped
+    // a task that names its profile runs on it (the job's reassignment for it), and one that is not its role's
+    // route's is said, so the user sees it before the OK; its model is then only a hint, and one that differs from
+    // what the profile runs is said, never silently dropped
     let mut profiles = Map::new();
-    let mut ignored: Vec<String> = Vec::new();
+    let mut said: Vec<String> = Vec::new();
     for t in &tasks {
         let Some(p) = &t.profile else { continue };
         profiles.insert(format!("{id}#{}", t.n), json!(p));
+        let default = routes.get(&t.role).and_then(Value::as_str).unwrap_or("");
+        if p != default {
+            said.push(format!(
+                "task {} runs on {p}, not the {} route's {default}",
+                t.n, t.role
+            ));
+        }
         let runs = crate::agents::session::find_profile(front, p).and_then(|p| p.model);
         if let Some(m) = t.model.as_ref().filter(|m| runs.as_ref() != Some(*m)) {
-            ignored.push(format!(
+            said.push(format!(
                 "task {}: model {m} ignored, profile {p} runs {}",
                 t.n,
                 runs.as_deref().unwrap_or("its own default model")
@@ -1307,7 +1326,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     if let Some(f) = &forecast {
         warnings.extend(budget_warnings(f, budget));
     }
-    warnings.extend(ignored);
+    warnings.extend(said);
     data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
     data["warnings"] = json!(warnings);
     // Say's proposal starts alone only inside the Autonomous preset's cells; why it waits is the job's
@@ -1892,6 +1911,36 @@ mod price_tests {
         assert!(budget_warnings(&f, None).is_empty());
     }
 
+    /// Pure (D): a mixed plan's budget binds the measured and the estimated dollars together, so its warning reads
+    /// their sum: $15 of each at p90 is over $20.
+    #[test]
+    fn a_mixed_plans_p90_is_warned_on_the_sum() {
+        let f = forecast(&[(Unit::Usd, 5.0, 15.0), (Unit::UsdEst, 5.0, 15.0)], &[]);
+        let w = budget_warnings(&f, Some(20.0));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("30") && w[0].contains("estimate") && w[0].contains("20"),
+            "{}",
+            w[0]
+        );
+        assert!(budget_warnings(&f, Some(31.0)).is_empty());
+    }
+
+    /// Pure (D): a cheap task's cost under a cent reads "<0.01", never "0.00", and a cost of nothing is left off.
+    #[test]
+    fn a_cost_under_a_cent_is_never_zero() {
+        let f = forecast(&[(Unit::Usd, 0.002, 0.004)], &[]);
+        let title = card_title(1, &f);
+        assert!(title.starts_with("1 task, about <0.01 USD, "), "{title}");
+        let f = forecast(&[(Unit::Usd, 0.002, 0.02)], &[]);
+        assert!(card_title(1, &f).contains("about <0.01–0.02 USD"));
+        let free = forecast(&[(Unit::Usd, 0.0, 0.0)], &[]);
+        assert!(!card_title(1, &free).contains("0.00"), "{}", card_title(1, &free));
+        for title in [card_title(1, &f), card_title(2, &forecast(&[], &["x"]))] {
+            assert!(!title.contains("0.00"), "{title}");
+        }
+    }
+
     fn made(job: &str, task: &str, p50: f64) -> norn::forecast::sample::Made {
         norn::forecast::sample::Made {
             job: job.into(),
@@ -2044,6 +2093,7 @@ pub(crate) mod graph_plan_tests {
     async fn a_proposed_task_runs_on_its_named_profile() {
         let dir = tempfile::tempdir().unwrap();
         let f = front(dir.path());
+        set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
         let (id, data) = proposed(
             &f,
             dir.path(),
@@ -2103,6 +2153,111 @@ pub(crate) mod graph_plan_tests {
         let wants = crate::forecast::wants_from(&f, &id, &data);
         assert_eq!(wants[0].profile, "opus");
         assert_eq!(wants[0].model.as_deref(), Some("claude-opus-5-5"));
+    }
+
+    /// A graph plan of TASKS proposed by the user for REPO: the job's summary, or why it was refused.
+    async fn try_propose(f: &Front, repo: &Path, tasks: Value) -> Result<JobSummary, Error> {
+        let w = effects::plans_write(
+            f,
+            &user(),
+            serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap(),
+        )
+        .await?;
+        let p: ProposeParams =
+            serde_json::from_value(json!({"plan": w.plan, "repo": repo.to_string_lossy()}))
+                .unwrap();
+        propose(f, &user(), p).await
+    }
+
+    /// Pure (D): a temp store.  A plan an agent wrote names the profile a task runs on: one a job may not run on
+    /// (Codex, whose lock is not proven) or one that is not there is refused at the proposal, as `job/reassign` and
+    /// Say refuse it, and no job is made.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plan_tasks_profile_goes_through_the_jobs_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(&f, json!({"codex": {"command": ["codex-acp"]}})).await;
+        for (profile, why) in [("codex", "lock is not proven"), ("nope", "no agent profile")] {
+            let e = try_propose(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "body": "x"},
+                       {"number": "3", "title": "c", "profile": profile, "body": "z"}]),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                e.message.contains("task 3") && e.message.contains(why),
+                "{}",
+                e.message
+            );
+        }
+        let jobs = f
+            .writer
+            .db
+            .read(|c| read_jobs::jobs(c, None))
+            .await
+            .unwrap();
+        assert!(jobs.is_empty(), "{jobs:?}");
+    }
+
+    /// Pure (D): a temp store.  A task that runs on a profile other than its role's route says so on the proposal,
+    /// where the user reads it before the OK; a task on its route's profile adds nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tasks_own_profile_is_shown_beside_its_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
+        let (_, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "profile": "claude", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "opus", "body": "y"}]),
+        )
+        .await;
+        let warnings: Vec<&str> = data["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            warnings.contains(&"task 2 runs on opus, not the review route's claude"),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("task 1 ")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Pure (D): a temp store.  "$20" on a plan with a subscription profile and a gateway one: what the gateway
+    /// measured and what the subscription's agent estimated count together, so $19 of each reaches the limit (and the
+    /// gateway may spend nothing more); the limit reached says it is an estimate.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dollar_budget_on_a_mixed_plan_binds_the_sum() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, _) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "profile": "claude", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "claude (OpenRouter)", "body": "y"}]),
+        )
+        .await;
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        fallback::set_budget(&f, &l.job, 20.0, true);
+        let scope = runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(
+            plan_scope(&l.job),
+        ));
+        let b = &f.core.budgets;
+        assert!(b.spend(&scope, Unit::UsdEst, 19.0).is_empty());
+        let hits = b.spend(&scope, Unit::Usd, 19.0);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].estimate() && (hits[0].spent - 38.0).abs() < 1e-9, "{hits:?}");
+        assert_eq!(b.usd_left(&id), Some(0.0));
+        // one card for the plan, not one per unit
+        assert!(b.spend(&scope, Unit::UsdEst, 1.0).is_empty());
     }
 
     /// Pure (D): a temp store.  With no profile named, the task's model is what the forecast prices.

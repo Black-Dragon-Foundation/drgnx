@@ -769,7 +769,11 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
   entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job. A task's
   `body` is its section of the brief, before its steps and interfaces; a task's `profile` is the profile it runs on
-  (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). Its `model` is only
+  (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). A plan an agent
+  wrote can name it, so `job/propose` runs the check `job/reassign` and Say run (`review::profile_refusal`: a
+  profile the settings do not have, or Codex, whose lock is not proven) on every task's profile and refuses the
+  proposal with `task N: …`; a task on another profile than its role's route is in the proposal's `warnings` as
+  `task N runs on P, not the ROLE route's Q`, so the user reads it before the OK. Its `model` is only
   the forecast's hint when no profile is named: beside a profile, the profile runs its own model, and when that
   differs the proposal's `warnings` say `task N: model X ignored, profile P runs Y`.
 - **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
