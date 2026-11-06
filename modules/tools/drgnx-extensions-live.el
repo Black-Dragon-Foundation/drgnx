@@ -50,6 +50,10 @@
 
 (defvar drgnx-extensions-live--marked nil "Packages the job under way marked for a restart (unmarked if it fails).")
 
+(defvar drgnx-extensions-live--keys nil
+  "The plan files of the jobs that repointed this session (a job's repoint is keyed by its plan file).  Only the end of
+one of these settles or points back; a job that swapped nothing leaves the repoints alone.")
+
 (defvar drgnx-extensions-live--removing nil
   "The packages the job under way takes away, with the modes they add, read at its plan step (the swap rewrites the
 modes index): ((NAME . ENTRY)…), ENTRY as `drgnx-extensions-index-of' gives it.")
@@ -201,15 +205,18 @@ elpa/ (one `setcar' each), where the copy exists; a package with no copy (or N n
                                                       name (drgnx-extensions-live--version dir))))
             (cl-pushnew name drgnx-extensions-live--marked)))))))
 
-(defun drgnx-extensions-live-before (names)
-  "Before a job for the packages NAMES starts: the package directories of theirs this session uses from elpa/ point
-at the current generation's copies.  Never signals."
+(defun drgnx-extensions-live-before (names &optional key)
+  "Before a job for the packages NAMES starts (t: every package, for a job that may swap any): the package
+directories of theirs this session uses from elpa/ point at the current generation's copies.  KEY, the job's plan
+file, makes its end settle (`drgnx-extensions-jobs-before-functions').  Never signals."
   (condition-case err
       (progn
         (require 'drgnx-pkg)
-        (let ((names (mapcar (lambda (n) (if (stringp n) (intern n) n)) names)))
+        (when key (cl-pushnew key drgnx-extensions-live--keys :test #'equal))
+        (let ((names (if (eq names t) t (mapcar (lambda (n) (if (stringp n) (intern n) n)) names))))
           (drgnx-extensions-live--repoint
-           (delq nil (mapcar (lambda (p) (and (memq (car p) names) (cdr p))) (drgnx-extensions-live--session)))
+           (delq nil (mapcar (lambda (p) (and (or (eq names t) (memq (car p) names)) (cdr p)))
+                             (drgnx-extensions-live--session)))
            (drgnx-pkg-current-generation)))
         (drgnx-extensions-live--claim))
     (error (drgnx-extensions-live--warn "the running packages' files were not kept" err))))
@@ -220,6 +227,7 @@ names); the directories this session uses from elpa/ that the swap takes away po
 Never signals."
   (condition-case err
       (let ((n (plist-get plan :generation)))
+        (when-let* ((key (plist-get plan :file))) (cl-pushnew key drgnx-extensions-live--keys :test #'equal))
         (setq drgnx-extensions-live--removing (drgnx-extensions-live--modes-of (append (plist-get plan :removes) nil)))
         (drgnx-extensions-live--repoint (append (plist-get plan :replaces) (plist-get plan :removes) nil)
                                         (and (natnump n) n))
@@ -383,18 +391,33 @@ then run the modules that waited for packages.  Never signals."
         (when (and ok (fboundp 'drgnx-modules-retry-waiting)) (drgnx-modules-retry-waiting)))
     (error (drgnx-extensions-live--warn "the session did not take the changed packages" err))))
 
+(defun drgnx-extensions-live--settle-key (key result)
+  "The job keyed KEY (its plan file) ended with RESULT: when it repointed this session, take it off the keys; the
+last of them to end settles (or points back)."
+  (when (member key drgnx-extensions-live--keys)
+    (setq drgnx-extensions-live--keys (delete key drgnx-extensions-live--keys))
+    (unless drgnx-extensions-live--keys (drgnx-extensions-live-after result))))
+
 (defun drgnx-extensions-live--done (_job result)
-  "On `drgnx-extensions-jobs-done-functions': a job ended with RESULT."
-  (drgnx-extensions-live-after result))
+  "On `drgnx-extensions-jobs-done-functions': a job of this session ended with RESULT."
+  (drgnx-extensions-live--settle-key (plist-get result :plan) result))
+
+(defun drgnx-extensions-live--plan-gone (file)
+  "On `drgnx-extensions-jobs-plan-gone-functions': another session's job, plan FILE, ended.  Its packages directory is
+what it left, so the session settles on it."
+  (drgnx-extensions-live--settle-key file '(:status done)))
 
 ;;;; Setup
 
 (defun drgnx-extensions-live-setup ()
-  "Take part in Extensions jobs: repoint at their plan steps, settle when they end; the in-use file goes at exit.
+  "Take part in Extensions jobs: repoint before a job of this session that swaps starts and at every plan step,
+settle when the job that repointed ends (another session's when its plan goes); the in-use file goes at exit.
 For the Extensions module's setup, which records the hooks (its teardown removes them; a session that points into a
 generation keeps its in-use file, which the next snapshot sweeps once the session is gone)."
+  (add-hook 'drgnx-extensions-jobs-before-functions #'drgnx-extensions-live-before)
   (add-hook 'drgnx-extensions-jobs-plan-functions #'drgnx-extensions-live-plan)
   (add-hook 'drgnx-extensions-jobs-done-functions #'drgnx-extensions-live--done)
+  (add-hook 'drgnx-extensions-jobs-plan-gone-functions #'drgnx-extensions-live--plan-gone)
   (add-hook 'kill-emacs-hook #'drgnx-extensions-live--kill))
 
 (provide 'drgnx-extensions-live)

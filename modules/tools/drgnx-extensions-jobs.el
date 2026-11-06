@@ -43,8 +43,18 @@ DIRS being package directory names (\"magit-4.1\") and generation G holding the 
 
 (defvar drgnx-extensions-jobs-done-functions nil
   "Called with (JOB RESULT) when an Extensions job this session follows has ended: JOB its id, RESULT a plist
-\(:status S :error TEXT :warnings LINES :missing ((NAME . WHY)…) :partly ((NAME FILE…)…) :kind KIND), S `done',
-`failed' or `stopped'.")
+\(:status S :error TEXT :warnings LINES :missing ((NAME . WHY)…) :partly ((NAME FILE…)…) :kind KIND :plan FILE), S
+`done', `failed' or `stopped', FILE the job's plan file (gone by then; the :file its plan hook had).")
+
+(defvar drgnx-extensions-jobs-before-functions nil
+  "Called with (NAMES PLAN) before this session asks the hub to start a job that may swap packages, or adds a click
+to a queue run that has not taken the queue yet: NAMES the packages (symbols) it changes, or t for any (an update of
+every package, a rollback); PLAN the plan file that job will write (the :file of its plan hook and the :plan of its
+result).")
+
+(defvar drgnx-extensions-jobs-plan-gone-functions nil
+  "Called with FILE when the plan file of a job this session does not follow is gone: another session's job ended
+\(its session deleted the file).")
 
 (defconst drgnx-extensions-jobs-timebox 7200 "Seconds an Extensions job may run.")
 
@@ -81,6 +91,12 @@ DIRS being package directory names (\"magit-4.1\") and generation G holding the 
   (file-name-as-directory (expand-file-name "extensions/progress" (drgnx-state-dir))))
 
 (defun drgnx-extensions-jobs--file (token) (expand-file-name (concat token ".json") (drgnx-extensions-jobs-dir)))
+
+(defun drgnx-extensions-jobs--plan-file (token) (concat (drgnx-extensions-jobs--file token) ".plan.json"))
+
+(defun drgnx-extensions-jobs--before (names token)
+  "Tell `drgnx-extensions-jobs-before-functions' that job TOKEN will change NAMES (a list, or t)."
+  (when names (drgnx-guard-run-hook 'drgnx-extensions-jobs-before-functions names (drgnx-extensions-jobs--plan-file token))))
 
 (defun drgnx-extensions-jobs--token ()
   "A new progress file name, made before the job starts: this session's pid, a count and a random part."
@@ -185,14 +201,17 @@ only."
 
 ;;;; Starting jobs
 
-(defun drgnx-extensions-jobs--start (kind name args ids &optional callback)
+(defun drgnx-extensions-jobs--start (kind name args ids &optional callback names)
   "Start the job \"Extensions: NAME\" of KIND running bin/drgnx ARGS, for the rows IDS; its token.  The symbol
-`progress' in ARGS becomes --progress and the job's progress file.  CALLBACK gets (ID WHY) when the hub answers."
+`progress' in ARGS becomes --progress and the job's progress file.  CALLBACK gets (ID WHY) when the hub answers.
+NAMES (a list of packages, or t): what the job may swap, told to `drgnx-extensions-jobs-before-functions' before the
+hub is asked."
   (let* ((token (drgnx-extensions-jobs--token)) (file (drgnx-extensions-jobs--file token))
          (argv (cons (expand-file-name "bin/drgnx" drgnx-dir)
                      (mapcan (lambda (a) (if (eq a 'progress) (list "--progress" file) (list a))) args))))
     (puthash token (list :token token :kind kind :status 'running :since (drgnx-timer-now) :ids ids :callback callback)
              drgnx-extensions-jobs--jobs)
+    (drgnx-extensions-jobs--before names token)
     (drgnx-exec-start (concat "Extensions: " name) argv :cwd drgnx-dir :machine "local" :local-only t
                       :timebox drgnx-extensions-jobs-timebox
                       :callback (lambda (id why) (drgnx-extensions-jobs--started token id why)))
@@ -253,9 +272,13 @@ has answered (a run an earlier session started may be waiting for the sync lock)
             (push tk left))))
       (when left
         (setq left (nreverse left))
-        (let ((token (or (drgnx-extensions-jobs--waiting)
-                         (drgnx-extensions-jobs--start 'sync (drgnx-extensions-jobs--sync-name left)
-                                                       '("sync" "--pending" "--wait" progress) nil))))
+        (let* ((names (delete-dups (delq nil (mapcar (lambda (tk) (plist-get (gethash tk drgnx-extensions-jobs--tickets) :pkg))
+                                                     left))))
+               (waiting (drgnx-extensions-jobs--waiting))
+               (token (or waiting
+                          (drgnx-extensions-jobs--start 'sync (drgnx-extensions-jobs--sync-name left)
+                                                        '("sync" "--pending" "--wait" progress) nil nil names))))
+          (when waiting (drgnx-extensions-jobs--before names waiting))   ; it has not taken the queue: before it does
           (dolist (tk left) (drgnx-extensions-jobs--ticket-put tk :job token :taken nil :error nil))
           (apply #'append (mapcar #'drgnx-extensions-jobs--ticket-state left)))))))
 
@@ -285,7 +308,8 @@ refusal for now, never `failed').  Never waits."
     ticket))
 
 (defun drgnx-extensions-jobs--command (kind args)
-  "(NAME ARGS IDS) of the job KIND with ARGS (`drgnx-extensions-jobs-run')."
+  "(NAME ARGS IDS SWAPS) of the job KIND with ARGS (`drgnx-extensions-jobs-run'); SWAPS what it may swap (a list of
+packages, t for any, nil for none)."
   (let ((text (lambda (x) (format "%s" x))))
     (pcase kind
       ('upgrade
@@ -297,12 +321,13 @@ refusal for now, never `failed').  Never waits."
                  ;; --staged goes alone: it installs exactly the entries --stage listed, hashes checked
                  (if staged '("upgrade" "--staged" progress)
                    (append '("upgrade" "--only") (mapcar #'symbol-name names) (and stage '("--stage")) '(progress)))
-                 names))))
-      ('upgrade-all (list "update every package" '("upgrade" progress) nil))
+                 names
+                 (and (not stage) (if staged t names))))))   ; a staged update may bring what NAMES need
+      ('upgrade-all (list "update every package" '("upgrade" progress) nil t))
       ('rollback
        (let ((n (and (integerp (car args)) (car args))))
          (list (if n (format "roll back to generation %d" n) "roll back")
-               (append '("rollback") (and n (list (number-to-string n))) '(progress)) nil)))
+               (append '("rollback") (and n (list (number-to-string n))) '(progress)) nil t)))
       ('refresh (list "refresh the catalog" '("extensions" "refresh" progress) nil))
       ('fetch-readme
        (let ((archive (nth 0 args)) (name (nth 1 args)))
@@ -328,9 +353,9 @@ WHY) once the hub answers (ID nil: it did not start, for WHY).  KIND and ARGS:
   plugin-install PATH [:replace t]      install the plugin at PATH, replacing one of its name with :replace
   plugin-remove NAME                    remove a plugin
 The rows of NAMES are `busy' while it runs."
-  (pcase-let* ((`(,name ,argv ,ids) (drgnx-extensions-jobs--command kind args))
+  (pcase-let* ((`(,name ,argv ,ids ,swaps) (drgnx-extensions-jobs--command kind args))
                (callback (plist-get (seq-drop-while (lambda (a) (not (keywordp a))) args) :callback))
-               (token (drgnx-extensions-jobs--start kind name argv ids callback)))
+               (token (drgnx-extensions-jobs--start kind name argv ids callback swaps)))
     (when (drgnx-extensions-jobs--job token)
       (drgnx-extensions-jobs--changed (drgnx-extensions-jobs--refresh-job token)))
     token))
@@ -379,8 +404,15 @@ The new tickets."
           (setq ids (append (drgnx-extensions-jobs--read-step (file-name-base f) f) ids))))
       (let (gone)
         (maphash (lambda (f _) (unless (member f seen) (push f gone))) drgnx-extensions-jobs--plans)
-        (dolist (f gone) (remhash f drgnx-extensions-jobs--plans)))
+        (dolist (f gone) (drgnx-extensions-jobs--plan-gone f)))
       (drgnx-extensions-jobs--changed ids))))
+
+(defun drgnx-extensions-jobs--plan-gone (file)
+  "The plan FILE a read saw before is gone: forget it, and when no job of this session wrote it (another session's
+job ended), tell `drgnx-extensions-jobs-plan-gone-functions'.  A job of this session says so at its own end."
+  (remhash file drgnx-extensions-jobs--plans)
+  (unless (drgnx-extensions-jobs--job (string-remove-suffix ".json.plan.json" (file-name-nondirectory file)))
+    (drgnx-guard-run-hook 'drgnx-extensions-jobs-plan-gone-functions file)))
 
 (defun drgnx-extensions-jobs--read-step (token file)
   "Read FILE, job TOKEN's progress, when this session follows that job; the ids that changed."
@@ -510,7 +542,7 @@ are deleted, the done hook runs, and a click left in the queue gets a job."
         (dolist (f (list file (concat file ".plan.json"))) (ignore-errors (delete-file f)))
         (remhash (concat file ".plan.json") drgnx-extensions-jobs--plans)
         (drgnx-guard-run-hook 'drgnx-extensions-jobs-done-functions (plist-get job :id)
-                              (append result (list :kind (plist-get job :kind))))
+                              (append result (list :kind (plist-get job :kind) :plan (concat file ".plan.json"))))
         (drgnx-extensions-jobs--changed (append ids (drgnx-extensions-jobs--reconcile)))))))
 
 (defun drgnx-extensions-jobs--event (event data)

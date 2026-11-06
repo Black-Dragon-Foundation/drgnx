@@ -78,9 +78,16 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   week at setup. Syncs run from the command line or by onboarding write no progress file.
 - **Plans.** A new `*.plan.json` runs `drgnx-extensions-jobs-plan-functions` once per `seq`, for every Extensions job's
   file whichever session started it: the state directory is shared, so every running drgnx repoints before the swap.
+  When a plan file a read saw is gone and no job of this session wrote it (another session's job ended),
+  `drgnx-extensions-jobs-plan-gone-functions` get its file name.
+- **Before a swap.** A job that swaps packages without a plan step the editor sees first — `upgrade` NAMES not staged
+  (the names, or t with `:staged`), `upgrade-all` and `rollback` (t), and every queue run (the names of the clicks it
+  takes, including a click that joins a waiting run) — runs `drgnx-extensions-jobs-before-functions` with (NAMES
+  PLAN-FILE) before it starts.
 - **Rows.** `(drgnx-extensions-jobs-state ID)`, ID a package or a ticket, is a cache read: `(:status queued|busy|done|failed|stopped
   :step :pkg :i :n :since :error :warnings :job :tickets)`. `drgnx-extensions-jobs-changed-functions` get the ids that
-  changed; `drgnx-extensions-jobs-done-functions` get each ended job's id and result.
+  changed; `drgnx-extensions-jobs-done-functions` get each ended job's id and result (`:status`, `:kind`, and `:plan`,
+  its plan file's name).
 - **Results**, from the summary of the job's end: the reason is the last `drgnx:` line; a `MISSING` line of a name no
   archive has reads "not in any archive you use: gnu, nongnu, melpa"; `WARNING … does not byte-compile` lines are
   "partly compiled: a.el, b.el", a warning and not a failure; "installed 4.3, not the 4.2 the page showed" when the
@@ -93,12 +100,18 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
 
 `modules/tools/drgnx-extensions-live.el` keeps a running session working while an Extensions job changes `elpa/`
 (user guide: [When a restart is needed](../guide/extensions.md#when-a-restart-is-needed)). The Extensions module's
-setup calls `drgnx-extensions-live-setup`, which puts `drgnx-extensions-live-plan` on
-`drgnx-extensions-jobs-plan-functions`, the done handler on `drgnx-extensions-jobs-done-functions` and the in-use
-file's removal on `kill-emacs-hook`.
+setup calls `drgnx-extensions-live-setup`, which puts `drgnx-extensions-live-before` on
+`drgnx-extensions-jobs-before-functions`, `drgnx-extensions-live-plan` on `drgnx-extensions-jobs-plan-functions`, the
+done handler on `drgnx-extensions-jobs-done-functions`, the gone-plan handler on
+`drgnx-extensions-jobs-plan-gone-functions` and the in-use file's removal on `kill-emacs-hook`.
+
+- **Which job settles.** A repoint is keyed by the plan file of the job that caused it (from `-before` or a plan
+  step). Only the end of a keyed job settles or points back, and with several overlapping, the last to end; a job
+  that swaps nothing (a readme fetch, a refresh) leaves the repoints alone. Another session's job settles this one
+  when its plan file goes.
 
 - **The repoint rule.** For each package directory D the plan's `replaces` or `removes` names (and, from
-  `(drgnx-extensions-live-before NAMES)`, each directory of NAMES), every `load-path` entry equal to `elpa/D` or under
+  `(drgnx-extensions-live-before NAMES KEY)`, each directory of NAMES, every one with t), every `load-path` entry equal to `elpa/D` or under
   it is replaced, one `setcar` on its cell, by its counterpart under `generations/N/elpa/D` — N the plan's generation
   (the current one for `-before`) — **only when that counterpart exists**. A package with no copy (a stock install, a
   sync with a missing package) is marked "restart drgnx" at once and its entries stay. One walk of `load-path` builds
