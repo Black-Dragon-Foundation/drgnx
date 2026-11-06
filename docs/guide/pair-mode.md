@@ -28,7 +28,8 @@ Autonomous starts chats paired ([security.md](security.md), the matrix).
 Turning Pair off for a chat closes its door at once: writes not yet in your editor are refused ("pair mode was turned
 off by the user"), the ones waiting in your editor are dropped unapplied, and the chat is told in a note. Nothing it is
 doing is cancelled. Pair mode cannot be turned on where the matrix says never. While you hold a chat's wheel its
-writes are refused the same way.
+writes are refused the same way, and so they are at once when you change the preset or a cell so that the matrix's
+`chat.project-edit` becomes never for the chat.
 
 ## When a write is refused
 

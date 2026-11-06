@@ -3803,6 +3803,20 @@ impl Session {
         Ok(())
     }
 
+    /// The matrix may have changed: this chat's `chat.project-edit` decided again; one that became never closes its
+    /// pair door now ([`crate::pair::door::Door::recheck`]), cancelling nothing.
+    pub(crate) async fn pair_recheck(self: &Arc<Self>) {
+        if !self.project_chat() {
+            return;
+        }
+        let Ok(eff) = self.cells_now().await else {
+            return;
+        };
+        if self.pair.recheck(&self.id, &eff) {
+            self.changed();
+        }
+    }
+
     async fn write_file(&self, req: &Value) -> Result<(), String> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let content = req.get("content").and_then(Value::as_str).unwrap_or("");

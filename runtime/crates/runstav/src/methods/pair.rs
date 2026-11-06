@@ -160,12 +160,12 @@ pub struct PairToggle {
 }
 
 /// `pair-drop`: drop every write of SESSION still queued in the editor (each answered `dropped`): the user turned pair
-/// off or took the wheel.
+/// off or took the wheel, or the matrix made the chat's `chat.project-edit` never.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PairDrop {
     pub session: String,
-    /// Why, as the editor's answer gives it back (`pair-off`, `held`).
+    /// Why, as the editor's answer gives it back (`pair-off`, `held`, `never`).
     pub reason: String,
 }
 

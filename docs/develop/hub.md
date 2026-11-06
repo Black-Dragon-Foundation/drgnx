@@ -1279,7 +1279,7 @@ result is (`event(NAME).check`):
 | `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
 | `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
 | `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
-| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held}`: drop the session's queued writes, each answered `dropped` with the reason |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held \| never}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
@@ -1319,7 +1319,11 @@ checkout read-only for it.
   door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
   holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
   is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
-  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel").
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel"), and
+  `Door::recheck` when the matrix makes the session's `chat.project-edit` never (a preset or a cell changed, reason
+  `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
+  answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
+  write.
 
 ## Per-session sockets
 
