@@ -111,12 +111,13 @@
     (should-not (string-search "emacs-30" tiers))))
 
 (ert-deftest drgnx-ci/the-modal-and-kitty-tiers-get-the-pinned-evil-and-kkp ()
-  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip
+  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip,
+  ;; and so do Quick Open's vertico rows, which test/no-skip.eld then fails: in the gate's job too
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (action (drgnx-ci-test--action "test-elpa")))
     (skip-unless (and tiers action))
     (drgnx-ci-test--has action "test/container/modal-elpa.sh" "echo \"DRGNX_MODAL_ELPA=" "echo \"DRGNX_USER_ELPA="
                         "etc/drgnx.lock.eld")
-    (dolist (job '("unit" "ui" "tty"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "tty"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "uses: ./drgnx/.github/actions/test-elpa"))))
 
 (ert-deftest drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image ()

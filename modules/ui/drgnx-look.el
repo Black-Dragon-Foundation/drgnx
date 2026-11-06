@@ -296,16 +296,36 @@ modus's grey, would stripe the gap).  Non-nil when a face changed."
     (dolist (w (window-list frame 'nomini))
       (when (window-parameter w 'drgnx-look-card) (drgnx-look--card-set w)))))
 
+(defvar drgnx-look--edge-before nil
+  "While ui/look is on under Glitnir: `default-frame-alist's `internal-border-width' before the setup put the cards'
+edge there, the edge a frame made since would have had without the module.")
+
+(defun drgnx-look--edge-at-birth ()
+  "Under Glitnir, in the setup: windows are made with the cards' edge (`internal-border-width', the density's gap at scale 1)
+from `default-frame-alist', and marked `drgnx-look-edge-born'.  A window is then born at its size: the edge set on a
+shown window made it ask the window manager for a bigger size, and the answer to the size it was made with could
+come after that and put it back, squeezing what was laid out in between (a daemon's restored split, 8 px short)."
+  (when (and (featurep 'glitnir) (bound-and-true-p glitnir-enable))
+    (setq drgnx-look--edge-before (alist-get 'internal-border-width default-frame-alist))
+    (drgnx-module-alist-put 'default-frame-alist 'internal-border-width (drgnx-look-density-value 'gap))
+    (drgnx-module-alist-put 'default-frame-alist 'drgnx-look-edge-born t)))
+
+(defun drgnx-look--edge-without (frame)
+  "The `internal-border-width' FRAME would have without the cards: the module's default's for a window born with it."
+  (if (frame-parameter frame 'drgnx-look-edge-born) (or drgnx-look--edge-before 0)
+    (frame-parameter frame 'internal-border-width)))
+
 (defun drgnx-look--card-frame (frame)
   "Make the docked panes of FRAME cards and widen the dividers to the gap; the frame's own widths are kept.  The
-frame's edge gets the same gap (`internal-border-width').  The dividers and the edge are painted in the gap's
+frame's edge gets the same gap (`internal-border-width'): a window made since the setup has it already
+(`drgnx-look--edge-at-birth'), so it does not change size here.  The dividers and the edge are painted in the gap's
 colour on this frame (`drgnx-look--island-faces-set'), whatever the theme says."
   (let ((gap (drgnx-look--card-gap-px frame)) (recolour nil))
     (unless (frame-parameter frame 'drgnx-look-card-saved)
       (set-frame-parameter frame 'drgnx-look-card-saved
                            (list (frame-parameter frame 'right-divider-width)
                                  (frame-parameter frame 'bottom-divider-width)
-                                 (frame-parameter frame 'internal-border-width))))
+                                 (drgnx-look--edge-without frame))))
     (dolist (p '(right-divider-width bottom-divider-width internal-border-width))
       (unless (eql (frame-parameter frame p) gap) (set-frame-parameter frame p gap)))
     (setq recolour (drgnx-look--island-faces-set frame))
@@ -316,14 +336,19 @@ colour on this frame (`drgnx-look--island-faces-set'), whatever the theme says."
     (when (and recolour (fboundp 'glitnir-refresh)) (glitnir-refresh))))
 
 (defun drgnx-look--card-restore (frame)
-  "Take the cards off FRAME and give its divider widths and edge gap back."
+  "Take the cards off FRAME and give its divider widths and edge gap back (a window born with the edge that never
+became a card frame gets the edge it would have had too; a child frame keeps its own)."
   (dolist (w (window-list frame 'nomini)) (drgnx-look--card-unset w))
-  (when-let* ((saved (frame-parameter frame 'drgnx-look-card-saved)))
-    (set-frame-parameter frame 'right-divider-width (car saved))
-    (set-frame-parameter frame 'bottom-divider-width (cadr saved))
-    (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
-    (drgnx-look--island-faces-restore frame)
-    (set-frame-parameter frame 'drgnx-look-card-saved nil)))
+  (if-let* ((saved (frame-parameter frame 'drgnx-look-card-saved)))
+      (progn
+        (set-frame-parameter frame 'right-divider-width (car saved))
+        (set-frame-parameter frame 'bottom-divider-width (cadr saved))
+        (set-frame-parameter frame 'internal-border-width (or (nth 2 saved) 0))
+        (drgnx-look--island-faces-restore frame)
+        (set-frame-parameter frame 'drgnx-look-card-saved nil))
+    (when (and (frame-parameter frame 'drgnx-look-edge-born) (not (frame-parent frame)))
+      (set-frame-parameter frame 'internal-border-width (drgnx-look--edge-without frame))))
+  (set-frame-parameter frame 'drgnx-look-edge-born nil))
 
 (defun drgnx-look-cards-apply ()
   "Docked panes as cards on every graphical frame, while Glitnir draws them."
@@ -491,6 +516,7 @@ under `auto' the follower pauses, as for a `load-theme' in config.el."
                        (setq drgnx-look--taken (list :previous (copy-sequence custom-enabled-themes) :ours nil))
                        (drgnx-look--chrome-on)
                        (drgnx-modules-push-undo "docked panes as cards" #'drgnx-look-cards-clear)
+                       (drgnx-look--edge-at-birth)     ; windows made from now on: born with the edge
                        ;; window parameters only, at once (before the frame is drawn); the gap's frame parameters
                        ;; change only with the scale, which comes idle
                        (drgnx-state-subscribe 'windows-changed #'drgnx-look--cards-windows-changed :lane 'now)
