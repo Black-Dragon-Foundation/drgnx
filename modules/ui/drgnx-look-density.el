@@ -36,6 +36,9 @@ change applies at once."
   :scope 'global :agents 'never :apply #'drgnx-look-density--settings-apply
   :schema '(enum compact comfortable roomy))
 
+(defvar drgnx-look-density-changed-hook nil
+  "Run after a change of `drgnx-look-density' has been applied while ui/look runs: the cards give the gap again.")
+
 (defun drgnx-look-density-value (key &optional density)
   "KEY's size in logical pixels at DENSITY (default `drgnx-look-density')."
   (let ((row (or (assq key drgnx-look-density-table) (error "drgnx-look-density: no size %S" key)))
@@ -99,7 +102,8 @@ user set a default `line-spacing', which then stays."
 (defun drgnx-look-density--settings-apply ()
   "The `:apply' of `drgnx-look-density': at once, while ui/look runs."
   (when (drgnx-module-running-p 'ui/look)
-    (drgnx-look-density-apply)))
+    (drgnx-look-density-apply)
+    (run-hooks 'drgnx-look-density-changed-hook)))
 
 (defun drgnx-look-ui-line-spacing (&optional line-px density scale)
   "The cons (TOP . BOTTOM) that brings a UI buffer's rows from LINE-PX device pixels (default the selected frame's
