@@ -218,10 +218,12 @@
     (drgnx-chrome-test--open dir "c.txt")
     (let* ((tabs (window-parameter (selected-window) 'tab-line-format))
            (runs (drgnx-chrome-test--mouse-runs tabs)))
-      (should (= 6 (length runs)))                      ; a name and a × for each of the three tabs
-      (should (= 6 (length (seq-uniq (mapcar #'cdr runs) #'eq))))
+      ;; one run for each tab that is not shown (the whole tab, its × included); the shown tab has none
+      (should (= 2 (length runs)))
+      (should (= 2 (length (seq-uniq (mapcar #'cdr runs) #'eq))))
       (should-not (get-text-property (1- (string-search "  b.txt" tabs)) 'mouse-face tabs))   ; the gap: no hover
-      (should (get-text-property (string-search "b.txt" tabs) 'mouse-face tabs)))))
+      (should (get-text-property (string-search "b.txt" tabs) 'mouse-face tabs))
+      (should-not (get-text-property (string-search "c.txt" tabs) 'mouse-face tabs)))))
 
 (ert-deftest drgnx-chrome/tab-faces-pad-dim-and-mark-the-active-group ()
   (drgnx-chrome-test--with dir

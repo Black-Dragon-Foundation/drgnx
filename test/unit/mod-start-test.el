@@ -99,14 +99,14 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       ;; what drgnx is, in two lines, and the buttons
       (let ((text (drgnx-start-test--text)))
         (should (string-match-p "drgnx" text))
-        (should (string-match-p "Open a Folder…" text))
-        (should (string-match-p "Open the Work Graph" text))
-        (should (string-match-p "All Keys" text))
+        (should (string-match-p "Open a folder…" text))
+        (should (string-match-p "Open the work graph" text))
+        (should (string-match-p "All keys" text))
         (should (string-match-p "Don't show this again" text)))
       ;; each button runs its command
-      (drgnx-start-test--press "Open a Folder…")
-      (drgnx-start-test--press "Open the Work Graph")
-      (drgnx-start-test--press "All Keys")
+      (drgnx-start-test--press "Open a folder…")
+      (drgnx-start-test--press "Open the work graph")
+      (drgnx-start-test--press "All keys")
       (should (equal (reverse drgnx-start-test--ran) '(folder graph keys))))))
 
 (ert-deftest drgnx-start/centred-with-plain-bullets ()

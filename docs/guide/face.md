@@ -45,6 +45,10 @@ the dark bar, a light theme for the light one, so changing the theme in Preferen
 | `drgnx-face-title-bar` | `dark` | `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
 | `drgnx-face-gtk-theme` | `"Adwaita"` | The GTK theme whose dark (or light) variant the bar uses: GTK is started with `GTK_THEME=Adwaita:dark`. Give the name of a GTK theme you have installed, without a variant: drgnx adds `:dark` or `:light`. Letters, digits and `. _ + -` only. |
 
+`drgnx-face-title-bar-default` answers what the setting should be on this desktop: `drgnx` under GNOME's window
+manager when Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+(`nhwl-toplevel-chrome-p`), else `dark`; never under a tiling window manager.
+
 What happens depends on where drgnx runs:
 
 - **Linux, X11:** the window gets the `_GTK_THEME_VARIANT` property, at once and again when the theme changes.
@@ -157,6 +161,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
+| `mode` | the buffer's `mode-name`: the bar of Magit, Help and the other read-only buffers (`drgnx-statusbar-other`) | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
 
 | Right | Shows | Click |
@@ -167,6 +172,26 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
+
+**Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face: it is
+`panel-padding` wide at each end (12 logical pixels at the comfortable density), the right-hand segments end one
+padding from the window's edge whatever the font, and when the window is too narrow the segments of
+`drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
+when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
+density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
+is the function that measures a string in a face.
+
+**The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) on the
+`gap` surface, which is the themes' mode line, and it is `status-bar` high (24 logical pixels at the comfortable
+density, 22 compact, 28 roomy) at any scale. Each segment is a target that lights with `drgnx-hover` under the pointer.
+On a graphical frame the marks are line icons: `git-branch` before the branch, `circle-x` and `triangle-alert` with the
+error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero is dimmed), `circle-check` or
+`circle-x` before the tests. A terminal keeps the glyphs. Only the `needs-you` segment is in the attention colour
+(`drgnx-status-attention`, through `drgnx-statusbar-waiting`); the others use the ok, warn and fail faces.
+
+Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
+(`special-mode`: Magit, Help, `*Messages*`) shows the segments of `drgnx-statusbar-other` (`mode`, the buffer's
+`mode-name`, then `misc`) on the left and no line and column.
 
 The most recently used editor window shows the whole bar; the other editor groups show `drgnx-statusbar-compact`
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
@@ -291,7 +316,13 @@ A quiet line along the top of the frame says where you are and where to start:
 
 On the left, the project and branch of the editor you used last (the folder of the project's root, and the same
 branch the status bar shows, so a new file git does not track yet has it too; with no project it says `drgnx`, with
-no git it leaves the branch out).
+no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
+opens the command palette. At the right end, before the window controls, two chips show while they have something to
+say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
+the agents module tells the row how many through `drgnx-topline-agents-function`).
+
+A double click on the row's empty part maximises the window or restores it (**Maximize or Restore Window**,
+`title-row-maximize`, in the palette too).
 In the middle, the three keys that open everything, as the profile you chose has them: **Quick Open** (files),
 the **Command Palette** (commands) and **Keyboard Shortcuts** (all keys). Each one is a button: click `C-S-p
 commands` and the palette opens. A command with no key of its own in your profile shows the key Emacs gives it
@@ -302,6 +333,9 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
 it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
+
+On a graphical frame the line is laid out in pixels too: the hint is centred on the frame to the pixel, and the window
+controls sit at the right edge, whatever the font and the zoom. A new width, a zoom or a font change lays it out again.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
@@ -387,9 +421,10 @@ value; Open Help has the full story.
 
 An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says what drgnx is in two lines, shows the
 three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
-active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
-Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
-one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
+active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a folder…**, **Open the work
+graph**, **All keys** and **Don't show this again**. The page is set in the look's type faces: the name in the title
+face (`drgnx-ui-title`), the keys in the heading face, the sentences in the UI text face, muted; the labels are in
+sentence case. `Tab` and `Shift-Tab` move between the buttons, `Return` presses one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
 edge), with plain bullets before the keys. In a graphical window that shows JPEG images, the Black Dragon logo (the
 dragon, wings spread) sits above the name, on the block's left edge like every line under it: nine lines of your
 default font tall (so it grows with the font and the display's scaling), lower when a narrow window would otherwise

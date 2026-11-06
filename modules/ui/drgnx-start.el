@@ -6,7 +6,7 @@
 ;; Part A of M12f.  Someone who opens drgnx and sees an empty editor does not know what to do.  `*drgnx start*' says
 ;; what drgnx is in two lines (under the logo, on a frame that shows images), shows the three keys that open
 ;; everything (the files, the commands, all keys: from the active profile, as the top line shows them) and has
-;; buttons: Open a Folder…, Open the Work Graph, All Keys, Don't show this again.
+;; buttons: Open a folder…, Open the work graph, All keys, Don't show this again.
 ;;
 ;; It shows itself, only where nothing is lost: in the editor window used last, when that window shows `*scratch*'
 ;; (never a file), by changing that window's buffer — it never splits a window, never selects another one and never
@@ -21,6 +21,8 @@
 (require 'seq)
 (require 'button)
 (require 'drgnx-registry)
+(require 'drgnx-type-faces)             ; the title, heading and text faces the page is set in
+(require 'drgnx-faces)                  ; `drgnx-text-muted'
 (require 'drgnx-face-state)
 (require 'drgnx-timer)
 (require 'drgnx-frame-kind)
@@ -43,24 +45,24 @@
   "The start page shown in an empty editor."
   :group 'drgnx-face :prefix "drgnx-start-")
 
-(defface drgnx-start-title '((t :inherit bold :height 1.4))
-  "The name at the top of the start page."
+(defface drgnx-start-title '((t :inherit (drgnx-ui-title bold)))
+  "The name at the top of the start page: the look's title type face."
   :group 'drgnx-start)
 
-(defface drgnx-start-key '((t :inherit bold))
-  "The keys on the start page."
+(defface drgnx-start-key '((t :inherit (drgnx-ui-heading bold)))
+  "The keys on the start page: the heading type face."
   :group 'drgnx-start)
 
-(defface drgnx-start-quiet '((t :inherit shadow))
-  "The start page's explanations."
+(defface drgnx-start-quiet '((t :inherit (drgnx-ui-text drgnx-text-muted shadow)))
+  "The start page's explanations: the UI text face, muted."
   :group 'drgnx-start)
 
 (defconst drgnx-start-buffer-name "*drgnx start*" "The name of the start page's buffer.")
 
 (defconst drgnx-start--buttons
-  '((open-folder "Open a Folder…" "Choose a folder to work in; it opens in the Explorer")
-    (work-graph "Open the Work Graph" "Specs, plans and branches as a graph")
-    (keys-sheet "All Keys" "Every command with its key")
+  '((open-folder "Open a folder…" "Choose a folder to work in; it opens in the Explorer")
+    (work-graph "Open the work graph" "Specs, plans and branches as a graph")
+    (keys-sheet "All keys" "Every command with its key")
     (dismiss "Don't show this again" "Keep this page away; Show Start Page in the palette brings it back"))
   "The buttons: a registry command ID (or `dismiss'), the label and the help text.  A command that is not there
 \(its module is off) has no button.")

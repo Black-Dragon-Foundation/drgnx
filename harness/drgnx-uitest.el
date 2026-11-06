@@ -73,6 +73,14 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
                   (or (equal (buffer-name) buffer) (equal (symbol-name major-mode) buffer))))
               (window-list (drgnx-uitest-root-frame) 'nomini)))
 
+(defun drgnx-uitest-pointer-set (x y)
+  "Move the compositor's pointer to the layout position X, Y (logical pixels): t when it moved.
+Only sway can be told (`swaymsg \"seat - cursor set X Y\"'); any other session returns `unsupported', so a row that
+needs a real pointer skips there.  `failed' when sway refused."
+  (if (and (getenv "SWAYSOCK") (executable-find "swaymsg"))
+      (if (zerop (call-process "swaymsg" nil nil nil (format "seat - cursor set %d %d" x y))) t 'failed)
+    'unsupported))
+
 (defun drgnx-uitest-posn (x y)
   "Position object for root-frame pixel X, Y."
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
