@@ -1,0 +1,41 @@
+{"scenario": "recording/llm-round-trip", "requires": ["v1"], "doc": "Pattern B (gates on the recorded line and the hub's exit). An editor's stream through the gateway is recorded against ratatoskr-mock llm (DRGNX_RECORD: status says so, the manifest is a mock-made v1 one, one llm.jsonl line ends complete); the mock is killed and a second hub on the same root replays it (DRGNX_REPLAY starts ratatoskr-mock llm --replay): the same request gets the same body, and the replay writes a second spend row equal to the live one; no miss is written."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/llm.json", "json": [{"path": "/chat/completions", "content_type": "text/event-stream", "chunks": [[0, "data: {\"id\":\"chat-r\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"], [30, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n"]]}]}
+{"do": "spawn", "capture": "mock", "argv": ["$MOCK", "llm", "--script", "$ROOT/llm.json", "--log", "$ROOT/llm.log", "--parent", "$HARNESS_PID"], "capture_stdout": {"regex": "MOCK-LLM-PORT (\\d+)", "name": "port"}}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "start", "hub": "live", "env": {"DRGNX_RECORD": "$ROOT/rec", "DRGNX_RECORD_PROVENANCE": "mock"}}
+{"do": "connect", "conn": "c", "hub": "live"}
+{"do":"send","conn":"c","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"c","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"token": "$capture:tok", "url": "$string"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"recording": {"mode": "record", "dir": "$ROOT/rec"}, "gateway": {"port": "$capture:gw"}}}}
+{"do": "file", "path": "$ROOT/rec/manifest.json", "json": {"format": "drgnx-recording", "version": 1, "normalize": 1, "scrub": 1, "provenance": "mock", "status": "incomplete"}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "e", "to": "tcp:127.0.0.1:$gw", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw", "Authorization": "Bearer $tok", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"}
+{"do": "expect_http", "conn": "e", "status": 200, "body_contains": "data: {\"id\":\"chat-r\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n"}
+{"do": "expect", "conn": "c", "json": {"event": "request", "data": {"agent": "editor", "provider": "mock", "input": 3, "output": 4, "status": 200}}}
+{"do": "sql_expect", "sql": "select agent, provider, input, output, status from spend", "rows": [["editor", "mock", 3, 4, 200]]}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "contains": "\"end\":\"complete\"", "count": 1}
+{"do": "file", "path": "$ROOT/rec/llm.jsonl", "contains": "\"path\":\"/chat/completions\"", "count": 1}
+{"do": "kill", "hub": "live", "signal": "TERM"}
+{"do": "expect_exit", "hub": "live", "code": 0}
+{"do": "kill", "pid": "$mock", "signal": "KILL"}
+{"do": "expect_exit", "pid": "$mock", "signal": "KILL"}
+{"do": "start", "hub": "replay", "env": {"DRGNX_REPLAY": "$ROOT/rec"}}
+{"do": "connect", "conn": "r", "hub": "replay"}
+{"do":"send","conn":"r","json":{"id":1,"method":"config/settings","params":{"overrides":[{"name":"drgnx-ai-providers","source":"row","value":{"mock":{"kind":"openai","url":"http://127.0.0.1:$port","caps":["chat"],"messages":false}}}]}}}
+{"do":"expect","conn":"r","json":{"id":1,"result":{"applied":1}}}
+{"do": "send", "conn": "r", "json": {"id": 2, "method": "gateway/editor-token"}}
+{"do": "expect", "conn": "r", "json": {"id": 2, "result": {"token": "$capture:tok2", "url": "$string"}}}
+{"do": "send", "conn": "r", "json": {"id": 3, "method": "status"}}
+{"do": "expect", "conn": "r", "json": {"id": 3, "result": {"recording": {"mode": "replay", "dir": "$ROOT/rec"}, "gateway": {"port": "$capture:gw2"}}}}
+{"do": "send", "conn": "r", "json": {"id": 4, "method": "subscribe"}}
+{"do": "expect", "conn": "r", "json": {"id": 4, "result": true}}
+{"do": "http", "conn": "e2", "to": "tcp:127.0.0.1:$gw2", "method": "POST", "path": "/p/mock/chat/completions", "headers": {"Host": "127.0.0.1:$gw2", "Authorization": "Bearer $tok2", "content-type": "application/json"}, "body": "{\"model\":\"m\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"}
+{"do": "expect_http", "conn": "e2", "status": 200, "body_contains": "data: {\"id\":\"chat-r\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4}}\n\ndata: [DONE]\n\n"}
+{"do": "expect", "conn": "r", "json": {"event": "request", "data": {"agent": "editor", "provider": "mock", "input": 3, "output": 4, "status": 200}}}
+{"do": "sql_expect", "sql": "select agent, provider, input, output, status from spend", "rows": [["editor", "mock", 3, 4, 200], ["editor", "mock", 3, 4, 200]]}
+{"do": "file", "path": "$ROOT/tmp/replay/misses.jsonl", "exists": false}
