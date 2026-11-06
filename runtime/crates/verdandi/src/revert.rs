@@ -5,7 +5,9 @@
 //! characters next to each other then and not now (the user typed between them), or a scoped character there then and
 //! gone now (the user deleted it).  Each overlap is a hunk the user decides.  The result is compared with git's
 //! 3-way merge (base: after the scope, ours: now, theirs: before it); a difference with no overlap means the span
-//! revert is wrong, and the preview carries the 3-way text instead.  **Roll back mine too:** the text before the
+//! revert is wrong, and the preview carries the 3-way text instead.  Not when others' operations lie inside the
+//! scope (typing between two of its records): the text after the scope holds them too, so git would take them away
+//! with it.  **Roll back mine too:** the text before the
 //! scope, applied as new operations, with the document as it was kept on `undone/<record>`.
 //!
 //! Loro's public API only: the scope's operations come from `export_json_in_id_span`, element ids from cursors.
@@ -177,6 +179,32 @@ pub(crate) fn scope_of(d: &LoroDoc, spans: &[Span]) -> Scope {
         first: first.as_ref().map(|f| f.0),
         before: first.map_or_else(Frontiers::default, |f| f.1),
     }
+}
+
+/// Whether operations outside SPANS lie between the scope's first operation and its end (the user typed between two
+/// of its records): then no text holds the scope's work alone, so git's 3-way (base: after the scope) has no base to
+/// check the span revert against.
+fn interleaved(d: &LoroDoc, sc: &Scope, spans: &[Span]) -> bool {
+    let (Some(from), Some(to)) = (d.frontiers_to_vv(&sc.before), d.frontiers_to_vv(&sc.after))
+    else {
+        return false;
+    };
+    to.iter().any(|(peer, end)| {
+        let mut at = from.get(peer).copied().unwrap_or(0);
+        let mut own: Vec<(i32, i32)> = spans
+            .iter()
+            .filter(|s| s.peer.0 == *peer)
+            .map(|s| (s.start as i32, s.end as i32))
+            .collect();
+        own.sort_unstable();
+        for (start, stop) in own {
+            if start > at {
+                break;
+            }
+            at = at.max(stop);
+        }
+        at < *end
+    })
 }
 
 /// An overlap as found: the scope's characters it sits between (or the run it deleted) and the user's characters.
@@ -450,7 +478,7 @@ impl History {
             keep_mine(&d, &sc, &found, &[], &mut Vec::new())?;
             let mut after = d.get_text(TEXT).to_string();
             let mut differs = false;
-            if found.is_empty() {
+            if found.is_empty() && !interleaved(&d, &sc, spans) {
                 let base = text_at(&d, &sc.after)?;
                 let theirs = text_at(&d, &sc.before)?;
                 let (clean, merged) = crate::threeway::merge(&base, &now, &theirs)?;

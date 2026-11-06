@@ -109,6 +109,45 @@ fn keep_mine_removes_only_agent_text() {
 }
 
 #[test]
+fn keep_mine_keeps_typing_between_two_records_of_the_scope() {
+    let mut f = fx();
+    let one = f.step(Kind::AgentStep, f.agent, &[(4, 0, "AGENT ONE\n")]);
+    // the user types between the agent's two records
+    f.step(Kind::Edits, f.user, &[(0, 0, "mine\n")]);
+    let t = f.text();
+    let two = f.step(
+        Kind::AgentStep,
+        f.agent,
+        &[(t.chars().count(), 0, "AGENT TWO\n")],
+    );
+    let p = f.h.preview_revert(f.br, &[one, two]).unwrap();
+    let want = "mine\none\ntwo\nthree\nfour\n";
+    assert!(p.overlaps.is_empty());
+    assert_eq!(
+        (p.files[0].after.as_str(), p.threeway_differs),
+        (want, false),
+        "git's 3-way has no base for typing inside the scope: it does not override the span revert"
+    );
+    f.h.apply_revert(p.id, &[], Mode::KeepMine, f.user, 1.0)
+        .unwrap();
+    assert_eq!(f.text(), want);
+}
+
+#[test]
+fn a_dropped_preview_is_gone() {
+    let mut f = fx();
+    let step = f.step(Kind::AgentStep, f.agent, &[(4, 0, "AGENT LINE\n")]);
+    let p = f.h.preview_revert(f.br, &[step]).unwrap();
+    assert_eq!(f.h.count("preview").unwrap(), 1);
+    f.h.drop_preview(p.id).unwrap();
+    assert_eq!(f.h.count("preview").unwrap(), 0);
+    assert!(
+        f.h.apply_revert(p.id, &[], Mode::KeepMine, f.user, 1.0)
+            .is_err()
+    );
+}
+
+#[test]
 fn keep_mine_restores_text_agent_deleted() {
     let mut f = fx();
     // the agent deletes "two\n" and turns "three" into "3"

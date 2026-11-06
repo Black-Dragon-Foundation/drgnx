@@ -991,6 +991,11 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
   theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
   user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  A text file the project's `history.db` holds as it is now is decided by the history instead: the typing waiting to
+  settle is flushed, and `History::preview_revert` over the records the session caused after the end of the step whose
+  checkpoint is used gives the text with the agent's operations undone and everyone else's kept, so an edit the user
+  made between two agent steps (which the agent's later checkpoint holds) stays; a hunk where the two meet is an
+  overlap as above (`docs/develop/history.md`, "Testing", says what this cannot tell apart).
   `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
   `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
 - **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused

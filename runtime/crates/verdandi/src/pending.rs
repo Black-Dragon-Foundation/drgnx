@@ -63,6 +63,13 @@ impl History {
         Ok(json)
     }
 
+    /// Preview ID of [`History::preview_revert`] dropped unapplied: a caller that only wanted its text.
+    pub fn drop_preview(&mut self, id: i64) -> Result<()> {
+        self.conn
+            .execute("delete from preview where id = ?1", [id])?;
+        Ok(())
+    }
+
     /// The newest record SESSION caused at or before AT.
     pub fn last_caused_by(&self, session: &str, at: f64) -> Result<Option<OpId>> {
         Ok(self

@@ -5,8 +5,11 @@
 //! user's work: a path someone changed after the agent's last step (its newest checkpoint) is the user's.  Where the
 //! user's edit and the agent's do not meet, the revert merges them (`git merge-file`: base the agent's last version,
 //! ours the user's, theirs the step's) and keeps the user's edit; where they meet, the path is an overlap the user
-//! answers (keep mine, the default; take the reverted file; or an edited text).  `roll-back-mine` writes every path
-//! back.  What the files held before is kept under `refs/drgnx/undone/<op>` in the shadow repository either way.
+//! answers (keep mine, the default; take the reverted file; or an edited text).  A text file the project's history
+//! holds as it is now takes the history's own keep mine instead (its records tell the agent's operations from the
+//! user's typing, also typing done between two agent steps, which a later checkpoint holds).  `roll-back-mine` writes
+//! every path back.  What the files held before is kept under `refs/drgnx/undone/<op>` in the shadow repository
+//! either way.
 
 use super::revert_core::{Pending, RevertCore, RevertEffect, RevertEvent, RevertStep};
 use crate::agents::rewind::{self, Target};
@@ -311,6 +314,23 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
         .clone();
     let last_seq = steps.last().map_or(t.seq, |s| s.seq);
     let newest = steps.iter().rev().find_map(|s| s.snapshot.clone());
+    // the step whose checkpoint the revert goes back to: the session's records after its end are what keep mine undoes
+    let anchor = steps
+        .iter()
+        .rev()
+        .find(|s| s.seq <= t.seq && s.snapshot.is_some())
+        .unwrap_or(&step);
+    let history = f
+        .dirs
+        .get()
+        .and_then(|d| f.core.history.of_tree(&d.hub, &cwd).ok())
+        .map(|(hub, tree)| FromHistory {
+            hub,
+            tree,
+            since: anchor.end.unwrap_or(anchor.start),
+            // read here: a blocking thread does not carry the virtual clock
+            now: crate::clock::wall_secs(),
+        });
     let root = f
         .dirs
         .get()
@@ -341,7 +361,7 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
             level,
             step,
             last_seq,
-            newest,
+            (newest, history),
         )
     })
     .await
@@ -350,8 +370,75 @@ async fn plan_for(f: &Front, t: &Target) -> Result<(Plan, Vec<w::RevertOverlap>)
     Ok((plan, cards))
 }
 
+/// The project history a revert reads its keep-mine text from: the hub and the tree, the end of the step whose
+/// checkpoint the revert goes back to (the session's records after it are its scope), and the hub's time now.
+struct FromHistory {
+    hub: std::sync::Arc<super::Hub>,
+    tree: super::Tree,
+    since: f64,
+    now: f64,
+}
+
+/// A file as the history's own keep mine leaves it: its text now, after the revert, and whether the user's later edit
+/// meets the agent's there.
+struct Kept {
+    now: String,
+    after: String,
+    overlap: bool,
+}
+
+/// The history's keep mine (`History::preview_revert`) over the records SID caused after H's step, by path: the
+/// agent's operations undone, the user's typing (a drgnx buffer's, by the user's peer) kept, whichever checkpoint holds
+/// it.  The typing waiting to settle is a record first.  Empty without records or when the history cannot say.
+fn kept_by_history(h: &FromHistory, sid: &str) -> HashMap<PathBuf, Kept> {
+    let mut g = h.hub.lock();
+    let inner = &mut *g;
+    if let Err(e) = inner
+        .settler
+        .flush(&mut inner.h, verdandi::FlushReason::Revert, h.now)
+    {
+        tracing::warn!(sid, "the typing before a revert is not a record: {e}");
+    }
+    let scope = match inner.h.caused_by(sid, h.since) {
+        Ok(s) if !s.is_empty() => s,
+        _ => return HashMap::new(),
+    };
+    let preview = h
+        .tree
+        .branch_in(&mut inner.h)
+        .and_then(|b| inner.h.preview_revert(b, &scope));
+    let p = match preview {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::info!(sid, "the history's keep mine is not used: {e}");
+            return HashMap::new();
+        }
+    };
+    // only its text is wanted: the files are written by the revert's own steps
+    if let Err(e) = inner.h.drop_preview(p.id) {
+        tracing::warn!(sid, "the history's preview stays: {e}");
+    }
+    let met: HashSet<verdandi::DocId> = p.overlaps.iter().map(|o| o.doc).collect();
+    p.files
+        .into_iter()
+        .map(|f| {
+            let overlap = met.contains(&f.doc);
+            (
+                PathBuf::from(f.path),
+                Kept {
+                    now: f.now,
+                    after: f.after,
+                    overlap,
+                },
+            )
+        })
+        .collect()
+}
+
 /// The plan's paths: every path the checkpoint and the files now differ in, each the agent's alone (restored), the
-/// user's too and mergeable (merged), or the user's where the edits meet (an overlap).  SUMMARY: the rewind tells the
+/// user's too and mergeable (merged), or the user's where the edits meet (an overlap).  A text file whose history
+/// holds the text now takes the history's keep mine: its records name the agent's operations, so the user's edit made
+/// between two agent steps (in a checkpoint the agent made later) is kept too.  SUMMARY: the rewind tells the
 /// conversation a summary, so a live session's revert needs the user's message.
 #[allow(clippy::too_many_arguments)]
 fn classify(
@@ -363,7 +450,7 @@ fn classify(
     level: RestoreLevel,
     step: norn::read::steps::Step,
     last_seq: i64,
-    newest: Option<String>,
+    (newest, history): (Option<String>, Option<FromHistory>),
 ) -> Result<(Plan, Vec<w::RevertOverlap>), Error> {
     let checkpoint = step
         .snapshot
@@ -413,6 +500,10 @@ fn classify(
         skipped: Vec::new(),
     };
     let mut cards = Vec::new();
+    let kept = history
+        .as_ref()
+        .map(|h| kept_by_history(h, &plan.sid))
+        .unwrap_or_default();
     for c in changes {
         let p = c.path.to_string_lossy().into_owned();
         if !super::tree::restorable(&c.path, &[]) {
@@ -421,6 +512,31 @@ fn classify(
         }
         if c.from_mode == 0o160000 || c.to_mode == 0o160000 {
             plan.skipped.push((c.path, "gitlink".into()));
+            continue;
+        }
+        // the history holds this file as it is now (LF text, no outside change it has not seen): its keep mine
+        if regular(c.from_mode)
+            && regular(c.to_mode)
+            && let Some(k) = kept.get(&c.path)
+            && text(Some(&now), &p).as_deref() == Some(k.now.as_str())
+        {
+            let theirs = text(Some(&checkpoint), &p);
+            if k.overlap {
+                cards.push(w::RevertOverlap {
+                    path: p,
+                    users: Some(k.now.clone()),
+                    reverted: theirs,
+                });
+                plan.overlaps.push((c.path, c.from_mode & 0o777));
+            } else if theirs.as_deref() == Some(k.after.as_str()) {
+                plan.restore.push(c.path);
+            } else {
+                plan.merges.push(Merge {
+                    path: c.path,
+                    text: k.after.clone(),
+                    mode: c.from_mode & 0o777,
+                });
+            }
             continue;
         }
         if !users.contains(&c.path) {

@@ -97,7 +97,9 @@ text inside the scope's insert goes with it) or `Edited(text)`.
 **The 3-way check.** Where no overlap is found, the result is compared with `git merge-file -p` (ours: now; base: the
 text after the scope; theirs: the text before it), run over three temporary files in a private folder. A clean merge
 that differs is a bug in the span revert: the preview says `threeway_differs` and carries git's text, which the apply
-then writes. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
+then writes. The check is not made when another author's operations lie between the scope's first operation and its
+last (the user typed between two of its records): the text after the scope then holds that typing too, and git, taking
+it for the scope's, would remove it. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
 records and a reload of each document from its rows): every case without an overlap equals git, and every overlap the
 case made is found, and no other. `verdandi::threeway::conflicts(base, ours, theirs)` is the public count of the same
 merge's conflicting hunks (0: clean; git counts at most 127, more is an error), for callers that only need to know
@@ -368,14 +370,22 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   that write, so a revert to it keeps that edit and removes the next. An agent that writes files itself, outside ACP
   (its own tools, a shell), is not covered: no hub write marks the point, so such a write made at once after an edit
   can still be in the edit's checkpoint.
-- The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
-  keep-mine puts the checkpoint's file back over them. The edit history does know such an edit is not the agent's (a
-  drgnx buffer's changes reach it through Nidhogg's hook as `history/batch`, by the user's peer, at once; another
-  program's through the watcher as `external:disk`), but the revert's files come from the checkpoints, which hold
-  whole trees and cannot tell. Keeping it means taking such a file's text from the history's own keep-mine
-  (`History::preview_revert` over the records the session caused after the step) instead of the checkpoint, and that
-  holds only where every change the agent made to the file is its record: a write outside ACP comes in as
-  `external:disk` and would pass for the user's.
+- Keep mine of a text file the history holds as it is now (the agent's served writes, a drgnx buffer's typing through
+  Nidhogg's hook as `history/batch`, the watcher's outside changes all reached it) takes the history's own keep mine
+  over the records the session caused after the end of the step whose checkpoint the revert goes back to
+  (`History::preview_revert`, its stored preview dropped at once), not the checkpoint. So a user's edit made between
+  two agent steps stays though the agent's later checkpoint holds it, and the agent's lines on both sides of it go. The
+  typing still waiting for the 30 s settle is flushed into its record first (`FlushReason::Revert`). Any other path (no
+  record of the session's, a CRLF or binary file, a history behind the file on disk) is read from the checkpoints
+  alone: a path that differs from the agent's newest checkpoint is the user's, so there an edit between two steps still
+  counts as the agent's.
+- An agent's write outside ACP (its own tools, a shell command) cannot be told from an edit in another program: both
+  reach the history only through the watcher, as `external:disk`. Neither inotify nor FSEvents names the writer
+  (fanotify does, with `CAP_SYS_ADMIN`, which the hub does not have), the agent runs as the user, and the user may save
+  a file from another editor while an agent's shell step runs, so no rule on time or process tells them apart either.
+  The history's keep mine keeps such a write as if it were the user's; only typing in a drgnx buffer is known to be the
+  user's. An outside edit the watcher had not read before the agent's next served write is diffed into that write's
+  record instead, and then counts as the agent's.
 - A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
   default answer keeps the user's file.
 - Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
