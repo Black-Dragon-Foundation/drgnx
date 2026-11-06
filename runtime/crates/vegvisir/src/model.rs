@@ -98,6 +98,29 @@ pub struct SessionFact {
     /// Its own plan entries done/total, when its task has no plan steps.
     #[serde(default)]
     pub progress: Option<(u32, u32)>,
+    /// The job it started that runs or waits now.
+    #[serde(default)]
+    pub job: Option<JobFact>,
+}
+
+/// A job a session started, as its card and its machine's queue show it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobFact {
+    pub id: String,
+    pub name: String,
+    /// The machine it runs on; none while it waits.
+    #[serde(default)]
+    pub runner: Option<String>,
+    /// `running` or `waiting`.
+    pub state: String,
+    /// When it started (seconds since the epoch), as the hub's row says; the card works the elapsed time out.
+    pub started: u64,
+    /// Its time box, in whole minutes.
+    #[serde(default)]
+    pub limit_min: Option<u32>,
+    /// The names of the keys sent to it (never their values).
+    #[serde(default)]
+    pub keys: Vec<String>,
 }
 
 /// A closed timeline step.
@@ -152,6 +175,22 @@ pub struct MachineFact {
     /// Reported by `machines/report` (jobq), not the hub's own pool.
     #[serde(default)]
     pub reported: bool,
+    /// What the hub knows of it when it is one of its runners.
+    #[serde(default)]
+    pub runner: Option<RunnerFact>,
+}
+
+/// A runner's side of a machine: trust, state (its reason when it is out of rotation), jobs, icon and, for cloud, the
+/// cost text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunnerFact {
+    pub trust: String,
+    pub state: String,
+    pub jobs: u32,
+    /// `monitor`, `laptop`, `server` or `cloud`.
+    pub icon: String,
+    #[serde(default)]
+    pub cost: Option<String>,
 }
 
 /// What a needs-you card is (part 1's cards).
@@ -232,6 +271,12 @@ pub struct Fields {
     /// A machine's slots: used, total.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slots: Option<(u32, u32)>,
+    /// A machine that is one of the hub's runners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<RunnerFact>,
+    /// An agent's job.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<JobFact>,
 }
 
 /// One item of the map.
@@ -569,6 +614,7 @@ impl Model {
                 fields.minutes = Some(f.minute.saturating_sub(s.fact.since));
                 fields.model = (!s.fact.model.is_empty()).then(|| s.fact.model.clone());
                 fields.spend = s.fact.spend.clone();
+                fields.job = s.fact.job.clone();
                 fields.context = s.fact.context;
                 let task = s.task.or_else(|| {
                     s.parent
@@ -621,6 +667,7 @@ impl Model {
             Kind::Machine => {
                 let m = &f.machines[&y];
                 fields.slots = Some((m.used, m.slots));
+                fields.runner = m.runner.clone();
                 m.name.clone()
             }
         };

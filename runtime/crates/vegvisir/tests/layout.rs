@@ -60,6 +60,7 @@ fn agent_events(i: usize, a: &Gen, plans: u8, machines: u8) -> Vec<Event> {
         spend: None,
         context: None,
         progress: None,
+        job: None,
     }));
     for j in 0..a.subs {
         out.push(Event::Session(SessionFact {
@@ -78,6 +79,7 @@ fn agent_events(i: usize, a: &Gen, plans: u8, machines: u8) -> Vec<Event> {
             spend: None,
             context: None,
             progress: None,
+            job: None,
         }));
     }
     if !a.files.is_empty() {
@@ -129,6 +131,7 @@ fn world_events(w: &World) -> Vec<Event> {
                     slots: 4,
                     used: 1,
                     reported: false,
+                    runner: None,
                 })
                 .collect(),
         ));

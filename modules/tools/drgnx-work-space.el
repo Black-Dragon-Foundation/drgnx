@@ -65,6 +65,7 @@
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
+(declare-function drgnx-work-job-log "drgnx-work-detail")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
 
@@ -412,6 +413,9 @@ follows the windows; the commands."
   (drgnx-command-define 'work-diff-reject-hunk :category "Work" :title "Reject the Hunk"
                         :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
                         :doc "Reject the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-job-log :category "Work" :title "Show the Job's Live Log"
+                        :command #'drgnx-work-job-log :map 'drgnx-work-detail-mode-map
+                        :doc "Show the end of the log of the job on this row of a machine's queue in the side panel")
   (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")

@@ -14,6 +14,7 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'text-property-search)
 (require 'drgnx-view)
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-map)
@@ -199,6 +200,38 @@ to nil when none is.  Nothing signals."
                   out)))))
     (delq nil (nreverse out))))
 
+(defun drgnx-work-detail--job-row (agent job)
+  "The queue row of the job JOB of the agent item AGENT: its name, agent, machine, state, time and the keys sent.  The
+text carries the job's id for `drgnx-work-job-log'."
+  (propertize
+   (concat "  "
+           (string-join
+            (delq nil (list (plist-get job :name) (plist-get agent :label)
+                            (or (plist-get job :runner) "waiting for a machine") (plist-get job :state)
+                            (and (equal (plist-get job :state) "running") (plist-get job :started)
+                                 (drgnx-work-map--job-time job))
+                            (and (plist-get job :keys) (format "keys: %s" (string-join (plist-get job :keys) ", ")))))
+            " · "))
+   'drgnx-work-job (plist-get job :id)))
+
+(defun drgnx-work-detail--machine-queue (state machine)
+  "The queue of the machine item MACHINE in STATE: the jobs running on it, each with its agent, and the jobs that wait
+for a machine, or nil when there are none."
+  (let ((name (plist-get machine :label)) (running nil) (waiting nil)
+        (takes-waiting (or (equal (plist-get machine :label) "local") (drgnx-work-map--field machine :runner))))
+    (dolist (id (drgnx-work-client-ids state))
+      (let* ((it (drgnx-work-client-item state id)) (job (and (equal (plist-get it :kind) "agent")
+                                                              (drgnx-work-map--field it :job))))
+        (cond ((null job))
+              ((equal (plist-get job :runner) name) (push (drgnx-work-detail--job-row it job) running))
+              ((and takes-waiting (null (plist-get job :runner))) (push (drgnx-work-detail--job-row it job) waiting)))))
+    (when (or running waiting)
+      (concat (format "queue · %s\n" name)
+              (mapconcat #'identity (nreverse running) "\n")
+              (if (and running waiting) "\n" "")
+              (if waiting (concat "waiting\n" (mapconcat #'identity (nreverse waiting) "\n")) "")
+              "\n  l live log"))))
+
 (defun drgnx-work-detail-sections (state sel &optional finished)
   "The side panel's sections for SEL in STATE: an alist (KEY . TEXT) of :head :why :touches :conclusions :actions.
 FINISHED: the id of the item that went and was replaced by SEL, said first."
@@ -238,10 +271,11 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
                       (if-let* ((c (funcall f :conclusion))) (concat "  → " c) "  none recorded")))
         ;; a branch in the merge queue: where it stands and what it conflicts with, as the hub sent it
         (cons :queue
-              (when-let* ((q (funcall f :queue)))
-                (concat "merge queue\n"
-                        (format "  %d of %d" (car q) (cadr q))
-                        (if-let* ((c (funcall f :conflicts))) (format "\n  conflicts with %s" (string-join c ", ")) ""))))
+              (or (when-let* ((q (funcall f :queue)))
+                    (concat "merge queue\n"
+                            (format "  %d of %d" (car q) (cadr q))
+                            (if-let* ((c (funcall f :conflicts))) (format "\n  conflicts with %s" (string-join c ", ")) "")))
+                  (and (equal (plist-get item :kind) "machine") (drgnx-work-detail--machine-queue state item))))
         (cons :actions "actions\n  open (RET)"))))))
 
 (defun drgnx-work-detail-text (state sel &optional finished)
@@ -282,6 +316,31 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
       (setq drgnx-work-detail--map map-buffer)
       (drgnx-view-touch drgnx-view))
     buffer))
+
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-work-map--job-time "drgnx-work-map")
+
+(defun drgnx-work-job-log ()
+  "Show the end of the log of the job on this row of the queue (the first job of the panel when point is on none).
+Press it again for what came since."
+  (interactive)
+  (let ((id (or (get-text-property (line-beginning-position) 'drgnx-work-job)
+                (get-text-property (point) 'drgnx-work-job)
+                (save-excursion (goto-char (point-min))
+                                (when-let* ((m (text-property-search-forward 'drgnx-work-job)))
+                                  (prop-match-value m))))))
+    (unless id (user-error "No job in this queue"))
+    (drgnx-hub-call "exec/log" (list :id id :tail_bytes 65536)
+                    (lambda (result err)
+                      (if err (message "Work: the log of %s: %s" id err)
+                        (with-current-buffer (let ((name (format "*drgnx job log: %s*" id)))
+                                               (when-let* ((old (get-buffer name))) (kill-buffer old))
+                                               (generate-new-buffer name))
+                          (insert (string-join (plist-get result :lines) "\n") "\n")
+                          (special-mode)
+                          (goto-char (point-max))
+                          (display-buffer (current-buffer)))))
+                    :deadline 10)))
 
 (defun drgnx-work-detail-buffers ()
   (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-detail-mode)) (buffer-list)))
