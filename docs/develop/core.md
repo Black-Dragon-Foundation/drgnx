@@ -2714,6 +2714,9 @@ unspecified never makes colour code signal.
 | `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
 | `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
 
+`drgnx-color-black` and `drgnx-color-white` are black and white as `(R G B)`, named once here for the code that moves
+a colour toward one of them (`(drgnx-color-hex drgnx-color-white)`), so no other file spells them.
+
 ### Where colours may be written
 
 Colour literals live only in `themes/drgnx-tokens.eld`, the token table of drgnx's three themes. Faces inherit

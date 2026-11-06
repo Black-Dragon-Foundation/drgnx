@@ -14,6 +14,12 @@
 (require 'cl-lib)
 (require 'color)
 
+(defconst drgnx-color-black '(0.0 0.0 0.0)
+  "Black as (R G B): where a colour goes to get darker.  Named once here, as the colour rule asks.")
+
+(defconst drgnx-color-white '(1.0 1.0 1.0)
+  "White as (R G B): where a colour goes to get lighter.  Named once here, as the colour rule asks.")
+
 (defun drgnx-color-rgb (color &optional frame)
   "COLOR as (R G B), floats in 0..1, or nil for nil, `unspecified-bg/-fg' or a name Emacs does not know.
 FRAME is the frame whose display resolves a colour name."

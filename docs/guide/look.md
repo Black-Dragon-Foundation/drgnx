@@ -55,8 +55,8 @@ The first time drgnx starts with `auto` because your `settings.el` named no them
 own themes; Color Theme picks another". It is shown once.
 
 `drgnx-look-accent` is `system` by default: the accent and the focus ring take the accent colour the desktop gives,
-made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text. Set it to `theme` for the
-theme's own accent.
+made lighter on a dark theme and darker on a light one until it reads at 4.5:1 as text (7:1 under High Contrast).
+Set it to `theme` for the theme's own accent.
 
 ### Terminals
 
