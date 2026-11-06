@@ -408,7 +408,17 @@ between knows whole turns went by (a turn can be shorter than the update throttl
 for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
 `agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
 stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
-a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. `agents/pause` cancels a
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. A tool entry's `content`
+text over 64 KiB goes in an event as its first and last 32 KiB with `outputBytes`, the whole size; the hub itself keeps
+the first and last 8 MiB of an output past 16 MiB. `agents/tool-output {id, tool_call, from, to}` answers
+`{text, total_bytes, truncated}`: bytes `from..to` (cut at character boundaries, so the next `from` is `from` plus
+`text`'s length), at most 256 KiB; `truncated` says the answer holds less than was asked. A range that starts in
+output the hub did not keep gets the kept head and tail with a line saying how many bytes are gone. An agent message
+entry in an event carries `blocks`, `[{block, kind, spans: [{text, style}]}]`, the first time and for a connection
+that has just subscribed, then `patch`, the blocks that are new or changed (same shape; only the last block of the
+text is parsed again as it streams); `kind` is `paragraph`, `heading`, `code`, `quote`, `list`, `rule`, `table` or
+`html`, `style` is `text` or space-joined `emph`, `strong`, `strike`, `link`, `code`, `h1`..`h6`. `text` stays as it
+was. `agents/pause` cancels a
 busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
 transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
 for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
@@ -1048,6 +1058,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/tool-output` | user | `{from: natnum, id: Id, to: natnum, tool_call: string}` | `{text: string, total_bytes: natnum, truncated: boolean}` | no |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |

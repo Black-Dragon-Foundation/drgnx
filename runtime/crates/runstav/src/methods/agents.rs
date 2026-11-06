@@ -336,6 +336,28 @@ pub struct ToolInput {
     pub truncated: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolOutputParams {
+    /// The session.
+    pub id: Id,
+    /// The tool call's id (the `id` of its `tool` entry).
+    pub tool_call: Bounded<String, 256>,
+    /// The first byte of the output wanted.
+    pub from: u64,
+    /// The byte after the last one wanted.
+    pub to: u64,
+}
+
+/// A range of a tool call's output: bytes `from..to` of it (cut at character boundaries), the size of the whole, and
+/// whether the answer holds less than was asked (the page cap, or output the hub did not keep).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ToolOutput {
+    pub text: String,
+    pub total_bytes: u64,
+    pub truncated: bool,
+}
+
 /// A slice of a session's transcript by steps (never a whole transcript): the steps and their entries.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -470,6 +492,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/tool-input", AgentsToolInput(ToolInputParams) -> ToolInput,
             classes: [User], writes: false,
             doc: "a tool call's raw input, which no event carries (at most 256 KiB, else its JSON text cut and `truncated`)",
+        ),
+        method!(
+            "agents/tool-output", AgentsToolOutput(ToolOutputParams) -> ToolOutput,
+            classes: [User], writes: false,
+            doc: "bytes `from`..`to` of a tool call's output, at most 256 KiB an answer (beyond what the hub kept: its head and tail, `truncated`), with the whole size",
         ),
         method!(
             "agents/pause", AgentsPause(ById) -> bool,

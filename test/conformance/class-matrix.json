@@ -17,6 +17,7 @@
   "agents/start": ["user"],
   "agents/stop": ["user"],
   "agents/tool-input": ["user"],
+  "agents/tool-output": ["user"],
   "brief/build": ["user"],
   "browser/check": ["user"],
   "brief/set": ["user"],
