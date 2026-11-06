@@ -918,6 +918,52 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
+  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
+  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
+  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
@@ -1348,7 +1394,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,

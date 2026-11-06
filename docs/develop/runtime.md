@@ -169,13 +169,17 @@ tail). There is no SDK role framework.
   (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
   (1024 events buffer).
 - **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
-  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork`. Every
+  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork_into`. Every
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
   connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
-- **Fork.** `fork(sid, Some(ForkPoint { message_id }))` sends `session/fork` with
-  `_meta.jetbrains.air.fork {version: 1, messageId}`; without a point, a plain fork. The new session starts in the
-  directory of the session it forks (the connection remembers the `cwd` of every session it opened or loaded).
+- **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
+  mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
+  caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
+  the point `_meta.jetbrains.air.fork {version: 1, messageId}` is merged into that `_meta`, key by key; without one, a
+  plain fork of the session's end. The source need not be a session this connection opened: a fresh process forks what
+  the agent kept on disk, which is how the hub always forks (a new process per fork, so the lock is applied and
+  verified at launch).
 - **Events.** `Update { at, sid, update, message_id }`: `at` is the receipt time in seconds since the epoch, taken
   when the line is read and never going backwards; `message_id` is the `messageId` of a message or thought chunk.
   `Request(Incoming)`: `Permission`, `ReadFile` or `WriteFile`, each with a `Responder`. A responder dropped
@@ -184,8 +188,9 @@ tail). There is no SDK role framework.
   (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
   with `Error::Closed`.
 - Unknown notifications are ignored; unknown requests get -32601.
-- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children; the mock agent is
-  `ratatoskr-mock acp`.
+- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
+  `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two
+  processes on one state folder show a fork on a connection that never saw the session.
 
 ## eitri: no-link file access
 
@@ -655,7 +660,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
+- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
   =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
@@ -665,7 +670,10 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
   `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
-  to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+  to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
+  `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
+  process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
+  fork's log line names `from`, `level`, `messageId`, `kept`, `turns`, `cwd`, `mcpServers` and `claude_options`.
 - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
   and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
   host's loopback.

@@ -1,6 +1,7 @@
 //! The edit history's methods for the editor (agent system part 4; `docs/develop/history.md`, "The hub"): the editor
 //! tells the hub which buffers it tracks and what changed in them, so the history holds the user's keystrokes beside
 //! the agents' and the outside world's.  User only: no agent tool and no manager tool reaches them.
+//! It also names what a revert or a fork of an agent's work restores (`docs/develop/hub.md`, "Rewind and fork").
 
 use super::method;
 use crate::registry::Method;
@@ -106,4 +107,15 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the editor stops tracking a buffer",
         ),
     ]
+}
+
+/// How much of an agent's conversation a rewind or a fork restores: up to the step's message (Claude), up to the
+/// last turn that completed at or before it (Codex), or a new conversation told a labelled summary (any other agent,
+/// a fork across providers, a fork that failed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestoreLevel {
+    Message,
+    Turn,
+    Summary,
 }
