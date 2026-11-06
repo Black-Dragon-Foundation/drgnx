@@ -371,6 +371,7 @@
         (live-take-over "C-c C-c" :map (drgnx-live . drgnx-live-mode-map))
         (remote-open "SPC r o")
         (remote-reconnect "SPC r r")
+        (agents-pair :none "the palette; the Pair chip in the agent panel")
         (agent-settings "SPC a c")
         (agent-settings-here "," :map (drgnx-agents-ui . drgnx-agents-list-mode-map))
         (agent-settings-refresh "g" :map (drgnx-agent-settings . drgnx-agent-settings-mode-map))

@@ -233,4 +233,136 @@ arrived meanwhile is applied after the first, by the outer drain."
         (kill-buffer buf)
         (should (equal sent (list (list "pair/closed" (list :file new)))))))))
 
+;;;; The save after an apply
+
+(defun drgnx-agent-pair-test--apply-one (buf text)
+  "Queue one write to BUF and run the slot, the apply putting TEXT at the end: the write's answer."
+  (drgnx-agent-pair--arrived (drgnx-agent-pair-test--write 1 "s1" buf))
+  (cl-letf (((symbol-function 'drgnx-agent-pair--apply)
+             (lambda (_write)
+               (save-excursion (goto-char (point-max)) (insert text))
+               (list :result "applied" :version (buffer-chars-modified-tick)))))
+    (drgnx-agent-pair--drain))
+  (drgnx-agent-pair-answer-of 1))
+
+(defun drgnx-agent-pair-test--disk (buf)
+  (with-temp-buffer (insert-file-contents (buffer-file-name buf)) (buffer-string)))
+
+(ert-deftest drgnx-agent-pair/a-clean-buffer-is-saved ()
+  "A write to a buffer with no unsaved edits is saved in the same slot: the file on disk is the agent's text."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "a.txt" "a\n")))
+      (should-not (buffer-modified-p buf))
+      (let ((answer (drgnx-agent-pair-test--apply-one buf "agent\n")))
+        (should (equal (plist-get answer :result) "applied"))
+        (should (eq (plist-get answer :saved) t))
+        (should-not (plist-get answer :not_saved)))
+      (should-not (buffer-modified-p buf))
+      (should (equal (drgnx-agent-pair-test--disk buf) "a\nagent\n")))))
+
+(ert-deftest drgnx-agent-pair/a-dirty-buffer-is-not ()
+  "A write to a buffer with your unsaved edits leaves it unsaved: the disk has neither, and the answer says so."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "a.txt" "a\n")))
+      (with-current-buffer buf (goto-char (point-min)) (insert "yours\n"))
+      (let ((answer (drgnx-agent-pair-test--apply-one buf "agent\n")))
+        (should (equal (plist-get answer :result) "applied"))
+        (should (eq (plist-get answer :saved) :false)))
+      (should (buffer-modified-p buf))
+      (should (equal (drgnx-agent-pair-test--disk buf) "a\n")))))
+
+(ert-deftest drgnx-agent-pair/old-versions-question-keeps-them ()
+  "With numbered backups past the kept counts and `delete-old-versions' nil, the save would ask whether to delete
+them: the guard keeps them instead, without asking, and the save goes through."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "v.txt" "a\n")))
+      (dolist (n '(1 2 3))
+        (with-temp-file (expand-file-name (format "v.txt.~%d~" n) dir) (insert "old\n")))
+      (with-current-buffer buf
+        (setq-local make-backup-files t) (setq-local version-control t) (setq-local backup-inhibited nil))
+      (let* ((delete-old-versions nil) (kept-old-versions 1) (kept-new-versions 1) (backup-directory-alist nil)
+             (backup-enable-predicate #'always)
+             (answer (drgnx-agent-pair-test--apply-one buf "agent\n")))
+        (should (eq (plist-get answer :saved) t)))
+      (should-not (buffer-modified-p buf))
+      (dolist (n '(1 2 3 4))
+        (should (file-exists-p (expand-file-name (format "v.txt.~%d~" n) dir)))))))
+
+(ert-deftest drgnx-agent-pair/final-newline-ask-becomes-t ()
+  "`require-final-newline' `ask' would ask at the save: the guard adds the newline instead."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "n.txt" "a")))
+      (with-current-buffer buf (setq-local require-final-newline 'ask))
+      (should (eq (plist-get (drgnx-agent-pair-test--apply-one buf "b") :saved) t))
+      (should (equal (drgnx-agent-pair-test--disk buf) "ab\n")))))
+
+(ert-deftest drgnx-agent-pair/coding-system-question-becomes-not-saved ()
+  "Text the file's coding system cannot encode would make the save ask for another: not saved, with the reason, and
+the buffer keeps the text."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "c.txt" "a\n")))
+      (with-current-buffer buf (setq buffer-file-coding-system 'iso-latin-1-unix))
+      ;; no default coding system is acceptable, so Emacs asks for one (else it would pick UTF-8 by itself)
+      (let* ((select-safe-coding-system-accept-default-p #'ignore)
+             (answer (drgnx-agent-pair-test--apply-one buf "日本\n")))
+        (should (equal (plist-get answer :result) "applied"))
+        (should (eq (plist-get answer :saved) :false))
+        (should (stringp (plist-get answer :not_saved))))
+      (should (buffer-modified-p buf))
+      (should (equal (drgnx-agent-pair-test--disk buf) "a\n")))))
+
+(ert-deftest drgnx-agent-pair/a-formatter-that-asks-becomes-not-saved ()
+  "`before-save-hook' runs; a formatter there that asks a question leaves the buffer unsaved, with the reason."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "f.txt" "a\n")) (ran nil))
+      (with-current-buffer buf
+        (add-hook 'before-save-hook (lambda () (setq ran t) (y-or-n-p "Reformat? ")) nil t))
+      (let ((answer (drgnx-agent-pair-test--apply-one buf "agent\n")))
+        (should ran)
+        (should (eq (plist-get answer :saved) :false))
+        (should (string-match-p "would have asked" (plist-get answer :not_saved))))
+      (should (buffer-modified-p buf))
+      (should (equal (drgnx-agent-pair-test--disk buf) "a\n")))))
+
+(ert-deftest drgnx-agent-pair/a-read-char-in-a-save-hook-becomes-not-saved ()
+  "A save hook that reads a character never waits for one: not saved, with the reason."
+  (drgnx-agent-pair-test--with
+    (let ((buf (drgnx-agent-pair-test--visit dir "r.txt" "a\n")))
+      (with-current-buffer buf (add-hook 'before-save-hook (lambda () (read-char "Key: ")) nil t))
+      (let ((answer (drgnx-agent-pair-test--apply-one buf "agent\n")))
+        (should (eq (plist-get answer :saved) :false))
+        (should (stringp (plist-get answer :not_saved))))
+      (should (buffer-modified-p buf)))))
+
+;;;; The toggle
+
+(ert-deftest drgnx-agent-pair/toggle-explains-why-it-is-off ()
+  "The Pair toggle of a chat: turning it off always works; turning it on says why it cannot (the matrix's cell, the
+history primitives, an agent whose proof is not green yet, a chat outside a project), and a chat that waits on your
+lines says which."
+  (let ((off (list :id "s1" :name "Claude" :provider "claude" :paired nil))
+        (on (list :id "s1" :name "Claude" :provider "claude" :paired t)))
+    (let ((s (drgnx-agent-pair-toggle-state off "never" t)))
+      (should-not (plist-get s :can))
+      (should (string-match-p "chat.project-edit is never" (plist-get s :why))))
+    (let ((s (drgnx-agent-pair-toggle-state off "ask" nil)))
+      (should-not (plist-get s :can))
+      (should (equal (plist-get s :why) "Pair needs Nidhogg .6 with Glitnir")))
+    (let ((s (drgnx-agent-pair-toggle-state (plist-put (copy-sequence off) :provider "codex") "ask" t)))
+      (should-not (plist-get s :can))
+      (should (string-prefix-p "Pair is not available for this agent yet: " (plist-get s :why))))
+    (let ((s (drgnx-agent-pair-toggle-state (list :id "s2" :name "Gemini" :provider "gemini") "allow" t)))
+      (should-not (plist-get s :can))
+      (should (string-match-p "only for a chat in your project" (plist-get s :why))))
+    (let ((s (drgnx-agent-pair-toggle-state off "ask" t)))
+      (should (plist-get s :can))
+      (should-not (plist-get s :on))
+      (should-not (plist-get s :why)))
+    (let ((s (drgnx-agent-pair-toggle-state on "never" nil)))
+      (should (plist-get s :can))
+      (should (plist-get s :on)))
+    (let ((s (drgnx-agent-pair-toggle-state
+              (append on (list :waiting (list :file "/p/src/main.rs" :lines '(120 124)))) "allow" t)))
+      (should (equal (plist-get s :waiting) "Claude is waiting for lines 120–124 of main.rs")))))
+
 ;;; agent-pair-test.el ends here

@@ -28,6 +28,8 @@
 (require 'drgnx-hub-client)
 (require 'drgnx-timer)
 (require 'drgnx-large-file)
+(require 'drgnx-no-prompt)
+(require 'drgnx-registry)
 
 (defconst drgnx-agent-pair-needs-history
   "pair needs the edit history (Nidhogg .6 with Glitnir); nothing of this write was applied"
@@ -161,11 +163,38 @@ cached state only (measured by the `pair-apply-tick' probe).  Nothing in it asks
                 (drgnx-agent-pair--take (pop drgnx-agent-pair--queue))))))))))
 
 (defun drgnx-agent-pair--take (write)
-  "WRITE, out of its queue: dropped when its deadline passed, else applied.  From here on it is never dropped."
+  "WRITE, out of its queue: dropped when its deadline passed, else applied and, when it applied, saved in the same
+slot (`drgnx-agent-pair--save').  From here on it is never dropped."
   (let ((id (plist-get write :write)))
     (if (> (drgnx-timer-now) (plist-get write :deadline))
         (drgnx-agent-pair--answer id (list :result "dropped" :reason "expired"))
-      (drgnx-agent-pair--answer id (drgnx-agent-pair--apply write)))))
+      (let* ((clean (not (buffer-modified-p)))
+             (answer (drgnx-agent-pair--apply write)))
+        (drgnx-agent-pair--answer id (if (equal (plist-get answer :result) "applied")
+                                         (append answer (drgnx-agent-pair--save clean))
+                                       answer))))))
+
+(defun drgnx-agent-pair--save (clean)
+  "The save after an applied write, in the same slot: the answer's `:saved' and `:not_saved'.  A buffer that was
+CLEAN before the apply is saved, so the agent's builds read what it wrote; one with your unsaved edits stays unsaved
+\(the agent is told the disk has neither).  The save never asks (`drgnx-with-no-prompts'): a question it would have
+asked, or an error, leaves the buffer unsaved and becomes `:not_saved' WHY.  `before-save-hook' runs as usual, here
+rather than inside `save-buffer' (which turns its errors into messages and saves anyway): a hook that would ask
+stops the save, any other error of it is a message, as Emacs has it."
+  (if (not clean)
+      (list :saved :false)
+    (let* ((failed nil)
+           (why (condition-case err
+                    (drgnx-with-no-prompts
+                      (condition-case e (run-hooks 'before-save-hook)
+                        ((inhibited-interaction drgnx-would-prompt drgnx-prompt-in-automatic-path)
+                         (signal (car e) (cdr e)))
+                        (error (message "Before-save hook error: %S" e)))
+                      (let ((before-save-hook nil) (save-silently t)) (save-buffer)))
+                  (error (setq failed (error-message-string err))))))
+      (cond ((and (or why failed) (buffer-modified-p)) (list :saved :false :not_saved (or why failed)))
+            ((buffer-modified-p) (list :saved :false :not_saved "the save did not write the file"))
+            (t (list :saved t))))))
 
 (defun drgnx-agent-pair--apply (_write)
   "Apply WRITE to the current buffer, whole or not at all: its answer (`pair/answer' params without the id).
@@ -307,9 +336,103 @@ for any other buffer)."
   (drgnx-agent-pair--send-open-set)
   (dolist (w (reverse drgnx-agent-pair--unacked)) (drgnx-agent-pair--send-answer w)))
 
+;;;; The toggle
+
+(defconst drgnx-agent-pair-proven '("claude" "gemini")
+  "The providers whose pair proof row is green: their own edit tools are off and every edit shape reaches the door.")
+
+(defconst drgnx-agent-pair-not-yet
+  '(("codex" . "its read-only mode lock is not proven to keep its own edits off yet")
+    ("kimi" . "its lock, with plan mode refused, is not proven yet")
+    ("deepseek" . "its lock and its ask plugin are not proven yet"))
+  "Why Pair is not offered yet for a provider whose pair proof row is not green: (PROVIDER . REASON).")
+
+(defun drgnx-agent-pair-primitives-p ()
+  "Whether this Emacs has the edit history's primitives pair mode needs (Nidhogg .6 with Glitnir)."
+  (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain)))
+
+(defun drgnx-agent-pair--name (snapshot)
+  (or (plist-get snapshot :name) (plist-get snapshot :profile) (plist-get snapshot :id)))
+
+(defun drgnx-agent-pair-toggle-state (snapshot cell primitives)
+  "What the Pair toggle of the chat SNAPSHOT (an `agents/list' row) shows: (:on ON :can CAN :why WHY :waiting TEXT).
+CELL is the chat's `chat.project-edit' verdict (\"allow\", \"ask\", \"never\"), PRIMITIVES whether this Emacs has the
+history primitives.  Turning Pair off can always be done; turning it on cannot, with WHY, where the chat is not in a
+project, the cell is never, the primitives are missing or the provider's pair proof is not green.  TEXT: \"NAME is
+waiting for lines A–B of FILE\" while the chat waits on your lines."
+  (let* ((on (eq (plist-get snapshot :paired) t))
+         (provider (plist-get snapshot :provider))
+         (why (unless on
+                (cond ((not (plist-member snapshot :paired)) "Pair is only for a chat in your project")
+                      ((equal cell "never")
+                       "Pair is off: the matrix's chat.project-edit is never for this chat (its preset or a column)")
+                      ((not primitives) "Pair needs Nidhogg .6 with Glitnir")
+                      ((not (member provider drgnx-agent-pair-proven))
+                       (concat "Pair is not available for this agent yet: "
+                               (or (cdr (assoc provider drgnx-agent-pair-not-yet))
+                                   "nothing proves yet that its own edit tools are off"))))))
+         (waiting (plist-get snapshot :waiting))
+         (lines (plist-get waiting :lines)))
+    (list :on on :can (null why) :why why
+          :waiting (and waiting
+                        (format "%s is waiting for %s of %s" (drgnx-agent-pair--name snapshot)
+                                (pcase lines
+                                  (`(,a ,b) (if (equal a b) (format "line %s" a) (format "lines %s–%s" a b)))
+                                  (_ "you"))
+                                (file-name-nondirectory (or (plist-get waiting :file) "")))))))
+
+(defun drgnx-agent-pair-set (session on &optional callback)
+  "Ask the hub to turn pair mode ON or off for chat SESSION (`agents/pair'); CALLBACK gets (RESULT ERROR).  Turning it
+off cancels nothing: the chat's writes are refused from then on and the ones queued here are dropped."
+  (drgnx-hub-call "agents/pair" (list :id session :on (if on t :false)) (or callback #'ignore)))
+
+(defun drgnx-agent-pair-toggle (&optional session)
+  "Agents: Pair — turn pair mode on or off for a chat in your project (SESSION, else the one chat, else chosen).
+When it cannot be turned on, says why; a chat waiting on your lines says which."
+  (interactive)
+  (let* ((chats (cl-remove-if-not (lambda (s) (plist-member s :paired))
+                                  (plist-get (drgnx-hub-call-sync "agents/list" nil) :sessions)))
+         (snap (cond (session (cl-find session chats :key (lambda (s) (plist-get s :id)) :test #'equal))
+                     ((null (cdr chats)) (car chats))
+                     (t (let ((names (mapcar (lambda (s) (cons (drgnx-agent-pair--name s) s)) chats)))
+                          (cdr (assoc (completing-read "Pair for chat: " names nil t) names)))))))
+    (unless snap (user-error "No chat in a project to pair"))
+    (let* ((provider (plist-get snap :provider)) (profile (plist-get snap :profile))
+           (cell (plist-get (drgnx-hub-call-sync
+                             "matrix/check"
+                             (list :action "chat.project-edit"
+                                   :who (append (list :role "chat") (and provider (list :provider provider))
+                                                (and profile (list :agent profile)))))
+                            :verdict))
+           (state (drgnx-agent-pair-toggle-state snap cell (drgnx-agent-pair-primitives-p)))
+           (name (drgnx-agent-pair--name snap))
+           (on (not (plist-get state :on)))
+           (waiting (plist-get state :waiting)))
+      (if (not (plist-get state :can))
+          (message "%s" (plist-get state :why))
+        (drgnx-agent-pair-set
+         (plist-get snap :id) on
+         (lambda (_result err)
+           (message "%s%s"
+                    (cond (err (format "Pair: %s" err))
+                          (on (format "Pair is on for %s" name))
+                          (t (format "Pair is off for %s; nothing it was doing is cancelled" name)))
+                    (if waiting (concat " · " waiting) ""))))))))
+
 ;;;; The module
 
+(defun drgnx-agent-pair--unpair-all ()
+  "Turn pair off for every paired chat (the module goes off): the hub closes their doors; nothing is cancelled."
+  (drgnx-agent-pair--send
+   "agents/list" nil
+   (lambda (result _err)
+     (dolist (s (plist-get result :sessions))
+       (when (eq (plist-get s :paired) t)
+         (drgnx-agent-pair--send "agents/pair" (list :id (plist-get s :id) :on :false)))))))
+
 (defun drgnx-agent-pair--setup ()
+  (drgnx-command-define 'agents-pair :category "Agents" :title "Pair: Turn On or Off" :command #'drgnx-agent-pair-toggle
+                        :doc "A chat in your project edits the files you have open, live (pair mode); off cancels nothing")
   (add-hook 'drgnx-hub-event-functions #'drgnx-agent-pair--event)
   (add-hook 'drgnx-hub-connected-functions #'drgnx-agent-pair--connected)
   (add-hook 'find-file-hook #'drgnx-agent-pair--opened)
@@ -321,13 +444,15 @@ for any other buffer)."
 
 (defun drgnx-agent-pair--teardown ()
   "The module goes off: the hub routes nothing here any more (an empty open set), every queued write is dropped
-\(`dropped', reason `pair-off'), the record goes.  Nothing it applied is undone."
+\(`dropped', reason `pair-off'), pair goes off for the paired chats (the hub closes their doors), the record goes.
+Nothing is cancelled and nothing it applied is undone."
   (drgnx-agent-pair--send "pair/open-set" (list :files []))
   (dolist (buf (buffer-list))
     (with-current-buffer buf
       (dolist (w (prog1 drgnx-agent-pair--queue (kill-local-variable 'drgnx-agent-pair--queue)))
         (drgnx-agent-pair--answer (plist-get w :write) (list :result "dropped" :reason "pair-off")))
       (kill-local-variable 'drgnx-agent-pair--file)))
+  (drgnx-agent-pair--unpair-all)
   (drgnx-timer-cancel 'agent-pair-drain)
   (setq drgnx-agent-pair--pending nil drgnx-agent-pair--commands 0 drgnx-agent-pair--lock nil
         drgnx-agent-pair--order nil drgnx-agent-pair--unacked nil)

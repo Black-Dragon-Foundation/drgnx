@@ -98,8 +98,9 @@ without the binary."
        found)
      (format "the agent said %S" text))))
 
-(defun drgnx-agent-pair-hub-test--idle (sid)
-  "Wait until chat SID's turn ended by itself: idle, with a stop entry."
+(defun drgnx-agent-pair-hub-test--idle (sid &optional unpaired)
+  "Wait until chat SID's turn ended by itself (idle), and with UNPAIRED until its snapshot says `paired' false too:
+the `agents/get' answer."
   (let ((asked nil) (found nil))
     (drgnx-agent-pair-hub-test--settle
      (lambda ()
@@ -108,8 +109,10 @@ without the binary."
          (drgnx-hub-call "agents/get" (list :id sid)
                          (lambda (r _e)
                            (setq asked nil)
-                           (when (equal (plist-get (plist-get r :session) :status) "idle")
-                             (setq found r)))))
+                           (let ((s (plist-get r :session)))
+                             (when (and (equal (plist-get s :status) "idle")
+                                        (or (not unpaired) (and (plist-member s :paired) (not (plist-get s :paired)))))
+                               (setq found r))))))
        found)
      "the turn ended")))
 
@@ -190,6 +193,51 @@ sends `pair-drop', the write is answered dropped and never lands, and the agent 
         (should (equal (plist-get (drgnx-agent-pair-answer-of write) :result) "dropped"))
         (should (equal (plist-get (drgnx-agent-pair-answer-of write) :reason) "never"))
         (drgnx-agent-pair-hub-test--said sid "chat.project-edit is now never")
+        (drgnx-test-deliver-all)
+        (should (equal (with-current-buffer buf (buffer-string)) "readme\n"))))))
+
+;;;; Task: the toggle and the module
+
+(defun drgnx-agent-pair-hub-test--held-write (project)
+  "A paired chat in PROJECT whose first of two `edit_file' calls on README waits in the queue (a command runs, so the
+caller binds `drgnx-agent-pair--commands'): (SID BUFFER WRITE)."
+  (let* ((file (concat project "README")) (buf (find-file-noselect file))
+         (sid (drgnx-agent-pair-hub-test--chat project)))
+    (drgnx-agent-pair-hub-test--send sid (drgnx-agent-pair-hub-test--edit file) (drgnx-agent-pair-hub-test--edit file))
+    (drgnx-agent-pair-hub-test--settle (lambda () (buffer-local-value 'drgnx-agent-pair--queue buf)) "the write queued")
+    (list sid buf (plist-get (car (buffer-local-value 'drgnx-agent-pair--queue buf)) :write))))
+
+(ert-deftest drgnx-agent-pair-hub/toggle-reaches-the-hub-and-cancels-nothing ()
+  "Turning Pair off for a chat with a write queued here: the hub has it off, the queued write is dropped and never
+lands, and the chat's turn goes on to its next call and ends by itself."
+  (drgnx-agent-pair-hub-test--with
+    (let ((drgnx-agent-pair--commands 1))
+      (pcase-let ((`(,sid ,buf ,write) (drgnx-agent-pair-hub-test--held-write project)) (done nil))
+        (drgnx-agent-pair-set sid nil (lambda (r e) (setq done (list r e))))
+        (drgnx-agent-pair-hub-test--settle (lambda () done) "the toggle's answer")
+        (should (equal done '(t nil)))
+        (drgnx-agent-pair-hub-test--settle (lambda () (null (buffer-local-value 'drgnx-agent-pair--queue buf)))
+                                           "the queue dropped")
+        (should (equal (plist-get (drgnx-agent-pair-answer-of write) :reason) "pair-off"))
+        (drgnx-agent-pair-hub-test--said sid "call: pair mode was turned off by the usercall: ")
+        (let ((r (drgnx-agent-pair-hub-test--idle sid)))
+          (should (plist-member (plist-get r :session) :paired))
+          (should-not (plist-get (plist-get r :session) :paired))
+          (should (cl-find "stop" (plist-get r :entries) :key (lambda (e) (plist-get e :type)) :test #'equal)))
+        (drgnx-test-deliver-all)
+        (should (equal (with-current-buffer buf (buffer-string)) "readme\n"))))))
+
+(ert-deftest drgnx-agent-pair-hub/module-off-turns-pair-off-and-cancels-nothing ()
+  "Turning tools/agent-pair off with a write queued: the write is dropped, the hub has the chat unpaired and routes
+nothing here, nothing of the chat's turn is cancelled, and nothing applied is undone."
+  (drgnx-agent-pair-hub-test--with
+    (let ((drgnx-agent-pair--commands 1))
+      (pcase-let ((`(,sid ,buf ,_write) (drgnx-agent-pair-hub-test--held-write project)))
+        (should-not (drgnx-module-teardown 'tools/agent-pair))
+        (should-not (buffer-local-value 'drgnx-agent-pair--queue buf))
+        (drgnx-agent-pair-hub-test--said sid "call: pair mode was turned off by the user")
+        (let ((r (drgnx-agent-pair-hub-test--idle sid t)))
+          (should (cl-find "stop" (plist-get r :entries) :key (lambda (e) (plist-get e :type)) :test #'equal)))
         (drgnx-test-deliver-all)
         (should (equal (with-current-buffer buf (buffer-string)) "readme\n"))))))
 

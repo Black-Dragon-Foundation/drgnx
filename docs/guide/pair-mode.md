@@ -38,6 +38,27 @@ The module `tools/agent-pair` is pair mode's side in Emacs:
   buffer's text, unsaved edits included.
 - **For now every write is refused whole** ("pair needs the edit history"): applying one safely over what you typed
   since the chat read the file needs Nidhogg .6 with Glitnir and the edit history, which are not here yet.
+- **Saving never asks.** A write to a buffer with no unsaved edits is saved right after it is applied, so the chat's
+  builds and tests see it; a buffer with your unsaved edits stays unsaved, and the chat is told the file on disk has
+  neither yet. Your `before-save-hook` (a formatter) runs as usual; one that would ask a question stops the save.
+  Anything the save would have asked (a coding
+  system, a formatter's question, deleting old backups, a final newline set to ask) never shows: old backups are
+  kept, the final newline is added, and otherwise the buffer stays unsaved and the chat is told "not saved: WHY".
+
+## Turning Pair on and off
+
+**Agents: Pair: Turn On or Off** (`agents-pair`, in the palette; the agent panel's Pair chip does the same) turns
+pair mode on or off for a chat in your project, the one there is or the one you choose. Turning it off always works.
+When it cannot be turned on it says why:
+
+- "Pair is off: the matrix's chat.project-edit is never for this chat" — change the preset or the cell first;
+- "Pair needs Nidhogg .6 with Glitnir" — the edit history pair mode needs is not in this Emacs;
+- "Pair is not available for this agent yet: REASON" — Claude and Gemini have pair mode now; Codex, Kimi and DeepSeek
+  get it once their own edit tools are proven off.
+
+A chat whose writes of one file were refused twice says so: "Claude is waiting for lines 120–124 of main.rs".
+Turning the module `tools/agent-pair` off turns pair off for the paired chats, drops what waits in the queue and
+cancels nothing; what was applied stays.
 
 ## Turning Pair off
 
