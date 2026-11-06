@@ -15,3 +15,7 @@
  :why "a terminal frame re-applies its dock sizes after a resize" :until "B11")
 (:file "modules/ui/drgnx-tty-popups.el" :what "window-configuration-change-hook"
  :why "windows made on an ASCII terminal get the ASCII table" :until "B11")
+(:file "modules/tools/drgnx-agent-panel.el" :what "window-buffer-change-functions"
+ :why "a panel is subscribed to its session's entries while a window shows it" :until "never: the hub is told what is visible")
+(:file "modules/tools/drgnx-agent-panel.el" :what "get-buffer-window"
+ :why "a panel asks whether a window of a visible frame shows it, to subscribe to its session's entries" :until "never: the hub is told what is visible")

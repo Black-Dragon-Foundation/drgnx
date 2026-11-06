@@ -1,0 +1,26 @@
+# The agent panel
+
+The agent panel shows one agent session in the right dock: who it is and what it is doing, a row of chips, and the
+conversation as rows. Open it with **Agents: Open the Agent Panel** (`C-k p` in the VS Code profile, `SPC a p` in Vim).
+There is one tab for each open agent.
+
+Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); every panel goes with it.
+
+## What you see
+
+- **Header:** the agent's name, then what it is doing: "Claude · running 6 min", "held by you" (you paused it) or
+  "Pair · editing your checkout".
+- **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
+  the hub reports it; none is made up.
+- **Steps:** a tool call is one line: a dot for its state, its title, its result after `·`, and its time and cost on the
+  right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
+  `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
+  step it belongs to; `TAB` opens or folds it, with the step's detail.
+- **Messages:** yours, the agent's, and the ends of turns, in order.
+
+## Live and paged
+
+A panel asks the hub for the session's entries only while a window shows it, and lets them go when none does. It opens
+on the last page of steps (`drgnx-agent-panel-page-steps`, 50) and loads the page before when you scroll to the top
+(or run **Load Earlier Steps**). New entries are added at the end and changed ones are patched in place; what is
+already on screen is never drawn again, and rows are drawn in slices of 4 ms or less that stop when you type.
