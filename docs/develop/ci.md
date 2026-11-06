@@ -426,6 +426,13 @@ kkp, vertico, compat and orderless (vertico needs compat; Quick Open's tests dri
 saved only by a push to or the daily run of `main`, on its own commit), and the action sets `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` to it. So the evil and real-kkp teardown tests, the modal
 isolation test and kitty's kkp tests run instead of skipping. So the caches are few:
 
+**Test packages.** MELPA serves only the newest build of each package, so a pinned `evil-collection-DATE.tar` 404s the
+day MELPA rebuilds it, which broke round 4's unit and GUI jobs. `modal-elpa.sh` therefore falls back to a mirror (a
+release of this repository, tag `test-packages`, `DRGNX_ELPA_MIRROR` overrides the URL) that holds each pinned tarball
+under its own name; the sha256 check is the same for both sources. Whoever bumps a MELPA pin uploads the tarball
+(already fetched and checked) with `gh release upload test-packages NAME.tar --repo Black-Dragon-Foundation/drgnx`
+(`gh release create test-packages` the first time) in the same change; old tarballs stay. A cache hit needs neither.
+
 | What | Key | Saves | Bust it |
 |---|---|---|---|
 | the prebuilt images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, checked out at pinned upstream commits at build, so the tier fetches none) | tag = `test/container/image-tag.sh`: the Containerfile and every file it copies (and `f45` for the test images); pulled by digest | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min; the Rust job's dnf installs and Nidhogg; the escape legs' bubblewrap build | change an input, or run `Test images` by hand (the weekly run refreshes every tag with Fedora's and Ubuntu's updates) |
