@@ -233,7 +233,10 @@ pieces of at most a quarter of that many characters, and batches are filled up t
 against the hash of the buffer's whole text, which costs time in proportion to the buffer (about 4 ms per MB), so a
 buffer over 256 K characters is drained only after 0.3 s of idleness and its changes wait in the ring meanwhile. When the hub answers
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
-that goes drops every registration; the next connection registers the buffers again.
+that goes drops every registration; the next connection registers the buffers again. After a drain that sent changes,
+`drgnx-history-drained-functions` runs with `(BUFFER COUNTER CHANGES)`: the buffer, the number of its drains that sent
+changes so far, and the changes sent (the hub's shape, 0-based `:start`). With no listener it costs nothing; a listener
+that signals is skipped.
 
 The module `tools/work-space` turns the mode on in its setup and off in its teardown.
 A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is

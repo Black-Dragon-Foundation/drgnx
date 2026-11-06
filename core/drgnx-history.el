@@ -43,10 +43,16 @@
 (defvar drgnx-history-idle-delay 0.3
   "Seconds of idleness before a large buffer's ring is drained.")
 
+(defvar drgnx-history-drained-functions nil
+  "Abnormal hook run after each drain that sent changes, with (BUFFER COUNTER CHANGES): the buffer, how many drains
+of it have sent changes (1 for the first), and the changes sent, in the hub's shape.  A listener that signals is
+ignored; with no listener the drain does nothing more.")
+
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
-to a batch: `ok', `resync', or `resynced' once the text went), RESYNCING (a `history/resync' is out)."
-  id registered last resyncing)
+to a batch: `ok', `resync', or `resynced' once the text went), RESYNCING (a `history/resync' is out), DRAINS (the
+drains that sent changes)."
+  id registered last resyncing (drains 0))
 
 (defvar drgnx-history--buffers (make-hash-table :test 'eq :weakness 'key)
   "Buffer → `drgnx-history--st'.  Weak on the buffer; entries go with `kill-buffer-hook' and the mode's teardown.")
@@ -259,14 +265,23 @@ costs time in proportion to the buffer and must not sit between two keystrokes. 
     (cond ((null drained))
           ((eq drained 'resync) (drgnx-history--resync buffer st))
           ((drgnx-history--st-resyncing st) nil)  ; the text on its way includes these
-          (t (let* ((batches (drgnx-history--batches (drgnx-history--changes drained) drgnx-history-batch-max))
-                    (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)))
+          (t (let* ((changes (drgnx-history--changes drained))
+                    (batches (drgnx-history--batches changes drgnx-history-batch-max))
+                    (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)) (sent t))
                (while batches
                  (let* ((batch (pop batches)) (lastp (null batches)))
                    (unless (drgnx-history--send "history/batch" (list :buffer_id id :changes batch :region_hash hash)
                                                 (if lastp (lambda (r e) (drgnx-history--batch-replied buffer st r e)) #'ignore))
-                     (setq batches nil)
-                     (drgnx-history--forget buffer)))))))))
+                     (setq batches nil sent nil)
+                     (drgnx-history--forget buffer))))
+               (when sent
+                 (cl-incf (drgnx-history--st-drains st))
+                 (when drgnx-history-drained-functions (drgnx-history--tell buffer st changes))))))))
+
+(defun drgnx-history--tell (buffer st changes)
+  "Tell `drgnx-history-drained-functions' that BUFFER's CHANGES went; a listener that signals is skipped."
+  (dolist (fn drgnx-history-drained-functions)
+    (condition-case nil (funcall fn buffer (drgnx-history--st-drains st) changes) (error nil))))
 
 (defun drgnx-history--drain ()
   "The `history-drain' timer: when Nidhogg's rings hold changes, send them.  Never prompts, waits or signals."
