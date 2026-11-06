@@ -10,7 +10,7 @@
 //!
 //! Loro's public API only: the scope's operations come from `export_json_in_id_span`, element ids from cursors.
 
-use crate::docs::TEXT;
+use crate::docs::{Change, TEXT};
 use crate::store::{BranchKind, DocUpdate, History, Kind, Record};
 use crate::{BranchId, DocId, Error, Frontier, OpId, PeerId, Result, Span, loro};
 use ::loro::cursor::Side;
@@ -92,24 +92,28 @@ pub(crate) fn char_ids(t: &LoroText) -> Vec<ID> {
         .collect()
 }
 
-/// A deletion the scope made: the version before it and the range it deleted then.
-struct Deletion {
-    order: (i64, u64),
-    before: Frontiers,
-    start: usize,
-    end: usize,
+/// A deletion the scope made: the delete operation's id, the version before it and the range it deleted then.
+#[derive(Clone)]
+pub(crate) struct Deletion {
+    pub(crate) order: (i64, u64),
+    pub(crate) id: ID,
+    pub(crate) before: Frontiers,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 /// What the scope's operations did in one document.
-struct Scope {
-    inserted: HashSet<ID>,
-    deletions: Vec<Deletion>,
+pub(crate) struct Scope {
+    pub(crate) inserted: HashSet<ID>,
+    pub(crate) deletions: Vec<Deletion>,
     /// The version right after the scope, and right before its first operation.
-    after: Frontiers,
-    before: Frontiers,
+    pub(crate) after: Frontiers,
+    pub(crate) before: Frontiers,
+    /// The first operation's (Lamport, peer): what was done after the scope began is ordered above it.
+    pub(crate) first: Option<(i64, u64)>,
 }
 
-fn scope_of(d: &LoroDoc, spans: &[Span]) -> Scope {
+pub(crate) fn scope_of(d: &LoroDoc, spans: &[Span]) -> Scope {
     let mut inserted = HashSet::new();
     let mut deletions = Vec::new();
     let mut first: Option<((i64, u64), Frontiers)> = None;
@@ -149,6 +153,7 @@ fn scope_of(d: &LoroDoc, spans: &[Span]) -> Scope {
                         };
                         deletions.push(Deletion {
                             order: (lamport, ch.id.peer),
+                            id: ID::new(ch.id.peer, op.counter),
                             before,
                             start: start.max(0) as usize,
                             end: end.max(0) as usize,
@@ -169,12 +174,13 @@ fn scope_of(d: &LoroDoc, spans: &[Span]) -> Scope {
         inserted,
         deletions,
         after,
+        first: first.as_ref().map(|f| f.0),
         before: first.map_or_else(Frontiers::default, |f| f.1),
     }
 }
 
 /// An overlap as found: the scope's characters it sits between (or the run it deleted) and the user's characters.
-struct Found {
+pub(crate) struct Found {
     /// The user's characters inside the scope's insert, alive now.
     users: Vec<ID>,
     /// Where it is now.
@@ -227,8 +233,37 @@ fn overlaps(d: &LoroDoc, sc: &Scope) -> Result<Vec<Found>> {
     Ok(out)
 }
 
-/// Keep mine on D, with CHOICES for its overlaps (missing ones keep the user's text), as PEER's operations.
-fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]) -> Result<()> {
+/// N characters at AT deleted from T, and logged.
+fn delete_logged(t: &LoroText, at: usize, n: usize, log: &mut Vec<Change>) -> Result<()> {
+    t.delete(at, n).map_err(loro)?;
+    log.push(Change {
+        start: at,
+        old_len: n,
+        inserted: String::new(),
+    });
+    Ok(())
+}
+
+/// S inserted into T at AT, and logged.
+fn insert_logged(t: &LoroText, at: usize, s: &str, log: &mut Vec<Change>) -> Result<()> {
+    t.insert(at, s).map_err(loro)?;
+    log.push(Change {
+        start: at,
+        old_len: 0,
+        inserted: s.to_owned(),
+    });
+    Ok(())
+}
+
+/// Keep mine on D, with CHOICES for its overlaps (missing ones keep the user's text), as PEER's operations.  Each
+/// delete and insert it makes is pushed onto LOG as a change, in order (offsets in the text as the one before left it).
+pub(crate) fn keep_mine(
+    d: &LoroDoc,
+    sc: &Scope,
+    found: &[Found],
+    choices: &[OverlapChoice],
+    log: &mut Vec<Change>,
+) -> Result<()> {
     let t = d.get_text(TEXT);
     let now = char_ids(&t);
     // where an edited hunk goes, as a cursor that follows the edits below
@@ -259,7 +294,7 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
         }
     }
     for (s, l) in runs.iter().rev() {
-        t.delete(*s, *l).map_err(loro)?;
+        delete_logged(&t, *s, *l, log)?;
     }
     // 2. what the scope deleted, inserted again after its surviving left neighbour, the latest deletion first; a
     // character inserted again stands in for the one it replaces when a later run looks for its neighbour
@@ -296,7 +331,7 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
                 }
             }
             let txt: String = chars[*s..*s + *l].iter().collect();
-            t.insert(at, &txt).map_err(loro)?;
+            insert_logged(&t, at, &txt, log)?;
             for i in 0..*l {
                 if let Some(new) = t.get_cursor(at + i, Side::Right).and_then(|c| c.id) {
                     again.insert(ids0[*s + i], new);
@@ -309,7 +344,7 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
         let at = c
             .and_then(|c| d.get_cursor_pos(&c).ok())
             .map_or(0, |p| p.current.pos);
-        t.insert(at.min(t.len_unicode()), &s).map_err(loro)?;
+        insert_logged(&t, at.min(t.len_unicode()), &s, log)?;
     }
     Ok(())
 }
@@ -412,7 +447,7 @@ impl History {
                         .collect(),
                 });
             }
-            keep_mine(&d, &sc, &found, &[])?;
+            keep_mine(&d, &sc, &found, &[], &mut Vec::new())?;
             let mut after = d.get_text(TEXT).to_string();
             let mut differs = false;
             if found.is_empty() {
@@ -531,7 +566,7 @@ impl History {
             match (mode, three) {
                 (Mode::RollBackMine, _) => set_text(d, &text_at(d, &sc.before)?)?,
                 (Mode::KeepMine, Some(t)) => set_text(d, &t)?,
-                (Mode::KeepMine, None) => keep_mine(d, &sc, &found, mine)?,
+                (Mode::KeepMine, None) => keep_mine(d, &sc, &found, mine, &mut Vec::new())?,
             }
             d.commit();
             let after = d.oplog_vv().get(&peer.0).copied().unwrap_or(0);

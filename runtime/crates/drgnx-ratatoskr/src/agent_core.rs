@@ -167,6 +167,8 @@ pub async fn serve(
         Params::HistoryHunks(p) => answer(crate::history::views::hunks(f, c, p).await),
         Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
         Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
+        Params::HistoryOpHunks(p) => answer(crate::history::hunk::op_hunks(f, c, p).await),
+        Params::HistoryRevertHunk(p) => answer(crate::history::hunk::revert_hunk(f, c, p).await),
         Params::RunnersUnbench(p) => answer(runners::methods::unbench(f, c, p).await),
         Params::RunnersRemove(p) => answer(runners::methods::remove(f, c, p).await),
         Params::RunnersKeys(p) => answer(runners::methods::keys(f, c, p).await),

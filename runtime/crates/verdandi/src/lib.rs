@@ -8,6 +8,7 @@
 //! - [`text`]: what a document holds: UTF-8 with LF, or the snapshot class.
 //! - [`log`]: the operation log's records, their causes, and the settle rule that groups typing into them.
 //! - [`revert`]: span revert on element ids, the overlaps a user's later edits make, the 3-way check.
+//! - [`revert_hunk`]: one record's hunks, one of them reverted with later typing kept, and who undid each.
 //! - [`pending`]: a revert's pending record (what a crash between its steps needs to finish), and its scope by session.
 
 pub mod anchor;
@@ -20,6 +21,7 @@ mod merge;
 pub mod pending;
 pub mod redact;
 pub mod revert;
+pub mod revert_hunk;
 #[cfg(test)]
 mod revert_props;
 mod schema;
@@ -35,6 +37,7 @@ pub use docs::{ActiveDoc, Change};
 pub use excise::Target;
 pub use log::{FlushReason, Settler};
 pub use revert::{FilePreview, Mode, Overlap, OverlapChoice, RevertPreview};
+pub use revert_hunk::{HunkConflict, HunkPlan, HunkState, OpHunk};
 pub use store::{BranchKind, Cause, DocUpdate, History, Kind, OpRecord, Record};
 pub use text::{Coding, NotText};
 pub use vacuum::vacuum_file;

@@ -1095,6 +1095,31 @@ budget chain; the forecast line the user saw is the editor's).
 - The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
   session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
 
+## One hunk of a record
+
+What Reject on one agent hunk calls, a worktree agent's or a paired chat's (whose writes land in the user's buffers,
+as the peer `agent:<session>` on the user's branch). Both user only; `history/hunk.rs` over `verdandi::revert_hunk`.
+
+- **`history/op/hunks {worktree, op? | session?}`**: the hunks of record OP, or of every `edits` record of SESSION's
+  agent on the worktree's branch, each `{op, path, index, start_line, end_line, text, deleted, state, undone_by}`:
+  lines 1-based in the text now, `text` the record's text still there, `deleted` what it removed, `state` `live`,
+  `partly-undone` or `undone`, and `undone_by` the records that took its text away or put back what it deleted, each
+  with its author (the user's `C-/` of an agent's write is `{"kind": "user"}`: "undone by you"). Settling typing is
+  written into its records first.
+- **`history/revert/hunk {worktree, op, path, hunk}`**: hunk HUNK of record OP reverted as the user's operations,
+  keeping what the user typed since. `state`:
+  - `applied`: no editor buffer tracks the file, so the hub applied it, wrote one `revert` record (parent OP, OP's
+    cause) and the file through `eitri`, announced to the origin core first, then `history/applied`. A file whose
+    disk differs from its history is refused (`stale`), as `history/take` is.
+  - `in-buffer`: an editor buffer tracks the file, so the hub changes nothing (it never writes behind an open buffer)
+    and answers `buffer_id`, `version` (the SHA-256 of the text the edits apply to, the hash `history/batch` carries)
+    and `edits` (`history/batch` changes, in order, with the origin `revert:<op>`). The editor applies them when its
+    buffer hashes to `version`; its batch then records them as the user's operations in one `revert` record naming OP.
+  - `conflict`: the text the hunk deleted has no place to go back to (a neighbour it sat between is gone, or other
+    text now sits beside it outside the agent's own text): `conflict {start_line, end_line, users, reverted}`,
+    nothing changed.
+  - `undone`: nothing to do; `undone_by` names who did.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
@@ -1288,10 +1313,12 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
 | `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
 | `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/hunk` | user | `{hunk: integer, op: integer, path: string, worktree: string}` | `HunkReverted` | yes |
 | `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
 | `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |

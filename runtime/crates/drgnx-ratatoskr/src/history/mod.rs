@@ -14,11 +14,14 @@
 //!   `history/take`, `history/redo`.
 //! - [`merge`]: a task's branch merged into the job's tree, as the union of their documents.
 //! - [`views`]: `history/blame` and `history/hunks`: who wrote the text, and what a branch changed since a record.
+//! - [`hunk`]: one hunk of an agent's record reverted with later typing kept, and who undid each hunk:
+//!   `history/op/hunks`, `history/revert/hunk`.
 
 pub mod backup;
 pub mod blob;
 pub mod branches;
 mod capture;
+pub mod hunk;
 pub(crate) mod merge;
 pub mod methods;
 pub mod origin;

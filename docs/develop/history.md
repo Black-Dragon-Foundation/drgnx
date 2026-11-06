@@ -150,6 +150,31 @@ text after record `since` to its text now, numbered as `git diff --unified=0` nu
 --no-index` over two private temporary files, as the 3-way check does `git merge-file`). A file with no change is left
 out.
 
+## One hunk of a record
+
+`src/revert_hunk.rs`: Reject on one hunk of an agent's record, with the user's later typing kept, and who undid it.
+
+- **A record's hunks** (`History::op_hunks(branch, op)`) come from element ids at the record's own version: each element
+  it inserted has its line, each deletion the line of the point it left (after its nearest surviving left neighbour).
+  Sorted by line, an unchanged line between two effects starts a new hunk, so the hunks are what `git diff -U0` shows
+  for that record alone. Each `OpHunk` has its lines now, the record's text still there, the text it deleted, a state
+  (`Live`, `PartlyUndone`, `Undone`) and `undone_by`. `History::records_of(branch, session)` lists the `edits` records
+  of a session's agent on a branch (a paired chat's, on the user's).
+- **Reverting one** (`History::plan_hunk_revert(branch, op, doc, index)`) is keep mine on that hunk's part of the
+  record's scope, run on a fork: its elements still there are deleted, the text it deleted goes back after its
+  surviving neighbour, and the characters the user typed inside the agent's text are other elements, so they stay. The
+  plan is the fork's deletes and inserts as `Change`s in order; `History::apply_hunk_revert` replays them on the live
+  document as the user's operations with one `revert` record (parent the record, its cause), and an editor applying
+  them in its buffer replays the same operations (`History::record_hunk_revert` then writes the record). A **conflict**
+  is a hunk whose deleted text has no place to go back to: a neighbour it sat between is gone, or other text now sits
+  beside it outside the agent's own text; the plan says so and nothing changes. An undone hunk plans nothing.
+- **Who undid it.** Loro names no deleter of an element, but every delete operation's position at its own version
+  names what it removed: the delete operations ordered after the record (Lamport) are read at their versions, and those
+  that removed the hunk's elements name their records through the op index; text the record deleted that is back at
+  its place (an editor's undo inserts it again as new elements) names the record that inserted it. Nothing is stored,
+  so it holds for any history; the scan costs a version checkout per later delete operation in the document and runs
+  only for a hunk with something gone.
+
 ## Privacy: redaction and excise
 
 `redact::scan(batch)` runs on capture, before a change reaches a document: the shapes of well-known keys (`sk-…`,
