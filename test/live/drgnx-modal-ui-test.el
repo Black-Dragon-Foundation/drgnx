@@ -184,18 +184,14 @@
               (let ((shown (drgnx-modal-ui-test--where sess)))
                 (should (string-search (car shown) (cadr row)))
                 (should (eq (cadr shown) 'normal))))
-            ;; Work and the Agents list (two rows each) in the right dock: there and back with C-w l and C-w h (Escape is
-            ;; Dock Back in the sidebar's docks only, in every key profile)
+            ;; the Agents list (two rows) in the right dock: there and back with C-w l and C-w h (Escape is Dock Back in
+            ;; the sidebar's docks only, in every key profile).  The dock's Work tab retired: SPC a w opens the Work space
             (drgnx-modal-session-eval
-             sess '(progn (advice-add 'drgnx-work-ui--roots :override
-                                      (lambda () (list (list :id "r1" :kind 'ruling :title "First ruling")
-                                                       (list :id "r2" :kind 'ruling :title "Second ruling"))))
-                          (advice-add 'drgnx-work-ui-refresh :override #'ignore)
-                          (setq drgnx-agents--sessions
+             sess '(progn (setq drgnx-agents--sessions
                                 (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle :conn 'fake :cwd default-directory)
                                       (drgnx-agents--make :id "b1" :name "beta" :status 'idle :conn 'fake :cwd default-directory)))
                           t))
-            (pcase-dolist (`(,show . ,buffer) '(("SPC a w" . "*drgnx Work*") ("SPC a v" . "*drgnx Agents*")))
+            (pcase-dolist (`(,show . ,buffer) '(("SPC a v" . "*drgnx Agents*")))
               (let ((editor (drgnx-modal-ui-test--where sess)))
                 (drgnx-modal-session-act sess show "C-w l")
                 (should (equal (drgnx-modal-session-eval sess '(list (buffer-name) evil-state)) (list buffer 'emacs)))
