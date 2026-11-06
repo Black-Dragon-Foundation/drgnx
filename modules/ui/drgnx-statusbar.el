@@ -335,6 +335,28 @@ nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  
 
 (defconst drgnx-statusbar--bar-face 'drgnx-statusbar "The face the bar's text is measured in.")
 
+(defconst drgnx-statusbar--base-faces '(mode-line-active mode-line-inactive)
+  "The mode line's own faces: the base every run of a mode line is merged onto.")
+
+(defvar drgnx-statusbar--base-saved 'none
+  "The override specs `drgnx-statusbar--base-on' replaced, an alist (FACE . SPEC); `none' while it has not.")
+
+(defun drgnx-statusbar--base-on ()
+  "The mode line's own faces inherit the caption type face, then `mode-line': each run of the bar (its faces inherit
+the caption face too) then merges the same family, height and weight onto its base, and Emacs copies no font spec
+for it.  An override spec: a theme's colours stay under it."
+  (when (eq drgnx-statusbar--base-saved 'none)
+    (setq drgnx-statusbar--base-saved
+          (mapcar (lambda (f) (cons f (get f 'face-override-spec))) drgnx-statusbar--base-faces))
+    (dolist (f drgnx-statusbar--base-faces)
+      (face-spec-set f '((t :inherit (drgnx-ui-caption mode-line)))))))
+
+(defun drgnx-statusbar--base-off ()
+  "Give the mode line's own faces the override specs they had before `drgnx-statusbar--base-on'."
+  (unless (eq drgnx-statusbar--base-saved 'none)
+    (pcase-dolist (`(,f . ,spec) drgnx-statusbar--base-saved) (face-spec-set f spec))
+    (setq drgnx-statusbar--base-saved 'none)))
+
 (defun drgnx-statusbar--scale (&optional frame)
   "FRAME's scale (1.0 without a native shell)."
   (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
@@ -1160,8 +1182,10 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
         (advice-add 'flymake--handle-report :after #'drgnx-statusbar--flymake-reported)   ; flymake has no hook for this
         (advice-add 'flymake-start :after #'drgnx-statusbar--flymake-started)               ; nor for this
         (drgnx-statusbar--misc-report-soon)
+        (drgnx-statusbar--base-on)
         (when (fboundp 'drgnx-modal-indicator-off) (drgnx-modal-indicator-off)))   ; the bar shows the modal state
     (dolist (h drgnx-statusbar--hooks) (remove-hook (car h) (cdr h)))
+    (drgnx-statusbar--base-off)
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-statusbar--editor-changed)
     (drgnx-signal-unsubscribe 'editor-changed #'drgnx-statusbar--ask-git)
     (advice-remove 'flymake--handle-report #'drgnx-statusbar--flymake-reported)

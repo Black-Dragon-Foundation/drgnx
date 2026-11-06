@@ -247,6 +247,28 @@ active (`drgnx-statusbar-test--epochs')."
         (setq-local mode-line-format nil)
         (should-not (drgnx-statusbar-mode-line))))))
 
+(ert-deftest drgnx-statusbar/the-mode-line-is-in-the-caption-face-while-the-bar-is-on ()
+  "Pattern D: while the bar is on, the mode line's own faces (`mode-line-active', `mode-line-inactive') inherit the
+caption type face the bar's text is in, then `mode-line' as before, so a run of the bar merges no other font onto them
+\(a font merged at every run copied a font spec); off, their override specs are what they were."
+  (drgnx-test-with-state
+    (drgnx-statusbar-test--with
+      (let ((drgnx-chrome-editor-mode-line drgnx-chrome-editor-mode-line)
+            (faces '(mode-line-active mode-line-inactive)))
+        (let ((before (mapcar (lambda (f) (get f 'face-override-spec)) faces)))
+          (cl-letf (((symbol-function 'drgnx-chrome-apply) #'ignore))
+            (unwind-protect
+                (progn
+                  (drgnx-statusbar-mode 1)
+                  (dolist (f faces)
+                    (let ((inherit (ensure-list (face-attribute f :inherit))))
+                      (should (equal (list f 'drgnx-ui-caption) (list f (car inherit))))
+                      (should (memq 'mode-line inherit))))
+                  (should (memq 'drgnx-ui-caption (ensure-list (face-attribute 'drgnx-statusbar :inherit))))
+                  (drgnx-statusbar-mode -1)
+                  (should (equal before (mapcar (lambda (f) (get f 'face-override-spec)) faces))))
+              (drgnx-statusbar-mode -1))))))))
+
 (ert-deftest drgnx-statusbar/segments-read-no-files-and-start-no-process ()
   (drgnx-statusbar-test--with
     (drgnx-statusbar--define-defaults)

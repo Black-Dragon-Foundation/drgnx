@@ -158,7 +158,9 @@ For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(dr
 
 In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) each editor window ends in a quiet bar:
 what you need at a glance, nothing that shouts. It is built from **segments**. Turn it off and on with **Toggle
-Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
+Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch. While it is on, the mode line's own faces
+(`mode-line-active`, `mode-line-inactive`) inherit the caption type face, which the bar's text is in, so Emacs merges no
+other font into each piece of the bar; a buffer that keeps its own mode line shows it in that face too.
 
 | Left | Shows | Click |
 |---|---|---|
