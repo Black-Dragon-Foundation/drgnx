@@ -1077,6 +1077,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
+| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
@@ -2538,3 +2541,29 @@ covers the next run at least 9 times in 10, provided past and future runs are ex
 breaks; hence the model in the key and a recent window. Keep the p90 of each pair as it stood before calibration:
 ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
 1, so the caller holds a scaled p90 at its p50 or above.
+
+**Prices and the hub's side** (`drgnx_ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
+cost. `rates_for` takes the rates of a profile from the setting `drgnx-agents-model-prices` (US dollars per million
+tokens, shipped dated `2026-11-01`; a cache price left out is the input price): the row with the longest key that is a
+prefix of the profile's model id; else, for a gateway profile, the provider's `:price (IN . OUT)` with every cache token
+at the input rate; else the row named for the profile's CLI (`claude`, for a Claude profile with no model set). No
+rate: the task is unpriced, and its cost is empty, never zero; a sample's own recorded cost serves only on the same
+profile. `prices_as_of` is the oldest date of a row. The cost unit is `usd` for a gateway profile and `usd-est` for a
+subscription's, which is an estimate.
+
+`ttl_of` is the prompt cache time to live of a profile in a role: 3600 s for a Claude subscription in any role and for a
+gateway Claude worker or manager (the lock asks for `LONG_CACHE_TTL`, `agents/lock.rs`), 300 s for everything else. The
+sweep passes it to `gather`, so a sample's cold wakes use the TTL its session had.
+
+`for_tasks` reads the newest 5000 samples, forms each task's class, simulates on `runner::agent_slots` slots (the number
+the tick starts at once) with a seed from the job key and every want's fields, widens each task by its class's size and
+the plan's totals by the smallest class's, and scales a task's p90 by its class's calibration factor when it has one.
+`forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows to keep). The wake line is a
+second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
+write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+| Method | Class | Answer |
+|---|---|---|
+| `forecast/get` | user | the forecast of a job, from its data as proposed |
+| `forecast/session` | user | one more run like a session: one task of its role and profile, nothing recorded |
+| `forecast/accuracy` | user | per role and profile, the share of finished tasks that took no more than their p90, and the median of actual over p50 |

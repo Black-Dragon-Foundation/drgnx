@@ -56,6 +56,11 @@ use tokio::sync::Notify;
 
 /// Agents of one job working at once (`drgnx-job-max-agents`).
 pub const MAX_AGENTS: usize = 3;
+/// How many agents of one job work at once: the tick starts up to this many, and a forecast schedules on this many
+/// slots, so the two cannot disagree.
+pub(crate) fn agent_slots(_front: &Front) -> usize {
+    MAX_AGENTS
+}
 /// Agents that may end without finishing a task before the user decides (`drgnx-job-start-tries`).
 pub const START_TRIES: i64 = 3;
 /// The most characters of a blocked task's reason that are kept.

@@ -320,6 +320,30 @@ The MCP servers agents get: `coordination' and `search'.
 | `:agents` | `never` |
 | `:schema` | `(list-of (enum coordination search))` |
 
+## drgnx-agents-model-prices
+
+What a model costs, for the forecasts: an alist KEY → (:in :out :cache-read :write-5m :write-1h :as-of), US dollars per
+million tokens.  KEY is a model id prefix (the longest match wins) or a provider name; `claude' is a Claude profile with
+no model set.  A cache price left out is the input price.  :as-of is the date the row was read off the provider's page;
+the forecast shows the oldest.  The shipped rows are Anthropic's pricing page of 2026-11-01; Haiku's is the tier above
+100,000 tokens (a request below it costs a fifth), because agent work runs past it.  A subscription's model is the CLI's
+choice, so a subscription's cost is an estimate.  A model with no row (every Codex and Gemini model until you add one)
+is unpriced; a gateway provider's `:price' in `drgnx-ai-providers' serves when no row matches.  Add a row for your
+own model, or change one when prices move.  Only you can set it, never a repository.
+
+| Key | Value |
+| --- | --- |
+| Default | `(("claude-fable-5-1" :in 10 :out 50 :cache-read 0.25 :write-5m 12.5 :write-1h 20 :as-of "2026-11-01") ("claude-opus-5-5" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01") ("claude-sonnet-5-5" :in 2 :out 10 :cache-read 0.1 :write-5m 2.5 :write-1h 4 :as-of "2026-11-01") ("claude-haiku-5-5" :in 0.5 :out 2.5 :cache-read 0.05 :write-5m 0.625 :write-1h 1 :as-of "2026-11-01") ("claude" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01"))` |
+| Type | `sexp` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Vec<ModelPrice>"` |
+| `:agents` | `never` |
+| `:schema` | `(alist string (plist (:in number) (:out number) (:cache-read number) (:write-5m number) (:write-1h number) (:as-of string)))` |
+
 ## drgnx-agents-net-hosts
 
 The hosts a job that was granted network may reach, per tier: an alist TIER → list of "host:port" strings.

@@ -4714,6 +4714,7 @@ mod tests {
         let (bus, mut seen) = tokio::sync::broadcast::channel(16);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let ctx = StepCtx {
+            flow: Arc::default(),
             session: "a1".into(),
             task: Some("task:7".into()),
             agent: "mock".into(),

@@ -18,6 +18,7 @@
 //! | `brief/*` | [`crate::brief`] |
 //! | `timeline/get` | [`crate::timeline`] |
 //! | `budget/*`, `pace/get` | [`crate::budget`] |
+//! | `forecast/*` | [`crate::forecast`] |
 //! | `records/{import,status}` | [`crate::records`] |
 //! | `records/{proposals,decide}` | [`crate::records`] |
 //! | `machines/{report,list}` | [`crate::work::machines`] |
@@ -74,7 +75,8 @@ pub async fn serve(
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
     use crate::{
-        agents, brief, budget, exec, manager, matrix_gate, records, runner, runners, timeline, work,
+        agents, brief, budget, exec, forecast, manager, matrix_gate, records, runner, runners,
+        timeline, work,
     };
     let (f, c) = (front, caller);
     Ok(match p {
@@ -129,6 +131,9 @@ pub async fn serve(
         Params::BudgetGet(p) => answer(budget::get(f, c, p).await),
         Params::BudgetSet(p) => answer(budget::set(f, c, p).await),
         Params::PaceGet(p) => answer(budget::pace(f, c, p).await),
+        Params::ForecastGet(p) => answer(forecast::get(f, c, p).await),
+        Params::ForecastSession(p) => answer(forecast::session(f, p).await),
+        Params::ForecastAccuracy(p) => answer(forecast::accuracy(f, p).await),
         Params::RecordsImport(p) => answer(records::import(f, c, p).await),
         Params::RecordsStatus(p) => answer(records::status(f, c, p).await),
         Params::RecordsProposals(p) => answer(records::proposals(f, c, p).await),
