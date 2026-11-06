@@ -262,11 +262,12 @@ Hooks run where drgnx sees a step. How much of an agent's work drgnx sees depend
 | Provider | Today | Arrives with the adapter forks |
 |---|---|---|
 | Claude (the org's `claude-agent-acp` fork) | every kind your rules and hooks look at is made to ask, so it reaches the seam; the panel extension reports the context breakdown and asks drgnx before a tool runs | `drop`, `pin` and `compact-preview` are not offered: the SDK cannot edit messages |
-| Codex, Gemini, Kimi Code, DeepSeek Harness | a config lock that makes what it can ask; the session names the kinds that are hooked and those that are not ("not hooked: …"), and a session whose subscribed kinds cannot be hooked at all is refused with the reason | the forks are in progress and not promised here: each is to add the same panel extension (context breakdown and, where the agent allows, a request before a tool runs) |
+| Codex (the stock `codex-acp` adapter) | a config lock in Codex's read-only mode: edits and MCP tools ask, so they reach the seam; the shell steps its policy runs unasked go through a managed hook that asks drgnx first (`hooked by the adapter`: Codex lets the step run if drgnx does not answer in time); hosted web search is off | nothing: Codex keeps the stock adapter, so there is no context breakdown |
+| Gemini, Kimi Code, DeepSeek Harness | a config lock that makes what it can ask; the session names the kinds that are hooked and those that are not ("not hooked: …"), and a session whose subscribed kinds cannot be hooked at all is refused with the reason | the forks are in progress and not promised here: each is to add the same panel extension (context breakdown and, where the agent allows, a request before a tool runs) |
 | Gateway profiles (OpenRouter and API keys) | the same as Claude: they run through the Claude adapter | nothing |
 
 Until a fork lands for a provider, expect "not hooked" marks for kinds its config cannot make ask, and no context
-breakdown. Abilities do not depend on the adapter: every profile gets them.
+breakdown; Codex has no fork coming, so it never shows one. Abilities do not depend on the adapter: every profile gets them.
 
 The managed ask rules for Claude are expected to make read-only commands ask; that has not yet been checked against
 the real Claude Code, and the same goes for the lock formats of Codex, Gemini and DeepSeek against their real CLIs.

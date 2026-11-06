@@ -149,7 +149,7 @@ what the hub already told the editor: nothing is asked while the transcript is d
 watching when it ran has no line (its note still shows).
 
 **The header** above the transcript says `context N%` and, when the agent sends a breakdown (an agent from the org's
-adapter forks does; others do not and show none), the figure opens the breakdown: a bar of the parts of the window
+adapter forks does: Claude, Gemini, Kimi Code, DeepSeek Harness; Codex and others do not and show none), the figure opens the breakdown: a bar of the parts of the window
 (system, tools, files, tool output, conversation, free), each part's items, `[drop]` and `[pin]` for an item where the
 agent offers them, and `[What /compact keeps]` where it can tell (nothing is compacted by looking). The header also says
 `not hooked: KINDS` for the kinds of step no hook reaches (with why), `hooked by the adapter: KINDS` for those the agent's

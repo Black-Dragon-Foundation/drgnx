@@ -2332,8 +2332,9 @@ has the whole account.
 
 An ACP extension between the hub and an agent's adapter, for what standard ACP does not give: the context breakdown,
 dropping and pinning what is in it, a compaction preview, and the `before-tool` hooks on steps the agent allows itself.
-The org's adapter forks speak it; any other agent simply does not advertise it, and the panel then shows none of it
-(hidden, never faked). The hub's side is `agents/session/panel.rs`.
+The org's adapter forks (Claude, Gemini, Kimi Code, DeepSeek Harness) speak it; any other agent simply does not
+advertise it, and the panel then shows none of it (hidden, never faked). Codex runs the stock `codex-acp`, which does
+not: its steps reach the hooks through its lock's managed hook instead ("The `before_tool` tool", above). The hub's side is `agents/session/panel.rs`.
 
 - **Handshake.** `initialize` sends `clientCapabilities._meta["_drgnx/panel"] = {"version": 1}`. The agent answers
   in `agentCapabilities._meta["_drgnx/panel"] = {version, features}`, features among `context`, `drop`, `pin`,
