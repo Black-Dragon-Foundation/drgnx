@@ -2488,12 +2488,16 @@ async fn write_steps(
             .await;
         }
         // a shell step may have committed: link the new commits to the decisions this session recorded
-        if let Some(task) = &ctx.task
-            && step.class == StepClass::Tool
+        if step.class == StepClass::Tool
             && matches!(step.tool_kind.as_deref(), None | Some("execute"))
         {
-            crate::runner::effects::link_new_commits(&sink.writer, &ctx.session, task, &ctx.cwd)
-                .await;
+            crate::runner::effects::link_new_commits(
+                &sink.writer,
+                &ctx.session,
+                ctx.task.as_deref(),
+                &ctx.cwd,
+            )
+            .await;
         }
         let ev = AgentStep {
             session: ctx.session.clone(),
