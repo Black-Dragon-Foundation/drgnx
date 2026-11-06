@@ -81,12 +81,11 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--header-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--chips-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--entry-row "drgnx-agent-panel-steps")
-(defvar drgnx-agent-panel--renderers)
-(defvar drgnx-agent-panel-snapshot-functions)
-(defvar drgnx-agent-panel-entries-functions)
-(defvar drgnx-agent-panel-make-functions)
-(defvar drgnx-agent-panel--setup-functions)
-(defvar drgnx-agent-panel--teardown-functions)
+(declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--strip-row "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
 
 (unless (featurep 'drgnx-agent-panel-steps)
   (load (expand-file-name "drgnx-agent-panel-steps" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -170,27 +169,20 @@ folds under it."
     (:chips (drgnx-agent-panel--chips-row))
     (:more (propertize "  ↑ earlier steps load when you scroll up\n" 'face 'drgnx-agent-panel-subtle))
     (:e (drgnx-agent-panel--entry-row (cadr key)))
-    (_ (let ((fn (alist-get (car-safe key) drgnx-agent-panel--renderers)))
-         (if fn (funcall fn key) "\n")))))
-
-(defvar drgnx-agent-panel--renderers nil
-  "Row kinds the sibling files draw: an alist of (KIND . FUNCTION), the function taking the key.")
+    (:strip (drgnx-agent-panel--strip-row))
+    (_ "\n")))
 
 (drgnx-view-define 'agent-panel :render #'drgnx-agent-panel--render :follow-tail t :slice drgnx-view-slice)
 
 ;;;; Keeping the view's rows in step with the model
 
-(defvar drgnx-agent-panel--key-sources nil
-  "Functions of no arguments that give row keys, in the order the rows go: the sibling files add theirs here.")
-
 (defun drgnx-agent-panel--wanted-keys ()
   "Every row key the panel should hold now, in order."
   (append (list (list :header) (list :chips))
-          (apply #'append (mapcar #'funcall (alist-get 'before drgnx-agent-panel--key-sources)))
+          (list (list :strip))
           (and drgnx-agent-panel--more drgnx-agent-panel--loaded (list (list :more)))
           (let ((idxs (sort (hash-table-keys drgnx-agent-panel--entries) #'<)))
-            (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))
-          (apply #'append (mapcar #'funcall (alist-get 'after drgnx-agent-panel--key-sources)))))
+            (mapcar (lambda (i) (list :e i)) (seq-filter #'drgnx-agent-panel--row-p idxs)))))
 
 (defun drgnx-agent-panel--reconcile ()
   "Tell the view which rows appeared or went: new keys go in after the key before them, none is drawn again."
@@ -221,10 +213,7 @@ folds under it."
           ((not (equal now "busy")) (setq drgnx-agent-panel--busy-since nil)))
     (drgnx-agent-panel--dirty (list :header) (list :chips))
     (drgnx-agent-panel--reconcile)
-    (run-hook-with-args 'drgnx-agent-panel-snapshot-functions (current-buffer))))
-
-(defvar drgnx-agent-panel-snapshot-functions nil
-  "Called with the panel buffer after a snapshot was taken: the sibling files redraw what the snapshot feeds.")
+    nil))
 
 (defun drgnx-agent-panel--take-entries (pairs &optional from-slice)
   "PAIRS, (INDEX ENTRY) as the hub sends them, are in the transcript: a new entry is appended, a changed one patched.
@@ -245,11 +234,7 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
           (when (eq (drgnx-agent-panel--type (drgnx-agent-panel--entry idx)) 'tool)
             (cl-pushnew (list :e idx) keys :test #'equal)))
         (when (drgnx-view-p drgnx-view)
-          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys))))
-      (run-hook-with-args 'drgnx-agent-panel-entries-functions (current-buffer) touched))))
-
-(defvar drgnx-agent-panel-entries-functions nil
-  "Called with the panel buffer and the indexes of entries that arrived or changed.")
+          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (gethash k drgnx-agent-panel--shown-keys)) keys)))))))
 
 (defun drgnx-agent-panel--take-steps (steps)
   (dolist (s steps)
@@ -348,7 +333,7 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
               drgnx-agent-panel--steps (make-hash-table :test #'eql) drgnx-agent-panel--shown-keys (make-hash-table :test #'equal)
               drgnx-agent-panel--open (make-hash-table :test #'equal))
         (drgnx-view-attach 'agent-panel)
-        (run-hook-with-args 'drgnx-agent-panel-make-functions buffer)
+        (drgnx-agent-panel-steps-init)
         (drgnx-agent-panel--reconcile)
         (drgnx-agent-panel--ask "agents/list" nil
                                 (lambda (r _err)
@@ -357,8 +342,6 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
                                                               (append (plist-get r :sessions) nil))))
                                     (with-current-buffer buffer (drgnx-agent-panel--take-snapshot snap)))))))
     buffer))
-
-(defvar drgnx-agent-panel-make-functions nil "Called with a new panel buffer, after its view is attached.")
 
 (defun drgnx-agent-panel-sync-windows (&optional _frame)
   "A panel a window shows takes the session's entries; one no window shows lets them go."
@@ -447,15 +430,12 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data) (drgnx-agent-panel--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions panel-resubscribe () (drgnx-agent-panel--resubscribe))
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
-  (dolist (fn drgnx-agent-panel--setup-functions) (funcall fn))
+  (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-sync-windows))
-
-(defvar drgnx-agent-panel--setup-functions nil "The sibling files' setups, run by the module's setup.")
-(defvar drgnx-agent-panel--teardown-functions nil "The sibling files' teardowns, run by the module's teardown.")
 
 (defun drgnx-agent-panel--teardown ()
   "Every panel gives its subscription back and goes."
-  (dolist (fn drgnx-agent-panel--teardown-functions) (funcall fn))
+  (drgnx-agent-panel-steps-teardown)
   (dolist (b (drgnx-agent-panel-buffers)) (kill-buffer b)))
 
 (defun drgnx-agent-panel-toggle ()
@@ -463,8 +443,7 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
   (interactive)
   (let ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at))))
     (unless (eq (car-safe key) :e) (user-error "Point is not on a step"))
-    (puthash key (not (gethash key drgnx-agent-panel--open)) drgnx-agent-panel--open)
-    (drgnx-agent-panel--dirty key)))
+    (drgnx-agent-panel--row-toggle key)))
 
 (drgnx-module-define 'tools/agent-panel
                      :doc "One agent session's steps, live, in the right dock: a step on a line, thinking folded under it."

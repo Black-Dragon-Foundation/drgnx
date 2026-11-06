@@ -2,6 +2,24 @@
 
 The settings drgnx declares with `drgnx-defsetting`, and the keys that say where each may be set, whether a workspace may set it, how it merges and whether an agent may change it. Generated from the declarations: do not edit; see docs/develop/core.md for how to regenerate it, and [Declaring a setting](../develop/settings.md) for the keys.
 
+## drgnx-agent-panel-disclosure
+
+The step types whose detail a new agent panel opens: thinking, read, search, edit, execute, fetch, other.
+A failed step opens whatever this says.  `M' in a panel makes its current choice the default.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(set (const thinking) (const read) (const search) (const edit) (const execute) (const fetch) (const other))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (enum thinking read search edit execute fetch other))` |
+
 ## drgnx-agents-allow-unsandboxed
 
 Non-nil: agents may run without the sandbox.  Off unless you turn it on; no workspace and no agent can.

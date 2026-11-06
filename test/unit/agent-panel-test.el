@@ -132,5 +132,64 @@ unanswered, and panel \"s1\" as `buf'."
     (should-not (get-buffer "*drgnx agent: s9*"))
     (should (equal before (list window-buffer-change-functions drgnx-hub-event-functions drgnx-hub-connected-functions)))))
 
+(defvar drgnx-agent-panel-disclosure)
+(defvar drgnx-agent-panel--disclosure)
+(declare-function drgnx-agent-panel-preset "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-make-default "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel-toggle-type "drgnx-agent-panel-steps")
+
+(ert-deftest drgnx-agent-panel/a-failed-step-opens ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run ok" "completed" :content (list (list :text "r\nfine output"))))
+             (list 1 (drgnx-agent-panel-test--tool "t2" "Run bad" "failed" :content (list (list :text "r\nboom output"))))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "boom output" text))
+        (should-not (string-match-p "fine output" text)))
+      ;; folding a failed step by hand wins over the outcome
+      (goto-char (drgnx-view-row-start drgnx-view '(:e 1)))
+      (drgnx-agent-panel-toggle)
+      (should-not (string-match-p "boom output" (drgnx-agent-panel-test--text buf))))))
+
+(ert-deftest drgnx-agent-panel/presets-switch-disclosure ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Read it" "completed" :content (list (list :text "r\nread body"))))
+             (list 1 (list :type "tool" :id "t2" :title "Edit it" :kind "edit" :status "completed" :content (list (list :text "r\nedit body"))))
+             (list 2 (list :type "thought" :text "deep thought"))))
+      (should-not (string-match-p "body" (drgnx-agent-panel-test--text buf)))
+      (drgnx-agent-panel-preset 2)
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "edit body" text))
+        (should-not (string-match-p "read body" text))
+        (should-not (string-match-p "deep thought" text)))
+      (drgnx-agent-panel-preset 3)
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "read body" text))
+        (should (string-match-p "deep thought" text)))
+      (drgnx-agent-panel-preset 1)
+      (should-not (string-match-p "body" (drgnx-agent-panel-test--text buf)))
+      ;; one toggle: a type opens on its own
+      (drgnx-agent-panel-toggle-type 'read)
+      (should (string-match-p "read body" (drgnx-agent-panel-test--text buf))))))
+
+(ert-deftest drgnx-agent-panel/make-default-persists ()
+  (drgnx-agent-panel-test--with
+    (let ((saved nil) (drgnx-agent-panel-disclosure nil))
+      (require 'drgnx-settings-editors nil t)
+      (cl-letf (((symbol-function 'drgnx-settings-editors-commit)
+                 (lambda (var tab root value) (push (list var tab root value) saved) value)))
+        (with-current-buffer buf
+          (drgnx-agent-panel-preset 2)
+          (drgnx-agent-panel-make-default)))
+      (should (equal '((drgnx-agent-panel-disclosure user nil (edit execute))) saved))
+      (should (equal '(edit execute) drgnx-agent-panel-disclosure))
+      ;; a panel made afterwards starts with it
+      (let ((other (drgnx-agent-panel-buffer "s2")))
+        (unwind-protect (should (equal '(edit execute) (buffer-local-value 'drgnx-agent-panel--disclosure other)))
+          (kill-buffer other))))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

@@ -24,3 +24,11 @@ A panel asks the hub for the session's entries only while a window shows it, and
 on the last page of steps (`drgnx-agent-panel-page-steps`, 50) and loads the page before when you scroll to the top
 (or run **Load Earlier Steps**). New entries are added at the end and changed ones are patched in place; what is
 already on screen is never drawn again, and rows are drawn in slices of 4 ms or less that stop when you type.
+
+## What opens
+
+The strip under the chips has a toggle for each step type (thinking, read, search, edit, execute, fetch, other). A type
+that is on shows the detail of its steps; `T` flips one, `TAB` opens or folds the step at point whatever the toggles say.
+A step that failed opens by itself. `1`, `2` and `3` are presets: **watch** (titles only), **review** (edits and
+commands open) and **debug** (everything, thinking included). What is open belongs to the chat. `M` makes the current
+choice the default for new panels and saves it in your settings (`drgnx-agent-panel-disclosure`).

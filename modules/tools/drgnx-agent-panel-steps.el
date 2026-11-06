@@ -11,8 +11,12 @@
 (require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
+(require 'drgnx-setting)
+(require 'drgnx-view)
+(require 'drgnx-registry)
 
 (defvar drgnx-agent-panel--session)
+(defvar drgnx-agent-panel--shown-keys)
 (defvar drgnx-agent-panel--snap)
 (defvar drgnx-agent-panel--busy-since)
 (defvar drgnx-agent-panel--entries)
@@ -109,7 +113,134 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
     (mapconcat (lambda (l) (propertize (concat "    " l "\n") 'face face))
                (append (seq-take lines limit) (and (> (length lines) limit) (list "…"))) "")))
 
-(defun drgnx-agent-panel--open-p (key) (and drgnx-agent-panel--open (gethash key drgnx-agent-panel--open)))
+;;;; Disclosure: which steps show their detail
+
+(defconst drgnx-agent-panel-step-types '(thinking read search edit execute fetch other)
+  "The step types the disclosure strip has a toggle for: a tool step's kind, and the agent's thinking.")
+
+(defconst drgnx-agent-panel-presets
+  '((watch) (review edit execute) (debug thinking read search edit execute fetch other))
+  "The view presets on 1, 2 and 3: watch shows the steps' titles only, review opens edits and commands, debug opens all.")
+
+(drgnx-defsetting drgnx-agent-panel-disclosure nil
+  "The step types whose detail a new agent panel opens: thinking, read, search, edit, execute, fetch, other.
+A failed step opens whatever this says.  `M' in a panel makes its current choice the default."
+  :type '(set (const thinking) (const read) (const search) (const edit) (const execute) (const fetch) (const other))
+  :group 'drgnx-agent-panel :scope 'global :agents 'never
+  :schema '(list-of (enum thinking read search edit execute fetch other)))
+
+(defvar-local drgnx-agent-panel--disclosure nil "The step types open in this chat.")
+(defvar drgnx-agent-panel--defaults-unsaved nil "Non-nil while the default chosen with `M' is not yet in the settings file.")
+
+(defun drgnx-agent-panel-steps-init ()
+  "A new panel starts with the defaults."
+  (setq drgnx-agent-panel--disclosure (copy-sequence drgnx-agent-panel-disclosure)))
+
+(defun drgnx-agent-panel--step-type (e)
+  (let ((k (and (stringp (plist-get e :kind)) (intern (plist-get e :kind)))))
+    (if (memq k drgnx-agent-panel-step-types) k 'other)))
+
+(defun drgnx-agent-panel--override (key) (and drgnx-agent-panel--open (gethash key drgnx-agent-panel--open)))
+
+(defun drgnx-agent-panel--thinking-open-p (key)
+  "Whether the thinking under the row KEY shows: your choice for the row, else the chat's toggle for thinking."
+  (let ((o (drgnx-agent-panel--override key)))
+    (if o (eq o 'open) (and (memq 'thinking drgnx-agent-panel--disclosure) t))))
+
+(defun drgnx-agent-panel--detail-open-p (key e)
+  "Whether the detail of tool entry E (row KEY) shows: your choice for the row, else it opens when the step failed,
+else when the chat's toggle for its type is on."
+  (let ((o (drgnx-agent-panel--override key)))
+    (cond (o (eq o 'open))
+          ((equal (plist-get e :status) "failed") t)
+          (t (and (memq (drgnx-agent-panel--step-type e) drgnx-agent-panel--disclosure) t)))))
+
+(defun drgnx-agent-panel--row-toggle (key)
+  "Open or fold row KEY's detail and thinking, whatever the toggles say."
+  (let* ((e (drgnx-agent-panel--entry (cadr key)))
+         (now (or (drgnx-agent-panel--thinking-open-p key) (and e (drgnx-agent-panel--detail-open-p key e)))))
+    (puthash key (if now 'closed 'open) drgnx-agent-panel--open)
+    (drgnx-view-dirty drgnx-view (list key))))
+
+(defun drgnx-agent-panel--redraw-steps ()
+  "Every step row and the strip are drawn again."
+  (when (drgnx-view-p drgnx-view)
+    (drgnx-view-dirty drgnx-view
+                      (cons (list :strip)
+                            (seq-filter (lambda (k) (eq (car-safe k) :e)) (hash-table-keys drgnx-agent-panel--shown-keys))))))
+
+(defun drgnx-agent-panel--set-disclosure (types)
+  "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
+  (setq drgnx-agent-panel--disclosure (copy-sequence types))
+  (clrhash drgnx-agent-panel--open)
+  (drgnx-agent-panel--redraw-steps))
+
+(defun drgnx-agent-panel-toggle-type (type)
+  "Open or close the detail of every step of TYPE in this chat."
+  (interactive (list (intern (completing-read "Step type: " (mapcar #'symbol-name drgnx-agent-panel-step-types) nil t))))
+  (drgnx-agent-panel--set-disclosure
+   (if (memq type drgnx-agent-panel--disclosure) (remq type drgnx-agent-panel--disclosure)
+     (cons type drgnx-agent-panel--disclosure))))
+
+(defun drgnx-agent-panel-preset (n)
+  "The view preset N: 1 watch, 2 review, 3 debug."
+  (drgnx-agent-panel--set-disclosure (cdr (nth (1- n) drgnx-agent-panel-presets))))
+
+(defun drgnx-agent-panel-preset-1 () "Watch: steps as titles only." (interactive) (drgnx-agent-panel-preset 1))
+(defun drgnx-agent-panel-preset-2 () "Review: edits and commands open." (interactive) (drgnx-agent-panel-preset 2))
+(defun drgnx-agent-panel-preset-3 () "Debug: everything open." (interactive) (drgnx-agent-panel-preset 3))
+
+(declare-function drgnx-settings-editors-commit "drgnx-settings-editors")
+
+(defun drgnx-agent-panel--save-defaults ()
+  "Write the default to the user's settings file; nil (and the default stays unsaved) when that is refused."
+  (require 'drgnx-settings-editors nil t)
+  (when (fboundp 'drgnx-settings-editors-commit)
+    (condition-case nil
+        (progn (drgnx-settings-editors-commit 'drgnx-agent-panel-disclosure 'user nil drgnx-agent-panel-disclosure) t)
+      (error nil))))
+
+(defun drgnx-agent-panel-make-default ()
+  "Make this chat's open step types the default for new panels, and save them in your settings."
+  (interactive)
+  (setq drgnx-agent-panel-disclosure (copy-sequence drgnx-agent-panel--disclosure))
+  (setq drgnx-agent-panel--defaults-unsaved (not (drgnx-agent-panel--save-defaults)))
+  (message "Agent panel: %s is now the default%s"
+           (if drgnx-agent-panel-disclosure (mapconcat #'symbol-name drgnx-agent-panel-disclosure ", ") "titles only")
+           (if drgnx-agent-panel--defaults-unsaved " (not saved: your settings file refused it)" "")))
+
+(defun drgnx-agent-panel--strip-row ()
+  "The disclosure strip: a toggle for each step type, and the presets."
+  (concat " "
+          (mapconcat (lambda (ty)
+                       (propertize (format " %s %s " (if (memq ty drgnx-agent-panel--disclosure) "▾" "▸") ty)
+                                   'face 'drgnx-agent-panel-chip))
+                     drgnx-agent-panel-step-types " ")
+          (propertize "  1 watch · 2 review · 3 debug · T toggle · M make default" 'face 'drgnx-agent-panel-subtle)
+          "\n"))
+
+(defun drgnx-agent-panel-steps-setup ()
+  (drgnx-command-define 'agents-panel-toggle-type :category "Agents" :title "Open or Close a Step Type"
+                        :command #'drgnx-agent-panel-toggle-type :map 'drgnx-agent-panel-mode-map
+                        :doc "Show or hide the detail of every step of one type in this chat")
+  (drgnx-command-define 'agents-panel-preset-1 :category "Agents" :title "Panel View: Watch"
+                        :command #'drgnx-agent-panel-preset-1 :map 'drgnx-agent-panel-mode-map
+                        :doc "Steps as titles only")
+  (drgnx-command-define 'agents-panel-preset-2 :category "Agents" :title "Panel View: Review"
+                        :command #'drgnx-agent-panel-preset-2 :map 'drgnx-agent-panel-mode-map
+                        :doc "Edits and commands open")
+  (drgnx-command-define 'agents-panel-preset-3 :category "Agents" :title "Panel View: Debug"
+                        :command #'drgnx-agent-panel-preset-3 :map 'drgnx-agent-panel-mode-map
+                        :doc "Every step open, thinking included")
+  (drgnx-command-define 'agents-panel-make-default :category "Agents" :title "Make the Panel View the Default"
+                        :command #'drgnx-agent-panel-make-default :map 'drgnx-agent-panel-mode-map
+                        :doc "The step types open now are what new panels open"))
+
+(defun drgnx-agent-panel-steps-teardown ()
+  "A default chosen with `M' that the settings file refused is tried once more before the module goes."
+  (when drgnx-agent-panel--defaults-unsaved
+    (setq drgnx-agent-panel--defaults-unsaved (not (drgnx-agent-panel--save-defaults)))))
+
 
 (defun drgnx-agent-panel--tool-row (idx e)
   (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
@@ -117,7 +248,8 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
          (result (drgnx-agent-panel--one-line (drgnx-agent-panel--text-of (plist-get e :content)) 40))
          (meta (drgnx-agent-panel--meta e))
          (thoughts (drgnx-agent-panel--thoughts-of idx))
-         (open (drgnx-agent-panel--open-p key)))
+         (open-thinking (drgnx-agent-panel--thinking-open-p key))
+         (open-detail (drgnx-agent-panel--detail-open-p key e)))
     (concat (format "  %s %s" (drgnx-agent-panel--dot status) title)
             (if (string-empty-p result) ""
               (propertize (concat "  · " result) 'face 'drgnx-agent-panel-subtle))
@@ -125,12 +257,12 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
             "\n"
             (when thoughts
               (let ((text (mapconcat (lambda (th) (or (plist-get th :text) "")) thoughts "\n")))
-                (if open
+                (if open-thinking
                     (concat (propertize "    ▾ thinking\n" 'face 'drgnx-agent-panel-subtle)
                             (drgnx-agent-panel--indented text 'drgnx-agent-panel-subtle))
                   (propertize (format "    ▸ thinking · %d lines\n" (length (split-string (string-trim-right text) "\n")))
                               'face 'drgnx-agent-panel-subtle))))
-            (when (and open (drgnx-agent-panel--text-of (plist-get e :content)))
+            (when (and open-detail (drgnx-agent-panel--text-of (plist-get e :content)))
               (drgnx-agent-panel--indented (drgnx-agent-panel--text-of (plist-get e :content)) 'default 12)))))
 
 (defun drgnx-agent-panel--entry-row (idx)
@@ -143,7 +275,7 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
                                   'face 'default)
                       "\n"))
       ('thought (concat (propertize "  ▸ thinking\n" 'face 'drgnx-agent-panel-subtle)
-                        (if (drgnx-agent-panel--open-p (list :e idx))
+                        (if (drgnx-agent-panel--thinking-open-p (list :e idx))
                             (drgnx-agent-panel--indented (plist-get e :text) 'drgnx-agent-panel-subtle) "")))
       ('stop (propertize "  — turn ended\n" 'face 'drgnx-agent-panel-subtle))
       ('error (propertize (format "  ✗ %s\n" (drgnx-agent-panel--one-line (or (plist-get e :text) (plist-get e :title) "error") 80))
