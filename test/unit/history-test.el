@@ -9,6 +9,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-timer)
 (require 'drgnx-history)
+(require 'drgnx-large-file)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 
 (defun drgnx-history-test--hooked-p ()
@@ -103,6 +104,27 @@
             (should-not (memq 'drgnx-history--found find-file-hook)))
         (drgnx-history-mode -1)
         (kill-buffer b)))))
+
+(ert-deftest drgnx-history/large-file-is-not-registered ()
+  ;; D: a buffer that holds a large file (or a chunk of one) is no producer; one flagged after it was tracked is let go
+  (let* ((dir (make-temp-file "history-lf" t)) (file (expand-file-name "a.txt" dir)) b)
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".git" dir))
+          (write-region "x" nil file nil 'silent)
+          (setq b (find-file-noselect file))
+          (should (drgnx-history--candidate b))
+          (with-current-buffer b (setq drgnx-large-file 'chunks))
+          (should-not (drgnx-history--candidate b))
+          (when (drgnx-history-test--hooked-p)
+            (with-current-buffer b (setq drgnx-large-file nil))
+            (drgnx-history--adopt b "b-1")
+            (should (drgnx-history-tracked-p b))
+            (with-current-buffer b (setq drgnx-large-file 'lean) (insert "y"))
+            (drgnx-history--drain)
+            (should-not (drgnx-history-tracked-p b))))
+      (when b (with-current-buffer b (set-buffer-modified-p nil)) (drgnx-history--forget b) (kill-buffer b))
+      (delete-directory dir t))))
 
 (ert-deftest drgnx-history/no-prompt-in-timer ()
   ;; D lint: nothing in the module asks the user anything; its hooks and its timer run unattended

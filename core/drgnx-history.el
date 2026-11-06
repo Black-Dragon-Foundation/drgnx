@@ -20,6 +20,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'drgnx-timer)
+(require 'drgnx-large-file)
 
 (declare-function drgnx-hub-call "drgnx-hub-client" (method params callback &rest keys))
 (declare-function nidhogg-history-track "nidhogg-history" (buffer on))
@@ -35,6 +36,12 @@
 
 (defvar drgnx-history-drain-interval 0.1
   "Seconds between looks at Nidhogg's ring while some buffer is tracked.")
+
+(defvar drgnx-history-large-size (* 256 1024)
+  "Characters from which a buffer's ring is drained only while Emacs is idle (`drgnx-history--due-p').")
+
+(defvar drgnx-history-idle-delay 0.3
+  "Seconds of idleness before a large buffer's ring is drained.")
 
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
@@ -124,7 +131,8 @@ inserts more is split (`drgnx-history--pieces')."
 (defun drgnx-history--candidate (buffer)
   "(ROOT . PATH) for BUFFER when it should be registered: a live, unregistered, non-indirect buffer visiting a local
 file inside a git project; else nil.  ROOT is the project's folder, PATH relative to it."
-  (when (and (buffer-live-p buffer) (not (buffer-base-buffer buffer)) (not (gethash buffer drgnx-history--buffers)))
+  (when (and (buffer-live-p buffer) (not (buffer-base-buffer buffer)) (not (gethash buffer drgnx-history--buffers))
+             (not (drgnx-large-file-p buffer)))
     (let ((file (buffer-local-value 'buffer-file-name buffer)))
       (when (and file (not (file-remote-p file)))
         (let ((root (locate-dominating-file file ".git")))
@@ -233,6 +241,18 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
          (drgnx-history--resync buffer st))
         ((not (drgnx-history--st-resyncing st)) (setf (drgnx-history--st-last st) 'ok))))
 
+(defun drgnx-history--idle-time ()
+  "How long Emacs has been idle (`current-idle-time'), or nil."
+  (current-idle-time))
+
+(defun drgnx-history--due-p (buffer)
+  "Whether BUFFER's ring may go now: a small buffer always; a large one only after Emacs has been idle for
+`drgnx-history-idle-delay', because the hub checks every batch against the hash of the buffer's whole text, which
+costs time in proportion to the buffer and must not sit between two keystrokes.  The changes wait in the ring."
+  (or (< (buffer-size buffer) drgnx-history-large-size)
+      (let ((idle (drgnx-history--idle-time)))
+        (and idle (>= (float-time idle) drgnx-history-idle-delay)))))
+
 (defun drgnx-history--drain-buffer (buffer st)
   "Hand BUFFER's ring to the hub."
   (let ((drained (nidhogg-history-drain buffer)))
@@ -256,7 +276,11 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
                drgnx-history--buffers)
       (dolist (e all)
         (when (gethash (car e) drgnx-history--buffers)
-          (condition-case nil (drgnx-history--drain-buffer (car e) (cdr e))
+          (condition-case nil
+              (cond ((drgnx-large-file-p (car e))      ; a revert turned it into a large file: no producer
+                     (drgnx-history--send "history/unregister" (list :buffer_id (drgnx-history--st-id (cdr e))) #'ignore)
+                     (drgnx-history--forget (car e)))
+                    ((drgnx-history--due-p (car e)) (drgnx-history--drain-buffer (car e) (cdr e))))
             (error (drgnx-history--forget (car e)))))))))
 
 ;;;; The mode

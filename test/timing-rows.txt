@@ -12,6 +12,7 @@ drgnx-bootstrap 100
 drgnx-check 100
 drgnx-chrome 100
 drgnx-file 100
+drgnx-history 100
 drgnx-lang 100
 drgnx-live 100
 drgnx-monitors 100
