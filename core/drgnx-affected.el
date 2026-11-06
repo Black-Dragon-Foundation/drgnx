@@ -139,6 +139,7 @@ MAP: the table (default ROOT's); CRATES: the workspace as `drgnx-affected-crates
          (groups nil) (why nil) (everything nil) (unit nil)
          (texts (make-hash-table :test 'equal))
          (crate-list 'unset)
+         (noted nil)
          (hits (make-hash-table :test 'equal)))
     (cl-labels
         ((add (g) (unless (assoc (plist-get g :id) groups) (push (cons (plist-get g :id) g) groups)))
@@ -177,7 +178,12 @@ MAP: the table (default ROOT's); CRATES: the workspace as `drgnx-affected-crates
               (if (eq (crates) :unavailable)
                   (progn (add (drgnx-affected--group map 'rust-workspace))
                          (note "%s: cargo metadata is unavailable: the whole workspace" file))
-                (rust (list (format "%s" crate)) (format "%s reads core/ or modules/: crate %s and its dependents" file crate))))
+                ;; said once, for the first file: every Lisp file under core/ and modules/ asks for the same crate
+                (unless (memq crate noted)
+                  (push crate noted)
+                  (rust (list (format "%s" crate))
+                        (format "%s (and every other core/ or modules/ file) is read by crate %s: it and its dependents"
+                                file crate)))))
              ('rust-path
               (let* ((cs (crates))
                      (c (and (listp cs) (drgnx-affected--crate-of cs file))))
