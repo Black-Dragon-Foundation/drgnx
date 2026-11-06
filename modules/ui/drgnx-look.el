@@ -453,15 +453,24 @@ under `auto' the follower pauses, as for a `load-theme' in config.el."
   "On `minibuffer-setup-hook': the minibuffer is on the gap surface, like the echo area."
   (drgnx-look--gap-on))
 
+(defun drgnx-look--minibuffer-inactive-gap ()
+  "On `minibuffer-inactive-mode-hook': put the gap surface back.
+A prompt that ends puts its minibuffer in `minibuffer-inactive-mode', which clears the buffer's
+remap (and the cookie with it), so the empty echo area would be drawn on the editor colour;
+only the one remap is reapplied."
+  (drgnx-look--gap-on))
+
 (defun drgnx-look-echo-area-on ()
   "The echo area and every minibuffer on the gap surface."
   (add-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (add-hook 'minibuffer-inactive-mode-hook #'drgnx-look--minibuffer-inactive-gap)
   (dolist (name drgnx-look--echo-buffers)
     (when-let* ((b (get-buffer name))) (with-current-buffer b (drgnx-look--gap-on)))))
 
 (defun drgnx-look-echo-area-off ()
   "Undo `drgnx-look-echo-area-on'."
   (remove-hook 'minibuffer-setup-hook #'drgnx-look--minibuffer-gap)
+  (remove-hook 'minibuffer-inactive-mode-hook #'drgnx-look--minibuffer-inactive-gap)
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
