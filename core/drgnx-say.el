@@ -165,11 +165,9 @@ for the job.  Nothing outside what is inserted moves."
     (insert "\n" (propertize "Written by the planning agent" 'face 'drgnx-say-label) "\n")
     (let ((start (point)))
       (when (plist-get job-summary :title) (insert (plist-get job-summary :title) "\n"))
+      ;; the hub's summary carries a task's n, title, role, profile, status and deps; its body stays in the plan
       (dolist (tk (plist-get job-summary :tasks))
-        (if (consp tk)
-            (insert (format "  %s. %s\n" (or (plist-get tk :n) "") (or (plist-get tk :title) ""))
-                    (if (plist-get tk :body) (concat "     " (plist-get tk :body) "\n") ""))
-          (insert (format "  %s\n" tk))))
+        (insert (format "  %s. %s\n" (or (plist-get tk :n) "") (or (plist-get tk :title) ""))))
       (add-face-text-property start (point) 'drgnx-say-agent))))
 
 ;;;; The proposal buffer

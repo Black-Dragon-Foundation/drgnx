@@ -32,7 +32,8 @@
 
 (defun drgnx-say-view-test--job ()
   (list :id "j1" :title "Settings review" :status "proposed" :budget 20.0
-        :tasks (list (list :n 1 :title "Read the settings" :role "review" :profile "sonnet" :body "Read the settings code."))))
+        :tasks (list (list :n 1 :title "Read the settings" :role "review" :profile "sonnet"
+                           :status "proposed" :deps nil))))   ; the keys `job/status' really sends
 
 (defun drgnx-say-view-test--text (forecast &optional job)
   (with-temp-buffer
@@ -105,7 +106,7 @@
   (let* ((text (drgnx-say-view-test--text (drgnx-say-view-test--forecast)))
          (label (string-search "Written by the planning agent" text)))
     (should label)
-    (dolist (s '("Settings review" "Read the settings code."))
+    (dolist (s '("Settings review" "1. Read the settings"))
       (should (> (string-search s text label) label)))
     ;; the hub's facts come before the agent's text
     (should (< (string-search "12–41 USD" text) label))))

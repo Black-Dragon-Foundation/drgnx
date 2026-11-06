@@ -650,7 +650,7 @@ is rejected and a new one replaces it. `say/end` closes the planning chat; its p
 ("of which wakes"), the manager's own spend beside the total, what the plan does to each subscription's week ("at this
 pace: Thursday; with this plan: Wednesday (estimate)", or "no pace yet"), warnings and the date of the price table.
 Under **Basis** each task says what its forecast came from ("12 implement tasks on sonnet"). A profile with no price
-reads "not priced" with its tokens and time, never a zero. The planning agent's title and task bodies come last, under
+reads "not priced" with its tokens and time, never a zero. The planning agent's job title and task titles come last, under
 "Written by the planning agent". `C-c C-c` approves (the job starts and the planning chat ends), `C-c C-e` asks for a
 change (it reads your words in the command) and `C-c C-k` rejects (the job stops and the chat ends); each is also in
 the palette as **Say It: Approve**, **Say It: Revise** and **Say It: Reject**. A question from the planning chat comes
