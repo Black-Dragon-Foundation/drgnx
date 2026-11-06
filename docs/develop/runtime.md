@@ -1064,7 +1064,8 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **The CPU path (`cpu/`).** The same forward pass in pure Rust, for machines with no usable GPU and for a lost device, and it
   must agree with the GPU path because vectors from both land in one index. `gemm` does the matmuls and the rest runs row by
   row, on a `rayon` pool of `threads` that the embedder owns. The non-linear kernels are built twice on x86-64, baseline and
-  AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON. No AVX-512: it ran slower
+  AVX2 + FMA, and chosen at run time; the build itself stays baseline. aarch64 uses baseline NEON, so `gemm` is built without
+  its `f16` feature, whose kernels need FEAT_FP16 (an aarch64 build failed on them). No AVX-512: it ran slower
   here. `worst_submit` is zero on this path.
 
 - **The download (`drgnx-ratatoskr/src/search/`).** `download` fetches exactly a table row's files into `<cache>/models`, from

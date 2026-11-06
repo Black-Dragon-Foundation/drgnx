@@ -74,7 +74,9 @@ bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 # hrafn-embed's GPU path. wgpu breaks its API about every 3 months: pinned, moved on purpose
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 pollster = "0.4"
-gemm = "=0.19.0"
+# f32 matmuls only: no `f16` feature, whose gemm-f16 has aarch64 asm that needs FEAT_FP16 (fullfp16), which baseline
+# aarch64 (Linux arm64, Android) doesn't have; the CPU path runs on baseline NEON there
+gemm = { version = "=0.19.0", default-features = false, features = ["std", "rayon"] }
 rayon = "1"
 
 [profile.release]
