@@ -1071,9 +1071,9 @@ Module flags: ((MODULE FLAG…)…).
 
 ## drgnx-notice-style
 
-Where a notice that interrupts shows: `float' (a toast over the editor, while Glitnir draws the frames),
-`echo' (a line in the echo area) or `auto' (`float' while Glitnir draws, else `echo').  A change applies to the next
-notice.
+Where a notice that interrupts shows: `float' (a toast over the editor on any graphical frame, without Glitnir's
+corners and shadow where it does not draw), `echo' (a line in the echo area) or `auto' (`float' while Glitnir draws,
+else `echo').  A terminal frame always echoes.  A change applies to the next notice.
 
 | Key | Value |
 | --- | --- |
