@@ -199,6 +199,14 @@ directory the tree names: the run's trusted store for a tree a sandboxed agent w
 Each version is published as the bus event `history/file-version {worktree, path, blob, op}`; its shape is frozen for its
 consumers.
 
+**Merges** (`merge.rs`). After git merged a task's branch into the job's tree (the review's merge and a manager's
+`merge` tool), `Hub::on_git_merge(target, source, old, new, now)` reads git's text of every file the merge changed from
+the merge commit, in the job tree's repository (after git's own hooks; never git in the task's tree), and writes one
+`merge` record with `History::record_merge` by the peer `external:git-merge`. The task's tree of another project (a
+snapshot task's own repository) is no source: then only git's result is recorded. What the job tree's files hold beyond
+the union (a file no branch had a document of, a deletion) follows as the git event's `external` record. The merge
+itself never waits on the history: a failure is logged.
+
 **Whose version** (`origin.rs`, pure). The hub registers a write before the file is written; the watcher's event about it
 and a rescan then find it known. `OriginCore` takes `HubWrite`, `Watch` and `Rescan` events (a path and a content hash)
 and answers which version each is: the hub's write, its own watcher event and a rescan are one version, the hub's; a

@@ -11,10 +11,12 @@
 //! - [`revert`]: revert to here, the `history/revert/*` methods over the pure order in `revert_core`.
 //! - [`branches`]: fork from here and the branches it makes: `history/fork`, `history/fork/drop`, `history/compare`,
 //!   `history/take`, `history/redo`.
+//! - [`merge`]: a task's branch merged into the job's tree, as the union of their documents.
 
 pub mod blob;
 pub mod branches;
 mod capture;
+pub(crate) mod merge;
 pub mod methods;
 pub mod origin;
 pub mod revert;

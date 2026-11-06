@@ -958,8 +958,16 @@ impl PlanHooks {
             Gate::Allow => {
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
+                let old = crate::timeline::snapshot::head_of(&job_tree);
                 match git.merge_into(&job_tree, &tree).await {
-                    Ok(super::git::MergeOutcome::Merged) => self.merged(front, job, t).await,
+                    Ok(super::git::MergeOutcome::Merged) => {
+                        if let Some(d) = front.dirs.get() {
+                            let h = &front.core.history;
+                            crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old)
+                                .await;
+                        }
+                        self.merged(front, job, t).await
+                    }
                     Ok(super::git::MergeOutcome::Conflict(files)) => {
                         let names: Vec<_> = files.iter().map(|f| f.display().to_string()).collect();
                         raise_card(
