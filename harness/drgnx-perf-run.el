@@ -1198,6 +1198,7 @@ version and the commit, as JSON in FILE."
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
     (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
+    (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               drgnx-perf-workers-names)
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
