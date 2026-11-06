@@ -58,14 +58,29 @@ is Dark."
     (should (equal custom-enabled-themes '(drgnx-light)))))
 
 (ert-deftest drgnx-look-follow/an-answer-of-none-reaches-the-follower ()
-  "Pattern D: the portal's first answer 0 (Light on GNOME) changes no stored value, so the store runs no hook; the
-follower still hears it, from the store's setter."
+  "Pattern D: the portal's first answer 0 (Light on GNOME) equals the store's default; Nidhogg runs the hook for a
+first answer all the same, and the follower switches to Light on it."
   (look-follow-test--with '(:scheme 0 :contrast 0 :accent nil :answered nil)
     (drgnx-look-follow-on)
     (should (equal custom-enabled-themes '(drgnx-dark)))
     (setq look-follow-test--portal '(:scheme 0 :contrast 0 :accent nil :answered t))
-    (drgnx-look-follow--after-set 'color-scheme 0)
+    (run-hook-with-args 'nhwl-settings-changed-functions 'color-scheme 0)
     (should (equal custom-enabled-themes '(drgnx-light)))))
+
+(ert-deftest drgnx-look-follow/the-desktop-is-read-through-the-public-store ()
+  "Pattern D: what the follower reads comes from `nhwl-settings-get' and `nhwl-settings-answered-p' (the store's own
+variables are Nidhogg's business), and it adds nothing to the store's functions."
+  (let ((values '((color-scheme . 0) (contrast . 0) (accent-color . (0.2 0.4 0.9)))) (answered nil))
+    (cl-letf (((symbol-function 'nhwl-settings-get) (lambda (key) (alist-get key values)))
+              ((symbol-function 'nhwl-settings-answered-p) (lambda (key) (memq key answered))))
+      (should (equal '(:scheme 0 :contrast 0 :accent (0.2 0.4 0.9) :answered nil) (drgnx-look-follow--read)))
+      (setq answered '(color-scheme))
+      (should (equal '(:scheme 0 :contrast 0 :accent (0.2 0.4 0.9) :answered t) (drgnx-look-follow--read)))))
+  (unwind-protect
+      (let ((drgnx-look-theme nil) (nhwl-settings-changed-functions nil))
+        (drgnx-look-follow-on)
+        (should-not (and (fboundp 'nhwl-settings--set) (advice--p (advice--symbol-function 'nhwl-settings--set)))))
+    (drgnx-look-follow-off)))
 
 (ert-deftest drgnx-look-follow/an-explicit-theme-is-left-alone ()
   "Pattern D: with a theme symbol, or nil, as `drgnx-look-theme', a portal change loads nothing."

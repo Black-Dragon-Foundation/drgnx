@@ -25,7 +25,6 @@
 
 (defvar drgnx-look-theme)
 (defvar nhwl-settings-changed-functions)
-(defvar nhwl-settings--values)
 (defvar ns-system-appearance)
 (defvar ns-system-appearance-change-functions)
 (declare-function drgnx-look--load "drgnx-look" (theme))
@@ -35,6 +34,7 @@
 (declare-function drgnx-settings-area-has-entry-p "drgnx-settings-area" (var))
 (declare-function drgnx-settings-area-update "drgnx-settings-area" (vars fn &optional always))
 (declare-function nhwl-settings-get "nhwl-settings" (key))
+(declare-function nhwl-settings-answered-p "nhwl-settings" (key))
 
 (drgnx-defsetting drgnx-look-accent 'system
   "Where the accent colour comes from: `system' (the desktop's accent colour, as text for the theme's variant) or
@@ -74,7 +74,8 @@ Contrast 1 is High Contrast; scheme 1 is Dark; 0 or 2 is Light once the portal a
 
 (defun drgnx-look-follow--read ()
   "What the desktop says now: a plist (:scheme N :contrast N :accent (R G B) :answered BOOL).  Never blocks: the
-store holds what the asynchronous reads brought, and the defaults until they come.  nil when there is no store.
+store holds what the asynchronous reads brought, and the defaults until they come; `nhwl-settings-answered-p' says
+whether the colour scheme was answered (0 is both GNOME's Light and the default).  nil when there is no store.
 `contrast' is read when the store knows the key (a Nidhogg without it answers 0)."
   (cond ((and (eq system-type 'darwin) (boundp 'ns-system-appearance))
          (list :scheme (if (eq ns-system-appearance 'dark) 1 2) :contrast 0 :accent nil :answered t))
@@ -82,8 +83,7 @@ store holds what the asynchronous reads brought, and the defaults until they com
          (list :scheme (nhwl-settings-get 'color-scheme)
                :contrast (condition-case nil (nhwl-settings-get 'contrast) (error 0))
                :accent (nhwl-settings-get 'accent-color)
-               :answered (and (boundp 'nhwl-settings--values) (hash-table-p nhwl-settings--values)
-                              (gethash 'color-scheme nhwl-settings--values) t)))))
+               :answered (and (fboundp 'nhwl-settings-answered-p) (nhwl-settings-answered-p 'color-scheme) t)))))
 
 ;;;; The theme
 
@@ -187,18 +187,12 @@ store holds what the asynchronous reads brought, and the defaults until they com
   "`ns-system-appearance-change-functions': macOS changed its appearance."
   (drgnx-look-follow-apply))
 
-(defun drgnx-look-follow--after-set (key _value)
-  "After `nhwl-settings--set': the store runs no hook for an answer equal to the default (0, Light on GNOME), so
-the first answer of `color-scheme' is heard here."
-  (when (eq key 'color-scheme) (drgnx-look-follow-apply)))
-
 (defun drgnx-look-follow-on ()
   "Follow the desktop: listen to the portal and to themes, say the migration notice, and switch now."
   (setq drgnx-look-follow--on t)
   (add-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (add-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (add-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)
-  (when (fboundp 'nhwl-settings--set) (advice-add 'nhwl-settings--set :after #'drgnx-look-follow--after-set))
   (when (eq drgnx-look-theme 'auto) (drgnx-look-follow--migrate))
   (drgnx-look-follow-apply))
 
@@ -208,7 +202,6 @@ the first answer of `color-scheme' is heard here."
   (remove-hook 'enable-theme-functions #'drgnx-look-follow--on-theme)
   (remove-hook 'nhwl-settings-changed-functions #'drgnx-look-follow--on-setting)
   (remove-hook 'ns-system-appearance-change-functions #'drgnx-look-follow--on-ns)
-  (advice-remove 'nhwl-settings--set #'drgnx-look-follow--after-set)
   (drgnx-look-follow--clear-accent))
 
 (provide 'drgnx-look-follow)
