@@ -11,7 +11,7 @@ Git decides merged text; Loro holds element ids; the selective revert is drgnx's
 ## `history.db`
 
 One per project (`History::open(dir)` → `<dir>/history.db`), on urdr's store: WAL, `0600`, full sync, migrations as
-data (`schema.rs`; schema 1). The hub is its only writer. A record and the document updates it carries go in one
+data (`schema.rs`; schema 2). The hub is its only writer. A record and the document updates it carries go in one
 transaction (`History::put_op`), so a multi-file action is all there or not at all.
 
 | Table | Holds |
@@ -25,6 +25,7 @@ transaction (`History::put_op`), so a multi-file action is all there or not at a
 | `peer` | a Loro peer per author per branch (`History::peer`): the user's session, an agent run, `external:<source>` |
 | `pending` | a revert in progress (the hub finishes it at start-up) |
 | `preview` | a revert preview until it is applied: its branch, the documents' versions then, its scope |
+| `provenance` | per record, the source element ids of text applied by diff (a redo of part, a take) |
 
 Ids: `DocId`, `OpId`, `PeerId`, `BranchId`; `WorktreeId::of(path, common_dir)` is the hex of both. A `Span { peer,
 start, end }` names the element ids a record's operations made in one document (a peer's counters); a `Frontier` is
@@ -100,6 +101,26 @@ case made is found, and no other.
 
 **Roll back mine too** (`Mode::RollBackMine`). The text goes back to what it was before the scope, applied as new
 operations; the document as it was is kept as branch `undone/<record>`, so its hunks can be redone.
+
+## Redo, fork, compare, take across
+
+`History::redo(revert, branch, choices, peer, at)` is a revert of the revert (keep mine), written as a `redo` record
+whose parent is the revert. `History::redo_part(revert, branch, docs, peer, at)` redoes only some files of a roll back:
+each takes the text it had on `undone/<revert>`, applied by diff over its text now (`set_text_range`: one edit over the
+part that differs). The record keeps **provenance**: the element ids in the source that the new text came from
+(`History::provenance(op)`, table `provenance`, schema 2), so the history can say the text is the agent's, not the redoing
+user's.
+
+`History::fork(at, from, name, author, now)` makes branch `name` (kind `fork`) holding `from`'s documents as they were
+after record `at` (`fork_at` its stored version), and writes a `fork` record whose parent is `at`.
+
+Two branches of a file share the element ids up to where they parted, so `History::compare(a, b)` finds hunks exactly:
+the elements only one holds, between two both hold. A `Hunk` has both ranges and texts, and for what `b` wrote its author
+and record (a deletion has none: an element id does not name its deleter). Text one branch took from the other is new
+elements with the same characters and is no hunk. `History::take(from, to, hunks, peer, at)` takes whole hunks (a
+`HunkRef` is the file and the exact range in `from`'s text) as new operations by `peer`, in one `merge` record with the
+source ids as provenance. A range that is not exactly one hunk is refused and nothing changes: a subset of a hunk is never
+imported.
 
 ## The hub
 

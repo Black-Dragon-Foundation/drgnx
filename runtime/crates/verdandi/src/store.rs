@@ -379,6 +379,7 @@ impl History {
             "branch",
             "pending",
             "preview",
+            "provenance",
         ];
         if !TABLES.contains(&table) {
             return Err(Error::Refused(format!("no table {table}")));

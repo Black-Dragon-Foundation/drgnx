@@ -19,10 +19,10 @@ fn record(kind: Kind, author: PeerId, parents: Vec<OpId>, spans: Vec<(DocId, Spa
 }
 
 #[test]
-fn open_creates_schema_v1() {
+fn open_creates_the_current_schema() {
     let d = tempfile::tempdir().unwrap();
     let h = History::open(&d.path().join("p")).unwrap();
-    assert_eq!(h.schema().unwrap(), 1);
+    assert_eq!(h.schema().unwrap(), verdandi::SCHEMA_VERSION);
     let db = d.path().join("p/history.db");
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
@@ -39,6 +39,7 @@ fn open_creates_schema_v1() {
         "branch",
         "pending",
         "preview",
+        "provenance",
     ] {
         assert_eq!(h.count(t).unwrap(), 0, "{t}");
     }
@@ -52,7 +53,7 @@ fn reopen_is_idempotent() {
     let b = h.branch("wt/1", BranchKind::Worktree, Some("c1")).unwrap();
     drop(h);
     let mut h = History::open(d.path()).unwrap();
-    assert_eq!(h.schema().unwrap(), 1);
+    assert_eq!(h.schema().unwrap(), verdandi::SCHEMA_VERSION);
     assert_eq!(h.doc_for("src/a.rs").unwrap(), doc);
     assert_eq!(
         h.branch("wt/1", BranchKind::Worktree, Some("c1")).unwrap(),

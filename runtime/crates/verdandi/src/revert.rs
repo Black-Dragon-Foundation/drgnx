@@ -82,7 +82,7 @@ struct Stored {
 }
 
 /// The element id of each character of T, in order.
-fn char_ids(t: &LoroText) -> Vec<ID> {
+pub(crate) fn char_ids(t: &LoroText) -> Vec<ID> {
     (0..t.len_unicode())
         .map(|i| {
             t.get_cursor(i, Side::Right)
@@ -316,6 +316,11 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
 
 /// Replace D's text with TARGET as one edit over the part that differs.
 fn set_text(d: &LoroDoc, target: &str) -> Result<()> {
+    set_text_range(d, target).map(|_| ())
+}
+
+/// [`set_text`], and where the inserted part of TARGET sits in it: (character offset, characters).
+pub(crate) fn set_text_range(d: &LoroDoc, target: &str) -> Result<(usize, usize)> {
     let t = d.get_text(TEXT);
     let now: Vec<char> = t.to_string().chars().collect();
     let want: Vec<char> = target.chars().collect();
@@ -336,7 +341,7 @@ fn set_text(d: &LoroDoc, target: &str) -> Result<()> {
     if !ins.is_empty() {
         t.insert(pre, &ins).map_err(loro)?;
     }
-    Ok(())
+    Ok((pre, ins.chars().count()))
 }
 
 /// The text of D at version F.
@@ -462,6 +467,19 @@ impl History {
         peer: PeerId,
         at: f64,
     ) -> Result<OpId> {
+        self.apply_scope(Kind::Revert, preview, choices, mode, peer, at)
+    }
+
+    /// [`History::apply_revert`] writing a record of KIND (a redo is a revert of a revert).
+    pub(crate) fn apply_scope(
+        &mut self,
+        kind: Kind,
+        preview: i64,
+        choices: &[OverlapChoice],
+        mode: Mode,
+        peer: PeerId,
+        at: f64,
+    ) -> Result<OpId> {
         let (branch, versions, json): (i64, Vec<u8>, String) = self
             .conn
             .query_row(
@@ -540,13 +558,13 @@ impl History {
         }
         let view = self.view()?;
         let r = Record {
-            kind: Kind::Revert,
+            kind,
             author: peer,
             cause: Default::default(),
             spans,
             parents: scope,
             git: None,
-            summary: format!("revert in {} files", keep.len()),
+            summary: format!("{} in {} files", kind.as_str(), keep.len()),
             at,
         };
         let written = (|| -> Result<OpId> {

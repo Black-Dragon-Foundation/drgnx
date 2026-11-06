@@ -9,6 +9,7 @@
 //! - [`log`]: the operation log's records, their causes, and the settle rule that groups typing into them.
 //! - [`revert`]: span revert on element ids, the overlaps a user's later edits make, the 3-way check.
 
+pub mod apply;
 pub mod docs;
 pub mod log;
 pub mod revert;
@@ -19,6 +20,7 @@ pub mod store;
 pub mod text;
 mod threeway;
 
+pub use apply::{FileDiff, Hunk, HunkRef};
 pub use docs::{ActiveDoc, Change};
 pub use log::{FlushReason, Settler};
 pub use revert::{FilePreview, Mode, Overlap, OverlapChoice, RevertPreview};
@@ -27,6 +29,9 @@ pub use text::{Coding, NotText};
 
 use std::fmt;
 use std::path::Path;
+
+/// The schema `history.db` is at once opened.
+pub const SCHEMA_VERSION: u32 = schema::MIGRATIONS[schema::MIGRATIONS.len() - 1].0;
 
 /// A tracked file's document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -28,5 +28,10 @@ create table preview(
   json text not null, at real not null);
 ";
 
+/// Schema 2: where text applied by diff came from (the source's element ids), per record.
+const V2: &str = "
+create table provenance(op integer primary key references op(id), spans_blob blob not null);
+";
+
 /// Every migration, oldest first.
-pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1)];
+pub(crate) const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2)];
