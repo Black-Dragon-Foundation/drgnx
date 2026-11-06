@@ -374,9 +374,12 @@ scopes: modules/editor/drgnx-sticky.el); re-apply the chrome after changing it."
   "The header of a buffer that has its own (tabulated-list column headings, clicked to sort).")
 
 (defun drgnx-chrome--set (w param value)
-  "Set W's PARAM to VALUE only if it changed: setting a window parameter redraws the window."
+  "Set W's line format PARAM (`tab-line-format', `header-line-format', `mode-line-format') to VALUE only if it
+changed, and then have W's lines drawn again: Emacs redraws a window for a new parameter only when a face filter names
+it, so without this the next redisplay may keep the old line (the window's text unchanged)."
   (unless (equal-including-properties (window-parameter w param) value)
-    (set-window-parameter w param value)))
+    (set-window-parameter w param value)
+    (with-current-buffer (window-buffer w) (force-mode-line-update))))
 
 (defun drgnx-chrome--apply-window (w note)
   (pcase (drgnx-chrome--role w)

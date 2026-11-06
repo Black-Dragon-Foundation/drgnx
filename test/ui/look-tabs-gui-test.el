@@ -4,7 +4,7 @@
 
 ;; Pattern D: every picture is taken after `drgnx-test-wait-presented'.  The hover row moves a real pointer
 ;; (`drgnx-uitest-pointer-set': sway only), so it skips elsewhere and the integration's sway pass must report it
-;; passed.  The tabs are put on a window by their parameters, the way chrome does.
+;; passed.  The tabs are put on a window by their parameters, through chrome's own setter.
 
 (require 'ert)
 (require 'cl-lib)
@@ -32,7 +32,7 @@ shown), under the dark theme.  Everything undone after."
      (set-window-parameter (selected-window) 'drgnx-tabs (list a b))
      (mapc #'disable-theme custom-enabled-themes)
      (load-theme 'drgnx-dark t)
-     (set-window-parameter (selected-window) 'tab-line-format (drgnx-chrome--tab-line (selected-window)))
+     (drgnx-chrome--set (selected-window) 'tab-line-format (drgnx-chrome--tab-line (selected-window)))
      (unwind-protect
          (progn (drgnx-test-wait-presented) ,@body)
        (mapc #'disable-theme custom-enabled-themes)
@@ -73,7 +73,7 @@ text area just below the tab line are both the `editor' token, and the tab line'
   (skip-unless (display-graphic-p))
   (drgnx-ui-look-tabs--with
     (set-window-parameter (selected-window) 'drgnx-tabs (list (window-buffer)))        ; the shown tab alone, at the left
-    (set-window-parameter (selected-window) 'tab-line-format (drgnx-chrome--tab-line (selected-window)))
+    (drgnx-chrome--set (selected-window) 'tab-line-format (drgnx-chrome--tab-line (selected-window)))
     (drgnx-test-wait-presented)
     (let* ((w (selected-window)) (s (drgnx-uitest-device-scale (selected-frame))) (edges (window-pixel-edges w))
            (top (round (* s (nth 1 edges)))) (h (window-tab-line-height w))
