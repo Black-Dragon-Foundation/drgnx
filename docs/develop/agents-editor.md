@@ -100,3 +100,21 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   panel) comes with the panel.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.
+
+## Probes recorded for the gate
+
+Recorded in the GUI harness (`agents-editor-gui/p3-drawn-frame`, mutter, Glitnir, dark and light, scale 1 and 2; five agents,
+three gutter ranges, an 80 to 95 row window). These are readings; the verdicts wait for the gate.
+
+- `agents-cursor-tick` (the frame apply: bar, rings, tag, strip, line table): p95 0.2-0.36 ms.
+- `agents-gutter-tick` (a scroll's visible-rows rebuild): p95 0.07-0.11 ms.
+- Pixels: the strip shows the agent's colour in the fringe of its lines and not elsewhere; the read range's rows hold none
+  of the default background along their text, in both themes at both scales.
+- `agents-line-tick` has its probe (`drgnx-agents-editor-line-probe`) and no GUI reading yet.
+
+## Not yet in this branch
+
+- The rows that need the hub (`agents-editor-hub-test.el`, the client's [B] row, and the Explorer's
+  `badges-land-on-the-users-tree-for-a-worktree-agent`) come with the hub's buffer view and presence feed; the same
+  mapping is tested here with a real git worktree.
+- The who-is-here list's `o` (open the panel) comes once the panel is in `p3`.

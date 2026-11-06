@@ -453,3 +453,89 @@ window, where margins work the same way: the marked row has the agent's colour i
 
 (provide 'agents-editor-gui-test)
 ;;; agents-editor-gui-test.el ends here
+
+;;;; Row 3: the module's own drawing (cursors, rings, tags, the gutter strip) in a real frame
+
+(defun agents-editor-gui--p3-frame (n)
+  "A frame of five agents and the gutter ranges around them; N makes its version."
+  (list :version n :agents
+        (list (list :ordinal 1 :session "s1" :handle "Opus" :mode "editing" :line 30 :line_end 30 :col 4)
+              (list :ordinal 2 :session "s2" :handle "Codex" :mode "reading" :line 35 :line_end 42 :col 0)
+              (list :ordinal 3 :session "s3" :handle "Gemini" :mode "pending" :line 50 :line_end 55 :col 0)
+              (list :ordinal 4 :session "s4" :handle "Kimi" :mode "editing" :line 60 :line_end 60 :col 0
+                    :projected '(:worktree_label "rp-df-hub"))
+              (list :ordinal 5 :session "s5" :handle "Deep" :mode "reading"))
+        :gutter '((:session "s1" :kind "changed" :start 20 :end 24 :help "Opus · changed in step 3")
+                  (:session "s3" :kind "pending" :start 50 :end 55 :help "Gemini · about to change")
+                  (:session "s2" :kind "conflict" :start 70 :end 72 :help "Codex · conflicts with your change"))))
+
+(ert-deftest agents-editor-gui/p3-drawn-frame ()
+  "The module's drawing of one frame (a bar, a tinted read range, a dashed pending range, a projected tag, the strip)
+in the dark and the light theme: pictures, the gutter and tint pixels, and the time of an apply and a scroll rebuild
+\(recorded as `P3 ...' lines; the verdict waits for the gate)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (load (expand-file-name "modules/ui/drgnx-look-derive" agents-editor-gui--repo) nil t)
+  (load (expand-file-name "modules/tools/drgnx-agents-editor-draw" agents-editor-gui--repo) nil t)
+  (let ((buf (get-buffer-create "*p3-draw*")) (win (selected-window)))
+    (with-current-buffer buf
+      (erase-buffer)
+      (dotimes (i 400) (insert (format "line %d of the sample file with some text on it\n" (1+ i))))
+      (setq-local cursor-type nil truncate-lines t)
+      (goto-char (point-min)))
+    (set-window-buffer win buf)
+    (let ((scale 0))          ; small text: the window shows rows 15 to 90
+      (while (and (< (agents-editor-gui--rows win (point-min)) 80) (> scale -12))
+        (with-current-buffer buf (text-scale-set (cl-decf scale))) (redisplay t)))
+    (set-window-start win (with-current-buffer buf (save-excursion (goto-char (point-min)) (forward-line 14) (point))))
+    (unwind-protect
+        (handler-bind ((error (lambda (e) (agents-editor-gui--note "P3 error %S: %s" e
+                                                                   (mapconcat #'identity (seq-take (split-string (backtrace-to-string) "\n") 14) " | ")))))
+          (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
+            (agents-editor-gui--theme theme)
+            (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))
+            (drgnx-agent-identity-clear)
+            (drgnx-agents-editor-draw-clear buf)
+            (let ((ms nil))
+              (dotimes (i 100)
+                (push (* 1000 (benchmark-elapse (drgnx-agents-editor-draw--apply buf (agents-editor-gui--p3-frame i)))) ms))
+              (agents-editor-gui--note "P3 apply %s scale=%S: %S" variant (drgnx-uitest-device-scale (selected-frame))
+                                       (agents-editor-gui--stats ms)))
+            (let ((ms nil))
+              (dotimes (k 60)
+                (set-window-start win (with-current-buffer buf (save-excursion (goto-char (point-min)) (forward-line (+ 14 (% k 20))) (point))))
+                (push (* 1000 (benchmark-elapse (drgnx-agents-editor-draw--rebuild-buffer buf))) ms))
+              (agents-editor-gui--note "P3 rebuild %s: %S" variant (agents-editor-gui--stats ms)))
+            (set-window-start win (with-current-buffer buf (save-excursion (goto-char (point-min)) (forward-line 14) (point))))
+            (set-window-point win (window-start win))
+            (drgnx-agents-editor-draw--rebuild-buffer buf)
+            (drgnx-test-wait-presented)
+            (agents-editor-gui--note "P3 window %s: rows=%S height=%S start-line=%S visible22=%S" variant
+                                     (agents-editor-gui--rows win (window-start win)) (window-body-height win)
+                                     (with-current-buffer buf (line-number-at-pos (window-start win)))
+                                     (with-current-buffer buf (save-excursion (goto-char (point-min)) (forward-line 21)
+                                                                              (pos-visible-in-window-p (point) win))))
+            (agents-editor-gui--png (format "p3-drawn-%s" variant))
+            ;; the strip: line 22 shows the agent's colour in the fringe, line 40 (nothing there) does not
+            (let* ((snap (drgnx-uitest-snapshot))
+                   (colour (agents-editor-gui--rgb (plist-get (drgnx-agent-identity 1) :face)))
+                   (own (agents-editor-gui--owner (agents-editor-gui--owners snap win 22 `((agent . ,colour)))))
+                   (none (agents-editor-gui--owner (agents-editor-gui--owners snap win 40 `((agent . ,colour))))))
+              (agents-editor-gui--note "P3 strip %s: line 22 owner=%S line 40 owner=%S" variant own none)
+              (should (eq own 'agent))
+              (should (eq none 'none))
+              ;; the read range's tint: along line 38's text the default background is gone, along line 45's it stays
+              (let* ((s (drgnx-uitest-device-scale (selected-frame)))
+                     (x0 (+ (cdr (agents-editor-gui--row-xy win 38)) (round (* s (+ (car (window-fringes win)) 8)))))
+                     (bg (cdr (drgnx-uitest-pixel snap (+ x0 (round (* s 400))) (car (agents-editor-gui--row-xy win 45)))))
+                     (count (lambda (line)
+                              (let ((n 0) (y (car (agents-editor-gui--row-xy win line))))
+                                (dotimes (dx 120) (when (equal bg (cdr (drgnx-uitest-pixel snap (+ x0 dx) y))) (cl-incf n)))
+                                n)))
+                     (tinted (funcall count 38)) (plain (funcall count 45)))
+                (agents-editor-gui--note "P3 tint %s: default-background pixels in 120 along line 38 (read range) %d, line 45 %d"
+                                         variant tinted plain)
+                (should (< tinted (/ plain 4)))))))
+      (drgnx-agents-editor-draw-clear buf)
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))
