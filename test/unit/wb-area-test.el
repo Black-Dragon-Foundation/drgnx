@@ -213,11 +213,18 @@
      (kill-buffer b))))
 
 (ert-deftest drgnx-area/faces-are-in-the-drgnx-group ()
-  ;; I10: Emacs 31 warns about a defface without a group (the build must have 0 warnings).
+  ;; I10: Emacs 31 warns about a defface without a group (the build must have 0 warnings).  A face may sit in a
+  ;; group under `drgnx' (the look's faces are in `drgnx-look').
   (require 'drgnx-explorer) (require 'drgnx-buffers) (require 'drgnx-git)
-  (dolist (f (face-list))
-    (when (string-prefix-p "drgnx-" (symbol-name f))
-      (should (assq f (get 'drgnx 'custom-group))))))
+  (let ((groups (list 'drgnx)) (faces nil))
+    (while groups
+      (dolist (member (get (pop groups) 'custom-group))
+        (pcase (cadr member)
+          ('custom-group (push (car member) groups))
+          ('custom-face (push (car member) faces)))))
+    (dolist (f (face-list))
+      (when (string-prefix-p "drgnx-" (symbol-name f))
+        (should (memq f faces))))))
 
 (ert-deftest drgnx-area/q-in-a-panel-buffer-hides-the-panel-and-returns-to-the-editor ()
   ;; DEFERRED M3c-6, ruled: `q' (quit-window) in a panel buffer hides the panel (size and tabs kept)
