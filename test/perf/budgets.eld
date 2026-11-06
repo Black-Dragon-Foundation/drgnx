@@ -148,4 +148,15 @@
  (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
- (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8))
+ (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
+ ;; The Work space (design §13; docs/develop/perf.md, "The Work space's workloads"): 30 streaming mock agents in a real
+ ;; hub.  The rules between workloads (the map shown at most 1 ms over hidden; the mirror at most 1 ms over `typing')
+ ;; are `drgnx-perf-run--relative-fails'.  The Rust rows (vegvisir layout, shell parse, trace) are their crates' tests.
+ (work-nav (:input :p95) 16) (work-nav (:frame_kb) 2048) (work-nav (:stalls) 0)
+ (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
+ (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
+ (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
+ (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
+ (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
+ (work-typing-mirror (:input :p95) 16) (work-typing-mirror (:stalls) 0)
+ (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1))

@@ -171,6 +171,14 @@ by `machines/report`), four cards (one a clash). `test/fixtures/work-space/proto
 prototype's own data. `vegvisir::fixture::thirty()` and `prototype()` (feature `fixture`, tests only) turn a
 description into the events a hub would feed.
 
+Into a real hub: `test/fixtures/work-space-thirty-fixture.el` builds the description into three git repositories and 30
+mock agents, all sessions (the four subagent entries are sessions of their own, each with its parent's repository),
+every one streaming; `drgnx-work-thirty-premise` signals when that does not hold. The perf workloads
+(`docs/develop/perf.md`, "The Work space's workloads") and the GUI scenes (`drgnx-work-gui/thirty-agent-scenes`: dark,
+light and high contrast, one shot each at the session's scale) both use it. What the hub derives from the mock agents'
+files, edits and prompts (plans, specs, shared files, machines) is what the map shows; the description's cards and
+machines are not injected.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and

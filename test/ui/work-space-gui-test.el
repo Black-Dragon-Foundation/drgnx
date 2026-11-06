@@ -544,4 +544,54 @@ runs, 40 times: p95 under 16 ms."
         (should (> (nth 2 sent) 0))
         (should (< (drgnx-work-gui--p95 times) 16))))))
 
+;;;; Scenes: the 30-agent map, dark, light and high contrast
+
+(load (expand-file-name "test/fixtures/work-space-thirty-fixture" drgnx-work-gui--repo) nil t)
+
+(defvar drgnx-work-space-roots)
+(declare-function drgnx-work-thirty-start "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-stop "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-map "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-premise "work-space-thirty-fixture")
+
+(defun drgnx-work-gui--scene-shoot (theme)
+  "Capture the root frame as work-space-THEME-sSCALE.png in the evidence folder; the file's name."
+  (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "work-scene" t)) :root))
+        (out (expand-file-name (format "work-space-%s-s%g.png" theme (frame-scale-factor)) temporary-file-directory)))
+    (should (file-exists-p shot))
+    (copy-file shot out t)
+    (drgnx-uitest--evidence out)
+    (drgnx-work-gui--log "scene shot %s" out)
+    out))
+
+(ert-deftest drgnx-work-gui/thirty-agent-scenes ()
+  "The map of the 30-agent workspace in a real hub (mock agents, all streaming), alone in the root frame: a screenshot
+in the drgnx dark, light and high-contrast themes at the session's scale (the lab runs scales 1, 1.25 and 2).  Asserts
+the premise (30 agents streaming and on the map), that the map drew rows, and that each shot exists; the eye judges the
+rest."
+  (skip-unless (and (getenv "DRGNX_RATATOSKR_BIN") (file-executable-p (getenv "DRGNX_RATATOSKR_BIN"))))
+  (drgnx-test-with-modules '(tools/work-space)
+    (let ((root (drgnx-uitest-root-frame)) buf)
+      (unwind-protect
+          (with-selected-frame root
+            (delete-other-windows)
+            (drgnx-work-thirty-start (getenv "DRGNX_RATATOSKR_BIN"))
+            (setq buf (drgnx-work-thirty-map t))
+            (delete-other-windows)
+            (set-window-buffer (selected-window) buf)
+            (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast))
+              (mapc #'disable-theme custom-enabled-themes)
+              (load-theme theme t)
+              (with-current-buffer buf (drgnx-view-touch drgnx-view))
+              (drgnx-test-wait (lambda () (redisplay t) (not (drgnx-view-pending-p (buffer-local-value 'drgnx-view buf))))
+                               :secs 30 :what "the map drawn")
+              (set-window-start (selected-window) (point-min))
+              (drgnx-test-wait-presented)
+              (drgnx-work-thirty-premise buf t)
+              (should (> (plist-get (drgnx-view-stats (buffer-local-value 'drgnx-view buf)) :rows-drawn) 0))
+              (drgnx-work-gui--scene-shoot theme)))
+        (mapc #'disable-theme custom-enabled-themes)
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-work-thirty-stop)))))
+
 ;;; work-space-gui-test.el ends here
