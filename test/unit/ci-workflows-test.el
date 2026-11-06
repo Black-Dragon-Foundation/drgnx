@@ -194,9 +194,9 @@
          (deny (and rt (drgnx-ci-test--job rt "deny"))))
     (skip-unless (and android containers deny))
     (drgnx-ci-test--has android
-                        "--target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p drgnx-ratatoskr -p forseti\n"
+                        "--target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p heimdall -p drgnx-ratatoskr -p forseti\n"
                         "--target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync\n"
-                        "--all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p forseti -- -D warnings\n"
+                        "--all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -p forseti -- -D warnings\n"
                         "--all-targets -p sleipnir --no-default-features --features proto,sync -- -D warnings\n")
     (drgnx-ci-test--has containers
                         "-p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd\n")

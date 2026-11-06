@@ -277,7 +277,10 @@ A gated file is one whose `;; test-pattern:` line (an exact line within the firs
 file the command runs the file once with `DRGNX_TEST_GATE_SWAP=0`; each `drgnx-test-gated` run then prints
 `drgnx-gate-swap-pairs: N`, the number of adjacent pairs of released lines from different connections it met, and the
 command goes on with K = 1, 2, … up to the largest N any run of the file printed so far (a swap can meet more pairs
-than the unswapped run did), one run per K. It stops at the first red, prints the run's output and the K, and exits 1.
+than the unswapped run did), one run per K. A file's loop stops at its first red, prints the run's output and the K, and the command exits 1.
+Without `--only`, the files run `DRGNX_ORDERS_JOBS` at a time (default: the CPUs), each file's Ks still in sequence and
+its output printed whole when it ends; the other files finish, so one run names every red file. A file takes about 4 to 23 s
+per K, nearly all of it its tests, so in sequence the files outran CI's 20 minutes.
 A run that prints no count is red too (a run that swapped nothing proves nothing), and so is a run at K ≥ 1 in which a
 test skipped that ran at K = 0 (the runner's `Skipped (N):` list): its swap went unexplored.
 

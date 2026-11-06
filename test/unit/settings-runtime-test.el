@@ -118,7 +118,15 @@
     (should (equal (funcall enc 'drgnx-runners-weight 2) "2"))
     (should (equal (funcall enc 'drgnx-runners-project-visibility "public") "\"public\""))
     (should (equal (funcall enc 'drgnx-search-model-mirror nil) "null"))
-    (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))))
+    (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))
+    ;; the agent browser's settings
+    (should (equal (funcall enc 'drgnx-agents-browser-program nil) "null"))
+    (should (equal (funcall enc 'drgnx-agents-browser-program "/usr/bin/chromium") "\"/usr/bin/chromium\""))
+    (should (equal (funcall enc 'drgnx-agents-browser-local-ports '(3000 8080)) "[3000,8080]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-deny-hosts nil) "[]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-deny-hosts '("example.com")) "[\"example.com\"]"))
+    (should (equal (funcall enc 'drgnx-agents-browser-idle 600) "600"))
+    (should (equal (funcall enc 'drgnx-agents-session-memory "4G") "\"4G\""))))
 
 (ert-deftest drgnx-settings-runtime/the-old-sender-is-gone ()
   (dolist (f '(drgnx-hub--send-providers drgnx-hub--providers-table drgnx-hub--provider-json drgnx-hub-resend-providers

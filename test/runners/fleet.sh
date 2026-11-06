@@ -55,8 +55,10 @@ up() {
     for o in ${opts[@]+"${opts[@]}"}; do printf '%s\n' "$o"; done
   } > "$STATE/50-fleet.conf"
   : > "$STATE/known_hosts"
-  local i
-  for i in $(seq 1 "$n"); do
+  # the runner numbers: none for 0 (macOS's `seq 1 0' counts down: 1 and 0)
+  local i ids=""
+  if [ "$n" -ge 1 ]; then ids=$(seq 1 "$n"); fi
+  for i in $ids; do
     podman run -d --name "$(name r$i)" --hostname "r$i" --network "$NET" --network-alias "r$i" \
       --memory 3g --memory-swap 3g --systemd=always --device /dev/fuse --device /dev/net/tun \
       --security-opt label=disable --security-opt unmask=ALL --cap-add SYS_ADMIN ${DRGNX_FLEET_RUNNER_OPTS:-} \
@@ -64,7 +66,7 @@ up() {
       -v "$STATE/base.tar:/fleet/base.tar:ro" -v "$STATE/share:/fleet/share:ro" -v "$STATE/50-fleet.conf:/etc/ssh/sshd_config.d/50-fleet.conf:ro" \
       "$IMAGE" >/dev/null
   done
-  for i in $(seq 1 "$n"); do
+  for i in $ids; do
     # wait on the announced states, not a sleep: the system has booted (the base image is loaded then), and the
     # runner's own user manager says it is running
     podman exec "$(name r$i)" systemctl is-system-running --wait >/dev/null 2>&1 || true
@@ -83,7 +85,7 @@ up() {
   mkdir -p "$STATE/home/.ssh"; chmod 700 "$STATE/home/.ssh"
   cp "$STATE/hub" "$STATE/home/.ssh/id_ed25519"; cp "$STATE/hub-cert.pub" "$STATE/home/.ssh/id_ed25519-cert.pub"
   : > "$STATE/home/.ssh/known_hosts"
-  for i in $(seq 1 "$n"); do
+  for i in $ids; do
     # host keys are learned at the first connection by the code under test; scan only so a bare `ssh` works
     podman exec "$(name hub)" bash -c "ssh-keyscan -q r$i >> '$STATE/home/.ssh/known_hosts' 2>/dev/null" || true
     printf 'Host r%s\n  User runner\n  IdentityFile %s/home/.ssh/id_ed25519\n  UserKnownHostsFile %s/home/.ssh/known_hosts\n' \

@@ -22,6 +22,11 @@
           (make-directory bin)
           (funcall script "podman" (format "echo \"$*\" >> %s\ncase \"$1 $2\" in \"image exists\") %s ;; esac"
                                            log (if image-exists "exit 0" "exit 1")))
+          ;; macOS's seq counts down when the end is below the start (`seq 1 0' prints 1 and 0), GNU's prints nothing:
+          ;; fleet.sh with no runners must not meet either
+          (funcall script "seq"
+                   (concat "i=$1\nwhile :; do echo \"$i\"; [ \"$i\" -eq \"$2\" ] && break\n"
+                           "if [ \"$i\" -lt \"$2\" ]; then i=$((i + 1)); else i=$((i - 1)); fi; done"))
           ;; key files: `-f FILE' makes FILE and FILE.pub; `-s CA … KEY.pub' makes KEY-cert.pub
           (funcall script "ssh-keygen"
                    (concat "f= s=\nwhile [ $# -gt 0 ]; do case \"$1\" in -f) f=$2; shift;; -s) s=1;; esac; last=$1; shift; done\n"
