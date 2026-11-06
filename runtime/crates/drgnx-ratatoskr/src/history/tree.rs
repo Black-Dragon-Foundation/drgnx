@@ -173,6 +173,8 @@ async fn sandboxed_run(
         enforced: Enforced::Yes,
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     };
     let req = SandboxReq {
         sid: sid.to_owned(),
