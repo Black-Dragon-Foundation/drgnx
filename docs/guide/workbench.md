@@ -424,13 +424,19 @@ In a terminal window the lane works the same, and the line you are on stays visi
 ### Docked panes as cards
 
 While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and every editor group are **cards**: corner radius 10, a
-1 px ring just outside in the divider colour (60 % opaque) and a soft shadow, on a 6 px gap. `drgnx-look-card` holds
-the numbers (logical pixels; the ring is a face and an opacity, never a colour). The gap is the frame's
-`right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is 6 logical pixels at any display
-scale, and set again when the scale changes); the frame's edge gets the same gap (`internal-border-width`, painted in
-the divider colour), so the outer cards have their corners, ring and shadow against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text. Turning the
-module off takes the cards away and gives the frame its divider widths back. An editor card keeps its corners while it scrolls. Without
-Glitnir nothing changes.
+1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
+([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
+and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
+`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).
+The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
+number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
+frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
+against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
+The gap and the frame's edge are painted in the gap colour (`drgnx-surface-gap`) on the frame, whatever the theme
+says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected window, has
+its ring in the accent colour, solid; it moves with the selection. Turning the module off takes the cards away and
+gives the frame its divider widths and the theme's divider faces back. An editor card keeps its corners while it
+scrolls. Without Glitnir nothing changes.
 
 ### The panel and the right dock
 
