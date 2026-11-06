@@ -234,13 +234,39 @@ their window; the editor above must not move).  A temporary lane is fitted as as
   (unless (plist-get (window-parameter (window-normalize-window window) 'drgnx-popup) :borrowed)
     (apply orig window args)))
 
+(defvar drgnx-popup--minibuffer-popups nil
+  "For each minibuffer open now, innermost first: the buffer the floating lane showed when it began, or nil.")
+
+(defun drgnx-popup--float-lane ()
+  "The floating lane's window while it shows a popup, else nil."
+  (when-let* ((w (drgnx-popup--window)) ((plist-get (window-parameter w 'drgnx-popup) :float))) w))
+
+(defun drgnx-popup--minibuffer-setup ()
+  "`minibuffer-setup-hook': note what the floating lane shows as this minibuffer begins."
+  (push (when-let* ((lane (drgnx-popup--float-lane))) (plist-get (window-parameter lane 'drgnx-popup) :popup))
+        drgnx-popup--minibuffer-popups))
+
+(defun drgnx-popup--minibuffer-exit ()
+  "`minibuffer-exit-hook': a popup the floating lane began to show inside this minibuffer (`*Completions*') ends
+with it.  The window lane's ends the same way: leaving the minibuffer restores the frame's window configuration, which
+the child frame is not part of."
+  (let ((was (pop drgnx-popup--minibuffer-popups)) (lane (drgnx-popup--float-lane)))
+    (when (and lane (not (eq (plist-get (window-parameter lane 'drgnx-popup) :popup) was)))
+      (drgnx-popup--end lane))))
+
 (defun drgnx-popup--mode ()
-  "Follow `drgnx-rules-mode': the fit guard and the floating lane's buffer-change check are on while the rules are."
+  "Follow `drgnx-rules-mode': the fit guard, the floating lane's buffer-change check and its end with the minibuffer
+are on while the rules are."
   (if drgnx-rules-mode
       (progn (advice-add 'fit-window-to-buffer :around #'drgnx-popup--fit)
-             (add-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed))
+             (add-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed)
+             (add-hook 'minibuffer-setup-hook #'drgnx-popup--minibuffer-setup)
+             (add-hook 'minibuffer-exit-hook #'drgnx-popup--minibuffer-exit))
     (advice-remove 'fit-window-to-buffer #'drgnx-popup--fit)
-    (remove-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed)))
+    (remove-hook 'window-buffer-change-functions #'drgnx-popup--frame-changed)
+    (remove-hook 'minibuffer-setup-hook #'drgnx-popup--minibuffer-setup)
+    (remove-hook 'minibuffer-exit-hook #'drgnx-popup--minibuffer-exit)
+    (setq drgnx-popup--minibuffer-popups nil)))
 
 (add-hook 'drgnx-rules-mode-hook #'drgnx-popup--mode)
 (when drgnx-rules-mode (drgnx-popup--mode))
