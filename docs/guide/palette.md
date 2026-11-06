@@ -27,9 +27,9 @@ open: when you have answered, the palette is there as you left it.
 | Parameter | Default | |
 |---|---|---|
 | `corner-radius` | 12 | logical pixels |
-| `shadow` | `(:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6)` | colour comes from the `child-frame-shadow` face |
-| `alpha-background` | 0.82 | a placeholder; the look session tunes it |
-| `backdrop-blur` | 10 | logical pixels of blur radius behind the box |
+| `shadow` | `(:blur 48 :offset (0 . 16) :spread 0 :opacity 0.5)` | 0.22 in the light theme, none in High Contrast; colour comes from the `child-frame-shadow` face |
+| `alpha-background` | 0.90 | 1.0 in High Contrast |
+| `backdrop-blur` | 12 | logical pixels of blur radius behind the box; none in High Contrast |
 | `transition` | `pop` | fade and pop in and out |
 
 `drgnx-palette-frame-width` (640 logical pixels, at any display scale) and `drgnx-palette-frame-top` (0.12, the fraction

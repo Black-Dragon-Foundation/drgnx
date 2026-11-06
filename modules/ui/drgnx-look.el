@@ -45,29 +45,107 @@
 
 ;;;; Chrome (Glitnir, the compositor)
 
-(defcustom drgnx-look-chrome
-  '((corner-radius . 8) (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity 0.35)) (transition . pop))
+(declare-function drgnx-look-variant "drgnx-theme-gen" (&optional frame))
+
+(drgnx-defsetting drgnx-look-motion 'auto
+  "Motion of popups, the palette and notices under Glitnir: `auto' follows the desktop's reduced-motion
+preference, `full' always moves, `reduced' never does (no transitions; blur and shadows stay).
+A change applies at once."
+  :type '(choice (const auto) (const full) (const reduced)) :group 'drgnx-look
+  :scope 'global :agents 'never :apply #'drgnx-look--motion-apply
+  :schema '(enum auto full reduced))
+
+(defun drgnx-look--float-motion (alist)
+  "ALIST without its `transition' when motion is `reduced'."
+  (if (eq drgnx-look-motion 'reduced) (assq-delete-all 'transition (copy-sequence alist)) alist))
+
+(defun drgnx-look-chrome-for (variant)
+  "The chrome of popups (child frames) under Glitnir in VARIANT (`dark', `light' or `hc'), in logical pixels.
+High contrast has no shadow and a 1 px ring (the `child-frame-border' face, `drgnx-border-strong')."
+  (drgnx-look--float-motion
+   (pcase variant
+     ('hc '((corner-radius . 8) (child-frame-border-width . 1) (transition . pop)))
+     (_ `((corner-radius . 8)
+          (shadow . (:blur 16 :offset (0 . 6) :spread 0 :opacity ,(if (eq variant 'light) 0.14 0.35)))
+          (transition . pop))))))
+
+(defun drgnx-look-palette-for (variant)
+  "The floating command palette's child frame parameters in VARIANT, in logical pixels.
+High contrast is opaque, with no shadow and no blur, and a 2 px ring."
+  (drgnx-look--float-motion
+   (pcase variant
+     ('hc '((corner-radius . 12) (alpha-background . 1.0) (child-frame-border-width . 2) (transition . pop)))
+     (_ `((corner-radius . 12)
+          (shadow . (:blur 48 :offset (0 . 16) :spread 0 :opacity ,(if (eq variant 'light) 0.22 0.50)))
+          (alpha-background . 0.90) (backdrop-blur . 12) (transition . pop))))))
+
+(defcustom drgnx-look-chrome (drgnx-look-chrome-for 'dark)
   "The chrome of popups (child frames) under Glitnir, in logical pixels: `child-frame-chrome' while ui/look is on.
-No colours: the shadow takes the `child-frame-shadow' face, the border what the toolkit drew."
+Left at its standard value, the chrome follows the theme's variant (`drgnx-look-chrome-for'); a value you set stands
+in every variant.  No colours: the shadow takes the `child-frame-shadow' face, the border the `child-frame-border' face."
   :type 'sexp :group 'drgnx-face)
 
-(defcustom drgnx-look-palette
-  '((corner-radius . 12) (shadow . (:blur 60 :offset (0 . 24) :spread 0 :opacity 0.6))
-    (alpha-background . 0.82) (backdrop-blur . 10) (transition . pop))
+(defcustom drgnx-look-palette (drgnx-look-palette-for 'dark)
   "The floating command palette's child frame parameters under Glitnir, in logical pixels.
-The 0.82 is a placeholder the look session tunes.  No colours: the shadow takes the `child-frame-shadow' face."
+Left at its standard value, they follow the theme's variant (`drgnx-look-palette-for'); a value you set stands in
+every variant.  No colours: the shadow takes the `child-frame-shadow' face."
   :type 'sexp :group 'drgnx-face)
+
+(defun drgnx-look--float-customised-p (symbol)
+  "Non-nil when SYMBOL's value is not its standard value (the user, Customize or a settings file set it)."
+  (not (equal (symbol-value symbol) (eval (car (get symbol 'standard-value)) t))))
+
+(defun drgnx-look-chrome-current (&optional _frame)
+  "The popup chrome now: the user's `drgnx-look-chrome' when customised, else the table for the variant.
+Also the function `child-frame-chrome' holds while ui/look is on, so a theme change needs only a refresh."
+  (if (drgnx-look--float-customised-p 'drgnx-look-chrome)
+      drgnx-look-chrome
+    (drgnx-look-chrome-for (drgnx-look-variant))))
+
+(defun drgnx-look-palette-current ()
+  "The palette's frame parameters now: the user's `drgnx-look-palette' when customised, else the table."
+  (if (drgnx-look--float-customised-p 'drgnx-look-palette)
+      drgnx-look-palette
+    (drgnx-look-palette-for (drgnx-look-variant))))
 
 (defvar child-frame-chrome)
+(defvar glitnir-reduced-motion)
 (declare-function glitnir-refresh "glitnir")
+(declare-function drgnx-palette-frame-restyle "drgnx-palette-frame" ())
+
+(defun drgnx-look--float-refresh ()
+  "Popups and the palette take the values for the variant now on, at once (one refresh)."
+  (when (featurep 'glitnir)
+    (when (fboundp 'drgnx-palette-frame-restyle) (drgnx-palette-frame-restyle))
+    (glitnir-refresh)))
+
+(defun drgnx-look--motion-apply ()
+  "The `:apply' of `drgnx-look-motion': `glitnir-reduced-motion' follows it (only when Glitnir has it), then the
+popups and the palette are styled again."
+  (when (boundp 'glitnir-reduced-motion)
+    (pcase drgnx-look-motion
+      ('auto (setq glitnir-reduced-motion 'auto))
+      ('full (setq glitnir-reduced-motion nil))))
+  (when (drgnx-module-running-p 'ui/look) (drgnx-look--float-refresh)))
+
+(defun drgnx-look--float-on-theme (&rest _)
+  "`enable-theme-functions' and `disable-theme-functions': the variant may have changed."
+  (drgnx-look--float-refresh))
 
 (defun drgnx-look--chrome-on ()
   "With Glitnir: popups rounded and shadowed, at once (`child-frame-chrome' set through the module; its undo
-restores the old value, and the refresh recorded before it runs after that).  Without it, nothing."
+restores the old value, and the refresh recorded before it runs after that).  Without it, nothing.  The chrome
+follows the theme's variant: the option holds a function until the module is off."
   (when (featurep 'glitnir)
     (drgnx-modules-push-undo "glitnir chrome refresh" (lambda () (glitnir-refresh)))
-    (drgnx-module-set 'child-frame-chrome drgnx-look-chrome)
+    (drgnx-module-set 'child-frame-chrome #'drgnx-look-chrome-current)
+    (add-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
+    (add-hook 'disable-theme-functions #'drgnx-look--float-on-theme)
+    (drgnx-modules-push-undo "popup variant hooks"
+                             (lambda () (remove-hook 'enable-theme-functions #'drgnx-look--float-on-theme)
+                               (remove-hook 'disable-theme-functions #'drgnx-look--float-on-theme)))
     (drgnx-decor-faces-on)
+    (drgnx-look--motion-apply)
     (glitnir-refresh)))
 
 ;;;; Cards (Glitnir, the compositor)

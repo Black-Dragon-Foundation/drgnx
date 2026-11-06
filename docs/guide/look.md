@@ -202,6 +202,25 @@ first match: the `:line-height` you set on `drgnx-look-font-code`, then the dens
 yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
 code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.
 
+## Popups and the palette
+
+Under Glitnir (the compositor; not in a terminal, and not where it is off) popups and the floating command palette are
+rounded and shadowed, with values per variant:
+
+| | Dark | Light | High Contrast |
+|---|---|---|---|
+| Popups | radius 8, shadow blur 16 down 6, opacity 0.35 | the same at 0.14 | no shadow, a 1 px `drgnx-border-strong` ring |
+| Palette | radius 12, shadow blur 48 down 16 at 0.50, 90 % opaque, blur 12 behind | shadow 0.22 | opaque, no shadow, no blur, a 2 px ring |
+
+The values follow the theme when it changes. `drgnx-look-chrome` and `drgnx-look-palette` hold them as frame
+parameter lists; a value you set (Customize or `settings.el`) stands in every variant. In the popup lane, descriptions
+(transient, which-key) use the UI font and their keys the code font.
+
+`drgnx-look-motion` (a setting) says how things move: `auto` (the default) follows the desktop's reduced-motion
+preference, `full` always moves, `reduced` never does: popups, the palette and notices then appear and vanish at once, and
+blur and shadows stay. A change applies at once. Where Glitnir is off, nothing floats and nothing moves: popups and the
+palette use the plain frames and notices go to the echo area.
+
 ## Icons
 
 drgnx draws its marks with [Lucide](https://lucide.dev) line icons: tree rows, tab leading icons, panel headers, the

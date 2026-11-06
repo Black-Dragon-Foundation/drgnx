@@ -47,11 +47,30 @@
   `((parent-frame . ,parent) (minibuffer . nil) (name . "drgnx-palette") (drgnx-palette . t)
     (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t)
     (skip-taskbar . t) (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
-    (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0) (child-frame-border-width . 0)
+    (internal-border-width . ,(drgnx-palette-frame--px parent 8)) (border-width . 0)
+    (child-frame-border-width . ,(drgnx-palette-frame--px
+                                  parent (or (alist-get 'child-frame-border-width (drgnx-palette-frame--look)) 0)))
     (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (tab-bar-lines-keep-state . t)
     (left-fringe . 0) (right-fringe . 0) (vertical-scroll-bars) (horizontal-scroll-bars)
     (visibility . nil)
-    ,@(bound-and-true-p drgnx-look-palette)))
+    ,@(assq-delete-all 'child-frame-border-width (copy-sequence (drgnx-palette-frame--look)))))
+
+(defun drgnx-palette-frame--look ()
+  "The look's parameters for the palette's frame (the variant's table, or the user's `drgnx-look-palette')."
+  (if (fboundp 'drgnx-look-palette-current) (drgnx-look-palette-current) (bound-and-true-p drgnx-look-palette)))
+
+(defun drgnx-palette-frame-restyle ()
+  "Give the palette's frame, when it exists, the look's parameters again (a theme changed the variant).  A key the
+new table leaves out is cleared; the border width is in the parent's pixels."
+  (when (frame-live-p drgnx-palette-frame--frame)
+    (let ((look (drgnx-palette-frame--look)) (parent (frame-parent drgnx-palette-frame--frame)))
+      (dolist (k '(shadow backdrop-blur))
+        (unless (assq k look) (set-frame-parameter drgnx-palette-frame--frame k nil)))
+      (set-frame-parameter drgnx-palette-frame--frame 'child-frame-border-width
+                           (drgnx-palette-frame--px (or parent drgnx-palette-frame--frame)
+                                                    (or (alist-get 'child-frame-border-width look) 0)))
+      (dolist (p look)
+        (unless (eq (car p) 'child-frame-border-width) (set-frame-parameter drgnx-palette-frame--frame (car p) (cdr p)))))))
 
 (defun drgnx-palette-frame--ensure (parent)
   "The palette's frame, made if need be, under PARENT."
