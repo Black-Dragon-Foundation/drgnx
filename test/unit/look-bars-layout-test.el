@@ -232,5 +232,57 @@ height (the memo would keep the old box otherwise)."
         (let ((drgnx-look-density 'compact)) (should-not (eq k (drgnx-statusbar--layout-key w))))
         (should (eq k (drgnx-statusbar--layout-key w)))))))
 
+(defmacro drgnx-look-bars-test--counting (calls &rest body)
+  "BODY with the bars measuring one pixel a column through a measure that counts its calls in CALLS."
+  (declare (indent 1))
+  `(let* ((,calls 0)
+          (drgnx-look-bars-measure-function (lambda (s &optional _f) (cl-incf ,calls) (string-width s))))
+     ,@body))
+
+(ert-deftest drgnx-look-bars/a-cursor-move-measures-only-the-position ()
+  "Pattern D: a cursor move measures at most the position segment's new text: the bar's memo does not hold the
+window's point, and the widths it measured are kept per text, face and layout.  A bar that shows no position (a
+special-mode buffer's) is not built again at all.  The counts per move are printed."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-right '(position c)) (drgnx-statusbar-compact '(position c)))
+      (drgnx-statusbar-define-segment 'position :fn #'drgnx-statusbar--seg-position)
+      (drgnx-look-bars-test--counting calls
+        (drgnx-statusbar-test--in-buffer 'emacs-lisp-mode
+          (insert "(a)\n(bb)\n(ccc)\n")
+          (goto-char (point-min))
+          (drgnx-statusbar-mode-line)
+          (dolist (move (list #'forward-char #'forward-char (lambda () (forward-line 1)) #'backward-char))
+            (setq calls 0)
+            (funcall move)
+            (drgnx-statusbar-mode-line)
+            (message "drgnx-look-bars: measures for a cursor move: %d" calls)
+            (should (<= calls 1)))))
+      (drgnx-look-bars-test--counting calls
+        (let ((drgnx-statusbar-other '(a)))
+          (drgnx-statusbar-test--in-buffer 'special-mode
+            (let ((inhibit-read-only t)) (insert "one\ntwo\n"))
+            (goto-char (point-min))
+            (let ((bar (drgnx-statusbar-mode-line)))
+              (setq calls 0)
+              (forward-line 1)
+              (should (eq bar (drgnx-statusbar-mode-line)))
+              (should (= 0 calls)))))))))
+
+(ert-deftest drgnx-look-bars/the-branch-cut-measures-a-few-times ()
+  "Pattern D: cutting a long branch to fit measures a few candidate lengths (halving), not one per character, and
+nothing when the same bar is laid out again.  The counts are printed."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-left '(branch)) (drgnx-statusbar-right '(c))
+          (branch (concat "⑂ " (make-string 120 ?x))))
+      (drgnx-statusbar-define-segment 'branch :fn (lambda () branch))
+      (drgnx-look-bars-test--counting calls
+        (let ((plain (substring-no-properties (drgnx-statusbar-render 60))))
+          (message "drgnx-look-bars: measures for a cut of a %d-character branch: %d" (length branch) calls)
+          (should (string-search (truncate-string-ellipsis) plain))
+          (should (<= calls 20)))
+        (setq calls 0)
+        (drgnx-statusbar-render 60)
+        (should (= 0 calls))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here
