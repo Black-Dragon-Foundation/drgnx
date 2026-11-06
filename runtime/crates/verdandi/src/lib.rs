@@ -26,6 +26,7 @@ mod schema;
 pub mod store;
 pub mod text;
 pub mod threeway;
+mod vacuum;
 
 pub use anchor::{AnchorId, Blame, FileHunks, LineHunk, Resolved, Side, When};
 pub use apply::{FileDiff, Hunk, HunkRef};
@@ -36,6 +37,7 @@ pub use log::{FlushReason, Settler};
 pub use revert::{FilePreview, Mode, Overlap, OverlapChoice, RevertPreview};
 pub use store::{BranchKind, Cause, DocUpdate, History, Kind, OpRecord, Record};
 pub use text::{Coding, NotText};
+pub use vacuum::vacuum_file;
 
 /// The 3-way merge of OURS and THEIRS from BASE (`git merge-file`): whether it is clean, and the merged text (with
 /// git's markers when it is not).

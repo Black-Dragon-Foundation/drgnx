@@ -419,6 +419,7 @@ impl Front {
             wal_bytes: None,
             last_backup: None,
             backup_ok: None,
+            history_backup: crate::backup_timer::last_history().map(|(_, ok)| ok),
             denied_in,
             batches: None,
             replays: None,

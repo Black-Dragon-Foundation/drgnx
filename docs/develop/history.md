@@ -296,6 +296,15 @@ against another's write.
 A hook that refused an agent's edit (the plugin hooks) is to show on the revert card as a skipped path whose reason
 starts `refused by hook`; the card prints a reason that starts so as it is.
 
+## Backup
+
+The nightly backup (and `graph/backup`) copies each project's `history.db` after the `work.db` copy: `VACUUM INTO` a
+temporary file beside `<data>/backup/history-<project>.db`, an integrity check, a rename over the old copy
+(`History::vacuum_into`, or `verdandi::vacuum_file` for a store nobody has open, which is what the backup uses).
+There is one copy per project and it is replaced each night, never rotated; the 2 GiB cap per project bounds it. A
+failed copy is logged, shows in `status.store.history_backup` and in `drgnx doctor` (the `store` row's warning and the
+`history` row's newest copy), and never fails the `work.db` copy or the other projects'.
+
 ## Testing
 
 `test/unit/history-test.el` (pattern D: batch splitting, the origin macro, an indirect buffer, the mode's teardown, the

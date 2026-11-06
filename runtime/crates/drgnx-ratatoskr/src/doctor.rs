@@ -394,6 +394,34 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
                 .into(),
         );
     }
+    // the edit histories' copies (`history-<project>.db`, one each, replaced each night)
+    let history_copies: Vec<u64> = std::fs::read_dir(&backup)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("history-") && n.ends_with(".db")
+        })
+        .filter_map(|e| {
+            e.metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        })
+        .collect();
+    v["store"]["history"] = json!({
+        "copies": history_copies.len(),
+        "newest_age_s": history_copies.iter().max().map(|t| now.saturating_sub(*t)),
+    });
+    if v["store"]["history_backup"] == false {
+        warnings.push(
+            "the last copy of an edit history (history.db) failed: see the hub log; the older copy was kept".into(),
+        );
+    }
     // the personal-notes opt-in file, as it loads now
     if let Some(home) = env.vars.get("HOME").filter(|h| Path::new(h).is_absolute()) {
         let deny = norn::deny::DenyList::load(Path::new(home), &paths::config_dir(env));

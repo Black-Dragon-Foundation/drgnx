@@ -794,6 +794,27 @@ trail's session, else the one running, and its last step):
 - **History: Compare Branches** lists what one branch of the edit history has that another does not, each hunk with who
   wrote it and in which step. **History: Who Wrote This** says the same for the text at point.
 
+How much of the conversation comes back depends on the provider. Claude Code with fork support goes back to the step's
+own message (**Message** level); Codex goes back to the last turn that finished at or before the step (**Turn**; a step in
+the middle of a turn rounds down); anything else, and any fork that fails (Claude Code deletes old transcripts after about
+30 days), starts a new conversation and tells it a labelled summary of what happened up to the step (**Summary**), which
+is why a summary revert asks for your message: no turn starts unasked. A step inside a subagent rounds down to the message
+before the parent's `Task` call. A revert goes forward: the restored text is one new commit (never a reset, never a
+rewritten branch), and a redo is a revert of the revert. It does not undo pushed commits, merges, messages already read,
+spent money or settings the agent changed; the card lists those first. In a linked worktree a sandboxed session cannot
+reach the shared git folder, so there the files are restored but the commit is not made, and the card says so. The
+agent's lock still applies: a revert never writes the protected paths (`.git`, the agent's own configuration,
+`.envrc`, `mise.toml`) and never writes through a link.
+
+**Fork from here** is your own act: no job, no approval card and no budget chain; it starts a plain session (a worker
+stays a worker) on the branch `job/fork-<session>-<id>`. A finished worker has no conversation to rewind: its revert
+restores code, decisions and commit and says so, and Fork sits beside it.
+
+The edit history (`history.db`, one per project) is part of the nightly backup, beside `work.db`: one checked copy per
+project, `backup/history-<project>.db`, replaced each night and never rotated; its 2 GiB cap per project bounds it.
+`drgnx doctor` shows the newest copy in its `history` row and warns when a copy failed. A failed history copy never
+stops the `work.db` copy.
+
 After a revert, a file you have open reverts quietly. A buffer with unsaved changes in a file the revert wrote is never
 touched: a notice leads to **History: Resolve Unsaved Changes**, a card showing the difference with *keep mine*,
 *take theirs* or *edit* (Ediff).

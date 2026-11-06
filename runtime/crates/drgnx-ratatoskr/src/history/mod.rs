@@ -4,6 +4,7 @@
 //! - [`origin`]: whose version a change is (pure): the hub's write, the watcher's event about it and a rescan are one.
 //! - [`capture`]: reads a file the way an agent's tree must be read (no link followed), routes it to a document or the
 //!   snapshot class, diffs it onto the document and records it.
+//! - [`backup`]: the nightly copy of each project's `history.db`, beside `work.db`'s.
 //! - [`blob`]: git object ids through a git directory the caller names.
 //! - [`methods`]: `register`, `batch`, `resync`, `unregister` on the hub, for the editor's buffers.
 //! - [`watch`]: Hrafn's watcher events into the hub.
@@ -14,6 +15,7 @@
 //! - [`merge`]: a task's branch merged into the job's tree, as the union of their documents.
 //! - [`views`]: `history/blame` and `history/hunks`: who wrote the text, and what a branch changed since a record.
 
+pub mod backup;
 pub mod blob;
 pub mod branches;
 mod capture;

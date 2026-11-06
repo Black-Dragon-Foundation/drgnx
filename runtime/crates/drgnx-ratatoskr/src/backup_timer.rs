@@ -1,5 +1,6 @@
 //! The nightly backup's schedule (Urdr Task 17; storage §8.1): at 03:00 local time, or at the first idle minute after
-//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate).
+//! a missed one, the hub makes a checked copy of `work.db` (`graph::backup_now`: `VACUUM INTO`, check, rotate) and one of
+//! each project's `history.db` beside it (`history::backup`, replaced, never rotated; [`record_history`]).
 //!
 //! [`due`] is pure (the clock is its arguments), so the catch-up is tested without waiting for a night.  The hub's
 //! schema tick asks it every 2 s.  What the last copy was stays in a process-wide record that `status.store` shows
@@ -68,6 +69,19 @@ static EXCISING: AtomicUsize = AtomicUsize::new(0);
 /// The record, as it is now.
 pub fn last() -> Last {
     *LAST.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The last night's copies of the edit histories: when, and whether every project's copy was good.
+static HISTORY: Mutex<Option<(u64, bool)>> = Mutex::new(None);
+
+/// The edit histories were copied (or failed to be) at AT.
+pub fn record_history(at: u64, ok: bool) {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, ok));
+}
+
+/// The last copy of the edit histories, as it is now.
+pub fn last_history() -> Option<(u64, bool)> {
+    *HISTORY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// A copy made (or failed) at AT.

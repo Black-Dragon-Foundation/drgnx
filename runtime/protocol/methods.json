@@ -9807,6 +9807,35 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "HistoryCopy": {
+            "additionalProperties": false,
+            "description": "One project's `history.db` copy.",
+            "properties": {
+              "bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "project",
+              "path",
+              "ok",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "What a backup did: the checked copy, and the old copies rotation removed.",
@@ -9821,6 +9850,14 @@
               "string",
               "null"
             ]
+          },
+          "history": {
+            "default": [],
+            "description": "The copy of each project's edit history (`history.db`) made beside `work.db`: one per project, replaced each\nnight.  A failed one never fails the `work.db` copy.",
+            "items": {
+              "$ref": "#/$defs/HistoryCopy"
+            },
+            "type": "array"
           },
           "ms": {
             "format": "double",
@@ -21428,6 +21465,13 @@
                 "description": "Why the move from schema 6 failed (it is not tried again until the hub restarts; `work.db` is still schema 6).",
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "history_backup": {
+                "description": "Whether the last night's copies of the edit histories (`history.db`, one per project) were all good (none: no\ncopy was made since the hub started).",
+                "type": [
+                  "boolean",
                   "null"
                 ]
               },

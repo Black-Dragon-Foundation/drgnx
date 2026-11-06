@@ -1069,6 +1069,21 @@ what `ratatoskr doctor --json' said)."
     ;; no section (no hub, no work.db): nothing to say
     (should (eq (car (funcall check nil)) 'ok))))
 
+(ert-deftest drgnx-doctor/history-row-names-the-last-history-copy ()
+  ;; D: the `history' check reads the `store' section's `history' facts
+  (let ((check (lambda (store)
+                 (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+                        (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store))))
+                   (drgnx-doctor-check 'history (list :ratatoskr fact))))))
+    (let ((r (funcall check '(:schema 7 :history (:copies 2 :newest_age_s 7300)))))
+      (should (eq (car r) 'ok))
+      (should (string-search "2 project copies, newest 2 h ago" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :history (:copies 1 :newest_age_s 100)))))
+      (should (string-search "1 project copy, newest 0 h ago" (nth 1 r))))
+    (should (string-search "no copy of an edit history yet"
+                           (nth 1 (funcall check '(:schema 7 :history (:copies 0))))))
+    (should (eq (car (funcall check nil)) 'ok))))
+
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
   ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
   (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))

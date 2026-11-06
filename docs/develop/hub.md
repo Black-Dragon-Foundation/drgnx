@@ -621,10 +621,13 @@ opening rule's text (the writer looks at the file once more first); a newer one 
 `best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
 state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify`, from any
 class, wakes the `events` broadcast. `status` says `store: {schema, writer: ready | not-ready |
-read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, denied_in?}`: the writer's state
-from its opening rule's last answer, the transactions the front's methods committed since start, when the move from
-schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
-out of the migration (`last_backup` and `backup_ok` come with the daily backups).
+read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, history_backup?, denied_in?}`: the
+writer's state from its opening rule's last answer, the transactions the front's methods committed since start, when the
+move from schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list
+kept out of the migration (`last_backup` and `backup_ok` come with the daily backups; `history_backup` says whether the
+last night's copies of the edit histories were all good). `graph/backup` and the nightly timer also copy each
+project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, replaced, never rotated) and answer
+`history: [{project, path, ok, bytes}]`; a failed one never fails the `work.db` copy.
 
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").

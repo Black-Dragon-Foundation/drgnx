@@ -238,7 +238,7 @@ pub async fn serve(
         Params::GraphSql(p) => sql(tools, p).await,
         Params::GraphExport(p) => export_of(w, tools, p).await,
         Params::GraphImport(p) => import(w, tools, p).await,
-        Params::GraphBackup(_) => backup_now(tools).await,
+        Params::GraphBackup(_) => backup_now(tools, dirs).await,
         Params::GraphCompact(p) => compact_of(w, tools, caller, p).await,
         Params::GraphScrub(_) => scrub_of(w).await,
         Params::GraphSettings(p) => settings(w, caller, p).await,
@@ -1678,14 +1678,16 @@ async fn import(w: &Writer, tools: &Coord, p: api::ImportParams) -> Result<Value
 }
 
 /// `graph/backup`: `<data>/backup/work-YYYYMMDD.db`, then the rotation.
-async fn backup_now(tools: &Coord) -> Result<Value, Error> {
+async fn backup_now(tools: &Coord, dirs: Option<&StoreDirs>) -> Result<Value, Error> {
     let (g, _) = store(tools)?;
-    Ok(json!(run_backup(&g).await))
+    Ok(json!(run_backup(&g, dirs.map(|d| d.hub.as_path())).await))
 }
 
 /// A checked copy in `<data>/backup/` and the rotation after it, logged and recorded for `status.store` and the
-/// doctor (the nightly timer's body, and `graph/backup`'s).
-pub async fn run_backup(g: &GraphStore) -> api::BackupAnswer {
+/// doctor (the nightly timer's body, and `graph/backup`'s).  With the hub's state folder HUB, each project's
+/// `history.db` is copied after the `work.db` copy, one copy each (`history::backup`); a failed one is logged and shown
+/// in `status.store`, and never fails the `work.db` copy.
+pub async fn run_backup(g: &GraphStore, hub: Option<&Path>) -> api::BackupAnswer {
     let dir = data_dir(g).join("backup");
     let day: String = crate::log::rfc3339(now() as u64)
         .chars()
@@ -1706,6 +1708,18 @@ pub async fn run_backup(g: &GraphStore) -> api::BackupAnswer {
         None => tracing::info!(bytes = r.bytes, ms = r.ms, "backup {}", r.path.display()),
         Some(e) => tracing::warn!("backup {} failed: {e}", r.path.display()),
     }
+    let history = match hub {
+        Some(hub) => {
+            let (hub, backup) = (hub.to_path_buf(), dir);
+            crate::clock::blocking(move || crate::history::backup::copy_all(&hub, &backup))
+                .await
+                .unwrap_or_default()
+        }
+        None => Vec::new(),
+    };
+    if !history.is_empty() {
+        crate::backup_timer::record_history(now() as u64, history.iter().all(|c| c.ok));
+    }
     api::BackupAnswer {
         path: show(&r.path),
         ok: r.ok,
@@ -1713,6 +1727,7 @@ pub async fn run_backup(g: &GraphStore) -> api::BackupAnswer {
         bytes: r.bytes,
         ms: r.ms,
         removed: removed.iter().map(|p| show(p)).collect(),
+        history,
     }
 }
 
