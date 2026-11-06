@@ -49,11 +49,12 @@ in the selected window of a bare frame under the dark theme.  Everything undone 
        (delete-directory ,root t))))
 
 (defun drgnx-ui-look-explorer--row-y (line)
-  "The y pixel (in the window's text area) of the middle of the Explorer's LINE-th line."
+  "The y pixel (in the window's text area) of the middle of the Explorer's LINE-th line.  The row's padding grows
+with the scale (the native shell's Lisp pixels are device pixels), so a fixed offset from its top misses the text."
   (with-current-buffer drgnx-explorer-buffer-name
     (goto-char (point-min)) (forward-line (1- line))
     (let ((pos (pos-visible-in-window-p (point) nil t)))
-      (+ (cadr pos) 4))))
+      (+ (cadr pos) (/ (line-pixel-height) 2)))))
 
 (defun drgnx-ui-look-explorer--right-edge (snap line)
   "The x pixel of the right edge of the last mark drawn on the Explorer's LINE-th line: the rightmost pixel in the
