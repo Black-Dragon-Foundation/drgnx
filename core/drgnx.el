@@ -58,6 +58,7 @@
 (require 'drgnx-settings-runtime)         ; the editor's override sender to the hub (config/settings)
 (require 'drgnx-settings-history)         ; reports every settings change to the hub (hooks added at load)
 (require 'drgnx-lisp-index)
+(require 'drgnx-history)                  ; the editor's side of the edit history (off without Nidhogg's change hook)
 (require 'drgnx-settings-lisp-page)       ; told of every load of your Lisp; its keymap is there for the keys apply
                                         ; (a map of a library not loaded yet waits in an after-load entry per apply)
 
@@ -197,7 +198,8 @@ The steady GC threshold is set at the end, also when a step fails (early-init de
             (drgnx-user-lisp-load-all)                 ; your Lisp files
             (drgnx-settings-apply-pass)                ; the end-of-init :apply pass
             (drgnx-settings-live-start)                ; changes to the settings files apply at once
-            (drgnx-lisp-index-schedule)))              ; the index of your Lisp files, built at idle
+            (drgnx-lisp-index-schedule)                ; the index of your Lisp files, built at idle
+            (drgnx-history-maybe-start)))              ; the edit history, where Nidhogg has the change hook
         (drgnx-keys-apply)
         (drgnx-modal-apply-pending)                    ; a Vim stack chosen before its engine was installed
         (drgnx-surfaces-refresh))
