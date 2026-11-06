@@ -150,6 +150,42 @@
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
 
+(ert-deftest drgnx-ci/the-msrv-is-one-number ()
+  ;; 1.95 since 2026-11-06 (wasmtime's 48 LTS needs it): the workspace's rust-version, the job that builds with it, and
+  ;; install.sh's floor; the toolchain install.sh's private rustup brings is not older
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "msrv")))
+         (cargo (drgnx-ci-test--file "runtime/Cargo.toml")) (install (drgnx-ci-test--file "install.sh"))
+         (private (and install (string-match "\nRUST_PRIVATE=\\([0-9.]+\\)\n" install) (match-string 1 install))))
+    (skip-unless (and job cargo install))
+    (should (string-search "\nrust-version = \"1.95\"\n" cargo))
+    (drgnx-ci-test--has job "name: MSRV 1.95 builds\n" "-msrv195-mt1-1.95.0-" "rustup toolchain install 1.95.0 --profile minimal\n"
+                        "cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml\n" "RUSTUP_TOOLCHAIN: 1.95.0\n")
+    (should (string-search "\nRUST_MIN=1.95\n" install))
+    (should private)
+    (should (version<= "1.95" private))))
+
+(ert-deftest drgnx-ci/the-rust-test-jobs-have-the-models-and-linux-has-llvmpipe ()
+  ;; the tests that run the built-in model fail without DRGNX_TEST_MODELS, the GPU tests without DRGNX_TEST_ADAPTER
+  ;; (never a skip): both workspace test jobs fetch the pinned files before `cargo test', and the Fedora 45 one runs
+  ;; the shaders on llvmpipe; macOS has no adapter and ignores its GPU rows
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (list (drgnx-ci-test--file ".github/ci/models.txt"))
+         (packages (drgnx-ci-test--file "test/container/rust-packages.sh")))
+    (skip-unless (and rt packages))
+    (should list)
+    (dolist (job '("linux" "macos"))
+      (let* ((text (drgnx-ci-test--job rt job))
+             (fetch (string-search "models.sh ../test-models\n" text))
+             (test (string-search "--no-fail-fast --" text)))
+        (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
+                            "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
+        (should (and fetch test (< fetch test)))
+        (should (string-search "env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true'" text))))
+    (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
+                            (drgnx-ci-test--job rt "linux")))
+    (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
+    (drgnx-ci-test--has packages "vulkan-loader mesa-vulkan-drivers")
+    (should (string-search "https://huggingface.co/$repo/resolve/$rev/$name" (drgnx-ci-test--file ".github/ci/models.sh")))))
+
 (ert-deftest drgnx-ci/the-runner-crates-are-checked-for-android-built-static-and-denied ()
   ;; forseti and sleipnir's protocol and sync are what jobq and the Android door take; the runner ships static (musl)
   (let* ((rt (drgnx-ci-test--yml "runtime.yml"))
@@ -189,6 +225,22 @@
             (push (nth 2 (split-string line)) listed)))
         (forward-line 1)))
     (should (equal (sort (copy-sequence found) #'string<) (sort (copy-sequence listed) #'string<)))))
+
+(ert-deftest drgnx-ci/a-run-of-ignored-tests-skips-the-timing-rows ()
+  ;; the timing rows are #[ignore] too: a `cargo test … -- --ignored' of a crate the timing list names skips that
+  ;; crate's rows (a debug build on a shared runner judged a release budget: search/query p95 in the escape legs)
+  (let ((rt (drgnx-ci-test--yml "runtime.yml")) (rows (drgnx-ci-test--file "test/timing-rust.txt")) timed (runs 0))
+    (skip-unless (and rt rows))
+    (dolist (line (split-string rows "\n" t))
+      (unless (string-match-p "\\`\\s-*#" line) (push (car (split-string line)) timed)))
+    (dolist (line (split-string rt "\n"))
+      (when (and (string-match-p "cargo test .*-- --ignored" line) (string-match "-p \\([a-z0-9-]+\\)" line)
+                 (member (match-string 1 line) timed))
+        (setq runs (1+ runs))
+        (should (string-suffix-p " $skips" line))))
+    (should (= runs 1))
+    (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
+                        "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 
 (ert-deftest drgnx-ci/the-timing-job-runs-the-rust-timing-tests-report-only ()
   (let* ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (script (expand-file-name "test/timing-rust.sh" drgnx-ci-test--root)))
@@ -355,7 +407,7 @@
           (let ((rk (match-string 1 head)))
             (should (or (string-search "hashFiles(" rk)
                         (and (string-prefix-p "cargo-" rk)
-                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.88\\.0\\|env\\.NIGHTLY" rk))
+                             (string-match-p "steps\\.rv\\.outputs\\.v\\|1\\.95\\.0\\|env\\.NIGHTLY" rk))
                         (string-prefix-p "fuzz-corpus-" rk)
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
@@ -373,6 +425,9 @@
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
                   (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
+                  ;; the model files: main and a pull request from this repository (CACHE_SAVE_PR), once models.sh
+                  ;; checked every file's sum
+                  (string-search "(env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)

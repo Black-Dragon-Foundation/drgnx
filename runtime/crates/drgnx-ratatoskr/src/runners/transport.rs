@@ -13,6 +13,7 @@
 
 use super::RunnerCfg;
 use mimir::BoxFuture;
+#[cfg(all(unix, not(target_os = "android")))]
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};

@@ -112,6 +112,28 @@ fn tables_name_no_onnx_or_gguf() {
     }
 }
 
+// test-pattern: D (pure). CI fetches the volume from this list (.github/ci/models.sh), so it is the table, line for line.
+#[test]
+fn the_ci_model_list_is_the_table() {
+    let list = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.github/ci/models.txt"),
+    )
+    .unwrap();
+    let listed: Vec<&str> = list
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .collect();
+    let table: Vec<String> = MODELS
+        .iter()
+        .flat_map(|m| {
+            m.files
+                .iter()
+                .map(|f| format!("{} {} {} {} {}", m.id, m.repo, m.revision, f.name, f.sha256))
+        })
+        .collect();
+    assert_eq!(listed, table);
+}
+
 #[test]
 fn every_model_on_the_volume_is_ready() {
     for spec in MODELS {
