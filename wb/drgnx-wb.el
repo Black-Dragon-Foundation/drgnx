@@ -192,7 +192,8 @@ density, on the graphical frame that shows it (or the selected one).  Call it fr
 change, a scale change and the buffer's first showing on a graphical frame fit the rows again
 \(`drgnx-wb-rows-follow').
 The remap costs a font spec copy at every face lookup of the buffer; the UI face put under the rows' own faces as text
-properties instead was measured dearer still (the perf lab's explorer allocation p50: 9984 objects, 7913 with the remap)."
+properties instead was measured dearer still (the perf lab's explorer allocation p50: 9984 objects, 7913 with the
+remap)."
   (face-remap-add-relative 'default 'drgnx-ui-text)
   (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
