@@ -99,6 +99,14 @@ The number column is as wide as the file needs when it opens; it never narrows, 
 another digit, so the text does not shift sideways while you type. **Toggle Line Numbers** (palette, View menu) still
 turns them off in one buffer.
 
+### The editor
+
+A code buffer (the buffers that show line numbers) has a two-pixel bar cursor, and its current line is marked across the
+full width of the window. A cursor a mode chose, such as Vim's box in normal state, stays. The blame hint at the end of
+a line (`extra/blame`) is italic, in the subtle text colour and the caption font, after a gap of 24 logical pixels. An
+inlay hint from the language server (`eglot-inlay-hint-face`) takes the same caption font and subtle colour, on the
+quiet selection colour.
+
 ## Glyphs
 
 drgnx draws a few symbols (a drag handle, a close mark, a branch sign, warnings, checks, busy and waiting marks,

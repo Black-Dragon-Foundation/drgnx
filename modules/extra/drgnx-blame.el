@@ -17,10 +17,14 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 (require 'drgnx-large-file)
+(require 'drgnx-pixels)                 ; `drgnx-pixels-scale'
+(require 'drgnx-faces)                  ; `drgnx-text-subtle'
+(require 'drgnx-type-faces)             ; `drgnx-ui-caption'
 
 (declare-function drgnx-diff-show "drgnx-diff")
 
-(defface drgnx-blame '((t :inherit font-lock-comment-face)) "Inline blame at the end of the line." :group 'drgnx)
+(defface drgnx-blame '((t :inherit (italic drgnx-text-subtle drgnx-ui-caption)))
+  "Inline blame at the end of the line: italic subtle text in the caption face." :group 'drgnx)
 
 (defvar drgnx-blame-delay 0.6 "Seconds of idle time before the line's blame is asked for.")
 (defvar drgnx-blame-cache-seconds 30 "How long a line's answer is kept (commits made elsewhere show after this).")
@@ -55,7 +59,8 @@
           ((< d (* 365 86400)) (funcall say (/ d (* 30 86400)) "month"))
           (t (funcall say (/ d (* 365 86400)) "year")))))
 
-(defconst drgnx-blame--gap 3 "Columns between the end of the line and the blame.")
+(defconst drgnx-blame--gap 3 "Columns the blame's room leaves for the gap between the end of the line and the blame.")
+(defconst drgnx-blame--gap-px 24 "The gap in logical pixels.")
 (defconst drgnx-blame--min-width 20 "Fewer columns than this left: no blame (a stump says nothing).")
 (defconst drgnx-blame--max-width 80 "The blame is never wider than this.")
 
@@ -90,7 +95,9 @@ ellipsis) and at most `drgnx-blame--max-width'; nil when WIDTH is under `drgnx-b
       (progn
         (unless drgnx-blame--overlay (setq drgnx-blame--overlay (make-overlay 1 1 nil t nil)))
         (move-overlay drgnx-blame--overlay (line-end-position) (line-end-position))
-        (overlay-put drgnx-blame--overlay 'after-string (concat (propertize (make-string drgnx-blame--gap ?\s) 'cursor t) text)))
+        (overlay-put drgnx-blame--overlay 'after-string
+                     (concat (propertize " " 'cursor t 'display `(space :width (,(round (* drgnx-blame--gap-px (drgnx-pixels-scale))))))
+                             text)))
     (when drgnx-blame--overlay (delete-overlay drgnx-blame--overlay))))
 
 (defun drgnx-blame--resized (window)
