@@ -2265,7 +2265,10 @@ a job use the same key. Rows written before this keep their old key.
 (`forecast.rs`, `norn::forecast::sample`), and so does a finished job's manager (`JOB#manager`). The sweep runs once
 at hub start, which backfills the history of earlier runs, and at the end of each runner tick; it takes what is due in
 pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
-second sweep and a task reopened after review are all the same query and leave one row per task. Every step with the
+second sweep and a task reopened after review are all the same query and leave one row per task. Because it runs
+every tick, the query reads no whole table of the graph: a finished job's manager sessions are found through the
+partial expression index `entity_manager_job` (work.db migration 11: live sessions whose `data.role` is `manager`, by
+`data.job`), compared as `+j.id` so the index is searched, and their steps through `step_session`. Every step with the
 task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
 A session with no task (a chat, a fork) makes no sample. The row's profile and provider are those of the last session
 that is no review: the runner marks a task's reviewer session (`review` in its record), whose steps count on the task

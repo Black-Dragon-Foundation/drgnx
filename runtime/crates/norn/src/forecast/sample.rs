@@ -69,6 +69,26 @@ pub struct Made {
 
 const MANAGER: &str = "#manager";
 
+/// The finished jobs whose manager steps no sample covers yet, `?1` at most.  The sweep runs it every tick, so each
+/// job's managers are looked up through `entity_manager_job` (migration 11): the terms are the index's own, and the
+/// job id is compared as `+j.id`, with no affinity, which an expression index needs to be searched; then their steps
+/// through `step_session`.  Nothing reads the whole entity table.
+const MANAGER_DUE: &str = "select j.id || '#manager' from job j \
+     where j.status in ('done', 'stopped') \
+       and exists (select 1 from entity e join step s on s.session = e.id \
+                   where json_extract(e.data, '$.job') = +j.id \
+                     and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null \
+                     and s.turn_id is not null) \
+       and not exists (select 1 from entity e join step s on s.session = e.id \
+                       where json_extract(e.data, '$.job') = +j.id \
+                         and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null \
+                         and s.end is null) \
+       and coalesce((select max(s.id) from entity e join step s on s.session = e.id \
+                     where json_extract(e.data, '$.job') = +j.id \
+                       and json_extract(e.data, '$.role') = 'manager' and e.retired_tx is null), 0) \
+           > coalesce((select f.last_step from forecast_sample f where f.task = j.id || '#manager'), 0) \
+     order by j.id limit ?1";
+
 /// Up to LIMIT keys to (re)sample: finished tasks with closed steps and no sample covering their newest step, and
 /// finished jobs whose manager steps are not covered.
 pub fn due(conn: &Tx, limit: i64) -> Result<Vec<String>, CoordError> {
@@ -87,23 +107,7 @@ pub fn due(conn: &Tx, limit: i64) -> Result<Vec<String>, CoordError> {
     };
     let room = limit - i64::try_from(out.len()).unwrap_or(limit);
     if room > 0 {
-        let mut st = conn.prepare(
-            "select j.id || '#manager' from job j \
-             where j.status in ('done', 'stopped') \
-               and exists (select 1 from step s join entity e on e.id = s.session \
-                           where s.turn_id is not null and e.retired_tx is null \
-                             and json_extract(e.data, '$.role') = 'manager' \
-                             and json_extract(e.data, '$.job') = j.id) \
-               and not exists (select 1 from step s join entity e on e.id = s.session \
-                               where s.end is null and e.retired_tx is null \
-                                 and json_extract(e.data, '$.role') = 'manager' \
-                                 and json_extract(e.data, '$.job') = j.id) \
-               and coalesce((select max(s.id) from step s join entity e on e.id = s.session \
-                             where e.retired_tx is null and json_extract(e.data, '$.role') = 'manager' \
-                               and json_extract(e.data, '$.job') = j.id), 0) \
-                   > coalesce((select f.last_step from forecast_sample f where f.task = j.id || '#manager'), 0) \
-             order by j.id limit ?1",
-        )?;
+        let mut st = conn.prepare(MANAGER_DUE)?;
         let rows = st.query_map([room], |r| r.get::<_, String>(0))?;
         for r in rows {
             out.push(r?);
@@ -1070,6 +1074,32 @@ mod tests {
         );
         put(&mut tx, &row).unwrap();
         assert!(due(tx.sql(), 100).unwrap().is_empty());
+    }
+
+    /// Pattern D. The sweep asks for its managers every tick: each finished job's manager sessions are found through
+    /// an index by the job, so the query never reads the whole entity table.
+    #[test]
+    fn the_manager_query_reads_no_whole_table() {
+        let c = db7();
+        let mut st = c
+            .prepare(&format!("explain query plan {MANAGER_DUE}"))
+            .unwrap();
+        let plan: Vec<String> = st
+            .query_map([100], |r| r.get(3))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            !plan.iter().any(|d| d == "SCAN e" || d.starts_with("SCAN e USING")),
+            "{plan:#?}"
+        );
+        assert!(
+            plan.iter()
+                .filter(|d| d.starts_with("SEARCH e USING INDEX entity_manager_job"))
+                .count()
+                == 3,
+            "{plan:#?}"
+        );
     }
 
     /// Pattern D. The tables have the numeric and id columns and nothing that could hold a brief; the brief is a length.
