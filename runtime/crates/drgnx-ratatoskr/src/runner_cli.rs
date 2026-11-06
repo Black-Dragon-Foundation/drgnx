@@ -9,6 +9,7 @@
 //! runner trust NAME mine|my-cloud|shared
 //! runner remove NAME [--yes]
 //! runner audit [--key K] [--since T]
+//! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
 //! ```
 //!
 //! The output is plain text in 60 columns ([`format_list`]); a runner that is out of rotation shows its reason.
@@ -54,6 +55,13 @@ pub enum RunnerCommand {
         key: Option<String>,
         since: Option<String>,
     },
+    /// `cloud setup aws`: the IAM policy the user creates for drgnx's role, printed (no hub call; drgnx never creates
+    /// IAM itself).
+    CloudSetupAws {
+        hub: String,
+        regions: Vec<String>,
+        sizes: Vec<String>,
+    },
 }
 
 fn one_of(what: &str, v: String, allowed: &[&str]) -> Result<String, String> {
@@ -77,7 +85,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         Some(Word(v)) => v.string().map_err(e)?,
         Some(other) => return Err(other.unexpected().to_string()),
         None => {
-            return Err("runner needs a subcommand (list, add, check, bench, trust, unbench, remove, audit)".into());
+            return Err("runner needs a subcommand (list, add, check, bench, trust, unbench, remove, audit, cloud)".into());
         }
     };
     let mut words: Vec<String> = Vec::new();
@@ -88,6 +96,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "add" => &["trust", "name", "profile", "accept", "root", "prefix"],
         "remove" => &["yes"],
         "audit" => &["key", "since"],
+        "cloud" => &["hub", "regions", "sizes"],
         "check" | "bench" | "trust" | "unbench" => &[],
         other => return Err(format!("unknown runner subcommand {other:?}")),
     };
@@ -180,6 +189,31 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             Ok(RunnerCommand::Audit {
                 key: opt("key"),
                 since: opt("since"),
+            })
+        }
+        "cloud" => {
+            let usage = "usage: runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]";
+            if words != ["setup", "aws"] {
+                return Err(usage.into());
+            }
+            let list = |k: &str| -> Vec<String> {
+                opt(k)
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            };
+            let (regions, sizes) = (list("regions"), list("sizes"));
+            if regions.is_empty() || sizes.is_empty() {
+                return Err(usage.into());
+            }
+            Ok(RunnerCommand::CloudSetupAws {
+                // the id the hub's runner code tags with today (runners::methods)
+                hub: opt("hub").unwrap_or_else(|| "hub".into()),
+                regions,
+                sizes,
             })
         }
         _ => unreachable!("the subcommand was checked above"),
@@ -293,6 +327,17 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
                 "ratatoskr runner: the key audit comes with the key handover, which isn't built yet: no key was ever sent"
             );
             return 1;
+        }
+        RunnerCommand::CloudSetupAws {
+            hub,
+            regions,
+            sizes,
+        } => {
+            println!(
+                "{}",
+                crate::runners::cloud::aws::policy_for(&hub, &regions, &sizes)
+            );
+            return 0;
         }
     };
     let hub = crate::supervise::ensure_quiet(env, ENSURE_TIMEOUT);
@@ -408,5 +453,23 @@ mod tests {
             assert!(p(bad).is_err(), "{bad:?} should not parse");
         }
         assert!(remove_note("desk").contains("run again with --yes"));
+        assert_eq!(
+            p(&[
+                "cloud",
+                "setup",
+                "aws",
+                "--regions",
+                "eu-west-1,us-east-1",
+                "--sizes",
+                "m7g.large"
+            ]),
+            Ok(RunnerCommand::CloudSetupAws {
+                hub: "hub".into(),
+                regions: vec!["eu-west-1".into(), "us-east-1".into()],
+                sizes: vec!["m7g.large".into()],
+            })
+        );
+        assert!(p(&["cloud", "setup", "aws", "--sizes", "m7g.large"]).is_err());
+        assert!(p(&["cloud", "setup", "gcp", "--regions", "r", "--sizes", "s"]).is_err());
     }
 }

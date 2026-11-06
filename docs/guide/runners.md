@@ -288,6 +288,36 @@ After a restart of drgnx's hub, a job that holds keys and still runs on a runner
 result come back: the hub asks for them ("needs your keys": run Runners: Load Keys), and the editor gives back the
 keys it holds as it connects.
 
+## Cloud: what you give drgnx
+
+drgnx can start machines of its own in your AWS account (GCP follows), only with your permission and within your
+limits. It talks to the provider's API directly, over HTTPS, with a role you create for it, scoped to what it does:
+
+- **Credentials come from a command**, by default `aws configure export-credentials`, the same one your `aws` CLI
+  uses (SSO, a profile, a role). drgnx runs it with no terminal and a 30 s limit. If it asks for anything (an MFA code,
+  a password, a confirmation) or doesn't finish, drgnx doesn't answer it: the card says "the cloud credentials need a
+  login: run `aws configure export-credentials` in a terminal", and nothing starts until you have. An expired session
+  reads the same way. What the command prints stays in memory: never written, logged or shown.
+- **Or a key in your keyring**, handed over like a job key (see "Keys"): the same JSON the command prints
+  (`{"Version": 1, "AccessKeyId": …, "SecretAccessKey": …}`).
+- **The role's policy**: `drgnx runner cloud setup aws` prints it, with your hub's id, regions and machine sizes filled
+  in; you create the role, drgnx never creates IAM itself. It has one statement per resource type: machines, their
+  disks and network interfaces may be started only with the tag `drgnx-hub=<your hub id>`, only in your sizes, only
+  with metadata tokens required; tags only when they are made; ending a machine, and the image and security-group
+  calls, only on resources with that tag; every call only in your regions. It denies `iam:PassRole` (machines get no
+  role) and making an image or snapshot public. No cloud credential ever reaches a machine.
+
+Every machine drgnx starts is tagged with your hub's id, ends itself when it powers off, and is started with an
+idempotency token, so a retry after a crash or a lost answer finds the machine the first try made instead of paying
+for a second one.
+
+**SSH to a cloud machine** uses no key of yours and never your `ssh-agent`. drgnx has its own SSH certificate
+authority (kept in your keyring, held in memory while drgnx runs). For each connection it makes a fresh key in memory,
+gives it to an `ssh-agent` of its own, and signs a certificate for it that names only that machine and lasts an hour.
+The machine accepts certificates from that authority and nothing else. Its host keys are read from its console, where
+it prints them at first boot, and pinned: a machine whose console doesn't show them is never connected to, and a host
+key that changes later is refused.
+
 ## How it is tested
 
 Runners are tested against containers that act as SSH machines (`test/runners/`): Fedora with `sshd`, systemd and

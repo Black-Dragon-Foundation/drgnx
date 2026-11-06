@@ -5,7 +5,7 @@ systemd as PID 1, the user `runner` (lingering, with the `memory pids cpu` contr
 and rootless podman inside. A fleet is N of them plus one harness container on one podman network.
 
 ```
-fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]...
+fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]... [--cloud MOCKBIN]
 fleet.sh exec I -- CMD...      # in runner I (1-based), as `runner`, with its user manager's environment
 fleet.sh check I               # runner I's controllers are delegated as the caps need (`up` checks every runner)
 fleet.sh put FILE...           # copy files to /fleet/share in every runner (read-only there)
@@ -128,3 +128,27 @@ It prints one line per run and `ROW PASSED/N` per row, keeps each run's log unde
 only when every run passed. The rows play the hub with its own parts (the transport, the link session, the queue on a
 `runtime.db`); the time a cut or a suspend lasts is the queue's clock moved on, never a wait. `--timing` adds the
 fleet throughput row (a 40-job set on 2 runners within 0.6 × its wall on 1), a timing row the timing lane only names.
+
+## Cloud machines
+
+`up --cloud MOCKBIN` adds a mock cloud: `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock") in a
+container `<prefix>-<run>-cloud` on the fleet's network, driving a podman API socket of the run's own
+(`podman system service`, stopped by `down` by its PID). Each machine the hub starts through it is a fake runner
+`<prefix>-<run>-cloud-<id>`, so `down` removes them too; `test` passes the harness
+`DRGNX_TEST_CLOUD_ENDPOINT_AWS=http://<prefix>-<run>-cloud:8080/`. Nothing leaves the fleet's network.
+
+A machine gets `DRGNX_FAKE_CLOUD_METADATA` (its metadata URL at the mock), which turns on the image's
+`fleet-cloud-init.service`: what the real image does at first boot. It makes new host keys, reads the CA and the
+principal from its user-data (IMDSv2: `drgnx-ca: …` and `drgnx-principal: …` lines), makes sshd certificate-only
+(`TrustedUserCAKeys`, `AuthorizedPrincipalsFile`, `AuthorizedKeysFile none`, `MaxAuthTries 2`), and prints its host
+keys on its console the way cloud-init's `write-ssh-key-fingerprints` does: the fingerprints through
+`logger -s -t cloud-init`, then the keys. A container has no serial port and systemd as its PID 1 sends nothing to
+`podman logs`, so the console is the file `/run/fleet-console`, which the mock reads (`podman exec … cat`) and serves as
+`GetConsoleOutput`. The rows are `drgnx-ratatoskr`'s `tests/fleet_cloud.rs` (features `fleet,test-hooks`):
+
+```
+cargo build -p domr --bin ratatoskr-mock                                                  # in the dev container
+cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_cloud --no-run
+fleet.sh up --runners 0 --cloud runtime/target/debug/ratatoskr-mock
+DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
+```

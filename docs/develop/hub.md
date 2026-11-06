@@ -2021,8 +2021,10 @@ that ssh would expand (`%`) or that would break its line, and an empty argv; `gr
 it reads for an option: `ForwardAgent no`, `ForwardX11 no`, `ClearAllForwardings yes`, `PermitLocalCommand no`,
 `BatchMode yes`, `StrictHostKeyChecking yes`, `UpdateHostKeys no`, `ServerAliveInterval 15`, `ServerAliveCountMax 4`,
 `Compression yes`, `ControlPersist 10m`, `RemoteCommand none` and `RequestTTY no` (`FORCED`). A cloud runner adds
-`IdentityAgent`, `CertificateFile`, `IdentitiesOnly yes` and `UserKnownHostsFile` (paths quoted) and reads no user
-config; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
+`IdentityAgent`, `IdentityFile` (the public half of the agent's key), `CertificateFile`, `IdentitiesOnly yes` and
+`UserKnownHostsFile` (paths quoted) and reads no user config. The `IdentityFile` is needed: under `IdentitiesOnly`
+ssh pairs a certificate only with a named identity's agent key ("no separate private key for certificate"), and
+without one it offers the user's default keys; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
 `ProxyCommand` stay the user's. `write` puts it at `$XDG_RUNTIME_DIR/drgnx-runners/<name>/ssh_config`, mode 0600, its
 folders 0700 (made, or narrowed), replaced in one rename; a runner folder that is a link or someone else's is refused.
 ssh expands `~` from the password database, not `$HOME`, so a test's `Include` reaches its own home only in a
@@ -2053,7 +2055,8 @@ the runner's folder. `LinkError {Lost, NeedsLogin(Login), HostKeyChanged, Refuse
 `classify_stderr` reads ssh's error output: Tailscale's "requires an additional check" (its URL kept for the card,
 never opened), a passphrase, a host key not known yet (`Login`), a changed host key (`HostKeyChanged`, never
 accepted); `link_error` makes the machine down or out of reach `Lost` and the rest `Refused` in ssh's words.
-`Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
+`for_runner` makes a cloud machine's unknown host key `HostKeyChanged` and any login it asks for a refusal: its keys
+are pinned and there is nothing to log in to. `Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
 `forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
 
 Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
@@ -2064,6 +2067,67 @@ escape lane's `--ignored` run never picks it up. They need sshd set two ways, th
 banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
+## Runners: cloud machines
+
+`runners/cloud/` starts and ends the user's cloud machines (`docs/guide/runners.md`, "Cloud: what you give drgnx").
+`trait Provider` (`BoxFuture` methods, so the hub holds a `dyn Provider`): `preflight() -> Vec<Check>`, `start(&StartReq)
+-> Instance`, `describe(id) -> InstanceInfo`, `list_ours()`, `end(id)` (one already gone is fine), `console(id)` (where
+a machine prints its host keys) and `prices(sizes) -> Prices`. Every call is bounded by `CALL_TIMEOUT` (30 s) and an
+answer by `MAX_BODY` (8 MiB). `CloudError {NeedsLogin(cmd), Denied, Capacity, Transient, Other}` carries the
+provider's code and message, never a credential.
+
+**AWS** (`aws.rs`): EC2's Query API (and STS `GetCallerIdentity`, the Pricing API's `GetProducts`), signed by
+`aws-sigv4` (`sign-http` only), sent through bifrost's `Upstream` (HTTP/1.1, rustls on ring) and read by a small
+`quick-xml` tree (`El`). `run_params` always sets `ClientToken` (the start's token: a retry returns the same
+machine), the `drgnx-hub` and `Name` tags on the instance, its volumes and its network interface,
+`InstanceInitiatedShutdownBehavior=terminate`, `MetadataOptions` tokens required with hop limit 1, the security group,
+the spot options, and the user-data (public things only). `classify(status, code)`: a 401/403 with an expired or
+unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drops the cached credentials;
+`UnauthorizedOperation` is `Denied`; `Insufficient*Capacity` is `Capacity`; throttling, 5xx and a just-started
+machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
+sizes)` what `drgnx runner cloud setup aws` prints.
+
+**Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
+`/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
+prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
+in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`.
+
+**Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
+`_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
+
+Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
+classes, the policy's statements, a prompting credential command), and [B] rows against the mock with its virtual
+clock (`start_describe_end_round_trip`, `a_retry_after_a_crash_returns_the_same_instance`).
+
+## Runners: cloud SSH
+
+`runners/cloud/ca.rs` (design §6.7.4). Keys are `ring` ed25519 (the plan's fallback: `ssh-key` 0.6 would add sha2
+0.10), and the OpenSSH formats are written here:
+
+- `Ca::new() -> (Ca, PublicKey)`: one CA per hub. `to_secret()` is its unencrypted `openssh-key-v1` PEM as a
+  `SecretString`, for the editor to write to the keyring; `from_secret` reads it back from `runners/keys`. Its seed is
+  a `Zeroizing` array; nothing writes it.
+- `UserKey::generate()`: a fresh key per redial, in memory only.
+- `Ca::sign(user, principal, valid) -> Certificate`: an `ssh-ed25519-cert-v01@openssh.com` user certificate, the
+  principal as its only principal and key id, valid from now less 60 s (clock skew) to now plus VALID (1 h), with no
+  critical options and no extensions (no pty, no forwarding). Public: written beside the key's public half.
+- `Agent::start(runtime_dir)`: the hub's own `ssh-agent -D -a $XDG_RUNTIME_DIR/drgnx-runners/agent.sock` (`$TMPDIR`
+  on macOS), ready when it prints `SSH_AUTH_SOCK=`. `add(key, lifetime)` is `ssh-add -t SECS -` with the PEM on
+  stdin. Both run with a cleared environment (`PATH` and our `SSH_AUTH_SOCK` only), so the user's agent is never
+  asked. Dropping it stops the agent.
+- `pin::from_console(text) -> Vec<HostKey>`: the machine's host keys as cloud-init's `write-ssh-key-fingerprints`
+  prints them: the fingerprint lines (after `logger`'s syslog prefix) and the public keys, the last pair of blocks
+  winning. A key counts only when its SHA-256 is among the fingerprints; a console without both blocks, a key the
+  fingerprints don't list, or no key refuses the machine. No trust on first use. `pin::known_hosts(host, keys)` is the
+  machine's `UserKnownHostsFile`. The GCP image (Fedora CoreOS has no cloud-init) prints the same blocks.
+- `ssh_config::write_in(runtime_dir, name, file, text)` writes those public files into the runner's folder, 0600.
+
+Tests: `runners::cloud::ca::` [D] (a certificate's fields and its signature, the CA's bytes in no file after signing,
+the user's agent untouched with `SSH_AUTH_SOCK` on a recording listener, the console's refusals), and the fleet rows
+`tests/fleet_cloud.rs` [C] (`fleet.sh up --cloud`: a mock cloud's machine reached by certificate only, a changed host
+key refused).
 
 ## Runners: attempts
 

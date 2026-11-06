@@ -61,3 +61,70 @@ the live session and is left for the user to authorise.
   under the pointer.
 - **Step 0** (a click turned into a drag that moved files) — the mechanism is reproduced: the follow changes the
   tree under a held button and the release arrives as a drag.
+
+## The cloud mock
+
+`ratatoskr-mock cloud` stands in for AWS and GCP in tests of the cloud runners. It reaches no real cloud: no network
+beyond its own listener, no real credentials (any `Authorization` header is accepted, and a fake token is built in
+pieces in tests).
+
+```
+ratatoskr-mock cloud --listen 127.0.0.1:0 --podman-remote SOCK|none --prefix P --run R [--hub ID]
+                     [--image IMG] [--network NET] [--podman PATH] [--metadata-url URL] [--log FILE] [--parent PID]
+```
+
+It prints `MOCK-CLOUD-PORT N`. With `--podman-remote SOCK` each instance that reaches `running` is a container
+`<P>-cloud-<id>` labelled `drgnx.fleet=<R>` on the network `fleet-<R>` (only such names are ever created or removed):
+its `dnsName` is the container's name, its console is the container's `/run/fleet-console`, and with
+`--metadata-url URL` (the mock as the containers reach it) it gets `DRGNX_FAKE_CLOUD_METADATA=URL/__metadata/<id>`,
+which the fake runner's stand-in for cloud-init reads its user-data from (`test/runners/README.md`, "Cloud
+machines"; `fleet.sh up --cloud`). `none` keeps instances in memory. With `--hub ID` it models the fixture policy: tag conditions and the explicit
+denies (`iam:PassRole`, `ModifyImageAttribute`, `ModifySnapshotAttribute`), answering `UnauthorizedOperation`, and
+`DryRunOperation` for an allowed `DryRun`. It does not evaluate IAM in general.
+
+**What it serves**, on one listener:
+
+- EC2 Query (XML) at `POST /`: `RunInstances` (`ClientToken`, `TagSpecification`, spot, shutdown behaviour, IMDSv2
+  options), `DescribeInstances` (filters `instance-state-name`, `instance-id`, `tag:K`, `tag-key`; the request's
+  region only), `DescribeInstanceAttribute` (shutdown behaviour), `TerminateInstances`, `GetConsoleOutput` (output
+  only with `Latest=true`), `DescribeSpotPriceHistory`, the image, snapshot and security-group calls,
+  `DescribeSubnets`, STS `GetCallerIdentity` and the Pricing `GetProducts`.
+- GCE REST at `/compute/v1/projects/…`: `instances.insert|get|delete|stop|aggregatedList|getSerialPortOutput`,
+  `images.getFromFamily|insert|get|delete`, `firewalls.insert|get|delete`, `zoneOperations.get`; Resource Manager
+  `projects:testIamPermissions`; Billing `services/…/skus`. `requestId` makes `insert` idempotent; a `stop` clears
+  `scheduling.terminationTime`; a deadline the clock passes deletes (or stops) the instance.
+- Instance metadata at `/__metadata/<id or name>/…`: IMDSv2 (`PUT latest/api/token`, a request with `X-Mock-Hops`
+  above the hop limit is dropped; `spot/instance-action`; `latest/user-data`, what `RunInstances` passed) and GCE's
+  `preempted` and `maintenance-event`.
+- The console and serial output carry the instance's host keys as cloud-init's `write-ssh-key-fingerprints` prints
+  them: the fingerprints through `logger -s -t cloud-init` (each line after a prefix such as
+  `<14>Nov  6 00:00:00 cloud-init: `), between `#####` lines and `-----BEGIN/END SSH HOST KEY FINGERPRINTS-----`,
+  then the public keys as they are between `-----BEGIN/END SSH HOST KEY KEYS-----`. In memory the keys are made up
+  (an ed25519 and an ECDSA one, shaped like real ones) and each fingerprint is its key's SHA-256; with containers the
+  image prints its real ones.
+
+**The clock is virtual.** It starts at 2026-11-06T00:00:00Z and moves only by `POST /__mock/clock`
+(`{"advance_s": n}` or `{"set": t}`), so boot delays, notices and deadlines need no sleeping.
+
+**Knobs** (`POST /__mock/<name>`, JSON body; `times` defaults to 1):
+
+| Knob | Body | Injects |
+|---|---|---|
+| `boot-delay` | `{seconds}` | instances stay `pending` that long |
+| `stuck` | `{id or "next", on: "start"\|"end"}` | an instance that never leaves pending, or never finishes ending |
+| `spot-notice` | `{id or "next", at or in_s}` | the notice in the metadata at that time, the interruption 120 s (GCE: the given duration) later |
+| `capacity`, `quota` | `{times, provider?}` | `InsufficientInstanceCapacity` / `VcpuLimitExceeded` on `RunInstances`; in the operation's `error` on GCE |
+| `fail` | `{op, status, code, message, times}` | any API error on a call (`op` is the EC2 action or GCE method; `*` any) |
+| `timeout` | `{op, times}` | a call that never answers |
+| `expire`, `token` | `{}`, `{accept}` | 401 (`ExpiredToken`) on every call until a token is accepted; then only that token |
+| `shutdown-mismatch` | `{value}` | `DescribeInstanceAttribute` reports another shutdown behaviour |
+| `no-termination-time` | `{}` | GCE ignores `terminationTime` |
+| `deny-permissions` | `{permissions}` | `testIamPermissions` leaves them out |
+| `prices` | `{aws\|gcp: {spot\|ondemand: {TYPE: n}}}` | the price lists; raising them mid-run makes a projection overrun |
+| `poweroff` | `{id}` | the instance powers itself off (terminate or stop, as started) |
+| `rotate-hostkey` | `{id}` | new host keys: in the console, and with containers in the machine's sshd (restarted on them before the knob answers) |
+| `seed` | `{provider, id, tags, zone?}` | an instance the hub did not make |
+| `reset` | `{}` | everything but the clock and the configuration |
+
+`GET /__mock/resources` lists everything the mock holds (instances, images, groups, prices, operations, faults left,
+and `unknown_requests`). A request the mock does not implement answers 501, is printed on stderr and listed there.

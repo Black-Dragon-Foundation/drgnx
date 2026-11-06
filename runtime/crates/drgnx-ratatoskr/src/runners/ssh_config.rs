@@ -3,8 +3,8 @@
 //!
 //! ssh keeps the first value it reads for an option, so the file starts with the options the hub forces: no agent,
 //! X11 or port forwarding, no local command, no prompt, strict host keys, the keep-alive, the master's persistence,
-//! and our command with no terminal whatever the user's config says. A cloud runner's own agent, certificate and
-//! pinned host key follow; an SSH runner's file then includes the user's `~/.ssh/config`, so the host, user, proxy and
+//! and our command with no terminal whatever the user's config says. A cloud runner's own agent, its key's public
+//! half, its certificate and its pinned host keys follow; an SSH runner's file then includes the user's `~/.ssh/config`, so the host, user, proxy and
 //! keys stay the user's.
 
 use super::RunnerCfg;
@@ -42,8 +42,11 @@ pub fn render(r: &RunnerCfg) -> String {
     }
     match &r.cloud {
         Some(c) => {
+            // the key's public half as IdentityFile: without it ssh finds no private key for the certificate (the agent's
+            // key matches only a named identity under IdentitiesOnly) and offers the user's default keys instead
             for (k, p) in [
                 ("IdentityAgent", &c.identity_agent),
+                ("IdentityFile", &c.identity_file),
                 ("CertificateFile", &c.certificate),
             ] {
                 s.push_str(&format!("{k} \"{}\"\n", p.display()));
@@ -76,10 +79,16 @@ pub fn path(runtime_dir: &Path, name: &str) -> PathBuf {
 /// file is mode 0600 and its folders 0700, owned by the hub's user; a folder that is a link, or someone else's, is
 /// refused. The text replaces the old file in one rename.
 pub fn write(runtime_dir: &Path, name: &str, text: &str) -> io::Result<PathBuf> {
+    write_in(runtime_dir, name, "ssh_config", text)
+}
+
+/// TEXT as the file FILE in the runner NAME's folder, as [`write`] writes the config: 0600 in 0700 folders, replaced in
+/// one rename. A cloud runner's public files go here: its certificate, its key's public half, its pinned host keys.
+pub fn write_in(runtime_dir: &Path, name: &str, file: &str, text: &str) -> io::Result<PathBuf> {
     private_dir(&runtime_dir.join("drgnx-runners"))?;
     let d = dir(runtime_dir, name);
     private_dir(&d)?;
-    let tmp = d.join(".ssh_config.new");
+    let tmp = d.join(format!(".{file}.new"));
     match std::fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
@@ -94,14 +103,14 @@ pub fn write(runtime_dir: &Path, name: &str, text: &str) -> io::Result<PathBuf> 
     f.write_all(text.as_bytes())?;
     f.sync_all()?;
     drop(f);
-    let p = path(runtime_dir, name);
+    let p = d.join(file);
     std::fs::rename(&tmp, &p)?;
     Ok(p)
 }
 
 /// D exists as a folder of the hub's user, mode 0700: made if missing, narrowed if wider; a link or someone else's
 /// folder is refused.
-fn private_dir(d: &Path) -> io::Result<()> {
+pub(crate) fn private_dir(d: &Path) -> io::Result<()> {
     match std::fs::symlink_metadata(d) {
         Ok(m) => {
             if !m.file_type().is_dir() {
@@ -149,6 +158,7 @@ mod tests {
         let mut cloud = ssh_runner("c1", "10.0.0.9");
         cloud.cloud = Some(CloudSsh {
             identity_agent: "/run/user/1000/drgnx-runners/c1/agent.sock".into(),
+            identity_file: "/run/user/1000/drgnx-runners/c1/id.pub".into(),
             certificate: "/run/user/1000/drgnx-runners/c1/id-cert.pub".into(),
             known_hosts: "/run/user/1000/drgnx runners/c1/known_hosts".into(),
         });
@@ -159,6 +169,7 @@ mod tests {
             lines[FORCED.len()..],
             [
                 "IdentityAgent \"/run/user/1000/drgnx-runners/c1/agent.sock\"",
+                "IdentityFile \"/run/user/1000/drgnx-runners/c1/id.pub\"",
                 "CertificateFile \"/run/user/1000/drgnx-runners/c1/id-cert.pub\"",
                 "IdentitiesOnly yes",
                 "UserKnownHostsFile \"/run/user/1000/drgnx runners/c1/known_hosts\"",
