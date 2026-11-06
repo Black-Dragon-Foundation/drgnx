@@ -191,14 +191,19 @@ line and header line: `window-body-pixel-edges' counts a tab line as body."
 
 (defun drgnx-uitest-pos-xy (window pos)
   "Root-frame pixel (X . Y) in the middle of the character at POS in WINDOW, or nil if a
-click there would not land on POS (invisible, scrolled away, cut off at the right edge)."
+click there would not land on POS (invisible, scrolled away, cut off at the right edge).
+The middle is that glyph's own (`posn-object-width-height'), not half a column: in a
+proportional font (the Explorer's rows) a `t' is narrower than half the frame's column."
   (let* ((f (window-frame window))
          (origin (drgnx-uitest--text-origin window))
          (posn (and (not (with-current-buffer (window-buffer window) (invisible-p pos)))
                     (posn-at-point pos window)))
          (xy (and posn (posn-x-y posn)))
-         (x (and xy (+ (car origin) (car xy) (/ (frame-char-width f) 2))))
-         (y (and xy (+ (cdr origin) (cdr xy) (/ (frame-char-height f) 2))))
+         (wh (and posn (posn-object-width-height posn)))
+         (w (if (natnump (car wh)) (max 1 (car wh)) (frame-char-width f)))
+         (h (if (natnump (cdr wh)) (max 1 (cdr wh)) (frame-char-height f)))
+         (x (and xy (+ (car origin) (car xy) (/ w 2))))
+         (y (and xy (+ (cdr origin) (cdr xy) (/ h 2))))
          (back (and xy (posn-at-x-y x y f))))
     (and back (eq (posn-window back) window) (eql (posn-point back) pos) (cons x y))))
 
