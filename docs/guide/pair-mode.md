@@ -23,6 +23,22 @@ Autonomous starts chats paired ([security.md](security.md), the matrix).
   `mise.toml`), CI and build files (`.github/`, `Makefile*`, `build.rs`, `*.sh`), credential files, or anything outside
   the checkout, links included. `read_file` never hands over a credential file either.
 
+## In your editor
+
+The module `tools/agent-pair` is pair mode's side in Emacs:
+
+- **A write waits for a safe moment.** It is applied between your commands: never while a command runs, while the
+  minibuffer is open (a `completing-read`, a question), inside a keyboard macro or an isearch. Nothing asks you
+  anything, and what you are typing in the minibuffer is never touched.
+- **A write that waited too long is dropped.** Each write may wait 2 s, counted from when your Emacs received it; past
+  that it is dropped unapplied and the chat is told the editor did not get to it. A write whose apply has started
+  always finishes.
+- **Your Emacs tells drgnx which files are open**, when you open, close or rename one (`write-file` too) and again
+  after every reconnection, so a chat writes only the files you have open, and `read_file` gives the chat your
+  buffer's text, unsaved edits included.
+- **For now every write is refused whole** ("pair needs the edit history"): applying one safely over what you typed
+  since the chat read the file needs Nidhogg .6 with Glitnir and the edit history, which are not here yet.
+
 ## Turning Pair off
 
 Turning Pair off for a chat closes its door at once: writes not yet in your editor are refused ("pair mode was turned

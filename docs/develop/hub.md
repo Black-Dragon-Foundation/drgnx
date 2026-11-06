@@ -1324,6 +1324,17 @@ checkout read-only for it.
   `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
   answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
   write.
+- **The editor's side** is `modules/tools/drgnx-agent-pair.el` (module `tools/agent-pair`). Every pair call goes on
+  the subscribed connection, the one the door sends to. The event handler only queues a `pair-apply` in the buffer
+  visiting the file (deadline: arrival plus `ttl_ms` on Emacs's clock); `drgnx-agent-pair--drain` takes the queues
+  from `post-command-hook` (when `drgnx-agent-pair--pending` is set) or a zero-delay wall timer, only when
+  `drgnx-agent-pair-slot-open-p` holds: no command runs (a count kept by `pre-`/`post-command-hook`,
+  `drgnx-agent-pair-command-step`, since minibuffer commands run inside another), recursion and minibuffer depth 0, no
+  keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
+  `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
+  `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
+  `pair-read` is answered with the buffer's text and `buffer-chars-modified-tick` as its version. Until the edit
+  history's shift is here, `drgnx-agent-pair--apply` refuses every write ("pair needs the edit history").
 
 ## Per-session sockets
 
