@@ -392,7 +392,9 @@ impl Agent {
                 {
                     match answer.pointer_mut("/agentCapabilities/_meta/_drgnx~1panel") {
                         Some(have) => have["adminPolicy"] = panel["adminPolicy"].clone(),
-                        None => answer["agentCapabilities"]["_meta"] = json!({"_drgnx/panel": panel}),
+                        None => {
+                            answer["agentCapabilities"]["_meta"] = json!({"_drgnx/panel": panel})
+                        }
                     }
                 }
                 self.log("initialize", params);
