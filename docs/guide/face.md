@@ -417,3 +417,25 @@ styles `window-divider` itself keeps its choice, and every colour you see comes 
 `drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
 The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`; `drgnx-wb-close`, its old
 name, is the same face). The UI kit's buttons are `drgnx-ui-button` (inherits `button`).
+
+### Faces for theme authors
+
+drgnx's chrome reads these semantic faces (group `drgnx-look`) and no colours. A theme that does not know them gets
+the defaults below, which inherit standard faces, so any Emacs theme works; a theme that styles them gets exactly the
+look it describes.
+
+| Face | Default inherits | Used for |
+|---|---|---|
+| `drgnx-surface-gap`, `-panel`, `-raised`, `-overlay` | `default` | the gap and bars, side panels, raised things (chips, the current tab), popups |
+| `drgnx-text-muted`, `-subtle`, `-disabled` | `shadow` | secondary, tertiary and unavailable text |
+| `drgnx-border`, `drgnx-border-strong` | `window-divider`, `vertical-border` | a card's hairline, an input's or popup's ring |
+| `drgnx-accent` | `link` (no underline) | the focus and the current thing |
+| `drgnx-hover` | `highlight` | a hovered row; its box has the widths of the focus ring |
+| `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the selection without the focus |
+| `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
+| `drgnx-status-attention` | `error` | something waits for you (`drgnx-status-needs-you` inherits it) |
+| `drgnx-agent-1` to `drgnx-agent-6` | `default` | the agents' colours |
+| `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background), and the `mouse-face` of the row that reveals it |
+
+A row with a hidden control puts `mouse-face` `drgnx-hover-row` on the whole row and draws the control with
+`drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it.
