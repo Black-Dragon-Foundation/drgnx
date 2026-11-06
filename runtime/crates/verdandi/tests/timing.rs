@@ -6,7 +6,14 @@ use verdandi::{BranchKind, Cause, Change, History, Kind, Record};
 
 /// A history in which an agent's record deleted a line and the user then deleted LATER characters elsewhere in the
 /// file, one delete operation each; the agent's record.
-fn history_with_later_deletes(later: usize) -> (tempfile::TempDir, History, verdandi::BranchId, verdandi::OpId) {
+fn history_with_later_deletes(
+    later: usize,
+) -> (
+    tempfile::TempDir,
+    History,
+    verdandi::BranchId,
+    verdandi::OpId,
+) {
     let dir = tempfile::tempdir().unwrap();
     let mut h = History::open(dir.path()).unwrap();
     let doc = h.doc_for("f.txt").unwrap();
@@ -14,7 +21,10 @@ fn history_with_later_deletes(later: usize) -> (tempfile::TempDir, History, verd
     let base = format!("keep\ngone\n{}\n", "x".repeat(later));
     h.activate(doc, br, || Ok(base.clone())).unwrap();
     let agent = h
-        .peer(&serde_json::json!({"kind": "agent", "session": "s9"}), Some(br))
+        .peer(
+            &serde_json::json!({"kind": "agent", "session": "s9"}),
+            Some(br),
+        )
         .unwrap();
     let user = h
         .peer(&serde_json::json!({"kind": "user"}), Some(br))
@@ -22,7 +32,11 @@ fn history_with_later_deletes(later: usize) -> (tempfile::TempDir, History, verd
     let record = |h: &mut History, peer, changes: Vec<Change>| {
         let mut spans = Vec::new();
         for c in &changes {
-            let s = h.activate(doc, br, || unreachable!()).unwrap().apply(peer, c).unwrap();
+            let s = h
+                .activate(doc, br, || unreachable!())
+                .unwrap()
+                .apply(peer, c)
+                .unwrap();
             spans.extend(s.into_iter().map(|s| (doc, s)));
         }
         h.record(Record {
