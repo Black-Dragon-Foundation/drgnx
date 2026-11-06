@@ -29,7 +29,7 @@ use crate::linux::podman::{self, Caps, ContainerImage, ContainerReq, RunnerArgs,
 use crate::linux::probe::{self, Probe};
 use crate::linux::reserve::{self, Reservation};
 use crate::linux::result::{RESULT, ResultJson};
-use crate::linux::{run, slices, unit};
+use crate::linux::{resize, run, slices, unit};
 use crate::proto::{
     AttemptState, Frame, FrameReader, FrameWriter, JobRef, Key, MAX_CHUNK, ManifestEntry,
     PROTO_VERSION, Sha256,
@@ -42,8 +42,8 @@ use crate::sync::slot::{self, Overlay, SlotKey};
 use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
-use forseti::{Action, JobId, Limits, Profile, RunningJob, Verdict};
-use std::collections::BTreeMap;
+use forseti::{Action, JobId, Kind, Limits, Profile, RunningJob, Verdict};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -275,6 +275,12 @@ pub struct Serve<W: Write> {
     stop_admitting: bool,
     level2_since: Option<Instant>,
     last_kill: Option<Instant>,
+    /// The jobs the ladder paused, until the pressure is gone.
+    paused: BTreeSet<String>,
+    /// The CPU weights set on job slices (the others are at systemd's default).
+    weights: BTreeMap<String, u32>,
+    /// A P1–P2 offer was refused for CPU since the last `ready`.
+    p12_waiting: bool,
     last_ready: Instant,
     last_ping: Instant,
     last_frame: Instant,
@@ -370,6 +376,9 @@ impl<W: Write> Serve<W> {
             stop_admitting: false,
             level2_since: None,
             last_kill: None,
+            paused: BTreeSet::new(),
+            weights: BTreeMap::new(),
+            p12_waiting: false,
             last_ready: now,
             last_ping: now,
             last_frame: now,
@@ -565,7 +574,8 @@ impl<W: Write> Serve<W> {
                         .unwrap_or_else(|| admit::unknown(&l.meta.spec)),
                     restartable: l.meta.spec.restartable,
                     evicted_once: false,
-                    long_build: false,
+                    // the ladder pauses builds and evicts the rest
+                    long_build: l.meta.spec.kind == Kind::Build,
                 })
             })
             .collect()
@@ -596,6 +606,8 @@ impl<W: Write> Serve<W> {
             .map(|l| l.meta.r.clone())
             .collect();
         self.ladder(&m);
+        self.grow(&m.running);
+        self.weigh(&m.running);
         self.send(&Frame::Ready {
             free_mib: b.mem_mib,
             free_cpu: b.cpu,
@@ -613,6 +625,12 @@ impl<W: Write> Serve<W> {
         self.stop_admitting = level != Level::Normal;
         if level < Level::Pressure {
             self.level2_since = None;
+            // the pressure is gone: the paused builds go on
+            for id in std::mem::take(&mut self.paused) {
+                if let Err(e) = resize::unpause(&self.container(&id)) {
+                    eprintln!("sleipnir serve: {e}");
+                }
+            }
             return;
         }
         let since = *self.level2_since.get_or_insert_with(Instant::now);
@@ -636,13 +654,141 @@ impl<W: Write> Serve<W> {
             let (id, reason) = match &a {
                 Action::Evict(id) => (id, jobexec::EVICTED.to_string()),
                 Action::Kill(id) => (id, format!("infra: {}", infra::KILLED)),
-                // pausing a long build waits for live resizing; admissions stop meanwhile
+                // a long build pauses (dedicated only); it is disturbed, so its red is suspect
+                Action::Pause(id) if self.cfg.profile == Profile::Dedicated => {
+                    self.pause(&id.0);
+                    continue;
+                }
                 Action::Pause(_) | Action::StopAdmitting => continue,
             };
             if let Some(l) = self.live.values().find(|l| l.meta.r.job == id.0) {
                 eprintln!("sleipnir serve: the ladder at {level:?}: {reason} {}", id.0);
+                if matches!(a, Action::Evict(_)) {
+                    let _ = jobexec::disturbed(&l.dir, "evicted");
+                }
                 self.kill(&l.dir.clone(), &l.meta.r.job.clone(), &reason);
                 self.last_kill = Some(Instant::now());
+            }
+        }
+    }
+
+    /// Job ID's container.
+    fn container(&self, id: &str) -> String {
+        format!("{}-{id}", self.cfg.prefix)
+    }
+
+    /// Pauses job ID's container once, marking its attempt disturbed first.
+    fn pause(&mut self, id: &str) {
+        let Some(l) = self.live.values().find(|l| l.meta.r.job == id) else {
+            return;
+        };
+        if self.paused.contains(id) {
+            return;
+        }
+        let _ = jobexec::disturbed(&l.dir, "paused");
+        match resize::pause(&self.container(id)) {
+            Ok(()) => {
+                eprintln!("sleipnir serve: the ladder pauses {id}");
+                self.paused.insert(id.to_string());
+            }
+            Err(e) => eprintln!("sleipnir serve: {e}"),
+        }
+    }
+
+    /// Grows each running job near its cap while the machine has room ([`admit::grow`]): the slice's
+    /// `memory.current` (its container and job-exec) sorts out the jobs well under it, the container's own reading
+    /// decides. The grown grant is recorded in the attempt's folder.
+    fn grow(&mut self, ours: &[RunningJob]) {
+        let keys: Vec<(String, u32)> = self
+            .live
+            .iter()
+            .filter(|(_, l)| l.meta.started.is_some() && !l.dir.join(RESULT).exists())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in keys {
+            let Some(l) = self.live.get(&key) else {
+                continue;
+            };
+            let id = l.meta.r.job.clone();
+            let cap = l.meta.grant.mem_cap_mib;
+            let near = slices::job_slice(SLICE_ROOT, &id)
+                .ok()
+                .and_then(|s| self.probe.cgroup(&s).ok())
+                .is_some_and(|c| c.current / (1024 * 1024) * 100 > cap * resize::GROW_AT_PCT);
+            if !near || self.paused.contains(&id) {
+                continue;
+            }
+            let container = self.container(&id);
+            let Ok(current_mib) =
+                resize::container_cgroup(&container).and_then(|cg| resize::current_mib(&cg))
+            else {
+                continue;
+            };
+            // the hub's head reservation doesn't reach runners: only the machine's room holds a grow here
+            let g = admit::Grow {
+                job: resize::Sized {
+                    job: JobId(id.clone()),
+                    container,
+                    machine: self.cfg.name.clone(),
+                    cap_mib: cap,
+                    current_mib,
+                    max_mib: l.meta.spec.mem_mib.max,
+                },
+                reservation: admit::reservation_job(&id, l.meta.r.attempt),
+                head: None,
+            };
+            match admit::grow(
+                &self.probe,
+                &self.limits,
+                &self.scheduler,
+                ours,
+                now_s(),
+                &g,
+                resize::apply,
+            ) {
+                Ok(Some(r)) => {
+                    eprintln!(
+                        "sleipnir serve: {id} grows from {} to {} MiB",
+                        r.from_mib, r.to_mib
+                    );
+                    if let Some(l) = self.live.get_mut(&key) {
+                        l.meta.grant.mem_cap_mib = r.to_mib;
+                        l.meta.grant.reserve_mib += r.delta_mib();
+                        if let Err(e) = attempts::write_meta(&l.dir, &l.meta) {
+                            eprintln!("sleipnir serve: {id}'s grown grant: {e}");
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("sleipnir serve: {id} can't grow: {}", e.why),
+            }
+        }
+    }
+
+    /// Running P4–P5 jobs yield CPU while a P1–P2 offer was refused for CPU since the last `ready`
+    /// ([`resize::weights`]); a weight is set only when it changes.
+    fn weigh(&mut self, ours: &[RunningJob]) {
+        let running: Vec<(String, forseti::Priority)> = ours
+            .iter()
+            .filter_map(|r| Some((slices::job_slice(SLICE_ROOT, &r.id.0).ok()?, r.priority)))
+            .collect();
+        let want = resize::weights(&running, std::mem::take(&mut self.p12_waiting));
+        self.weights.retain(|u, _| want.iter().any(|(w, _)| w == u));
+        for (unit, w) in want {
+            if self
+                .weights
+                .get(&unit)
+                .copied()
+                .unwrap_or(resize::WEIGHT_NORMAL)
+                == w
+            {
+                continue;
+            }
+            match resize::set_weight(&unit, w) {
+                Ok(()) => {
+                    self.weights.insert(unit, w);
+                }
+                Err(e) => eprintln!("sleipnir serve: {e}"),
             }
         }
     }
@@ -653,7 +799,7 @@ impl<W: Write> Serve<W> {
         if let Err(e) = jobexec::kill_reason(dir, reason) {
             eprintln!("sleipnir serve: the kill reason of {id}: {e}");
         }
-        let name = format!("{}-{id}", self.cfg.prefix);
+        let name = self.container(id);
         if let Err(e) = run::limited(
             Path::new("podman"),
             &["kill", &name],
@@ -730,11 +876,19 @@ impl<W: Write> Serve<W> {
             now_s(),
             &offer,
         ) {
-            Err(no) => self.send(&Frame::Refuse {
-                r,
-                why: no.why,
-                reason: no.reason,
-            }),
+            Err(no) => {
+                // a P1–P2 job waiting for CPU: the running P4–P5 jobs yield at the next `ready`
+                if no.reason == Some(forseti::WaitReason::Threads)
+                    && matches!(priority, forseti::Priority::P1 | forseti::Priority::P2)
+                {
+                    self.p12_waiting = true;
+                }
+                self.send(&Frame::Refuse {
+                    r,
+                    why: no.why,
+                    reason: no.reason,
+                })
+            }
             Ok(grant) => {
                 let meta = Meta {
                     hub_id: self.cfg.hub_id.clone(),

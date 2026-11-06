@@ -96,6 +96,11 @@ impl Reservations {
         fs::rename(&tmp, &path)
     }
 
+    /// SCHEDULER's reservation for JOB.
+    pub fn read(&self, scheduler: &str, job: &str) -> io::Result<Reservation> {
+        serde_json::from_slice(&fs::read(self.file(scheduler, job)?)?).map_err(io::Error::other)
+    }
+
     /// Removes SCHEDULER's reservation for JOB; one that is not there is no error.
     pub fn remove(&self, scheduler: &str, job: &str) -> io::Result<()> {
         match fs::remove_file(self.file(scheduler, job)?) {

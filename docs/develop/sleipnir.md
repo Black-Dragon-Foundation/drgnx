@@ -169,7 +169,36 @@ containers sit beside it in the job slice at 1000.
 
 The verdict is `forseti::classify` over what job-exec saw: the kill reason, `oom_kill`, the exit code or signal, the
 timeout and the row parser's judgement. The helper's `key-timeout` record (a key request that got no key) makes it
-`infra: key not delivered`, never the job's own failure; a written kill reason still comes first.
+`infra: key not delivered`, never the job's own failure; a written kill reason still comes first. A scheduler that
+pauses or evicts a job first leaves `disturbed` in its folder (`jobexec::disturbed(dir, why)`): the result says
+`disturbed: true` (its time is no fair sample), and a red becomes `Suspect`, to be run again undisturbed.
+
+### Live resizing (`linux::resize`)
+
+The moves on a running job that never throttle it (the job scheduler's "grow and shrink while running"):
+
+- **Grow.** When the container's `memory.current` passes 85 % of its cap and the machine has room, the cap grows by a
+  quarter (at least 256 MiB), never past the job's `mem_mib.max` and never past the room: the budget now, and, on
+  the machine where the backfill head has its reserved start, what the head still needs then (`Head::of` takes the
+  reservation and `forseti::budget_at` at its start; the grow is taken from that budget). `grow(job, budget, head)`
+  decides; `apply` carries it out.
+- **Through the unit, never behind systemd.** `apply` sets the container's systemd scope (`set-property --runtime …
+  MemoryMax=`) and the container (`podman update --memory M --memory-swap M`, so still no swap), in the order that
+  keeps the scope at or above its container: scope first for a grow, container first for a shrink. No cgroup file is
+  written by sleipnir.
+- **A shrink below use is refused.** `shrink(job, to)` refuses a cap under the container's use, and `apply` reads the
+  use again just before a shrink and refuses it then too, never forcing the kernel to reclaim or kill.
+- **CPU weight.** `weights(running, waiting_p12)`: while P1–P2 jobs wait for CPU, the running P4–P5 job slices get
+  `CPUWeight=20`; once they no longer wait, 100 again.
+- **Pause.** At the ladder's pressure level a dedicated machine pauses its lowest-priority long builds (`podman
+  pause`, the cgroup freezer) and lets them go on once the pressure is gone; a workstation never pauses.
+
+In `serve`, a grow is judged under the admission lock (`admit::grow`) against the machine as it is, the others'
+reservations counted; once applied, the job's reservation holds what it added, so no scheduler admits into it, and the
+grown grant is written to the attempt's `attempt.json`. A grow that can't be applied leaves the reservation as it was.
+The hub's head reservation doesn't reach runners yet, so on a runner only the machine's room holds a grow. CPU weights
+follow the offers: a P1–P2 offer refused for CPU since the last `ready` makes the P4–P5 jobs yield at the next one.
+Builds count as long builds for the ladder.
 
 ## The job helper (`helper`)
 
@@ -592,8 +621,10 @@ job-exec writes the verdict, which `serve` reports as `Cancelled`.
 
 **The ladder** runs at every `ready` on the runner's slice tree: `tight` stops admissions; at `pressure` and
 `danger` the scheduler holding the most memory (`forseti::ladder_actor`, over the reservations) evicts (dedicated) or
-kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. Pausing a long
-build waits for live resizing.
+kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
+runner it pauses the lowest-priority long builds at `pressure` and lets them go on below it; a paused or evicted job
+is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
+resizing, above).
 
 **The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
 (`serve::cleanup::plan`, pure):
