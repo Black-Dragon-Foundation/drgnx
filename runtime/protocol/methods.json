@@ -12430,6 +12430,137 @@
       "classes": [
         "user"
       ],
+      "doc": "the hunks of one record of a worktree's history, or of every record of a session's agent there (a paired chat's), each with what is still there and who undid it",
+      "name": "history/op/hunks",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/op/hunks`: in the history of the worktree WORKTREE, record OP, or every record of SESSION's agent.",
+        "properties": {
+          "op": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree"
+        ],
+        "title": "OpHunksParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HunkState": {
+            "description": "How much of a hunk is still there.",
+            "enum": [
+              "live",
+              "partly-undone",
+              "undone"
+            ],
+            "type": "string"
+          },
+          "OpHunk": {
+            "additionalProperties": false,
+            "description": "One hunk of a record: its lines in the text now (1-based), the record's text still there, the text it removed.",
+            "properties": {
+              "deleted": {
+                "type": "string"
+              },
+              "end_line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "index": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "op": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "state": {
+                "$ref": "#/$defs/HunkState"
+              },
+              "text": {
+                "type": "string"
+              },
+              "undone_by": {
+                "items": {
+                  "$ref": "#/$defs/UndoneBy"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "op",
+              "path",
+              "index",
+              "start_line",
+              "end_line",
+              "text",
+              "deleted",
+              "state",
+              "undone_by"
+            ],
+            "type": "object"
+          },
+          "UndoneBy": {
+            "additionalProperties": false,
+            "description": "A record that undid (part of) a hunk, and who wrote it.",
+            "properties": {
+              "author": true,
+              "op": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "hunks": {
+            "items": {
+              "$ref": "#/$defs/OpHunk"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "hunks"
+        ],
+        "title": "OpHunks",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "redo a revert: the files it changed go back to what they were before it (the user's later edits stay), one record and one forward commit; the agent is told by a message, its conversation is not restored",
       "name": "history/redo",
       "params": {
@@ -12846,6 +12977,204 @@
           "undone"
         ],
         "title": "Applied",
+        "type": "object"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "revert one hunk of an agent's record, keeping the user's later typing: applied and written by the hub, or handed to the editor buffer that holds the file; a hunk whose old text has no place to go back to is a conflict and changes nothing",
+      "name": "history/revert/hunk",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`history/revert/hunk`: hunk HUNK (an `OpHunk.index`) of record OP in PATH, in the worktree WORKTREE.",
+        "properties": {
+          "hunk": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "op": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "worktree",
+          "op",
+          "path",
+          "hunk"
+        ],
+        "title": "RevertHunkParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BatchChange": {
+            "additionalProperties": false,
+            "description": "One change of a batch: OLD_LEN characters at START (offsets in the document's LF text) replaced by INSERTED.",
+            "properties": {
+              "inserted": {
+                "type": "string"
+              },
+              "old_len": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "origin": {
+                "description": "`user` (the default) or `agent:<session>` for a change merged in from an agent.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "start": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "old_len",
+              "inserted"
+            ],
+            "type": "object"
+          },
+          "HunkConflict": {
+            "additionalProperties": false,
+            "description": "A conflicting hunk: its lines now, the user's text where the old text would go back, and that old text.",
+            "properties": {
+              "end_line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "reverted": {
+                "type": "string"
+              },
+              "start_line": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "users": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start_line",
+              "end_line",
+              "users",
+              "reverted"
+            ],
+            "type": "object"
+          },
+          "HunkRevertState": {
+            "description": "What a hunk's revert did.",
+            "oneOf": [
+              {
+                "const": "applied",
+                "description": "The hub applied it and wrote the file.",
+                "type": "string"
+              },
+              {
+                "const": "in-buffer",
+                "description": "An editor buffer holds the file: it applies EDITS, as the origin `revert:<op>`, when its text hashes to VERSION.",
+                "type": "string"
+              },
+              {
+                "const": "conflict",
+                "description": "The old text has no place to go back to: nothing changed.",
+                "type": "string"
+              },
+              {
+                "const": "undone",
+                "description": "Undone already: nothing to do.",
+                "type": "string"
+              }
+            ]
+          },
+          "UndoneBy": {
+            "additionalProperties": false,
+            "description": "A record that undid (part of) a hunk, and who wrote it.",
+            "properties": {
+              "author": true,
+              "op": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "buffer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflict": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/HunkConflict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edits": {
+            "description": "In order; offsets in the text as each earlier one left it.",
+            "items": {
+              "$ref": "#/$defs/BatchChange"
+            },
+            "type": "array"
+          },
+          "op": {
+            "description": "The `revert` record (applied).",
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/HunkRevertState"
+          },
+          "undone_by": {
+            "items": {
+              "$ref": "#/$defs/UndoneBy"
+            },
+            "type": "array"
+          },
+          "version": {
+            "description": "SHA-256 in hex of the text EDITS apply to (`history/batch`'s hash).",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "edits",
+          "undone_by"
+        ],
+        "title": "HunkReverted",
         "type": "object"
       },
       "writes": true

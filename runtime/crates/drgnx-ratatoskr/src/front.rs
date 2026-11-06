@@ -685,6 +685,8 @@ impl Front {
             | Params::HistoryCompare(_)
             | Params::HistoryTake(_)
             | Params::HistoryRedo(_)
+            | Params::HistoryOpHunks(_)
+            | Params::HistoryRevertHunk(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
             | Params::RunnersKeys(_)

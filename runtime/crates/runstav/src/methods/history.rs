@@ -141,7 +141,120 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: true,
             doc: "redo a revert: the files it changed go back to what they were before it (the user's later edits stay), one record and one forward commit; the agent is told by a message, its conversation is not restored",
         ),
+        method!(
+            "history/op/hunks", HistoryOpHunks(OpHunksParams) -> OpHunks,
+            classes: [User], writes: false,
+            doc: "the hunks of one record of a worktree's history, or of every record of a session's agent there (a paired chat's), each with what is still there and who undid it",
+        ),
+        method!(
+            "history/revert/hunk", HistoryRevertHunk(RevertHunkParams) -> HunkReverted,
+            classes: [User], writes: true,
+            doc: "revert one hunk of an agent's record, keeping the user's later typing: applied and written by the hub, or handed to the editor buffer that holds the file; a hunk whose old text has no place to go back to is a conflict and changes nothing",
+        ),
     ]
+}
+
+/// `history/op/hunks`: in the history of the worktree WORKTREE, record OP, or every record of SESSION's agent.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpHunksParams {
+    pub worktree: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// How much of a hunk is still there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HunkState {
+    Live,
+    PartlyUndone,
+    Undone,
+}
+
+/// A record that undid (part of) a hunk, and who wrote it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UndoneBy {
+    pub op: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<serde_json::Value>,
+}
+
+/// One hunk of a record: its lines in the text now (1-based), the record's text still there, the text it removed.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpHunk {
+    pub op: i64,
+    pub path: String,
+    pub index: i64,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub text: String,
+    pub deleted: String,
+    pub state: HunkState,
+    pub undone_by: Vec<UndoneBy>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpHunks {
+    pub hunks: Vec<OpHunk>,
+}
+
+/// `history/revert/hunk`: hunk HUNK (an `OpHunk.index`) of record OP in PATH, in the worktree WORKTREE.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RevertHunkParams {
+    pub worktree: String,
+    pub op: i64,
+    pub path: String,
+    pub hunk: i64,
+}
+
+/// What a hunk's revert did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum HunkRevertState {
+    /// The hub applied it and wrote the file.
+    Applied,
+    /// An editor buffer holds the file: it applies EDITS, as the origin `revert:<op>`, when its text hashes to VERSION.
+    InBuffer,
+    /// The old text has no place to go back to: nothing changed.
+    Conflict,
+    /// Undone already: nothing to do.
+    Undone,
+}
+
+/// A conflicting hunk: its lines now, the user's text where the old text would go back, and that old text.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HunkConflict {
+    pub start_line: i64,
+    pub end_line: i64,
+    pub users: String,
+    pub reverted: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HunkReverted {
+    pub state: HunkRevertState,
+    /// The `revert` record (applied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffer_id: Option<String>,
+    /// SHA-256 in hex of the text EDITS apply to (`history/batch`'s hash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// In order; offsets in the text as each earlier one left it.
+    pub edits: Vec<BatchChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<HunkConflict>,
+    pub undone_by: Vec<UndoneBy>,
 }
 
 /// `history/fork`: SESSION's step SEQ, the user's MESSAGE, and the profile of the second agent (none: the source's).

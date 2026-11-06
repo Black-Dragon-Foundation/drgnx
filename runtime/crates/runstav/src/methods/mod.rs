@@ -269,6 +269,8 @@ params! {
     HistoryCompare(history::CompareParams),
     HistoryTake(history::TakeParams),
     HistoryRedo(history::RedoParams),
+    HistoryOpHunks(history::OpHunksParams),
+    HistoryRevertHunk(history::RevertHunkParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
     RunnersKeys(runners::KeysParams),
