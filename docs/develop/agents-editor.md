@@ -73,5 +73,16 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   rest to the function that was set before; it reads the cached table, nothing else. When the table goes empty the
   buffer's diff-hl is redrawn so its marks come back, and on teardown every diff-hl buffer is redrawn. A range that
   changes shape while diff-hl is on leaves diff-hl's marks on lines the agent stopped owning until diff-hl's next update.
+- **The agent line (`drgnx-agents-editor-line.el`):** `drgnx-chrome-add-tail-provider` (depth 30) registers
+  `drgnx-agents-editor-line--provider`; the chrome's provider list (`drgnx-chrome-tail-providers`, depth order) is a
+  `(:eval ...)` after the breadcrumb that joins the providers' strings, each a function of the window, run in
+  redisplay, answering from cache. The large-file header (depth 10) and sticky scroll (depth 20) are providers too;
+  `drgnx-chrome-header-tail` still works as a buffer-local construct after the providers. At each frame the line's
+  strings are built once per agent (symbol at its line from `add-log-current-defun`, or
+  `drgnx-agents-editor-line-symbol-function`; the plan entry, else the step title, truncated to 40 columns; `%`
+  doubled); redisplay only picks the entry nearest the window's point, so the same string object comes back until the
+  next frame. `drgnx-chrome-short-breadcrumb-functions` shortens the breadcrumb to the file name while the line shows.
+  `drgnx-agents-editor-line-probe` times the build and a provider call (the probe for `agents-line-tick`; the verdict
+  waits for the gate).
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.

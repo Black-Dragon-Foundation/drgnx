@@ -34,4 +34,14 @@ part that exists so far: which buffers are watched.
   works with git marks off.
 - A terminal has no fringe, so the buffer gets a one-column left margin while an agent's lines are showing.
 
-How the agent line draws follows in a later page of this guide.
+## The agent line
+
+- The header, after the file's name, shows one line for the agent nearest your cursor: its mark, its name, what it is
+  doing, the symbol it is in, and the step or plan entry it is on in quotes ("◆ Opus 2 · editing · parse_frame \"Wire
+  the retry\""). With more agents in the file, "+N" says how many; clicking it opens who is in this file.
+- "F follow" (or the command **Follow Agent**) keeps that agent's name tag on in your buffer; again, or with no agent
+  near, stops.
+- While the line shows, the breadcrumb shortens to the file name so both fit. A large file's header and sticky
+  scroll's scopes come first and are never replaced.
+
+How the Explorer, the status bar and the who-is-here list show agents follows in a later page of this guide.

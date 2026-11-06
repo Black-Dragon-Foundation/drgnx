@@ -24,6 +24,10 @@
 
 (unless (featurep 'drgnx-agents-editor-draw)
   (load (expand-file-name "drgnx-agents-editor-draw" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agents-editor-line)
+  (load (expand-file-name "drgnx-agents-editor-line" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(declare-function drgnx-agents-editor-line-setup "drgnx-agents-editor-line")
+(declare-function drgnx-agents-editor-line-teardown "drgnx-agents-editor-line")
 (declare-function drgnx-agents-editor-draw-setup "drgnx-agents-editor-draw")
 (declare-function drgnx-agents-editor-draw-teardown "drgnx-agents-editor-draw")
 (declare-function drgnx-agent-identity-clear "drgnx-agent-identity")
@@ -208,6 +212,7 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
   (require 'drgnx-agent-identity)
   (setq drgnx-agent-identity-watched-function #'drgnx-agents-editor--present-ordinals)
   (drgnx-agents-editor-draw-setup)
+  (drgnx-agents-editor-line-setup)
   (drgnx-module-hook 'drgnx-hub-event-functions event (event data) (drgnx-agents-editor--event event data))
   (drgnx-module-hook 'drgnx-hub-connected-functions rewatch () (drgnx-agents-editor--rewatch))
   (drgnx-module-hook 'window-buffer-change-functions windows (frame) (drgnx-agents-editor-sync-windows frame))
@@ -221,6 +226,7 @@ the :agents and :gutter that changed (each replaces the frame's whole list)."
   (maphash (lambda (view b) (drgnx-agents-editor--unwatch view b)) (copy-hash-table drgnx-agents-editor--views))
   (clrhash drgnx-agents-editor--states)
   (clrhash drgnx-agents-editor--views)
+  (drgnx-agents-editor-line-teardown)
   (drgnx-agents-editor-draw-teardown))
 
 (drgnx-module-define 'tools/agents-in-editor

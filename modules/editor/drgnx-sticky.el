@@ -18,7 +18,8 @@
 (require 'drgnx-large-file)
 (require 'drgnx-timer)
 
-(defvar drgnx-chrome-header-tail)
+(declare-function drgnx-chrome-add-tail-provider "drgnx-chrome")
+(declare-function drgnx-chrome-remove-tail-provider "drgnx-chrome")
 (declare-function nidhogg-treesit-parser-ready-p "nidhogg-treesit-bg.c" (parser))
 (declare-function treesit-parser-p "treesit.c")
 (declare-function drgnx-chrome-apply "drgnx-chrome")
@@ -171,16 +172,16 @@ segment, with the text unchanged, takes that segment: the scope lines are read a
                                (setq drgnx-sticky--last (vector tick scopes s))
                                s))))))))
 
-(defconst drgnx-sticky--tail '(:eval (drgnx-sticky--segment (selected-window)))
-  "The header's tail in a buffer with sticky scroll (evaluated in the window being drawn).")
+(defun drgnx-sticky--tail (w)
+  "The chrome's tail provider (depth 20, after the large-file header): window W's sticky part,
+in a buffer with sticky scroll."
+  (and (buffer-local-value 'drgnx-sticky-mode (window-buffer w)) (drgnx-sticky--segment w)))
 
 (define-minor-mode drgnx-sticky-mode
   "Sticky scroll: the scopes scrolled off the top, in the header after the breadcrumb."
   :lighter nil
   (if drgnx-sticky-mode
-      (progn (setq-local drgnx-chrome-header-tail drgnx-sticky--tail)
-             (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t))
-    (kill-local-variable 'drgnx-chrome-header-tail)
+      (add-hook 'after-change-functions #'drgnx-sticky--after-change nil t)
     (remove-hook 'after-change-functions #'drgnx-sticky--after-change t))
   (when (and (bound-and-true-p drgnx-chrome-mode) (get-buffer-window)) (drgnx-chrome-apply)))   ; the header shows it now
 
@@ -190,6 +191,7 @@ segment, with the text unchanged, takes that segment: the scope lines are read a
 
 (defun drgnx-sticky--teardown ()
   "Sticky scroll off in every live buffer that has it (the hook and the command go with the setup)."
+  (when (fboundp 'drgnx-chrome-remove-tail-provider) (drgnx-chrome-remove-tail-provider #'drgnx-sticky--tail))
   (dolist (b (buffer-list))
     (with-current-buffer b (when drgnx-sticky-mode (drgnx-sticky-mode -1)))))
 
@@ -199,6 +201,8 @@ segment, with the text unchanged, takes that segment: the scope lines are read a
                      :teardown #'drgnx-sticky--teardown
                      :setup (lambda ()
                               (drgnx-memo-activate 'sticky-segment)
+                              (eval-after-load 'drgnx-chrome
+                                (drgnx-modules-with-owner (drgnx-chrome-add-tail-provider #'drgnx-sticky--tail 20)))
                               (add-hook 'prog-mode-hook #'drgnx-sticky--maybe)
                               (drgnx-command-define 'toggle-sticky-scroll :category "View" :title "Toggle Sticky Scroll"
                                                     :command #'drgnx-sticky-mode :doc "The enclosing scopes in the header, off or on")))

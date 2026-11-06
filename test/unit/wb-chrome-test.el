@@ -489,3 +489,52 @@ Race-proof pattern D."
         (drgnx-look--islands-off)
         (face-spec-set 'drgnx-surface-gap spec 'face-defface-spec)
         (set-face-foreground 'window-divider nil f)))))
+
+;;;; Tail providers
+
+(defun drgnx-chrome-test--tail-a (_w) "A")
+(defun drgnx-chrome-test--tail-b (_w) "B")
+(defun drgnx-chrome-test--tail-none (_w) nil)
+
+(ert-deftest drgnx-chrome/tail-providers-in-depth-order ()
+  (let ((drgnx-chrome-tail-providers nil))
+    (unwind-protect
+        (progn
+          (drgnx-chrome-add-tail-provider #'drgnx-chrome-test--tail-a 30)
+          (drgnx-chrome-add-tail-provider #'drgnx-chrome-test--tail-none 20)
+          (drgnx-chrome-add-tail-provider #'drgnx-chrome-test--tail-b 10)
+          (should (equal '(drgnx-chrome-test--tail-b drgnx-chrome-test--tail-none drgnx-chrome-test--tail-a)
+                         drgnx-chrome-tail-providers))
+          (should (equal "BA" (drgnx-chrome--tail-string (selected-window))))
+          ;; adding one again moves it
+          (drgnx-chrome-add-tail-provider #'drgnx-chrome-test--tail-b 40)
+          (should (equal "AB" (drgnx-chrome--tail-string (selected-window))))
+          (drgnx-chrome-remove-tail-provider #'drgnx-chrome-test--tail-b)
+          (should (equal "A" (drgnx-chrome--tail-string (selected-window)))))
+      (dolist (f '(drgnx-chrome-test--tail-a drgnx-chrome-test--tail-b drgnx-chrome-test--tail-none))
+        (drgnx-chrome-remove-tail-provider f)))))
+
+(ert-deftest drgnx-chrome/a-header-with-providers-keeps-the-breadcrumb-first ()
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "src/a.el")
+    (let ((drgnx-chrome-tail-providers nil))
+      (unwind-protect
+          (progn
+            (drgnx-chrome-add-tail-provider #'drgnx-chrome-test--tail-a 10)
+            (drgnx-chrome-apply nil t)
+            (let ((h (window-parameter (selected-window) 'header-line-format)))
+              (should (string-search "a.el" (car h)))
+              (should (equal drgnx-chrome--providers-tail (cadr h)))))
+        (drgnx-chrome-remove-tail-provider #'drgnx-chrome-test--tail-a)
+        (drgnx-chrome-apply nil t)
+        (should (stringp (window-parameter (selected-window) 'header-line-format)))))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-shortens-on-request ()
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "src/deep/a.el")
+    (let ((full (drgnx-chrome-breadcrumb (selected-window)))
+          (short (let ((drgnx-chrome-short-breadcrumb-functions (list (lambda (_w) t))))
+                   (drgnx-chrome-breadcrumb (selected-window)))))
+      (should (string-search "deep" full))
+      (should (string-search "a.el" short))
+      (should-not (string-search "deep" short)))))
