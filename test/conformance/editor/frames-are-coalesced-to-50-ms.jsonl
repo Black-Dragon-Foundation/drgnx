@@ -1,0 +1,32 @@
+{"scenario": "editor/frames-are-coalesced-to-50-ms", "requires": ["v1", "test-hooks"], "doc": "A watched buffer's view gets its full frame as the watch's answer, then at most one agent-buffer per 50 ms of the hub's clock, to the watching connection only: an agent's read moving several lines between two flushes is one frame, which names the version it follows. Pattern B on the hub's virtual clock: the moves are gated by agents/presence/get, each flush by __test_advance; with the clock held, no frame can come between two advances, so the count after a 10 ms advance is read with the clock still short of the next flush."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/mock-moves.txt", "text": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "connect", "conn": "o", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "o", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "o", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/work/mock-moves.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v1", "version": 1, "base": 0, "agents": [], "gutter": []}}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "moves 2 8\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 3, "result": {"entries": [{"session": "$sid", "live": true, "line": 2}]}}, "within_ms": 30000, "every_ms": 20}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "__test_advance", "params": {"ms": 50}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 2, "base": 1, "agents": [{"session": "$sid", "ordinal": 1, "handle": "Claude", "mode": "read", "live": true, "line": "$number"}]}}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 5, "result": {"entries": [{"session": "$sid", "live": true, "line": 5}]}}, "within_ms": 30000, "every_ms": 20}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "__test_advance", "params": {"ms": 10}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["agent-buffer"]}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "__test_advance", "params": {"ms": 50}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 3, "base": 2, "agents": [{"session": "$sid", "mode": "read", "live": true}]}}, "within_ms": 10000}
+{"do": "count_events", "conn": "o", "for_ms": 100, "none": ["agent-buffer"]}

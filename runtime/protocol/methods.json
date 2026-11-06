@@ -168,12 +168,27 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
               "job": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
                   "null"
                 ]
               },
@@ -187,9 +202,25 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -374,6 +405,293 @@
     {
       "data": {
         "$defs": {
+          "BufferAgent": {
+            "additionalProperties": false,
+            "description": "One agent in the buffer.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "handle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running.",
+                "type": "boolean"
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "ordinal": {
+                "description": "Its ordinal in the workspace (the display maps it to a colour and a mark).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan_entry": {
+                "description": "The plan entry it works on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Present for an agent working in another worktree, mapped onto this buffer: no bar or ring is drawn for it."
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step_title": {
+                "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "session",
+              "mode",
+              "source"
+            ],
+            "type": "object"
+          },
+          "GutterKind": {
+            "description": "What a gutter range says.",
+            "oneOf": [
+              {
+                "const": "changed",
+                "description": "Lines the agent's peer wrote.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "Lines an edit is about to change.",
+                "type": "string"
+              },
+              {
+                "const": "conflict",
+                "description": "Lines the agent changed that the user changed too (a projection only).",
+                "type": "string"
+              }
+            ]
+          },
+          "GutterRange": {
+            "additionalProperties": false,
+            "description": "One gutter range: lines START to END (1-based, inclusive) of one session, merged per session and kind.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "help": {
+                "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/GutterKind"
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "kind",
+              "start",
+              "end",
+              "help"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          },
+          "Projected": {
+            "additionalProperties": false,
+            "description": "Where a projected item comes from: the agent's worktree.",
+            "properties": {
+              "worktree_label": {
+                "description": "The worktree's folder name (\"editing in rp-df-hub\").",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree_label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BufferAgent"
+            },
+            "type": "array"
+          },
+          "approximate": {
+            "description": "The user's text was read from disk: unsaved changes are not in the projection.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "base": {
+            "description": "The version this frame follows; 0: a full frame (a watch's answer).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "doc_version": {
+            "description": "The buffer's change count the frame was computed against (the last the editor sent).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gutter": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "BufferFrame",
+        "type": "object"
+      },
+      "doc": "a watched buffer view's frame changed: the agents in it and the gutter, at most once per view per 50 ms of the hub's clock, to the watching connection only (agents/buffer/watch)",
+      "name": "agent-buffer"
+    },
+    {
+      "data": {
+        "$defs": {
           "Entry": {
             "additionalProperties": true,
             "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
@@ -454,9 +772,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -471,6 +798,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -481,9 +821,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -508,6 +854,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -561,6 +912,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -2193,6 +2558,361 @@
       "classes": [
         "user"
       ],
+      "doc": "end one buffer view of this connection (false: none was open; a connection's views end with it)",
+      "name": "agents/buffer/unwatch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/buffer/unwatch`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "BufferUnwatch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "one buffer view of this connection shows a file: the answer is its full frame (the agents in it, the gutter), and agent-buffer events follow, to this connection only; a watch again with a newer doc_version says the user changed the buffer",
+      "name": "agents/buffer/watch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/buffer/watch`'s params: VIEW (the editor's id for a buffer shown in a window) shows FILE.",
+        "properties": {
+          "doc_version": {
+            "description": "The buffer's own change count: a watch of a view already watched with a newer one says the user changed it\n(the projection follows after 300 ms without another).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "The buffer's absolute path.",
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "worktree": {
+            "description": "The edit history's worktree id, when the buffer is tracked.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "file"
+        ],
+        "title": "BufferWatch",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "BufferAgent": {
+            "additionalProperties": false,
+            "description": "One agent in the buffer.",
+            "properties": {
+              "col": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "handle": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running.",
+                "type": "boolean"
+              },
+              "mode": {
+                "$ref": "#/$defs/PresenceMode"
+              },
+              "ordinal": {
+                "description": "Its ordinal in the workspace (the display maps it to a colour and a mark).",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan_entry": {
+                "description": "The plan entry it works on.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Present for an agent working in another worktree, mapped onto this buffer: no bar or ring is drawn for it."
+              },
+              "session": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/$defs/PresenceSource"
+              },
+              "step_title": {
+                "description": "Its current step's title (the agent's own words).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "session",
+              "mode",
+              "source"
+            ],
+            "type": "object"
+          },
+          "GutterKind": {
+            "description": "What a gutter range says.",
+            "oneOf": [
+              {
+                "const": "changed",
+                "description": "Lines the agent's peer wrote.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "Lines an edit is about to change.",
+                "type": "string"
+              },
+              {
+                "const": "conflict",
+                "description": "Lines the agent changed that the user changed too (a projection only).",
+                "type": "string"
+              }
+            ]
+          },
+          "GutterRange": {
+            "additionalProperties": false,
+            "description": "One gutter range: lines START to END (1-based, inclusive) of one session, merged per session and kind.",
+            "properties": {
+              "end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "help": {
+                "description": "The hover text (\"Opus · changed in step 14 · 2 min ago\").",
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/GutterKind"
+              },
+              "projected": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Projected"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "session": {
+                "type": "string"
+              },
+              "start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "session",
+              "kind",
+              "start",
+              "end",
+              "help"
+            ],
+            "type": "object"
+          },
+          "PresenceMode": {
+            "description": "How a session is in a file.",
+            "oneOf": [
+              {
+                "enum": [
+                  "read"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "listed",
+                "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
+                "type": "string"
+              },
+              {
+                "const": "write",
+                "description": "Written by a shell command.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "Changed by an edit tool.",
+                "type": "string"
+              }
+            ]
+          },
+          "PresenceSource": {
+            "description": "Where the hub saw it.",
+            "oneOf": [
+              {
+                "const": "acp",
+                "description": "A read or search step's ACP fields.",
+                "type": "string"
+              },
+              {
+                "const": "edit",
+                "description": "An edit step.",
+                "type": "string"
+              },
+              {
+                "const": "command",
+                "description": "A file a shell step's command names (\"from the command\").",
+                "type": "string"
+              },
+              {
+                "const": "opened",
+                "description": "A file a shell step's processes opened (\"seen open\").",
+                "type": "string"
+              }
+            ]
+          },
+          "Projected": {
+            "additionalProperties": false,
+            "description": "Where a projected item comes from: the agent's worktree.",
+            "properties": {
+              "worktree_label": {
+                "description": "The worktree's folder name (\"editing in rp-df-hub\").",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree_label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A view's frame: `agents/buffer/watch`'s answer, and the data of `agent-buffer`.",
+        "properties": {
+          "agents": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/BufferAgent"
+            },
+            "type": "array"
+          },
+          "approximate": {
+            "description": "The user's text was read from disk: unsaved changes are not in the projection.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "base": {
+            "description": "The version this frame follows; 0: a full frame (a watch's answer).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "doc_version": {
+            "description": "The buffer's change count the frame was computed against (the last the editor sent).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gutter": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/GutterRange"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "version",
+          "base"
+        ],
+        "title": "BufferFrame",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
       "name": "agents/do",
       "params": {
@@ -2593,12 +3313,27 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
               "job": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
                   "null"
                 ]
               },
@@ -2612,9 +3347,25 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -3013,12 +3764,27 @@
                   "null"
                 ]
               },
+              "handle": {
+                "description": "Its name, unique in its workspace: the model's short name, numbered from the second agent of that model on\n(\"Opus\", \"Opus 2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
               "job": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "last_active": {
+                "description": "The hub's time of its latest update (seconds since the epoch): which identity a display reuses past its\ncapacity.",
+                "format": "double",
+                "type": [
+                  "number",
                   "null"
                 ]
               },
@@ -3032,9 +3798,25 @@
                   }
                 ]
               },
+              "monogram": {
+                "description": "The handle's short form for badges (\"O\", \"O2\").",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "name": {
                 "type": [
                   "string",
+                  "null"
+                ]
+              },
+              "ordinal": {
+                "description": "Its place among its workspace's live agents (1, 2, …; kept for its life): each display's colour and mark come\nfrom it. Absent once it has ended.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
                   "null"
                 ]
               },
@@ -3379,9 +4161,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -3396,6 +4187,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -3406,9 +4210,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3433,6 +4243,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {
@@ -3486,6 +4301,20 @@
           },
           "file": {
             "type": "string"
+          },
+          "rel": {
+            "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo": {
+            "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3565,6 +4394,20 @@
               },
               "file": {
                 "type": "string"
+              },
+              "rel": {
+                "description": "FILE relative to the top of its git checkout, so a badge lands on the user's tree whatever worktree the agent\nis in; absent outside git.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "repo": {
+                "description": "The project of that checkout: 16 hex digits of its git common directory's main checkout (the same id for every\nworktree of one repository, as the code index's).",
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3577,9 +4420,18 @@
             "description": "One session in one file: the presence model's entry.",
             "properties": {
               "at": {
-                "description": "The hub's time of the step (seconds since the epoch).",
+                "description": "The hub's time of the step, or of the tool call's last update (seconds since the epoch).",
                 "format": "double",
                 "type": "number"
+              },
+              "col": {
+                "description": "The column after the last character an edit inserted (0-based, in characters): where its cursor sits.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
               },
               "file": {
                 "description": "An absolute path in one of the workspace's repositories.",
@@ -3594,6 +4446,19 @@
                   "null"
                 ]
               },
+              "line_end": {
+                "description": "The last line of its range (a read's `limit`, an edit's changed lines); absent: `line` only.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "live": {
+                "description": "From a tool call still running (`tool_call` names it): replaced by its step's entry when the step closes, and\nnever kept across a hub restart.",
+                "type": "boolean"
+              },
               "mode": {
                 "$ref": "#/$defs/PresenceMode"
               },
@@ -3604,9 +4469,15 @@
                 "$ref": "#/$defs/PresenceSource"
               },
               "step": {
-                "description": "The timeline step it came from.",
+                "description": "The timeline step it came from; 0 while it is live.",
                 "format": "int64",
                 "type": "integer"
+              },
+              "tool_call": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "required": [
@@ -3631,6 +4502,11 @@
               {
                 "const": "listed",
                 "description": "A directory listing or a recursive search over it.",
+                "type": "string"
+              },
+              {
+                "const": "pending",
+                "description": "About to change: an edit waiting for the user's permission, or still streaming its input.",
                 "type": "string"
               },
               {

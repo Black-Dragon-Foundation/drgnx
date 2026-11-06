@@ -14,6 +14,7 @@
 
 pub mod deliver;
 pub mod handoff;
+pub mod identity;
 pub mod launch;
 pub mod lock;
 pub mod net;
@@ -56,6 +57,8 @@ pub struct Hub {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     db: OnceLock<urdr::Handle>,
     steps: StepBus,
+    /// Each live session's ordinal, handle and monogram ([`identity`]).
+    pub identities: Arc<identity::Pool>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -96,6 +99,13 @@ impl Hub {
     /// The worktree session SID works in (none for a session the hub does not hold).
     pub fn worktree(&self, sid: &str) -> Option<PathBuf> {
         lock(&self.sessions).get(sid).map(|s| s.worktree())
+    }
+
+    /// What session SID is doing now: its running step's title, the agent's own words (none: between steps, or a
+    /// session the hub does not hold).
+    pub fn doing(&self, sid: &str) -> Option<String> {
+        let s = lock(&self.sessions).get(sid).cloned()?;
+        s.doing()
     }
 
     /// A session on PROFILE, started by CALLER (the user's connection), in the directory and role of P.
@@ -229,6 +239,7 @@ impl Hub {
     }
 
     async fn forget(&self, id: &str) {
+        self.identities.free(id);
         if let Some(db) = self.db() {
             session::delete_row(db, id).await;
         }

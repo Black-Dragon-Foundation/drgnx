@@ -75,6 +75,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 lexopt.workspace = true
 sha2.workspace = true  # the merge gate's diff hashes
+similar = "2.7"  # edit lines from a whole-file diff, and the three-way projection (the version already in the lock)
 zip.workspace = true  # `browser install` unpacks the pinned archive
 http-body-util.workspace = true  # the download's body
 http = "1"                # the download's request (already in the tree through hyper)

@@ -290,6 +290,7 @@ impl Front {
         self.editors.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.buffers.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -679,6 +680,8 @@ impl Front {
             | Params::WorkConclusions(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
+            | Params::AgentsBufferWatch(_)
+            | Params::AgentsBufferUnwatch(_)
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
             | Params::WorkMapClose(_)

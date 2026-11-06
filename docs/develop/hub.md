@@ -1030,6 +1030,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
+| `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
@@ -1039,7 +1041,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
-| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
 | `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
@@ -1265,7 +1267,8 @@ result is (`event(NAME).check`):
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
-| `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
+| `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
@@ -1474,21 +1477,92 @@ and badges build on it). This is its contract.
   known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
   (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
   its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
-  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `read` >
-  `listed`).
-- **Now:** an entry is now while its session is live and it is younger than 120 s (`presence-stale-after`) or it is
-  its session's latest entry. Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in
-  no file.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `pending` >
+  `read` > `listed`). Part 3 adds `line_end` (the range's last line), `col` (the column after an edit's last inserted
+  character, where its cursor sits) and `pending` (an edit about to land).
+- **Edit lines and read ranges** (part 3, `work::edit_lines`): an edit's lines come from its ACP `diff` content, never
+  from `rawInput`. A fragment (Claude's `Edit`, Codex's one `diff` per hunk) is placed where its `oldText` is found
+  exactly once in the file's text now, or its `newText` once it has landed; a whole file (Gemini's diff, a `Write`, a
+  new file) is its old text diffed against its new, line by line. A call with several hunks sits on its last one.
+  Lines count on LF (a CRLF file is read as LF); found nowhere, or more than once, or in a file over 8 MiB, the entry
+  is the file only. The step's detail records the lines (`line_start`, `line_end`), so they survive a restart. A
+  read's range is its location's line (else its `offset`) through `limit` lines.
+- **Pending:** an edit call with `diff` content that is still `pending` or `in_progress`, and a permission request
+  for one that waits for the user, show as `pending` on the lines the diff will change. A refused request's entry
+  goes at once; an allowed one gives way to the call's own updates.
+- **The live feed** (part 3): the session's reader applies each `tool_call` and `tool_call_update` as it arrives, not
+  only when the step closes. Such an entry has `live: true`, `tool_call` (the call's id) and `step: 0`, and stands in
+  for the session's closed entry in that file while the call runs. The call's end replaces it: the closed step's entry
+  when it completed, nothing when it failed or was denied; a step cut while its call runs on (a permission wait, the
+  next call starting) leaves the live entry standing, and a call that ends with no step of its own open drops it at
+  once. An update for a call already closed is dropped, so the reader and the step writer may come in either order.
+  Live entries are never rebuilt after a restart.
+- **Now:** a session's running call in a file is now; otherwise an entry is now while its session is live and it is
+  younger than 120 s (`presence-stale-after`) or it is its session's latest entry (a running call's, if it has one).
+  Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in no file.
 - **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
-  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file,
-  entries}]}`, who is in them now; `agents/presence/get {file} -> {file, entries}`. The names keep clear of
-  `presence/set`, the user's away state. A connection's subscriptions end with it.
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file, rel?,
+  repo?, entries}]}`, who is in them now; `agents/presence/get {file} -> {file, rel?, repo?, entries}`. `rel` is the
+  file's path from the top of its git checkout and `repo` the checkout's project id (16 hex digits of the main
+  checkout's real path, as the code index's), so a badge lands on the user's tree whatever worktree the agent is in;
+  both are read from the `.git` entries, with no git run. The names keep clear of `presence/set`, the user's away
+  state. A connection's subscriptions end with it.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### Identity
+
+Every live session holds an identity from its start until it ends (`agents::identity`, part 3), so every surface
+names and colours an agent the same way:
+
+- **Ordinal:** the lowest number from 1 that no other live session of its workspace holds, kept for its life. A
+  workspace is the session's git repository (the project id of its checkout's common directory, the same for every
+  worktree of it), else its folder. The hub never gives a live ordinal twice; a display that has fewer
+  colour-and-mark pairs than agents reuses one by its own rule, reading `last_active`.
+- **Handle:** the model's short name (Claude's families by name, `Opus`, `Sonnet`, `Haiku`; another model by the first
+  word of its name; else the provider: `Claude`, `Codex`, `Gemini`), numbered from the second live agent of that model
+  in the workspace on (`Opus`, `Opus 2`, `Opus 3`; a freed number is given again, lowest first). The **monogram** is
+  its initial and that number (`O`, `O2`).
+- **Where:** the `agent` snapshot (`agents/list`, the `agent` event) carries `ordinal`, `handle`, `monogram` and
+  `last_active` (the hub's time of its latest update); an ended session has none. A session frees its identity when it
+  is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
+  Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
+  parent's; subagents have no snapshot, so none is shown yet.
+
+### The buffer view
+
+What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
+overlays from it):
+
+- **Views:** `agents/buffer/watch {view, file, worktree?, doc_version?}` (user connections) opens view VIEW of this
+  connection on FILE, or opens it again, and answers its full frame (`base` 0); `agents/buffer/unwatch {view}` ends it
+  (`false`: none was open). Views are keyed by (connection, view), like the Work map's, and a connection's views end
+  with it. A view matches its file's true name and `REPO:REL` (the same file in every worktree of its repository, the
+  presence model's `rel` and `repo`).
+- **Frames:** a presence change in a matched file makes the view due, and one flush 50 ms of the hub's clock later
+  (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
+  (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
+  frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
+  a newer `doc_version` (the buffer's own change count) is the user typing: that view's frame follows after 300 ms
+  without another (task `editor:quiet`). Nothing is built while no view matches, and an unwatched file costs nothing.
+- **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
+  session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
+  and kind: `pending` for an edit about to land, and `changed` for the lines the session's latest step snapshot changed
+  in its own worktree against its base (the interim before the edit history), with a hover that names the handle, the
+  step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
+  repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
+  copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
+  meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
+  entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
+  ranges are `changed` or `conflict`, also `projected`. The user's text is read from disk until the edit history
+  mirrors buffers, so such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
+- **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
 ### The Work map
 

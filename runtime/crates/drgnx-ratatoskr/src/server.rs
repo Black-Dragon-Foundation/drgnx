@@ -266,6 +266,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    // the editors' buffer views follow the presence model from now on
+    front.core.buffers.bind(&front);
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings

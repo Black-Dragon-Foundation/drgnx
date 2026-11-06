@@ -442,6 +442,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                 || advance::serve(&out, &l).await
                 || matrix_ask::serve(&front, &out, &l).await
                 || browser_endpoint::serve(&out, &l)
+                || buffer_views::serve(&front, &out, &l)
                 || barrier_refused(&out, &l)
             {
                 continue;
@@ -505,7 +506,8 @@ async fn sequenced(
                             || owner_gone::serve(front, out, &l).await
                             || advance::serve(out, &l).await
                             || matrix_ask::serve(front, out, &l).await
-                            || browser_endpoint::serve(out, &l))
+                            || browser_endpoint::serve(out, &l)
+                            || buffer_views::serve(front, out, &l))
                     {
                         front.line(session, out, &l).await;
                     }
@@ -626,6 +628,37 @@ fn barrier_refused(out: &Outbox, line: &str) -> bool {
         out.push(format!("{a}\n").into());
     }
     true
+}
+
+/// `__test_buffer_views` (test-hooks): the editors' buffer views open now and the frame bodies built so far
+/// ([`crate::editor::Buffers::counts`]), answered `{views, built}`.
+#[cfg(feature = "test-hooks")]
+mod buffer_views {
+    use super::Outbox;
+    use crate::front::Front;
+    use runstav::wire::{Answer, Request};
+    use serde_json::json;
+
+    /// Serve LINE when it is a `__test_buffer_views` request (true), else leave it to the dispatcher.
+    pub(super) fn serve(front: &Front, out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_buffer_views" {
+            return false;
+        }
+        let (views, built) = front.core.buffers.counts();
+        if let Some(id) = req.id {
+            let a = serde_json::to_string(&Answer {
+                id,
+                result: json!({"views": views, "built": built}),
+                ignored: vec![],
+            })
+            .expect("an answer serializes");
+            out.push(format!("{a}\n").into());
+        }
+        true
+    }
 }
 
 /// `__test_owner_gone {owner}` (test-hooks): the sessions OWNER owns closed as if it had died, now; answered with how

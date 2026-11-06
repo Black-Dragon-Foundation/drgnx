@@ -8,6 +8,7 @@
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod editor;
 pub mod exec;
 pub mod forecast;
 pub mod gateway;
@@ -236,6 +237,8 @@ params! {
     WorkConclusions(work::ConclusionsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
+    AgentsBufferWatch(editor::BufferWatch),
+    AgentsBufferUnwatch(editor::BufferUnwatch),
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
@@ -281,6 +284,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
+    v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
     v
