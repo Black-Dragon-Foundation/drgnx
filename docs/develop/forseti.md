@@ -103,9 +103,31 @@ carves its share at start.
     reservations never pass the budget);
   - with no history the cap is `min(mem_max, mem_budget)` and the reserve `mem_min`.
 - **`oom_rerun(mem)`**: the one re-run after an `oom` verdict asks `mem_min × 1.5`.
-- **`head_protection(order, waiting_since, now, fits)`**: when the first job of the order has waited 600 s without
-  fitting anywhere, it names its best machine, and the shell admits nothing smaller there
-  (`WaitReason::HeadProtection`) until it starts. Backfill replaces this in F2.
+- **`head_protection(job, eff, machine, expected_s, reservation, now)`**: the head's reservation applied to a start
+  that `admit` allows: while `backfill_ok` refuses it, the job waits as `WaitReason::HeadProtection(head)`. With no
+  reservation nothing is held. (F1's version, a hold after 600 s of waiting, is replaced by backfill.)
+
+## Backfill (`backfill`)
+
+Slurm's backfill, jobq §5.6 phase 3: the scheduler reserves the head job's start, and a smaller job may start before
+it only if it is expected to end first.
+
+- **`reservation(order, eff, m, running_ends)`**: the head is the first job in `order` of the highest priority there;
+  no other job reserves, so a P4 or P5 reservation never holds P1–P3 work. `order` lists the jobs that could start
+  but for room, each with its `Need` (`Need::of(job, exp)`: its minimum memory, its expected CPU or minimum cores, as
+  `admit` checks them). `m` lists the machines that may take the head with their budgets now. On each the head's
+  start is the earliest of now and the running jobs' expected ends at which it fits `budget_at`; it reserves the
+  machine where that comes soonest (ties: the name first in order), as `backfill::Reservation { job, priority,
+  machine, at }`. None when it fits nowhere even once every running job has ended.
+- **`budget_at(m, now_budget, running_ends, t)`**: the budget at `t`: each running job whose end has come gives back
+  what the budget counts for it now (its use, what it holds beyond use, its CPU). A running job with no end listed
+  gives nothing back; one past its end gives it back at once. Overcommit isn't counted.
+- **`backfill_ok(job, eff, machine, expected_s, r, now)`**: another machine, the head itself and a job of higher
+  priority than the head's always pass; otherwise the job must end by `r.at` (`expected_end(now, expected_s)`, rounded
+  up to the second). So what backfill starts has given back what it took by `r.at`, and the head's start never moves.
+
+`no_priority_le_3_job_delayed_by_a_reservation` and `backfill_never_delays_the_heads_start` (properties) check both
+rules, and that the same inputs in any machine order give the same reservation.
 
 ## Eviction and drains (`evict`, `drain`)
 
@@ -221,7 +243,8 @@ job, in queue order, the hub builds a `Candidate` per machine (the local one wit
 - **`finish(job, c, now)`**: `wait + start + transfer + expected`. The transfer is `missing_bytes / link_bps` (bytes
   per second; 0 on the local machine, and 0 until the rate is measured). The expected time comes from `c.history`
   (the job's rows from every machine): this machine's, else another machine's × `c.speed`, the static speed ratio,
-  else 10 minutes.
+  else 10 minutes. `finish_with(job, c, now, learned, warmth)` is the same with learned placement (below); `finish`
+  is it with nothing learned.
 - **`cloud_counts(eff, gates_allowed, is_gate, best_own_s, cloud_s, after_s, projection_ok)`**: a cloud machine
   counts only for work someone waits on (priority 1–3, or a gate's when the project allows cloud for gates), only if
   it finishes at least `runners-cloud-after` before the best own machine, and only if starting it fits the spend
@@ -229,12 +252,33 @@ job, in queue order, the hub builds a `Candidate` per machine (the local one wit
 - **`pick(job, cands, ctx)`**: the smallest finish among the candidates that pass; ties go to the local machine,
   then `mine`, `my-cloud`, `shared`. With none, `Pick::Wait` carries the reason of the candidate that came closest
   (the latest check it failed: a job pinned to a benched runner waits as `Benched`); with no candidates at all,
-  `NoRunner`.
+  `NoRunner`. `pick_with(job, cands, ctx, learned, warmth)` estimates with `finish_with` and, on an equal estimate
+  and tie order, puts a warm start before the name; `pick` is it with nothing learned and no warmth known.
 - **`why_here(job, cands, ctx)`**: when trust alone keeps a job here, the hub says why, in the design's words:
   "runs here: needs key `K`, which no runner may get", "runs here: N commits not on origin" (a public project's job
   whose commits the origin lacks), "runs here: project P is private; the only free runner is shared".
 
 Properties: `a_job_never_goes_to_a_runner_its_trust_forbids` over generated jobs, runners and modes.
+
+### Learned placement (`learn`)
+
+jobq §5.8 phase 3, generalised to runners (runners design §6.8.2, "with F2"). Learning changes estimates only: the
+filters (trust, the pin, features, state, modes, the cell) and the cloud's terms decide as before.
+
+- **`Ewma`**: the first sample is the average; each later one moves it by `ALPHA` (0.3) of the difference. A sample
+  that isn't a positive finite number is ignored.
+- **`Learned { link_bps, speed }`**: per runner the rate its transfers reached (`observe_transfer(runner, bytes,
+  secs)`), and per `(machine, other)` how much longer `machine` takes than `other` on one history key
+  (`observe_run(row, rows)`: a finished undisturbed run's time over each other machine's median of that key).
+- **`expected_warm_cold(c, slot_near, images_present)`** (`expected_for(c, warmth)`): a start is warm with its slot
+  present at a near key and its images present. Only the history rows of the same kind of start count while there
+  are undisturbed ones, else all of them. From those rows: `c`'s own; else the machine with a learned ratio to `c`
+  whose run is newest (ties: the name first in order), × that ratio; else the static rule.
+- In **`finish_with`**, the learned link rate replaces the measured one when there is one.
+
+With nothing learned and no warmth known, `pick_with` is `pick`; with no history every estimate is 10 minutes.
+`rules_still_hold_under_learning` (a property) checks that, that a picked runner passes the filters and the cloud's
+terms whatever was learned, and that the same inputs give the same pick whatever order they were learned in.
 
 ## Fairness (`fair`)
 
