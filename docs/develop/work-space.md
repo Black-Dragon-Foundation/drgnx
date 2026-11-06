@@ -595,7 +595,8 @@ works on a card when its `task` field names the card's id.
 `drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
 title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
 
-- **The trail** is a `work-trail` view (`:follow-tail`): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
+- **The trail** is a `work-trail` view (`:follow-tail`, DELAY 0: the first page and each new step are drawn at the next
+  timer pass; the default 0.1 s throttle was the whole of its first-rows and append times): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
   the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
   command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
   `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of
