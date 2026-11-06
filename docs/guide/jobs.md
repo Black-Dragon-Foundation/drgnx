@@ -73,8 +73,13 @@ In Lisp, `core/drgnx-exec.el` is the client. `drgnx-exec-start` is asynchronous 
 reason it did not start); `drgnx-exec-get` and `drgnx-exec-list` read a cache that follows the hub's `exec-done` events
 and never call the hub, so timers and redisplay may use them; `drgnx-exec-log` and `drgnx-exec-stop` read the end of a job's log
 (one call, `tail_bytes`; waiting up to 5 s: for commands only) and end it. A job's status there is `running`, `done`, `failed` (a non-zero exit
-or the time box), `stopped` or `gone` (lost). A job's time box is an hour unless the caller passes `:timebox` (up to 24
-hours) or `:no-timebox`. The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
+or the time box), `stopped` or `gone` (lost); a job that ended keeps the hub's summary as `:summary` (`:exit`,
+`:failing`, `:lines`, `:log`), from its `exec-done` event or its `exec/get` and `exec/list` row, and
+`drgnx-exec-listed-hook` runs after each list answer. A job's time box is an hour unless the caller passes `:timebox` (up to 24
+hours) or `:no-timebox`. `:machine` says where it runs (`"local"` or a runner's name; the hub's `auto` when absent) and
+`:local-only t` keeps it on this machine whatever the project's runner settings say: the Extensions view's installs,
+updates and catalog refreshes are jobs named `Extensions: …` with both, and a two-hour time box
+([Extensions](../develop/extensions.md#jobs)). The servers the editor starts and leaves up (the local AI runner, the Playwright server of Test
 Report) run without a time box, so a daemon that stays up for days never loses them: they end
 when you stop them, when the editor's teardown does, or when the hub stops. The search indexer is a batch job (it exits
 when the index is built) and has the longest time box, 24 hours; tree-sitter grammar builds and mermaid drawings keep the

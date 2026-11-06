@@ -2,8 +2,10 @@
 ;; test-class: det
 ;; Offline and in temp dirs (pattern D: no process, no clock): the archives are local directories, the job runs in this
 ;; Emacs through `drgnx-extensions-refresh-cli-run' (the function bin/drgnx's `extensions' command calls), and its
-;; exit code is the return value.  Never MELPA, never GNU ELPA, never the user's cache.
+;; exit code is the return value.  Never MELPA, never GNU ELPA, never the user's cache.  The signing tests run gpg, run
+;; to its end, on a test key in a temp GNUPGHOME (pkg-fixture.el's signed archives).
 (require 'ert)
+(require 'cl-lib)
 (require 'json)
 (require 'drgnx-paths)
 (require 'drgnx-pkg)
@@ -37,6 +39,22 @@ with the default ranking.  Returns the alist NAME → directory."
   (let ((inhibit-message t))
     (with-output-to-string (setq args (cons (drgnx-extensions-refresh-cli-run args) nil))))
   (car args))
+
+(defmacro drgnx-extensions-refresh-test--signed (root &rest body)
+  "BODY in a sandbox ROOT whose only archive, gnu, signs as GNU ELPA does: a test key in a temp GNUPGHOME signs its
+files, the key's public half is in the sandbox's package keyring, and a directory archive counts as one that signs
+\(as pkg-child-fixture.el's DRGNX_TEST_SIGNED_DIRS makes it).  The key's gpg agents are stopped after."
+  (declare (indent 1))
+  `(drgnx-pkg-test--with ,root
+     (cl-letf (((symbol-function 'drgnx-pkg--directory-archive-p) #'ignore))
+       (unwind-protect
+           (progn
+             (drgnx-pkg-child-signer ,root)
+             (drgnx-extensions-refresh-test--packages-eld
+              ,root (list (cons "gnu" (drgnx-pkg-child-sign-archive
+                                       ,root (drgnx-pkg-test--archive (concat ,root "arch-gnu") '((magit "1.0")))))))
+             ,@body)
+         (drgnx-pkg-child-gpg-stop ,root)))))
 
 (defun drgnx-extensions-refresh-test--tree (dir)
   "Every file under DIR with its size and modification time."
@@ -174,11 +192,23 @@ with the default ranking.  Returns the alist NAME → directory."
         (should (equal before (drgnx-extensions-refresh-test--tree (drgnx-elpa-dir))))
         (should (equal lock (drgnx-pkg-test--bytes (drgnx-pkg-lock-file))))))))
 
+(ert-deftest drgnx-extensions-refresh/a-signing-archive-is-checked-as-a-sync-checks-it ()
+  ;; The archive counts as signing by sync's own rule (`drgnx-pkg-unsigned-archives'), so the catalog says so, and its
+  ;; contents pass the check against the sandbox's keyring.
+  (drgnx-extensions-refresh-test--signed root
+    (should (eql 0 (drgnx-extensions-refresh-test--run "refresh")))
+    (let ((c (drgnx-extensions-refresh-test--catalog)))
+      (should (equal (mapcar (lambda (a) (list (alist-get 'name a) (alist-get 'signed a))) (alist-get 'archives c))
+                     '(("gnu" t))))
+      (should (equal (mapcar (lambda (p) (alist-get 'name p)) (alist-get 'packages c)) '("magit"))))))
+
 (ert-deftest drgnx-extensions-refresh/a-stripped-sig-fails-the-refresh ()
-  ;; The signed fixture archive and the archive settings that check its signature come with the signature task; the
-  ;; refresh already runs inside them when they exist.
-  (skip-unless (fboundp 'drgnx-pkg-with-archive-settings))
-  (ert-skip "needs the signed fixture archive"))
+  (drgnx-extensions-refresh-test--signed root
+    (should (eql 0 (drgnx-extensions-refresh-test--run "refresh")))
+    (let ((before (drgnx-pkg-test--bytes (drgnx-extensions-refresh-file))))
+      (delete-file (concat root "arch-gnu/archive-contents.sig"))            ; stripped
+      (should (eql 1 (drgnx-extensions-refresh-test--run "refresh")))
+      (should (equal before (drgnx-pkg-test--bytes (drgnx-extensions-refresh-file)))))))
 
 (ert-deftest drgnx-extensions-refresh/the-command-line-has-a-usage ()
   (should (eql 2 (drgnx-extensions-refresh-test--run "frobnicate")))

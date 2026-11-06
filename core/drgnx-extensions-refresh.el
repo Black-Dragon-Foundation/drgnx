@@ -38,32 +38,18 @@
 
 (defun drgnx-extensions-refresh--url-p (location) (string-match-p "\\`https?://" location))
 
-(defun drgnx-extensions-refresh--signed-p (name location)
-  "Whether archive NAME at LOCATION signs its contents: a URL archive unless it is MELPA's or listed in packages.eld's
-:unsigned-archives; a directory archive does not."
-  (and (drgnx-extensions-refresh--url-p location)
-       (not (string-match-p "\\`https?://\\(stable\\.\\)?melpa\\.org/" location))
-       (not (member name (plist-get (drgnx-pkg--packages-eld) :unsigned-archives)))))
-
 (defmacro drgnx-extensions-refresh--with-settings (archives &rest body)
   "BODY with package.el set up as a sync sets it up for ARCHIVES, apart from the packages directory, which is the
-refresh's own.  The signature rules are `drgnx-pkg-with-archive-settings' (the one place that binds them) once it
-exists; until then the refresh binds the same variables itself."
+refresh's own: the signatures, keyring and priorities are `drgnx-pkg-with-archive-settings' (the one place that binds
+them), so an archive a sync checks is checked here too."
   (declare (indent 1))
   `(let* ((package-user-dir (drgnx-extensions-refresh--pkg-dir)) (package-directory-list nil)
           (package-archives ,archives)
-          (package-gnupghome-dir (expand-file-name "gnupg" (drgnx-data-dir)))
           (package-alist nil) (package-archive-contents nil) (package--initialized t)
           (package-pinned-packages nil)
-          (package-archive-priorities (drgnx-pkg-archive-priorities))
-          (package-check-signature (if (seq-some (lambda (a) (drgnx-extensions-refresh--signed-p (car a) (cdr a)))
-                                                 package-archives)
-                                       t 'allow-unsigned))
-          (package-unsigned-archives (mapcar #'car (seq-remove (lambda (a) (drgnx-extensions-refresh--signed-p (car a) (cdr a)))
-                                                               package-archives)))
           (package-quickstart nil)
           (package-quickstart-file (expand-file-name "unused-quickstart.el" package-user-dir)))
-     ,@body))
+     (drgnx-pkg-with-archive-settings ,@body)))
 
 (defun drgnx-extensions-refresh--fetch-contents ()
   "Fetch every archive's contents into the refresh's own directory; an archive that does not answer, or whose
@@ -180,7 +166,8 @@ signature does not verify, is an error (package.el itself only warns)."
     (vconcat (sort out (lambda (a b) (string< (plist-get a :name) (plist-get b :name)))))))
 
 (defun drgnx-extensions-refresh--build (archives lock)
-  "The catalog plist for ARCHIVES (an alist NAME → location) over the contents package.el holds now."
+  "The catalog plist for ARCHIVES (an alist NAME → location) over the contents package.el holds now, inside
+`drgnx-extensions-refresh--with-settings' (an archive signs unless it is in `package-unsigned-archives')."
   (let* ((counts (drgnx-extensions-refresh--counts))
          (updates (drgnx-extensions-refresh--updates lock))
          packages skipped)
@@ -195,7 +182,7 @@ signature does not verify, is an error (package.el itself only warns)."
                      skipped))))
     (list :version drgnx-extensions-refresh-version :written (float-time) :emacs emacs-version
           :archives (vconcat (mapcar (lambda (a) (list :name (car a) :url (cdr a)
-                                                       :signed (if (drgnx-extensions-refresh--signed-p (car a) (cdr a)) t :false)))
+                                                       :signed (if (member (car a) package-unsigned-archives) :false t)))
                                      archives))
           :packages (vconcat (nreverse packages))
           :builtins (drgnx-extensions-refresh--builtins)
