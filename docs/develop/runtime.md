@@ -36,7 +36,7 @@ runtime/
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
 | `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
-| `brokkr` | the plugin host: plugin manifests, the approval hash and the install scan (pure so far), and the agent-tools WIT world ([plugins.md](plugins.md)) |
+| `brokkr` | the plugin host: plugin manifests, the approval hash, the install scan, the agent-tools WIT world, and the WASM host (wasmtime 48) that runs plugins on a guest runtime of its own ([plugins.md](plugins.md)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `mimir` | a tools-only MCP server for both protocol eras (`initialize`, and the stateless 2026-07-28) and the bridge's redial; self-contained, pure Rust |
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |

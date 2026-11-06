@@ -79,6 +79,15 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "m
 pollster = "0.4"
 gemm = "=0.19.0"
 rayon = "1"
+# brokkr's plugin engine: the 48 LTS (rustc 1.95, supported to 2028-08-20), only these features; no `wat`, `cache`,
+# `gc`, `threads`, pooling allocator, Winch or WASI p1/p3/http. wasmtime-wasi-io links wasi:io on its own, so brokkr
+# links each WASI interface it provides one by one (docs/develop/plugins.md, "What a plugin can reach")
+wasmtime = { version = "=48.0.8", default-features = false, features = ["runtime", "cranelift", "component-model", "async", "std"] }
+wasmtime-wasi = { version = "=48.0.8", default-features = false, features = ["p2"] }
+wasmtime-wasi-io = { version = "=48.0.8", default-features = false, features = ["std"] }
+bytes = "1"
+# brokkr's tests only: component text for what no toolchain emits on purpose (a disabled proposal, many handles)
+wat = "=1.263.0"
 
 [profile.release]
 strip = true

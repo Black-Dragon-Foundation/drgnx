@@ -47,28 +47,8 @@ pub struct HookInput {
     pub detail: Value,
 }
 
-/// What a rule or a hook said.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Verdict {
-    /// No objection: the matrix still decides.
-    Allow,
-    Deny(String),
-    /// The point's replacement object: `{arguments}`, `{content}`, `{message}` or `{notes}`.
-    Change(Value),
-    Annotate(String),
-}
-
-impl Verdict {
-    /// The verdict's word: `allow`, `deny`, `change`, `annotate`.
-    pub fn word(&self) -> &'static str {
-        match self {
-            Verdict::Allow => "allow",
-            Verdict::Deny(_) => "deny",
-            Verdict::Change(_) => "change",
-            Verdict::Annotate(_) => "annotate",
-        }
-    }
-}
+/// What a rule or a hook said: the plugin host's verdict, so a hook's answer needs no translation.
+pub use brokkr::Verdict;
 
 /// Who gave a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +148,51 @@ pub trait HookHost: Sync {
     /// The clock the point's budget is measured on (the hub's, so its test clock decides).
     fn now(&self) -> tokio::time::Instant {
         tokio::time::Instant::now()
+    }
+}
+
+impl HookPlugin for brokkr::Plugin {
+    fn manifest(&self) -> &Manifest {
+        brokkr::Plugin::manifest(self)
+    }
+    fn hash(&self) -> [u8; 32] {
+        brokkr::Plugin::hash(self)
+    }
+}
+
+/// The plugin host as [`run`] calls it: `brokkr`'s host, the I/O of the step's session or job, and the point's own
+/// `refresh` (how it derives `paths` and `command` from a step's `detail`). The point passes its `accepts_change` to
+/// [`run`] itself.
+pub struct PluginHooks<'a, R> {
+    pub host: &'a brokkr::Host,
+    pub io: Arc<dyn brokkr::HostIo>,
+    pub refresh: R,
+}
+
+impl<R: Fn(&mut HookInput) + Sync> HookHost for PluginHooks<'_, R> {
+    type Plugin = brokkr::Plugin;
+
+    fn run_hook(
+        &self,
+        plugin: &brokkr::Plugin,
+        point: Point,
+        input: Value,
+        deadline: Duration,
+    ) -> impl Future<Output = Result<Verdict, String>> + Send {
+        let io = self.io.clone();
+        async move {
+            self.host
+                .run_hook(plugin, point, input, deadline, io)
+                .await
+                .map_err(|e| match e {
+                    brokkr::CallError::Timeout => format!("timed out ({})", span(deadline)),
+                    other => other.to_string(),
+                })
+        }
+    }
+
+    fn refresh(&self, input: &mut HookInput) {
+        (self.refresh)(input)
     }
 }
 
