@@ -69,6 +69,7 @@ pub async fn once(front: &Arc<Front>) {
             h.tick(front, &id).await;
         }
     }
+    crate::forecast::sweep(front).await;
 }
 
 /// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`MAX_AGENTS`]) in the

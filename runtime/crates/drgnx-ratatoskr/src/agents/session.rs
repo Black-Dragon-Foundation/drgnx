@@ -221,6 +221,8 @@ struct ClosedStep {
     detail: Option<norn::write::work::StepDetail>,
     /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
     command: Option<String>,
+    /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
+    context: Option<i64>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -289,6 +291,10 @@ impl State {
     /// Close the step running (if any) at END, carrying USE.
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
+            let context = (turn_use.is_some() || open.class == StepClass::JobWait)
+                .then(|| self.usage.as_ref().and_then(|u| u.used))
+                .flatten()
+                .map(|used| used as i64);
             let u = turn_use.unwrap_or_default();
             let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
             // a subagent's step keeps its parent, with a detail of its own if it has none
@@ -318,6 +324,7 @@ impl State {
                 cache_read: u.cache_read,
                 cache_write: u.cache_write,
                 cost: u.cost,
+                context,
             });
         }
     }
@@ -2305,6 +2312,7 @@ async fn write_steps(
             cost_unit: c.cost.map(|_| "usd-est".to_string()),
             snapshot: None,
             log_version: None,
+            context: c.context,
         };
         let detail = c.detail.clone();
         let (id, seq, log_version) = match sink
@@ -4424,6 +4432,25 @@ mod tests {
 
     // test-pattern: D
     #[test]
+    fn a_step_keeps_the_context_at_its_close() {
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 300000, "size": 1000000}),
+        ));
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), Some(TurnUse::default()));
+        st.step_begin(StepClass::JobWait, None);
+        st.step_close(now(), None);
+        st.step_begin(StepClass::Tool, None);
+        st.step_close(now(), None);
+        let got: Vec<Option<i64>> = st.closed.iter().map(|c| c.context).collect();
+        assert_eq!(got, [None, Some(300000), Some(300000), None]);
+    }
+
+    // test-pattern: D
+    #[test]
     fn no_cost_reported_leaves_the_step_unpriced() {
         let mut st = State::new();
         st.apply(&upd(
@@ -4595,6 +4622,7 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
             })
             .unwrap();
         }
@@ -4687,6 +4715,7 @@ mod tests {
                 cost,
                 detail: None,
                 command: None,
+                context: None,
             })
             .unwrap();
         }
@@ -4758,6 +4787,7 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
             })
             .unwrap();
         }

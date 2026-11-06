@@ -83,6 +83,8 @@ pub struct StepEnd {
     /// Set when the step's end has a snapshot or decision log version the start did not.
     pub snapshot: Option<String>,
     pub log_version: Option<i64>,
+    /// The session's context size in tokens when the step closed (a turn's last step, a job wait).
+    pub context: Option<i64>,
 }
 
 /// Start a step; answers its id.  Its `seq` is the session's next.
@@ -124,8 +126,8 @@ pub fn open(tx: &WTx<'_>, new: StepNew) -> Result<i64, CoordError> {
 pub fn close(tx: &WTx<'_>, id: i64, end: StepEnd) -> Result<(), CoordError> {
     let changed = tx.sql().execute(
         "update step set end = ?2, tokens_in = ?3, tokens_out = ?4, cache_read = ?5, cache_write = ?6, \
-         cost = ?7, cost_unit = ?8, snapshot = coalesce(?9, snapshot), log_version = coalesce(?10, log_version) \
-         where id = ?1 and end is null",
+         cost = ?7, cost_unit = ?8, snapshot = coalesce(?9, snapshot), log_version = coalesce(?10, log_version), \
+         context = ?11 where id = ?1 and end is null",
         (
             id,
             end.end,
@@ -137,6 +139,7 @@ pub fn close(tx: &WTx<'_>, id: i64, end: StepEnd) -> Result<(), CoordError> {
             &end.cost_unit,
             &end.snapshot,
             end.log_version,
+            end.context,
         ),
     )?;
     if changed == 0 {

@@ -79,6 +79,7 @@ pub mod doctor;
 pub mod embed;
 pub mod eval_cli;
 pub mod exec;
+pub mod forecast;
 pub mod front;
 pub mod gateway;
 pub mod graph;
