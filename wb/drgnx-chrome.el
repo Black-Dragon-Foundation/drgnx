@@ -23,6 +23,7 @@
 (require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (declare-function drgnx-groups-split-right "drgnx-groups")
 
@@ -134,7 +135,8 @@ BOX the width of the flat box above and below a tab's text that makes the tab fo
   "The anonymous face of a tab's box: BOX pixels above and below, in the face's own background; its top corners
 rounded and its bottom open where the compositor draws such boxes."
   (list :box `(:line-width (0 . ,box) :style flat-button
-                           ,@(when (featurep 'glitnir) `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom))))))
+                           ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
+                               `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom))))))
 
 (defun drgnx-chrome--tab (w b shown active rows)
   "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;
