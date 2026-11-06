@@ -13,6 +13,7 @@
 (require 'drgnx-faces)
 (load (expand-file-name "modules/ui/drgnx-look-derive" drgnx-dir) nil t)
 (load (expand-file-name "modules/ui/drgnx-look-follow" drgnx-dir) nil t)
+(load (expand-file-name "modules/ui/drgnx-look" drgnx-dir) nil t)       ; Color Theme's `drgnx-look-load-theme'
 (load (expand-file-name "test/fixtures/orders-fixture" drgnx-dir) nil t)
 (add-to-list 'custom-theme-load-path (expand-file-name "test/fixtures/themes" drgnx-dir))
 
@@ -32,6 +33,10 @@
   (pcase ev
     (`(config-load-theme) (load-theme 'doom-one-fixture t))
     (`(config-load-own-theme) (load-theme 'drgnx-light t))
+    (`(color-theme-pick)                ; Color Theme (`preferences-theme'): its writes to the files left out
+     (cl-letf (((symbol-function 'drgnx-settings-area-ensure-writable) #'ignore)
+               ((symbol-function 'drgnx-modules-update-state) #'ignore))
+       (drgnx-look-load-theme 'drgnx-light)))
     (`(module-setup) (drgnx-look-follow-on))
     (`(setting-change) (drgnx-look-follow-apply))
     (`(,(and kind (or 'portal-color-scheme 'portal-contrast 'portal-accent)) ,value)
@@ -95,6 +100,20 @@ follower is paused, whatever the desktop says (here Dark, against the user's Lig
                    (cons 'contrast '((portal-contrast 1) (portal-contrast 0)))
                    (cons 'setting '((setting-change)))
                    (cons 'config '((config-load-own-theme))))
+    :init #'look-follow-orders-test--init :step #'look-follow-orders-test--step
+    :check #'look-follow-orders-test--check-chosen-own)))
+
+(ert-deftest drgnx-look-follow/never-replaces-a-color-theme-pick ()
+  "Pattern A: drgnx Light picked with Color Theme on a dark desktop is chosen like a `load-theme' in config.el: in
+every order it stays enabled and the follower is paused."
+  (look-follow-orders-test--fake
+   (drgnx-test-every-order
+    :kinds '(color-theme-pick module-setup portal-color-scheme portal-contrast setting-change)
+    :sources (list (cons 'setup '((module-setup)))
+                   (cons 'scheme '((portal-color-scheme 1)))
+                   (cons 'contrast '((portal-contrast 1) (portal-contrast 0)))
+                   (cons 'setting '((setting-change)))
+                   (cons 'pick '((color-theme-pick))))
     :init #'look-follow-orders-test--init :step #'look-follow-orders-test--step
     :check #'look-follow-orders-test--check-chosen-own)))
 

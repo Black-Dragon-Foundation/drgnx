@@ -393,9 +393,10 @@ that does not load is said, and the colours stay.  `auto' hands over to the foll
 
 (defun drgnx-look-load-theme (theme)
   "Make THEME the only theme and remember it (`drgnx-look-theme', in settings.el).  A settings.el with a mistake
-refuses (`drgnx-settings-refused') before the theme changes."
+refuses (`drgnx-settings-refused') before the theme changes.  THEME is your choice, one of drgnx's own included:
+under `auto' the follower pauses, as for a `load-theme' in config.el."
   (drgnx-settings-area-ensure-writable)
-  (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
+  (drgnx-look--load theme)
   (drgnx-modules-update-state (lambda (state) (plist-put (copy-sequence state) :theme theme))))
 
 (defun drgnx-look-choose-theme (theme)
@@ -514,9 +515,10 @@ refuses (`drgnx-settings-refused') before the theme changes."
                                              :doc "Run the decoration button at point")
                        ;; last, and guarded: a theme that errors leaves the commands (Color Theme picks another)
                        (drgnx-look-follow-on)
+                       ;; Color Theme's pick of an earlier session: your choice, so the follower pauses for it
                        (when-let* ((theme (drgnx-look--saved-theme)))
                          (when (memq theme (custom-available-themes))      ; `auto' is not one: the follower chose
-                           (condition-case e (let ((drgnx-look-follow--loading t)) (drgnx-look--load theme))
+                           (condition-case e (drgnx-look--load theme)
                              (error (message "drgnx: the colour theme %s does not load (%s); Color Theme picks another"
                                              theme (error-message-string e))))))))
 

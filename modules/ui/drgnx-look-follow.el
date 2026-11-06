@@ -59,7 +59,8 @@
   "Non-nil once a theme (drgnx's own included) was enabled by anything but drgnx itself; until the follower is off.")
 
 (defvar drgnx-look-follow--loading nil
-  "Non-nil while drgnx itself enables a theme (the follower, Color Theme): that is not a theme from elsewhere.")
+  "Non-nil while drgnx itself enables a theme (the follower, the theme `drgnx-look-theme' names): that is not a theme
+you chose.  Color Theme does not bind it: its pick is yours.")
 
 (defvar drgnx-look-follow--accent-faces nil "The faces whose override spec the follower wrote.")
 
