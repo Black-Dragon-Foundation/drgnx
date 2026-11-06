@@ -157,8 +157,8 @@ feature; each `glitnir-refresh' pushes the option's value at that moment onto RE
 
 (ert-deftest drgnx-look/chrome-on-with-glitnir ()
   (drgnx-look-test--with-glitnir refreshes
-    (should (equal child-frame-chrome drgnx-look-chrome))
-    (should (equal (car refreshes) drgnx-look-chrome))))             ; refreshed at once, with the chrome set
+    (should (eq child-frame-chrome #'drgnx-look-chrome-current))
+    (should (eq (car refreshes) #'drgnx-look-chrome-current))))           ; refreshed at once, with the chrome set
 
 (ert-deftest drgnx-look/teardown-restores-chrome ()
   (drgnx-look-test--with-glitnir refreshes

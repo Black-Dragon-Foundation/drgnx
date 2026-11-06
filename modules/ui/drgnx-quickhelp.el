@@ -28,7 +28,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-state)
 (declare-function drgnx-face-glyph "drgnx-face")
-(defvar drgnx-look-chrome)
+(declare-function drgnx-look-chrome-current "drgnx-look" (&optional frame))
 (declare-function eldoc--format-doc-buffer "eldoc")
 
 (defgroup drgnx-quickhelp nil
@@ -388,8 +388,8 @@ another display)."
                           (vertical-scroll-bars . nil) (horizontal-scroll-bars . nil) (menu-bar-lines . 0)
                           (tool-bar-lines . 0) (tab-bar-lines . 0) (line-spacing . 0) (cursor-type . nil)
                           (desktop-dont-save . t) (drgnx-quickhelp . t)
-                          ,@(and (featurep 'glitnir) (bound-and-true-p drgnx-look-chrome)
-                                 drgnx-look-chrome))))))
+                          ,@(and (featurep 'glitnir) (fboundp 'drgnx-look-chrome-current)
+                                 (drgnx-look-chrome-current)))))))
   (let ((win (frame-root-window drgnx-quickhelp--frame)))
     (set-window-buffer win (get-buffer-create drgnx-quickhelp--buffer-name))
     (set-window-dedicated-p win t)
