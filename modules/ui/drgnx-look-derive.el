@@ -100,7 +100,8 @@
           (drgnx-text-muted :foreground ,text) (drgnx-text-subtle :foreground ,text)
           (drgnx-focus :box (:line-width (-2 . -2) :color ,(or link f)))
           (drgnx-accent :foreground ,(or link f) :underline nil)
-          (drgnx-control-hidden :foreground ,panel)
+          ;; a terminal never hides a row's control (`drgnx-look-hover-control'): there it stays dim, not invisible
+          (drgnx-control-hidden ,@(if (eq kind 'gui) `(:foreground ,panel) '(:inherit shadow)))
           ,@(drgnx-look-derive--agents kind dark))))))
 
 (defun drgnx-look-derive--mentioned-p (face)

@@ -488,7 +488,7 @@ look it describes.
 | `drgnx-focus` | none (a box) | the keyboard focus ring; the theme sets its colour |
 | `drgnx-status-attention` | `error` | something waits for you (`drgnx-status-needs-you` inherits it) |
 | `drgnx-agent-1` to `drgnx-agent-6` | `default` | the agents' colours |
-| `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background), and the `mouse-face` of the row that reveals it |
+| `drgnx-control-hidden`, `drgnx-hover-row` | `shadow`, `drgnx-hover` | a row's × or ⋯ while it is not hovered (its foreground is the row's background; on a terminal, where the control is never hidden, a theme derive colours keeps it `shadow`), and the `mouse-face` of the row that reveals it |
 
 A row with a hidden control puts `mouse-face` `drgnx-hover-row` on the whole row and draws the control with
 `drgnx-look-hover-control`; the selected row, a row with the keyboard focus and terminal frames always show it. Pass
