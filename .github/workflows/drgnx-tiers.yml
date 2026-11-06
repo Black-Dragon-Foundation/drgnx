@@ -165,6 +165,10 @@ jobs:
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
           nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+      # the same packages as unit: test/no-skip.eld holds here too, and without them Quick Open's vertico rows skip
+      - name: The pinned evil, kkp, vertico and orderless, as unit has them (they skip without them)
+        if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-elpa
       - name: Unit suite in gate mode, the files in parallel (no :timing tests)
         if: ${{ !cancelled() }}
         working-directory: drgnx
