@@ -715,7 +715,8 @@ refused nothing."
                             (when (and b-mode holding (process-get proc 'tramp-vector)
                                        (tramp-get-connection-property proc "locked"))
                               (setq holding nil)
-                              (dolist (h (nreverse held)) (apply #'jsonrpc--process-filter h))
+                              ;; through the process's own filter, where the module's guard sits
+                              (dolist (h (nreverse held)) (apply (process-filter (car h)) h))
                               (drgnx-test-wait (lambda () (not (drgnx-test-wait--due-p)))
                                                :what "the timers due inside TRAMP's call")))))
       (dolist (n '("a.py" "b.py")) (with-temp-file (expand-file-name n (concat dir "src")) (insert "x = 1\n")))
@@ -775,10 +776,17 @@ refused nothing."
                            (should (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
                            (should (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
                            (should (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode))
-                           (should (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'jsonrpc--process-filter)))
+                           ;; on Nidhogg the guard is on the batch function, and on the filter only of a connection
+                           ;; Nidhogg did not frame (jsonrpc's own function stays unadvised: advice there turns the
+                           ;; framing off for every connection)
+                           (should (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'nidhogg-workers-jsonrpc--batch))
+                           (should (memq #'drgnx-lang--guard-unframed-filter eglot-server-initialized-hook))
+                           (should-not (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'jsonrpc--process-filter)))
   ;; and the module's teardown took them all away
   (should-not (memq #'drgnx-lang--no-remote-autoreconnect eglot-connect-hook))
+  (should-not (memq #'drgnx-lang--guard-unframed-filter eglot-server-initialized-hook))
   (should-not (advice-member-p #'drgnx-lang--guard-reconnect 'eglot-reconnect))
+  (should-not (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'nidhogg-workers-jsonrpc--batch))
   (should-not (advice-member-p #'drgnx-lang--answers-on-top-level-timers 'jsonrpc--process-filter))
   (should-not (advice-member-p #'drgnx-lang--guard-eglot-activation 'eglot--maybe-activate-editing-mode)))
 

@@ -2078,6 +2078,16 @@ load that came before the output, and a finished compile looked like one that en
 on 16 cores). Warnings are printed, and the build test fails on any; `bin/drgnx build` exits 1 only on errors, so a
 warning a newer Emacs adds never stops an install or an update.
 
+**Trampolines.** After a build without errors, `drgnx-build-trampolines` compiles the native trampolines of the
+primitives drgnx advises or `cl-letf`s, so the first start after an install or `drgnx update` (a new Nidhogg
+invalidates them all) does not wait for gcc inside a command. The list is a static scan
+(`drgnx-build-advised-primitives`) of `core/`, `modules/` and `wb/` for `advice-add`, `drgnx-module-advice` and
+`(symbol-function 'NAME)`, plus the two lists advised in a loop (`drgnx-guard-prompt-functions`,
+`drgnx-sandbox-vc--advised`), kept to C primitives. They go to the first writable directory of
+`native-comp-eln-load-path` (`DRGNX_TEST_ELN_DIR` first when a test run gives one: tests never write the user's
+cache); one that fails to compile is skipped, and Emacs compiles it when it is first advised, as before. Without native
+compilation the step does nothing.
+
 ## The Emacs `bin/drgnx` runs in
 
 The shell function `emacs_bin` picks the one Emacs every subcommand uses: `$DRGNX_EMACS`, else the first line of

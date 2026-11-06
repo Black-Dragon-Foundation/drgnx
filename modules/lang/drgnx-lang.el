@@ -271,6 +271,29 @@ refused (\"Forbidden reentrant call of Tramp\"), or be dropped with the binding 
     (unwind-protect (funcall filter proc string)
       (set-default-toplevel-value 'timer-list timer-list))))
 
+(declare-function nidhogg-set-process-framing "nidhogg-io.c")
+(declare-function nidhogg-process-framing "nidhogg-io.c")
+(declare-function jsonrpc--process "jsonrpc")
+
+(defun drgnx-lang--install-answer-guard ()
+  "Put `drgnx-lang--answers-on-top-level-timers' where a server's answers are read.
+On a Nidhogg with the worker threads, a connection can be read by the reader thread, which hands the main thread
+batches (`nidhogg-workers-jsonrpc--batch'); that adoption falls back to jsonrpc's filter for good when the filter has
+advice, so the guard goes on the batch function, and on the filter of each connection Nidhogg did not frame
+\(`drgnx-lang--guard-unframed-filter'; a remote server is one).  Without the feature the filter has it, as it always had."
+  (if (fboundp 'nidhogg-set-process-framing)
+      (progn (advice-add 'nidhogg-workers-jsonrpc--batch :around #'drgnx-lang--answers-on-top-level-timers)
+             (add-hook 'eglot-server-initialized-hook #'drgnx-lang--guard-unframed-filter))
+    (advice-add 'jsonrpc--process-filter :around #'drgnx-lang--answers-on-top-level-timers)))
+
+(defun drgnx-lang--guard-unframed-filter (server)
+  "On `eglot-server-initialized-hook' (SERVER exists, its `initialize' request is not sent yet, so the first answer
+is guarded too): the filter of SERVER's process answers on the top-level timers unless Nidhogg frames it.  The advice
+lives on that process's filter alone, so jsonrpc's own function stays unadvised for the others."
+  (let ((proc (ignore-errors (jsonrpc--process server))))
+    (when (and (processp proc) (null (nidhogg-process-framing proc)))
+      (add-function :around (process-filter proc) #'drgnx-lang--answers-on-top-level-timers))))
+
 (defvar drgnx-lang--eglot-warned nil "Was the missing eglot function reported?")
 
 (defun drgnx-lang--install-eglot-guards ()
@@ -280,7 +303,7 @@ answers handled outside TRAMP's calls."
   (add-hook 'eglot-connect-hook #'drgnx-lang--no-remote-autoreconnect)
   (add-hook 'eglot-connect-hook #'drgnx-lang--attach-buffers t)   ; after the other connect hooks
   (advice-add 'eglot-reconnect :around #'drgnx-lang--guard-reconnect)
-  (advice-add 'jsonrpc--process-filter :around #'drgnx-lang--answers-on-top-level-timers)
+  (drgnx-lang--install-answer-guard)
   (if (fboundp 'eglot--maybe-activate-editing-mode)
       (advice-add 'eglot--maybe-activate-editing-mode :around #'drgnx-lang--guard-eglot-activation)
     (unless drgnx-lang--eglot-warned
@@ -305,6 +328,8 @@ outside the module's setup (a test).  The module's own teardown removes the ones
   (remove-hook 'after-init-hook #'drgnx-lang--report-missing-activation)
   (advice-remove 'eglot-reconnect #'drgnx-lang--guard-reconnect)
   (advice-remove 'jsonrpc--process-filter #'drgnx-lang--answers-on-top-level-timers)
+  (advice-remove 'nidhogg-workers-jsonrpc--batch #'drgnx-lang--answers-on-top-level-timers)
+  (remove-hook 'eglot-server-initialized-hook #'drgnx-lang--guard-unframed-filter)
   (advice-remove 'eglot--maybe-activate-editing-mode #'drgnx-lang--guard-eglot-activation))
 
 (defun drgnx-lang--maybe-eglot-remote (file)
@@ -373,6 +398,21 @@ from the module's own."
   (interactive)
   (eldoc-doc-buffer t))
 
+(defvar eglot-events-buffer-config)
+(declare-function eglot-events-buffer "eglot")
+
+(defun drgnx-lang-show-lsp-log ()
+  "Toggle the language servers' message log.  Off (the default) nothing is copied into a log buffer, which is what
+keeps big answers cheap.  On, messages are logged from now on (2,000,000 characters at most) and the current
+server's log is shown; running a second time turns it off again."
+  (interactive)
+  (let ((on (> (or (plist-get eglot-events-buffer-config :size) 0) 0)))
+    (set-default 'eglot-events-buffer-config (list :size (if on 0 2000000) :format 'full))
+    (if on (message "LSP log off")
+      (if-let* ((server (eglot-current-server)))
+          (pop-to-buffer (eglot-events-buffer server))
+        (message "LSP log on: servers started from now on are logged")))))
+
 (drgnx-module-define 'lang/eglot
                      :doc "Language servers when installed, tree-sitter modes when the grammar is, definitions, references, rename, hover."
                      :stage 'startup
@@ -386,7 +426,9 @@ from the module's own."
                          (drgnx-modules-with-owner
                            (drgnx-lang--install-eglot-guards)
                            (drgnx-lang--set-option 'eglot-sync-connect nil)       ; a slow server never blocks opening the file
-                           (drgnx-lang--set-option 'eglot-autoshutdown t)))       ; a server goes with its project's last buffer
+                           (drgnx-lang--set-option 'eglot-autoshutdown t)         ; a server goes with its project's last buffer
+                           ;; the events log copies every message into a buffer: off (Show LSP Log turns it on)
+                           (drgnx-lang--set-option 'eglot-events-buffer-config '(:size 0 :format full))))
                        (eval-after-load 'xref
                          (drgnx-modules-with-owner (drgnx-lang--set-option 'xref-prompt-for-identifier nil)))
                        (pcase-dolist (`(,id ,title ,fn ,doc)
@@ -398,7 +440,8 @@ from the module's own."
                                         (code-problems "Problems" flymake-show-project-diagnostics "Errors and warnings of the project (in the panel)")
                                         (code-next-problem "Next Problem" flymake-goto-next-error "Jump to the next error or warning in this file")
                                         (code-previous-problem "Previous Problem" flymake-goto-prev-error "Jump to the previous error or warning in this file")
-                                        (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")))
+                                        (code-format "Format Document" drgnx-lang-format "Format with the language server (else re-indent)")
+                                        (code-show-lsp-log "Show LSP Log" drgnx-lang-show-lsp-log "Turn the language server's message log on (and show it), or off again")))
                          (drgnx-command-define id :category "Code" :title title :command fn :scope 'editing :doc doc))))
 
 (provide 'drgnx-lang)

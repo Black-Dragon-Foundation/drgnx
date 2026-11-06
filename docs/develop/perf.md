@@ -35,7 +35,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
 | replace-typing | 22 characters into the fixture while the Search view lists 10k matches in 100 files: the first key starts the search (checked: at least 5 keys typed while it streamed, all 10k listed) | input latency, and `:slice_ms`: the wall time of each view draw while the matches stream (budget: max 16 ms) |
 | replace-retype | the same 10k matches listed and drawn, then the string `pi` typed 5 times into the Replace field: after the pause each match row is patched with its new preview, in slices, the visible rows first (checked: no full draw, the rows equal a fresh render of the view's keys) | input latency, and `:slice_ms`: the wall time of each view draw (`drgnx-view--draw-buffer`, timed by a harness-side advice; budget: max 6 ms) |
-| live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (the mock runs in the same Emacs, so its message and websocket frame are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency |
+| live-view | the typing workload's 186 characters while the Live view, beside the file, shows a mock browser's JPEG frames as wide as the view asked for (as Chrome sends them), 30 a second, each sent once the last was acknowledged (two frames that differ, chosen by the count of frames drawn so that each drawn frame differs from the last, as a page's frames differ, so the last frame can stay cached as the next one's stand-in; the mock runs in the same Emacs, so their messages and websocket frames are made once; without ImageMagick the frames are a few bytes no decoder takes, so drawing costs less) (checked: frames were drawn) | input latency; measured `:live :blank` (redisplays that drew a frame's space with no picture: a decode Nidhogg's image worker deferred, drawn without the last frame as its stand-in; 0 without the worker), `:frames`, `:deferred`, `:timing` (Nidhogg's `nidhogg-workers--test-image-timing`, when the build has it) |
 | agent-settings-open | the Claude Code settings page opened and drawn (`redisplay`) against a fixture home: a 5 MB `.claude.json` (300 projects with history), 50 MCP servers and 200 skills; three runs | milliseconds until drawn (budget 150) and the processes started (budget 0: opening the page starts nothing) |
 | settings-start | `settings.el` with 200 entries (100 of defined options, 100 of packages not loaded; no `:set` functions) read and applied as at a second start; three runs | milliseconds (`:read_ms`, budget 2) |
 | settings-page | the Settings page opened and drawn with 5,000 customizable variables added to the session's own, then the name of one typed into the search a character at a time | `:open_ms` (budget 100), `:key_p50_ms` and `:key_max_ms` (a keystroke with its redisplay; the worst, budget 16), `:key_search_max_ms` (the search without the redisplay) |
@@ -59,14 +59,17 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;
 without it the workloads fail and say so) is started with a settings file of its own whose profile `mock` is
 `ratatoskr-mock acp --as claude --script FILE`. The script's n-th line is the program of the n-th prompt (`say TEXT`,
-`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. The session holds
+`silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. A prompt past the last
+line runs its own words and ends at once, so `agent-stream`'s script has a line for every run one mock serves: an A/A's
+warm-ups and rounds on both sides (`drgnx-perf-workers/agent-stream-has-a-turn-for-every-run`). The session holds
 mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at most every 50 ms, so a short turn can go
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
 check "typed while it streamed" is a turn that has not ended), never the status. The agents and their events are the hub's.
 
-**Input latency** is a command's start until the screen shows it: a 0 s timer set after the command redisplays
-before it reads the clock (timers can run before the command loop's own redisplay, which would leave fontification
-and mode-line work out). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
+**Input latency** is a command's start until the screen shows it: `post-command-hook` redisplays
+before it reads the clock (which leaves fontification and mode-line work in). The latency ends in the hook, not in a
+0 s timer: under the harness a timer ran at the next paced input event, so input p95 sat at the tick (40.3 ms at the
+0.04 s tick, 30.3 at 0.03; `DRGNX_UITEST_TICK` sets the tick for a probe). Keys arrive one at a time (the harness), so typed-ahead input — where Emacs skips
 redisplay — is not covered; the harness's own recorder runs inside the measured span (small).
 
 **Per command** (`drgnx-perf-begin` / `drgnx-perf-end`), from `pre-command-hook` to the redisplay after the command,
@@ -153,7 +156,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. With `DRGNX_USER_ELPA` naming a directory that holds an `eat-VERSION` package, `bin/drgnx test --container --perf` mounts it read-only and the terminal workloads run in the container too; with a `websocket-VERSION` package there the Live view runs too. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -246,7 +249,8 @@ T = max(1 ms, 10 % of REF's median value); `not comparable` when a side lacks th
 
 `--ab REF` still judges the median only and also prints the p95 verdict (T = 1 ms). `--ab-env` prints, per workload,
 the median verdict, the p95 verdict at T = 1 ms and, when the runs carry it, the probe verdict on
-`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3. It also judges the judged
+`(:compose :draw-ms :p95)`; any of them `regressed` is exit 1, any `inconclusive` is exit 3, and an A/A that fails
+(see "One A/A per A/B invocation") is exit 4. It also judges the judged
 side's `:compose` budget rows (the median of the value over its rounds) at n >= 100, n being `(:compose :count)` summed
 over its rounds.
 
@@ -341,7 +345,10 @@ The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; 
 the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
 the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section (it compiles the
 tree first, so under podman the checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run
-throws away; other runtimes keep it read-only, where the A/B's build fails). Name the workloads
+throws away; other runtimes keep it read-only, where the A/B's build fails). Its two sessions run side by side, so
+`--ab-env` gets two sessions' memory, `--memory 6g` (a plain `--perf` run 3g; `DRGNX_TEST_GUI_MEMORY` overrides both):
+at 3g the OOM killer took one session in every `compile-flood` A/B (each peaks near 1.8 GB), and the run failed with
+"Connection refused" or "End of file during parsing". Name the workloads
 (`DRGNX_PERF_WORKLOADS`) for any A/B: the lab's other workloads need not suit the Nidhogg you mount.
 
 ## The synthetic day
@@ -549,7 +556,8 @@ Without the feature the probe reports `:watchdog nil` and no stalls row is judge
 F)`, the live Lisp heap after its last collection (from `garbage-collect-heapsize`); reported, not gated.
 
 **The switch.** `DRGNX_PERF_WATCHDOG` is applied when a recording starts (`drgnx-perf-begin`): unset or `default` runs
-the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), `off` leaves it off. A watchdog
+the watchdog at 100 ms (the shipped configuration), `on` at 1 ms (the stress case), a number at that many ms (`16`:
+what the `stalls-ge16` rows mean), `off` leaves it off. A watchdog
 already in that state is not restarted. On a system the watchdog does not run on (macOS: Nidhogg builds it but refuses
 to start it) the switch does nothing, and nothing is put back. The switch is `drgnx-watchdog-mode`, so `off` also stops the doctor's record
 hook and idle timer. `drgnx-perf-end` puts the watchdog back as it was before the recording (mode and threshold), so a
@@ -565,6 +573,158 @@ long pause is not always the collector's own marking.
 Reported stress: `--ab-env DRGNX_PERF_WATCHDOG=on,off` (1 ms; not a gate).
 
 Tests: `test/unit/perf-watchdog-test.el`.
+
+## The workers probe (off-the-main-thread work)
+
+On a Nidhogg with `nidhogg-workers` the lab measures the worker threads. Without the feature every row below reports
+`:workers nil` and nothing fails.
+
+**Advice on jsonrpc's reader keeps framing off.** Nidhogg's jsonrpc adoption stands back when `jsonrpc--process-filter`
+or `jsonrpc--json-read` has advice, which includes drgnx's own. So the TRAMP timer guard (`lang/eglot`) is on
+`nidhogg-workers-jsonrpc--batch` and on the filter of unframed connections only, the booster is not set up while
+`nidhogg-workers-framing` is on, and eglot's events log is off (`eglot-events-buffer-config`, Show LSP Log turns it
+on). A measurement of framing under drgnx's config compares the framed path only if none of these is undone
+(`drgnx-lang/framing-engages-under-drgnx`).
+
+**The switch.** `DRGNX_PERF_WORKERS` is read once per session, before any workload, and handed unchanged to
+`(nidhogg-workers-apply SPEC)`: `default` (also unset), `on`, `off`, `inline`, or `+SW`/`-SW` items such as
+`+nidhogg-workers-treesit+nidhogg-treesit-defer` (they have no commas, so `--ab-env` takes them). A step's gate is
+`--ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default`. Sessions and containers pass it on. The lab applies it with its
+first call into a session, so a workload's `:setup` already runs under it: a connection is framed only if
+`nidhogg-workers-framing` is on when it opens, and lsp-burst's servers open in its setup
+(`drgnx-perf-workers/switch-applied-before-the-setup`). Each LSP row reports `:lsp :framed`, the connections Nidhogg
+frames; a framing A/B whose framed arm shows 0 compared the unframed path twice.
+
+**The probe.** `drgnx-perf-begin` resets `nidhogg-workers-stats`, `drgnx-perf-end` reports
+`:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)`: busy ms by phase (`worker-wait` as its total
+and as `worker-wait-REASON` per reason; the A/B explains with them, see below; `treesit-with-waits` is `treesit`
+(Nidhogg counts every synchronous parse there, the workers on or off) plus `treesit-wait`, the main thread's whole
+tree-sitter time; `image-with-waits` is `image` plus the `display` and `image-pixels` waits, the main thread's whole
+time for images, so a decode moved into a wait for `nh-img` does not count as gone; both are explain lines next to
+input, cpu and stalls, not verdicts), the main thread's waits for a
+worker (`treesit-wait` + `worker-wait`), jobs that ran inline, deferred work. The stalls probe adds `:stalls-ge16` and
+`:stalls-ge100` (the watchdog resolves stalls at its threshold: 100 ms by default, so `-ge16` needs
+`DRGNX_PERF_WATCHDOG=16`, the threshold the gates' A/Bs run with, or `on`).
+
+**Workload keys.** `:complete-when FORM` is true once the work the actions started is done; the lab polls it every
+10 ms while the session is idle (a repeating `drgnx-timer-*` timer, not an idle timer: that runs once per idle period,
+and the lab's own calls do not end one) and records `:complete-ms`. Polling starts before the keys, so a form that is
+already true then (an unedited buffer is coloured) must also count the work. The work can outlast the keys (a compile flood, the reparse after a
+paste), so after the actions the lab waits for the form to hold (at most 60 s, `drgnx-perf-run-complete-wait`, the
+session idle meanwhile) before it reads `:complete-ms`, the digest and the check; the input rows cover the keys only.
+`:digest FORM` returns a string (buffer text plus the visible faces, filter-call arguments or the message sequence) kept
+as `:digest`.
+
+**Report-only rows.** A budget row `(W PATH LIMIT :report-only STEP)` never fails, and the report lists it as
+`report`, until `DRGNX_PERF_LANDED` (comma separated) names STEP; the gate that lands a step adds it. From then on the
+row is judged like any other, wall-clock paths included.
+
+**The A/B verdict.** Besides the wall samples, p95 and the compose probe, each judged workload prints a verdict for
+per-command input p50, p95, p99 and max, `:cpu_ms` p50 and p90, `:busy-ms` p50 and p95 (the main thread's busy time
+per command: its latency plus the timers that ran after the screen showed it, up to the next command), `:timer-ms` p95
+(the ms the timers took under each command; only the `:timers t` rows: `terminal-output`, `compile-flood`, `lsp-burst`,
+`lsp-typing`), stalls of 16 and of 100 ms or more, `:complete-ms` and `lsp-burst`'s `:lsp :handler_ms :max` (the statistic over the rounds is the median of
+the per-round differences; same rule: not worse unless the whole 95 % interval is above max (1 ms, 10 % of the REF
+median)). A path a side does not report is left out. A workload whose `:digest` differs between the sides is
+`regressed (digest)`. `--ab-env` counts all of these in the exit code (3 stays "inconclusive").
+
+**Worker phases explain, they do not decide.** A phase's ms (`:workers :phase-ms`) gets no verdict: moving work to a
+worker is meant to move time between phases, and the verdict is what the user feels (input, busy, timers, stalls). The
+A/B prints an explain block under each workload with every phase's REF and tree value. What the lab does check is that
+the phases add up in each arm (`drgnx-perf-ab-phase-sum`, printed on every A/B as `phase-sum ok` or `MISMATCH`): the
+sum of the phases (`worker-wait-REASON` entries repeat `worker-wait` and are left out) must not exceed `(:busy-ms :sum)`
+by more than 1 ms, else a phase counted time the main thread was not busy. The check works on the run's totals (the sum
+of the per-command values). The change across the arms is only explained, never judged: every A/B prints
+`explain busy changed by X ms, the phases' sum by Y ms` (`drgnx-perf-ab-phase-delta-line`). `:busy-ms` is a stand-in
+(latency plus the timers after the screen showed the command), because Nidhogg reports no per-command main-thread busy
+time, so run sums of it and of the phases are not comparable and a cross-arm rule failed by construction, even in an
+A/A. No run carries a watchdog busy measure today; when one does, the explain line should prefer it, and a cross-arm
+check can be judged again once Nidhogg reports a real per-command busy time.
+
+**One A/A per A/B invocation.** With `--ab-env` the first selected workload runs against itself once, before any A/B
+round (`--aa`, the default; `--no-aa` skips it, for debugging): the same session on the REF side, the same rounds, the
+same verdicts, read both ways (REF minus REF, and the sides swapped). It runs once because it proves the lab is quiet at
+that moment, which does not depend on the workload; one A/A per workload doubled the lab time of a gate arm. A deciding
+verdict (median, p95, compose probe, every metric above) of `regressed` in either direction (the build reads worse than
+itself, so the lab is broken), digests that differ, or a failing per-arm phase-sum check refuses the invocation: no
+workload gets an A/B round, `A/A failed` is printed under the A/A's workload with the reasons, and the exit code is 4
+(it comes before 1 and 3). Else every workload gets its A/B, and the results file records the A/A once (`aa`, with the
+workload it ran on). An `inconclusive` verdict does not refuse: with about 13 deciding
+metrics read two ways at n around 100, a tail metric is nearly always inconclusive against itself, so it prints a line
+(`A/A (typing): p95 inconclusive (forward)`) and the A/B goes on; the A/B's own verdicts, budgets and exit codes are unchanged.
+A probe that counts a phase twice shows up here, as a refused run, instead of as a verdict about the change. An A/A that
+is not judged (a loaded calibration, an error, a workload without per-command samples) proves nothing about the lab and
+refuses the invocation like a failed one: `A/A failed: the A/A was not-judged (loaded calibration)`, exit 4. Every
+calibration (of an A/A or an A/B) is taken once both sessions are quiet: the wait lets a stream left running by the
+last run end first, so a session's own background work does not mark it loaded. The A/A costs one workload's lab time
+per invocation.
+
+The results file carries `run_rounds` for every workload: per round and arm, the input p95, p99 and max and the counts of
+stalls of 16 and of 100 ms or more, so a tail in the pooled samples can be traced to the rounds that carry it. The
+`lsp-typing` digest hashes each server's first 100 messages of the session (not of the round, the flood goes on across
+rounds); the `quick-open-large` digest names files by their path under the repository, not under the session's temporary
+directory.
+
+**The calibration rows** (report-only, never failing; printed as `report cal-ROW WORKLOAD: KEY value, …` by plain
+`--perf`; a key the Nidhogg build does not report prints `n/a (Task 55/57)`): `cal-costs` (`:costs` and `:decisions`
+against `(nidhogg-workers--policy)` for `ts-open`, `ts-typing`, `ts-paste` and `image-open`), `cal-pressure` (`:pressure`:
+starts per second, mean and max frames, from `ts-typing` and `live-view`) and `cal-pty` (`terminal-output`'s `:ahead`
+p50 and max, sampled per command from `nidhogg-workers--test-io-info`). They come from the probe's `:cal` record.
+
+**Machine shape.** `DRGNX_PERF_CPUS=2|4` runs `bin/drgnx test --container` with `--cpuset-cpus` set to one thread of
+each of the first 2 or 4 physical cores, read from `lscpu -p=CPU,CORE` (`drgnx-perf-cpuset-args`): `0,1` / `0,1,2,3`
+on a machine that numbers its cores first, `0,2` / `0,2,4,6` on one that puts a core's two threads side by side, so
+"2 cores" never means one core's two threads. The workers' A/B runs both shapes:
+
+```sh
+DRGNX_PERF_CPUS=2 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+DRGNX_PERF_CPUS=4 bin/drgnx test --container --perf --ab-env DRGNX_PERF_WORKERS=+SW1+SW2,default
+```
+
+Tests: `test/unit/perf-workers-test.el`.
+
+### The workers' workloads
+
+Twelve workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
+what the Nidhogg workers take off the main thread. Each types the same 6 commands into the editor while the work runs; the
+first key starts it (from a timer, as it starts for a user), so the keys and the work overlap. Each has `:complete-when`
+(`:complete-ms`, polled at idle) and `:digest` (equal on and off), and a budget row `(W PATH LIMIT :report-only STEP)` in
+`test/perf/budgets.eld`: the limit is the design's table (V2 §1 or drgnx's existing row), never a first run. A row fails
+only after `DRGNX_PERF_LANDED` names its step.
+
+| Workload | What it does | Budget rows (step) |
+|---|---|---|
+| `lsp-burst` | three jsonrpc connections to `test/fixtures/lsp-replay.el`, replaying recorded rust-analyzer, clangd and tsserver traffic; each sends completion answers of 0.5, 1 and 3 MB, three rounds. `:lsp :handler_ms :max` is the slowest handler after the server wrote its answer's last byte (the server sends that time next, `LSP_REPLAY_STAMP`); the workload puts no advice on jsonrpc, which would keep Nidhogg's framing off. `:lsp :framed` counts the framed connections. Each request carries the runner's own completion deadline as its jsonrpc timeout (60 s); a request that times out is a handled failure, reported as `:lsp :timeouts` (count) and `:lsp :timeout_ids` (`CONNECTION/ID`), never a silent hang | input p95 16, no 16 ms stall, `:lsp :handler_ms :max` 50 (ot4; the A/B judges it too) |
+| `lsp-typing` | the same servers flood 300 recorded diagnostics and progress messages a second (`:lsp :framed` as above) | input p95 16, max 50 (ot4) |
+| `ts-open` | 1 and 2 MB files in `c-ts-mode`, `typescript-ts-mode`, `python-ts-mode`, opened one after the other in a second window | `:ts :draw_ms` 16 (first draw), `:ts :colored_ms` 500, no 100 ms stall (ot2) |
+| `ts-paste` | `C-y` of 500 KB into a 1 MB C file, then typing (a p95 needs 100 commands over the repeats; every repeat starts from the file on disk) (electric-pair, show-paren, which-function on) | input p95 16, `:complete-ms` 300 (ot2) |
+| `ts-typing`, `ts-typing-unclosed` | typing balanced / unclosed code in that file; complete (and the digest read) once every typed character's command has run and the colour has settled: no parse job or deferred region for the buffer, and jit-lock's contextual refontification after the last key done | input p95 16 (ot2) |
+| `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
+| `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html`; every repeat clears the image cache first (or only the warm-up decodes), and `:preview_drawn_ms` waits until no decode is pending on Nidhogg's image worker | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
+| `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
+| `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5) |
+| `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
+| `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5 | input max 50, `:complete-ms` 1000 (ot8) |
+
+`agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
+endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.
+
+**Fixtures.** Generators, not big files: `test/fixtures/workers/generators.el` writes the sources (1 and 2 MB per language),
+the compile log, the 5,000-file folder and the 25k- and 200k-file repositories when a workload sets up. The pictures are
+`make-images.sh`'s output (ImageMagick; `screenshot-4k.png`, `images/`, `preview-20.md`). The language-server traffic is
+recorded once from the real servers by `capture-lsp.sh` (run it in the container: `.claude/tmp/ctr.sh --image
+localhost/drgnx-dev:f45 --memory 6g -- bash test/fixtures/workers/capture-lsp.sh`): a server the image lacks (clangd,
+rust-analyzer, Node and typescript-language-server) is installed for that run only; the corpora are
+`corpus-NAME.eld.gz` and `manifest.eld` gives the message count and byte total a replay must reproduce (a test checks it).
+`lsp-replay.el` serves a corpus (`LSP_REPLAY_CORPUS`), with `LSP_REPLAY_COMPLETION_SIZES`, `LSP_REPLAY_FLOOD` and
+`LSP_REPLAY_STAMP` (a `$/replaySent` notification with each answer's id and write time after the answer).
+
+**A report-only run** (the baseline; a Nidhogg with workers, under the lease, no A/B):
+
+```sh
+DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open explorer-expand explorer-git quick-open-large autosave-typing" \
+  .claude/tmp/perf-exclusive.sh bin/drgnx test --container --perf
+```
 
 ## Slow frames in another configuration
 

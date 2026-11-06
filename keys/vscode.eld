@@ -195,6 +195,7 @@
         (code-quick-fix "C-.")
         (code-problems "C-S-m")
         (code-format :none "in the palette (VS Code's C-S-i is the LLM Menu here, as in gryphn)")
+        (code-show-lsp-log :none "in the palette")
         (view-zoom-in "C-=" "C-+")
         (view-zoom-out "C--")
         (view-zoom-reset "C-0")

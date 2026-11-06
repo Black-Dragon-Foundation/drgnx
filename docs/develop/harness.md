@@ -629,7 +629,8 @@ session launcher         systemd         # or detached (process group, no system
   containerd mode). `--podman` is short for `DRGNX_CONTAINER=podman … --container`.
 - **GUI tier in a container:** `test/container/Containerfile.gui` (fedora:45 + `emacs-pgtk mutter sway i3
   xorg-x11-server-Xvfb xrandr xprop emacs-lucid dbus-daemon mesa-dri-drivers ImageMagick procps-ng util-linux`, ~2.15 GB),
-  run with `--memory 3g --memory-swap 3g` (`DRGNX_TEST_GUI_MEMORY` overrides). mutter falls back to a surfaceless software renderer, so no GPU is
+  run with `--memory 3g --memory-swap 3g` (6g for `--perf --ab-env`, which runs two sessions; `DRGNX_TEST_GUI_MEMORY`
+  overrides). mutter falls back to a surfaceless software renderer, so no GPU is
   needed. The container needs `--security-opt seccomp=unconfined --security-opt label=disable`: GTK loads icons
   through glycin, whose `bwrap` sandbox cannot create namespaces under the default policy, and Emacs aborts.
 - **Window managers' image:** `--compositor kwin` and `--compositor niri` run in `drgnx-test-wm:TAG` (TAG: `test/container/image-tag.sh`, a hash of the Containerfile and every file it
@@ -1301,6 +1302,13 @@ the client half of the `gated` pattern; the hub half is Ratatoskr's test clock a
   held the connection reads as open (`process-status`), so no close is seen before the data. The client's own
   `delete-process` runs the client's sentinel at once and drops what was held; `set-process-sentinel` and
   `process-sentinel` on a gated connection reach the client's sentinel behind the gate's.
+- **Gated connections are unframed.** The gate replaces the connection's filter (`set-process-filter`), which turns
+  Nidhogg's framing off ([hub.md](hub.md#the-clients-core)): a gated test always runs the client's filter path, whatever
+  `nidhogg-workers-framing` says. The framed path has its own rows (`hub-client-frame-test.el`, and the framed rows of
+  `hub-client-shell-test.el`, whose peers use `drgnx-test-peer-send`), and `hub-client-framed-test.el` runs the framed
+client against the real Ratatoskr (a subscription and a burst of calls; `handshake`, waiting on the hub's answers).
+`NIDHOGG_WORKERS` (for example `+nidhogg-workers-framing`) is passed into the test container, so a run can set the
+switches for the whole suite.
 - **The schedule** is given up front: `(CONN :answer METHOD)`, `(CONN :event NAME)`, `(CONN :line)`, `(CONN :eof)`
   and `(:pause LABEL)`. A step releases its connection's lines up to its own, in order: the gate reorders lines across
   connections, never within one. A connection's challenge and the answers to its first `ping` and its `hello` are

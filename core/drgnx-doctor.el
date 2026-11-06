@@ -510,6 +510,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :timers-report (drgnx-doctor--timers-report)
            :notices (drgnx-doctor--notices)
            :watchdog (progn (require 'drgnx-watchdog-doctor) (drgnx-watchdog-doctor-facts))
+           :workers (progn (require (quote drgnx-workers-doctor)) (drgnx-workers-doctor-facts))
            :statusbar-slow (drgnx-doctor--state-file "statusbar-slow.eld")   ; the status bar's slow entries
            :statusbar-slow-time (drgnx-doctor--state-file-time "statusbar-slow.eld")
            ;; file names only: a key found in the config dir is never part of the facts
@@ -1609,4 +1610,5 @@ table) continues indented by the same six spaces."
 
 (provide 'drgnx-doctor)
 (require 'drgnx-watchdog-doctor)   ; its checks (freezes, gc) join the list once this file is provided
+(require 'drgnx-workers-doctor)    ; its check (workers) joins the list too
 ;;; drgnx-doctor.el ends here

@@ -195,6 +195,7 @@
         (code-quick-fix :none "in the palette")
         (code-problems :none "in the palette")
         (code-format :none "in the palette")
+        (code-show-lsp-log :none "in the palette")
         (view-zoom-in :none "C-x C-+ (stock)")
         (view-zoom-out :none "C-x C-- (stock)")
         (view-zoom-reset :none "C-x C-0 (stock)")

@@ -405,3 +405,288 @@ and fails when ROW was not measured in the run."
                       (buffer-string)))))
     (should (eql (car out) 2))
     (should (string-match-p "usage: drgnx test --perf --ab-env VAR=JUDGED,REF" (cdr out)))))
+
+;;;; The A/A first, the phase-sum check, the explain block, timer ms
+
+(defun drgnx-perf-ab-test--run (phases busy-sum &optional timer-p95)
+  "A run whose worker phases are PHASES (a plist of ms) and whose main thread was busy BUSY-SUM ms in all."
+  (append (list :alloc (list :p50 100) :cpu_ms (list :p90 1.0) :rows 1
+                :input (list :p50 5.0 :p95 8.0) :busy-ms (list :p50 5.0 :p95 8.0 :sum busy-sum)
+                :workers (list :phase-ms phases))
+          (and timer-p95 (list :timer-ms (list :p95 timer-p95)))))
+
+(defmacro drgnx-perf-ab-test--ab-env (run &rest body)
+  "Run BODY with `drgnx-perf-ab--one' returning RUN (a form, evaluated per call) and the sessions told apart by
+`calls' (the sessions it ran, newest first); side b is the one with DRGNX_PERF_GLITNIR=on."
+  (declare (indent 1))
+  `(let (calls)
+     (drgnx-perf-ab-test--with-fake 0
+       (cl-letf (((symbol-function 'drgnx-perf-ab--start)
+                  (lambda (_tree &optional env) (list :name (if (member "DRGNX_PERF_GLITNIR=on" env) 'sess-b 'sess-a))))
+                 ((symbol-function 'drgnx-perf-ab--one)
+                  (lambda (sess _spec)
+                    (push sess calls)
+                    (list :samples (drgnx-perf-ab-test--samples 5 25) :run ,run))))
+         ,@body))))
+
+(ert-deftest drgnx-perf-ab/aa-blocks-on-mismatch ()
+  ;; phases of 50 ms in a main thread that was busy 10 ms: the lab is wrong, not the change
+  (drgnx-perf-ab-test--ab-env (drgnx-perf-ab-test--run (list 'json 50.0) 10.0)
+    (let (code out)
+      (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+      (should (eql code 4))
+      (should (string-match-p "A/A failed" out))
+      (should (string-match-p "phase-sum" out))
+      (should calls)
+      (should-not (memq 'sess-b calls)))        ; no A/B round
+    ;; --no-aa skips the A/A: the A/B runs, and prints the check
+    (setq calls nil)
+    (let (code out)
+      (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50 :aa nil))))
+      (should (memq 'sess-b calls))
+      (should-not (eql code 4))
+      (should (string-match-p "phase-sum MISMATCH" out))))
+  ;; a regressed verdict and a digest that differs block as well
+  (should (string-match-p "regressed" (car (drgnx-perf-ab-test--aa-problems '(("p95" . regressed)) nil))))
+  (should (equal (drgnx-perf-ab-test--aa-problems nil nil 'regressed) '("digest differs"))))
+
+(defun drgnx-perf-ab-test--aa-problems (forward reverse &optional digest)
+  "`drgnx-perf-ab-aa-problems' with the deciding verdicts FORWARD and REVERSE (alists LABEL -> verdict) and the
+digest verdict DIGEST (default no-regression); the entry carries a clean phase-sum."
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'drgnx-perf-ab--deciding)
+               (lambda (&rest _) (prog1 (if (= calls 0) forward reverse) (cl-incf calls))))
+              ((symbol-function 'drgnx-perf-ab-digest-verdict)
+               (lambda (_) (list :verdict (or digest 'no-regression)))))
+      (drgnx-perf-ab-aa-problems (list :wall-rounds nil :run-rounds nil :phase-sum nil)))))
+
+(ert-deftest drgnx-perf-ab/aa-inconclusive-does-not-block ()
+  (should-not (drgnx-perf-ab-test--aa-problems '(("median" . no-regression) ("p95" . inconclusive))
+                                               '(("median" . no-regression) ("max" . inconclusive))))
+  ;; it is printed, as a line of its own
+  (cl-letf (((symbol-function 'drgnx-perf-ab--deciding)
+             (lambda (&rest _) '(("median" . no-regression) ("p95" . inconclusive))))
+            ((symbol-function 'drgnx-perf-ab-digest-verdict) (lambda (_) (list :verdict 'no-regression))))
+    (should (equal (drgnx-perf-ab-aa-notes (list :wall-rounds nil :run-rounds nil))
+                   '("A/A: p95 inconclusive (forward)" "A/A: p95 inconclusive (reverse)")))))
+
+(ert-deftest drgnx-perf-ab/aa-regressed-blocks ()
+  (let ((p (drgnx-perf-ab-test--aa-problems '(("median" . no-regression) ("p95" . regressed))
+                                            '(("median" . no-regression)))))
+    (should (= (length p) 1))
+    (should (string-match-p "p95 regressed (forward)" (car p))))
+  (should (string-match-p "median regressed (reverse)"
+                          (car (drgnx-perf-ab-test--aa-problems '(("median" . improved))
+                                                                '(("median" . regressed)))))))
+
+(ert-deftest drgnx-perf-ab/cross-arm-phase-sum-explains-only ()
+  ;; busy fell 121.5 ms, the phases' sum rose 141.4 ms: not comparable run sums, so no mismatch ...
+  (let ((a (drgnx-perf-ab-test--run (list 'json 60.0) 200.0)) (b (drgnx-perf-ab-test--run (list 'json 201.4) 78.5)))
+    (should-not (drgnx-perf-ab-phase-sum (drgnx-perf-ab-test--run (list 'json 40.0) 200.0)
+                                         (drgnx-perf-ab-test--run (list 'json 100.0) 300.0)))
+    (should (drgnx-perf-ab-phase-sum a b))      ; per arm: B has 201.4 phases in 78.5 busy
+    (let ((ok-b (drgnx-perf-ab-test--run (list 'json 100.0) 300.0))
+          (ok-a (drgnx-perf-ab-test--run (list 'json 60.0) 200.0)))
+      (should-not (drgnx-perf-ab-phase-sum ok-a ok-b))
+      (should (string-match-p "busy changed by 100.0 ms, the phases' sum by 40.0 ms"
+                              (drgnx-perf-ab-phase-delta-line ok-a ok-b))))
+    (should-not (drgnx-perf-ab-phase-delta-line '(:workers nil) '(:workers nil))))
+  ;; ... and an A/A with such a pair passes (the phase-sum entry is nil)
+  (drgnx-perf-ab-test--ab-env (drgnx-perf-ab-test--run (list 'json 40.0) 100.0)
+    (let (out)
+      (setq out (with-output-to-string (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50)))
+      (should (string-match-p "busy changed by" out)))))
+
+(ert-deftest drgnx-perf-ab/aa-passes-then-ab ()
+  (drgnx-perf-ab-test--ab-env (drgnx-perf-ab-test--run (list 'json 40.0 'worker-wait 3.0 'worker-wait-drain 3.0) 100.0)
+    (let (code out)
+      (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+      (should (eql code 0))
+      (should (string-match-p "A/A (typing): passed" out))
+      (should (string-match-p "phase-sum ok" out))
+      ;; the A/A ran first, on the REF side's session alone, then the A/B on both
+      (let ((order (reverse calls)))
+        (should (eq (car order) 'sess-a))
+        ;; a warm-up and the minimum of rounds on sess-a alone, before the first call on sess-b
+        (should (>= (cl-position 'sess-b order) (+ 1 (* 2 drgnx-perf-ab-min-rounds))))))))
+
+(defmacro drgnx-perf-ab-test--three-workloads (&rest body)
+  "BODY with three workloads selected and `drgnx-perf-ab--workload' counting its calls in `wcalls' ((NAME SA SB)…,
+newest first), returning a judged entry that carries the A/A fields."
+  (declare (indent 0))
+  `(let (wcalls)
+     (drgnx-perf-ab-test--with-fake 0
+       (cl-letf (((symbol-function 'drgnx-perf-run--workloads)
+                  (lambda () '((w1 :measure "m") (w2 :measure "m") (w3 :measure "m"))))
+                 ((symbol-function 'drgnx-perf-ab--start)
+                  (lambda (_tree &optional env) (list :name (if (member "DRGNX_PERF_GLITNIR=on" env) 'sess-b 'sess-a))))
+                 ((symbol-function 'drgnx-perf-ab--workload)
+                  (lambda (name _spec sa sb _n &optional _others)
+                    (push (list name sa sb) wcalls)
+                    (list :name name :status 'judged :wall-rounds nil :run-rounds nil
+                          :verdict (list :verdict 'no-regression :diff 0.0 :lo 0.0 :hi 0.0 :threshold 1.0)
+                          :a (list :n 1) :b (list :n 1))))
+                 ((symbol-function 'drgnx-perf-ab--deciding) (lambda (&rest _) nil))
+                 ((symbol-function 'drgnx-perf-ab-digest-verdict) (lambda (_) (list :verdict 'no-regression))))
+         ,@body))))
+
+(ert-deftest drgnx-perf-ab/aa-runs-once-per-invocation ()
+  (drgnx-perf-ab-test--three-workloads
+    (let (code out)
+      (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+      (should (eql code 0))
+      ;; one call with session S on both sides (the A/A), then one A/B per workload
+      (let ((aa (seq-filter (lambda (c) (eq (nth 1 c) (nth 2 c))) wcalls)))
+        (should (= (length aa) 1))
+        (should (eq (car (car aa)) 'w1)))
+      (should (= (length wcalls) 4))
+      (should (string-match-p "A/A (w1): passed" out))
+      (should (= 1 (with-temp-buffer (insert out) (how-many "A/A (" (point-min) (point-max)))))))
+  ;; --no-aa: no such call
+  (drgnx-perf-ab-test--three-workloads
+    (with-output-to-string (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50 :aa nil))
+    (should (= (length wcalls) 3))
+    (should-not (seq-some (lambda (c) (eq (nth 1 c) (nth 2 c))) wcalls))))
+
+(ert-deftest drgnx-perf-ab/aa-failure-refuses-every-workload ()
+  (drgnx-perf-ab-test--three-workloads
+    (cl-letf (((symbol-function 'drgnx-perf-ab-aa-problems) (lambda (&rest _) '("p95 regressed (forward)"))))
+      (let (code out)
+        (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+        (should (eql code 4))
+        (should (= (length wcalls) 1))            ; the A/A only: no A/B for any workload
+        (should (string-match-p "^w1 +A/A failed: p95 regressed (forward)" out))))))
+
+(ert-deftest drgnx-perf-ab/results-carry-each-rounds-tail ()
+  "The results file keeps every round's input p95/p99/max and stall counts per arm, so a tail in the pooled samples can
+be traced to the rounds that carry it.  Pattern D: an entry with two rounds."
+  (let* ((run (lambda (p99 max s100)
+                (list :input (list :p50 5.0 :p95 40.3 :p99 p99 :max max) :stalls-ge16 4 :stalls-ge100 s100)))
+         (e (list :name 'w :status 'judged
+                  :run-rounds (list (list :a (funcall run 90.0 120.0 0) :b (funcall run 188.0 360.0 2))
+                                    (list :a (funcall run 91.0 130.0 1) :b (funcall run 95.0 140.0 0)))))
+         (rounds (plist-get (cdr (drgnx-perf-ab--result-entry e)) :run_rounds)))
+    (should (= (length rounds) 2))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :input_p99) 188.0))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :input_max) 360.0))
+    (should (equal (plist-get (plist-get (aref rounds 0) :b) :stalls_ge100) 2))
+    (should (equal (plist-get (plist-get (aref rounds 1) :a) :input_p95) 40.3))
+    (should (equal (plist-get (plist-get (aref rounds 1) :a) :stalls_ge16) 4))))
+
+(ert-deftest drgnx-perf-ab/calibration-waits-for-both-sessions-to-be-quiet ()
+  "A calibration spins a fixed loop and calls the core loaded when the wall clock is longer than the CPU: the other
+session's stream, still running from its last run, took the core and voided the A/A.  The calibration of a session is
+preceded by the wait for every session (its own included) to be quiet.  Pattern D: the order of the calls."
+  (let (calls)
+    (drgnx-perf-ab--calibrate (lambda (s form) (push (cons s form) calls) (list :loaded nil)) 'sa 'sb)
+    (setq calls (nreverse calls))
+    (should (equal (mapcar #'car calls) '(sa sb sa)))
+    (should (equal (cdr (nth 0 calls)) drgnx-perf-ab--quiet-form))
+    (should (equal (cdr (nth 1 calls)) drgnx-perf-ab--quiet-form))
+    (should (equal (cdr (nth 2 calls)) "(drgnx-perf-calibrate)"))))
+
+(ert-deftest drgnx-perf-ab/void-aa-refuses-every-workload ()
+  "An A/A that is loaded (not judged), errored or not comparable proves nothing about the lab: no A/B runs and the
+exit code is 4 with a line saying why.  Pattern D: each void status, with stubbed sessions."
+  (dolist (status '(not-judged error not-comparable))
+    (drgnx-perf-ab-test--three-workloads
+      (let ((judged (symbol-function 'drgnx-perf-ab--workload)))
+        (cl-letf (((symbol-function 'drgnx-perf-ab--workload)
+                   (lambda (name spec sa sb &rest more)
+                     (if (eq sa sb)
+                         (progn (push (list name sa sb) wcalls) (list :name name :status status :why "x"))
+                       (apply judged name spec sa sb more)))))
+          (let (code out)
+            (setq out (with-output-to-string (setq code (drgnx-perf-ab-env "DRGNX_PERF_GLITNIR=on,off" :n 50))))
+            (should (eql code 4))
+            (should (= (length wcalls) 1))
+            (should (string-match-p (format "^w1 +A/A failed: .*%s" status) out))))))))
+
+(ert-deftest drgnx-perf-ab/phase-sum-checks-arms-and-the-difference ()
+  (let ((run (lambda (ph busy) (drgnx-perf-ab-test--run ph busy))))
+    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 40.0) 100.0) (funcall run (list 'json 40.0) 100.0)))
+    ;; within 1 ms of the busy time is fine, more is not
+    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 100.9) 100.0) nil))
+    (should (drgnx-perf-ab-phase-sum (funcall run (list 'json 101.5) 100.0) nil))
+    ;; the by-reason entries repeat worker-wait: not summed twice
+    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'worker-wait 30.0 'worker-wait-display 30.0) 40.0) nil))
+    ;; across arms nothing is judged here (see `cross-arm-phase-sum-explains-only')
+    (should-not (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 50.0) 150.0)))
+    (let ((m (drgnx-perf-ab-phase-sum (funcall run (list 'json 60.0) 200.0) (funcall run (list 'json 160.0) 150.0))))
+      (should (eq (car m) :phase-sum-mismatch))
+      (should (string-match-p "arm B: phases 160.0" (plist-get (cdr m) :why))))
+    ;; no phases (stock Emacs) or no busy time: nothing to check
+    (should-not (drgnx-perf-ab-phase-sum '(:workers nil) '(:workers nil)))))
+
+(ert-deftest drgnx-perf-ab/phases-explain-not-decide ()
+  ;; a phase rises 10 -> 30 ms while busy and input stay equal: not worse, and the phase shows in the explain block
+  (let* ((rounds (cl-loop for i below 10
+                          collect (list :a (drgnx-perf-ab-test--run (list 'treesit-wait (+ 10.0 (* 0.1 (% i 3)))) 100.0)
+                                        :b (drgnx-perf-ab-test--run (list 'treesit-wait (+ 30.0 (* 0.1 (% i 3)))) 100.0))))
+         (vs (drgnx-perf-ab-metric-verdicts rounds)))
+    (should vs)
+    (dolist (v vs)
+      (should (memq (plist-get (cdr v) :verdict) '(no-regression improved)))
+      (should-not (eq (nth 1 (car v)) :phase-ms)))
+    (let ((text (drgnx-perf-ab--extra-lines (list :metric-verdicts vs :a-run (plist-get (car rounds) :a)
+                                                  :b-run (plist-get (car rounds) :b)))))
+      (should (string-match-p "explain" text))
+      (should (string-match-p "treesit-wait 10.0 / 30.0" text))
+      (should (string-match-p "busy-ms p50 no-regression" text)))))
+
+(ert-deftest drgnx-perf-ab/timer-ms-decides ()
+  (let* ((rounds (cl-loop for i below 10
+                          collect (list :a (drgnx-perf-ab-test--run nil 100.0 (+ 2.0 (* 0.1 (% i 3))))
+                                        :b (drgnx-perf-ab-test--run nil 100.0 (+ 9.0 (* 0.1 (% i 3)))))))
+         (vs (drgnx-perf-ab-metric-verdicts rounds)))
+    (should (eq (plist-get (cdr (assoc '(:timer-ms :p95) vs)) :verdict) 'regressed))
+    (should (eq (plist-get (cdr (assoc '(:busy-ms :p95) vs)) :verdict) 'no-regression))
+    (should (eq (plist-get (cdr (assoc '(:input :p50) vs)) :verdict) 'no-regression))))
+
+(ert-deftest drgnx-perf/timer-ms-and-busy-per-command ()
+  (let ((drgnx-perf--timers-on t) (drgnx-perf--timer-cur nil) (drgnx-perf--timer-after 0.0) (drgnx-perf--cmd-lat nil)
+        (drgnx-perf--timer-ms nil) (drgnx-perf--busy-ms nil))
+    ;; a command: 2 ms of timers before the screen shows it (inside its latency), 3 ms after (added to its busy time)
+    (setq drgnx-perf--timer-cur 0.0)
+    (drgnx-perf--timer-note 2.0)
+    (setq drgnx-perf--cmd-lat 10.0)
+    (drgnx-perf--timer-note 3.0)
+    (drgnx-perf--busy-flush)
+    (should (equal drgnx-perf--timer-ms '(5.0)))
+    (should (equal drgnx-perf--busy-ms '(13.0)))
+    ;; before any command, and with the recording off, nothing is kept
+    (setq drgnx-perf--timer-cur nil)
+    (drgnx-perf--timer-note 9.0)
+    (should-not drgnx-perf--timer-cur)))
+
+(ert-deftest drgnx-perf-ab/results-keep-a-digest-and-blank-count-per-round ()
+  ;; the medians keep one run's digest; a differing round must stay visible in the results file
+  (let* ((rounds (list (list :a (list :digest "d1" :live (list :blank 0)) :b (list :digest "d1" :live (list :blank 0)))
+                       (list :a (list :digest "d1" :live (list :blank 0)) :b (list :digest "d2" :live (list :blank 3)))
+                       (list :a (list :digest "d1") :b (list :digest "d1" :live (list :blank 0)))))
+         (e (list :name 'live-view :status 'judged :run-rounds rounds))
+         (file (make-temp-file "drgnx-perf-ab" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file (list (drgnx-perf-ab--result-entry e)))
+          (let* ((j (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string))
+                                       :object-type 'plist :null-object nil))
+                 (r (plist-get (plist-get j :results) :live-view)))
+            (should (equal (plist-get (plist-get r :digests) :a) ["d1" "d1" "d1"]))
+            (should (equal (plist-get (plist-get r :digests) :b) ["d1" "d2" "d1"]))
+            (should (equal (plist-get (plist-get r :blanks) :a) [0 0 nil]))
+            (should (equal (plist-get (plist-get r :blanks) :b) [0 3 0]))))
+      (delete-file file))))
+
+(ert-deftest drgnx-perf-ab/a-workload-without-a-digest-still-has-one-entry-per-round ()
+  (let* ((rounds (list (list :a (list :rows 1) :b (list :rows 1)) (list :a (list :rows 1) :b (list :rows 1))))
+         (file (make-temp-file "drgnx-perf-ab" nil ".json")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-run--write-results file (list (drgnx-perf-ab--result-entry (list :name 'w :status 'judged :run-rounds rounds))))
+          (let ((r (plist-get (plist-get (json-parse-string (with-temp-buffer (insert-file-contents file) (buffer-string))
+                                                            :object-type 'plist :null-object nil)
+                                         :results)
+                              :w)))
+            (should (equal (plist-get (plist-get r :digests) :a) [nil nil]))))
+      (delete-file file))))

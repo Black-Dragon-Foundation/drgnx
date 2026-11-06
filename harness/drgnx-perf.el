@@ -4,8 +4,8 @@
 
 ;;; Commentary:
 ;; Probes run inside a harness session: input latency (a command's start until the screen shows it:
-;; a 0 s timer set in post-command-hook, which redisplays before reading the clock — timers can run
-;; before the command loop's own redisplay, so without it the redisplay would be left out), forced
+;; post-command-hook redisplays and then reads the clock, so the redisplay is part of it; a timer would end
+;; the latency at the harness's next paced input event instead), forced
 ;; redisplay time, frame creation, GC (count and time), memory (RSS), a CPU profile of a thunk, and a
 ;; hook audit (every function on the busy hooks timed, the hooks restored after).  The controller
 ;; (drgnx-perf-run.el) runs workloads in a session, judges them against budgets
@@ -19,6 +19,7 @@
 ;; the session's agent code, which the replay workloads drive
 (defvar drgnx-agents--sessions)
 (declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
+(declare-function drgnx-timer-now "drgnx-timer")
 (declare-function drgnx-timer-cancel "drgnx-timer")
 (declare-function drgnx-timer-start "drgnx-timer")
 (declare-function drgnx-agents--changed "drgnx-agents")
@@ -90,11 +91,6 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
   "Glitnir's monotonic ns now (no allocation), or nil on a build without the present time."
   (and (fboundp 'glitnir--last-paint) (plist-member (glitnir--last-paint) :present-ns) (glitnir--now-ns)))
 
-(defun drgnx-perf--pre ()
-  (drgnx-perf--hooks-flush)
-  (let ((ns (drgnx-perf--present-ns)))
-    (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum) ns))))   ; allocation last
-
 (defun drgnx-perf--await-present (ns)
   "Wait (100 ms at most) for the first paint sent to the compositor after NS; push its delay, if it came."
   (let ((end (+ (float-time) 0.1)) (p 0))
@@ -102,20 +98,58 @@ the compositor (`wl_surface.commit'), on either side of an A/B.")
       (accept-process-output nil 0.001))
     (when (>= p ns) (push (/ (- p ns) 1e6) drgnx-perf--presents))))
 
+(defvar drgnx-perf--audit)
+(defvar drgnx-perf--timers-on nil "While recording: timers are timed per command (`drgnx-perf--timers-ad').")
+(defvar drgnx-perf--timer-cur nil
+  "While recording: the ms every timer took under the current command (its start to the next command's), or nil
+before the first command.")
+(defvar drgnx-perf--timer-after 0.0 "Of `drgnx-perf--timer-cur', the ms of the timers that ran after the screen showed the command.")
+(defvar drgnx-perf--cmd-lat nil "The current command's latency (ms) once the screen shows it, else nil.")
+(defvar drgnx-perf--timer-ms nil "Per finished command: the ms its timers took.")
+(defvar drgnx-perf--busy-ms nil
+  "Per finished command: the main thread's busy ms, its latency (start to the screen showing it) plus the timers
+that ran after, up to the next command.")
+
+(defun drgnx-perf--busy-flush ()
+  "The current command is complete: keep its timer ms and its busy ms."
+  (when drgnx-perf--timer-cur
+    (push drgnx-perf--timer-cur drgnx-perf--timer-ms)
+    (when drgnx-perf--cmd-lat (push (+ drgnx-perf--cmd-lat drgnx-perf--timer-after) drgnx-perf--busy-ms))))
+
+(defun drgnx-perf--pre ()
+  (drgnx-perf--hooks-flush)
+  (drgnx-perf--busy-flush)
+  (setq drgnx-perf--timer-cur 0.0 drgnx-perf--timer-after 0.0 drgnx-perf--cmd-lat nil)
+  (let ((ns (drgnx-perf--present-ns)))
+    (setq drgnx-perf--t0 (list (float-time) (drgnx-perf--cpu-ms) (drgnx-perf--alloc-sum) ns))))   ; allocation last
+
+(defvar drgnx-perf--ahead nil "While recording: the pty read-ahead (bytes) of the terminal's process, sampled per command.")
+(defvar drgnx-perf--term)
+(declare-function nidhogg-workers--test-io-info "nidhogg-io.c")
+
+(defun drgnx-perf--ahead-sample ()
+  "Note the terminal process's `:ahead' (Nidhogg's pty read-ahead) when a terminal workload has one."
+  (when (and (fboundp 'nidhogg-workers--test-io-info) (bound-and-true-p drgnx-perf--term) (buffer-live-p drgnx-perf--term))
+    (when-let* ((p (get-buffer-process drgnx-perf--term))
+                (a (plist-get (nidhogg-workers--test-io-info p) :ahead)))
+      (when (numberp a) (push a drgnx-perf--ahead)))))
+
 (defun drgnx-perf--finish (t0)
-  "The 0 s timer: the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
+  "From `post-command-hook': the screen shows the command; record its wall, CPU and allocation, then (Glitnir) its present."
   (redisplay)                           ; the screen showing the command is part of its latency
-  (let ((alloc (drgnx-perf--alloc-sum)))
+  (let ((alloc (drgnx-perf--alloc-sum)) (ms (* 1000 (- (float-time) (car t0)))))
     (push (- alloc (nth 2 t0) 7) drgnx-perf--allocs)           ; less the first reading's own 7 conses
     (push (- (drgnx-perf--cpu-ms) (nth 1 t0)) drgnx-perf--cpus)
-    (push (* 1000 (- (float-time) (car t0))) drgnx-perf--latencies))
+    (push ms drgnx-perf--latencies)
+    (setq drgnx-perf--cmd-lat ms)
+    (drgnx-perf--ahead-sample))
   (when (nth 3 t0) (drgnx-perf--await-present (nth 3 t0))))
 
 (defun drgnx-perf--post ()
   (when drgnx-perf--t0
     (let ((t0 drgnx-perf--t0))
       (setq drgnx-perf--t0 nil)
-      (run-at-time 0 nil #'drgnx-perf--finish t0))))
+      (drgnx-perf--finish t0))))
 
 (defun drgnx-perf--gc ()
   "After each collection: its own time (`gc-elapsed' grows by it)."
@@ -167,13 +201,16 @@ refuses to start elsewhere)."
 
 (defun drgnx-perf--watchdog-env ()
   "Apply $DRGNX_PERF_WATCHDOG once (until `drgnx-perf--watchdog-restore'): unset or `default' runs
-`nidhogg-watchdog-mode' at 100 ms (the shipped configuration), `on' at 1 ms (the stress case), `off' leaves it off.
+`nidhogg-watchdog-mode' at 100 ms (the shipped configuration), `on' at 1 ms (the stress case), a number at that many
+ms (16: the gates' `stalls-ge16' rows), `off' leaves it off.
 A watchdog already in that state is not restarted.  Without the feature, or on a system it does not run on, nothing.
 Returns nil when it did not apply, t when nothing had to change, else (ON . THRESHOLD) as they were before."
   (when (and (not drgnx-perf--watchdog-applied) (drgnx-perf--watchdog-runs-p))
     (setq drgnx-perf--watchdog-applied t)
     (let* ((v (getenv "DRGNX_PERF_WATCHDOG"))
-           (ms (cond ((equal v "off") nil) ((equal v "on") 1) (t 100)))
+           (ms (cond ((equal v "off") nil) ((equal v "on") 1)
+                     ((and v (string-match-p "\\`[1-9][0-9]*\\'" v)) (string-to-number v))
+                     (t 100)))
            (prior (cons (and (drgnx-perf--watchdog-on-p) t)
                         (and (boundp 'nidhogg-watchdog-threshold) nidhogg-watchdog-threshold))))
       (if (if ms (and (car prior) (eql (cdr prior) ms)) (not (car prior)))
@@ -297,6 +334,8 @@ without the watchdog."
       ;; during a workload, so the records give the stacks, the felt count and the longest wall time, not the number
       (list :stalls (max (plist-get d :stalls) (length drgnx-perf--stalls))
             :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
+            :stalls-ge16 (seq-count (lambda (w) (>= w 16)) walls)
+            :stalls-ge100 (seq-count (lambda (w) (>= w 100)) walls)
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
             :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
                             :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
@@ -329,6 +368,100 @@ without the watchdog."
                  :edges (vconcat (drgnx-perf--drain-edges))
                  :stalls (vconcat (reverse drgnx-perf--day-stalls)))
       (setq drgnx-perf--day-stalls nil))))
+;;;; The worker threads (docs/develop/perf.md, "The workers probe")
+
+(declare-function nidhogg-workers-apply "nidhogg-workers")
+(declare-function nidhogg-workers-stats "nidhogg-workers")
+
+(defvar drgnx-perf--workers-applied nil "Non-nil once $DRGNX_PERF_WORKERS has been applied in this session.")
+
+(defun drgnx-perf--workers-p () (featurep 'nidhogg-workers))
+
+(defun drgnx-perf--workers-env ()
+  "Apply $DRGNX_PERF_WORKERS once per session, before any workload: `nidhogg-workers-apply' gets the value as the
+Nidhogg switch grammar has it (`default', `on', `off', `inline', or +SW/-SW items) and `default' when it is unset or
+empty.  Without the feature, nothing."
+  (when (and (not drgnx-perf--workers-applied) (drgnx-perf--workers-p))
+    (setq drgnx-perf--workers-applied t)
+    (let ((v (getenv "DRGNX_PERF_WORKERS")))
+      (nidhogg-workers-apply (if (or (null v) (string-empty-p v)) "default" v)))))
+
+(defun drgnx-perf--workers-begin ()
+  "Zero the worker counters: the next `drgnx-perf--workers-end' reads this workload alone."
+  (when (drgnx-perf--workers-p) (nidhogg-workers-stats t)))
+
+(defun drgnx-perf--workers-fallbacks (stats)
+  "The fallbacks of every worker in STATS, summed."
+  (let ((n 0))
+    (cl-loop for (_k v) on stats by #'cddr
+             when (and (consp v) (keywordp (car v)))
+             do (dolist (f (plist-get v :fallbacks)) (when (consp f) (cl-incf n (or (cdr f) 0)))))
+    n))
+
+(defun drgnx-perf--workers-phases (ph)
+  "Nidhogg's :phase-ms PH (PHASE MS …, `worker-wait' a plist of REASON MS) as PHASE MS with numbers only: the
+`worker-wait' total and one `worker-wait-REASON' per reason, rounded."
+  (cl-loop for (k v) on ph by #'cddr
+           if (numberp v) append (list k (drgnx-perf--round v))
+           else if (consp v)
+           append (cons k (cons (drgnx-perf--round (cl-loop for (_r ms) on v by #'cddr when (numberp ms) sum ms))
+                                (cl-loop for (r ms) on v by #'cddr when (numberp ms)
+                                         append (list (intern (format "%s-%s" k r)) (drgnx-perf--round ms)))))))
+
+(defun drgnx-perf--workers-end ()
+  "(:workers (:phase-ms PLIST :wait-ms F :fallbacks N :deferrals PLIST)) for the workload just run; (:workers nil)
+without the feature.  :phase-ms is the busy time of each phase, :wait-ms the main thread's waits for a worker
+(`treesit-wait' and `worker-wait'), :fallbacks the number of jobs that ran inline, :deferrals the deferred work.
+Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as `worker-wait' and each reason as
+`worker-wait-REASON', all numbers, so the A/B judges them like every other phase."
+  (if (not (drgnx-perf--workers-p))
+      (list :workers nil)
+    (let* ((s (nidhogg-workers-stats)) (ph (drgnx-perf--workers-phases (plist-get s :phase-ms))))
+      ;; the main thread's whole time for images: its own image work and its waits for nh-img (the display and
+      ;; image-pixels reasons), so an image decode moved into a wait is not counted as gone
+      (when (numberp (plist-get ph 'image))
+        (setq ph (append ph (list 'image-with-waits
+                                  (drgnx-perf--round (+ (plist-get ph 'image) (or (plist-get ph 'worker-wait-display) 0)
+                                                        (or (plist-get ph 'worker-wait-image-pixels) 0)))))))
+      ;; the main thread's whole tree-sitter time: its synchronous parses (Nidhogg counts them in `treesit' with the
+      ;; workers on or off) and its waits for nh-parse, so a parse moved into a wait is not counted as gone
+      (when (numberp (plist-get ph 'treesit))
+        (setq ph (append ph (list 'treesit-with-waits
+                                  (drgnx-perf--round (+ (plist-get ph 'treesit) (or (plist-get ph 'treesit-wait) 0)))))))
+      (list :workers (list :phase-ms ph
+                           :wait-ms (drgnx-perf--round (+ (or (plist-get ph 'treesit-wait) 0) (or (plist-get ph 'worker-wait) 0)))
+                           :fallbacks (drgnx-perf--workers-fallbacks s)
+                           :deferrals (plist-get s :deferrals))))))
+
+;;;; Completion metrics: how long until the work a workload started is done
+
+(defvar drgnx-perf--complete nil "While recording: (PREDICATE START-S DONE-MS) of the workload's completion metric.")
+
+(defun drgnx-perf-complete-poll ()
+  "When the predicate holds, note the ms since `drgnx-perf-complete-begin' (once)."
+  (when (and drgnx-perf--complete (null (nth 2 drgnx-perf--complete)) (funcall (nth 0 drgnx-perf--complete)))
+    (require 'drgnx-timer)
+    (setf (nth 2 drgnx-perf--complete) (drgnx-perf--round (* 1000 (- (drgnx-timer-now) (nth 1 drgnx-perf--complete)))))
+    (drgnx-timer-cancel 'perf-complete)))
+
+(defun drgnx-perf--complete-tick ()
+  "The completion timer: poll while Emacs is idle, not inside a command."
+  (when (current-idle-time) (drgnx-perf-complete-poll)))
+
+(defun drgnx-perf-complete-begin (predicate)
+  "Start timing until PREDICATE (a function of no arguments, the workload's `:complete-when') holds, polled every
+10 ms while Emacs is idle, through the timer layer.  Not an idle timer: that runs once per idle period, and the lab's
+own calls after the keys do not end one, so work that finished later in the pause was never seen."
+  (require 'drgnx-timer)
+  (setq drgnx-perf--complete (list predicate (drgnx-timer-now) nil))
+  (drgnx-timer-start 'perf-complete 0.01 #'drgnx-perf--complete-tick :repeat 0.01 :owner :core))
+
+(defun drgnx-perf-complete-end ()
+  "(:complete-ms MS) since `drgnx-perf-complete-begin', or (:complete-ms nil) when it never held; stops the polling."
+  (drgnx-perf-complete-poll)
+  (when (fboundp 'drgnx-timer-cancel) (drgnx-timer-cancel 'perf-complete))
+  (prog1 (list :complete-ms (nth 2 drgnx-perf--complete))
+    (setq drgnx-perf--complete nil)))
 
 (defun drgnx-perf--gc-row (pauses)
   "(:count N :max MS :p95 MS) of PAUSES (ms); :max and :p95 are nil with no collection."
@@ -341,16 +474,45 @@ without the watchdog."
   (list :ge16 (if latencies (drgnx-perf--round (/ (* 100.0 (seq-count (lambda (l) (>= l 16)) latencies)) (length latencies))) 0.0)
         :p95 (and latencies (drgnx-perf--round (drgnx-perf--p95 latencies)))))
 
-(defun drgnx-perf-begin ()
+(defvar drgnx-perf--timer-key nil "Non-nil while recording a `:timers t' row: `drgnx-perf-end' reports `:timer-ms'.")
+
+(defun drgnx-perf--decisions-json (decisions)
+  "Nidhogg's :decisions (((AREA OUTCOME REASON) . N) ...) as a vector of strings \"AREA OUTCOME REASON N\": the session
+sends its result as JSON, which takes neither dotted pairs, lists nor symbols."
+  (vconcat (mapcar (lambda (d) (format "%s %s" (mapconcat #'symbol-name (car d) " ") (cdr d))) decisions)))
+
+(defun drgnx-perf--cal-end ()
+  "(:cal PLIST) for the calibration rows, or nil without a key to report: `:costs', `:decisions' and `:pressure' as
+`nidhogg-workers-stats' gives them, `:policy' from `nidhogg-workers--policy', `:ahead' (:p50 :max) from the samples of
+the terminal's pty read-ahead.  A key the Nidhogg build lacks is left out (the report prints `n/a')."
+  (let (out (s (and (featurep 'nidhogg-workers) (fboundp 'nidhogg-workers-stats) (nidhogg-workers-stats))))
+    (dolist (k '(:costs :decisions :pressure))
+      (when (plist-member s k)
+        (setq out (append out (list k (if (eq k :decisions) (drgnx-perf--decisions-json (plist-get s k)) (plist-get s k)))))))
+    (when (fboundp 'nidhogg-workers--policy)
+      (setq out (append out (list :policy (nidhogg-workers--policy)))))
+    (when drgnx-perf--ahead
+      (setq out (append out (list :ahead (list :p50 (plist-get (drgnx-perf-stats drgnx-perf--ahead) :p50)
+                                               :max (apply #'max drgnx-perf--ahead))))))
+    (and out (list :cal out))))
+
+(defun drgnx-perf-begin (&optional timers)
   "Start recording: every command's latency, every GC pause, memory, Glitnir's frame-time record (the
-compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls')."
+compose probe: reset here, read by `drgnx-perf-end' under :compose) and the stall watchdog's records (`:stalls').
+Every command's main-thread busy ms is kept too (`:busy-ms'); TIMERS (a `:timers t' row) also reports the ms the
+timers took per command (`:timer-ms')."
   (drgnx-perf--glitnir-env)
   (setq drgnx-perf--watchdog-prior (drgnx-perf--watchdog-env))
+  (drgnx-perf--workers-env)
+  (drgnx-perf--workers-begin)
   (drgnx-perf--stalls-begin)
   (drgnx-perf--compose-stats t)
   (setq drgnx-perf--latencies nil drgnx-perf--allocs nil drgnx-perf--cpus nil drgnx-perf--t0 nil drgnx-perf--presents nil
         drgnx-perf--gc-pauses nil drgnx-perf--gc-last gc-elapsed
-        drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb) (drgnx-perf--rows)))
+        drgnx-perf--start (list gcs-done gc-elapsed (drgnx-perf-rss-kb) (drgnx-perf--rows))
+        drgnx-perf--timer-key timers drgnx-perf--timers-on t drgnx-perf--timer-cur nil drgnx-perf--timer-after 0.0
+        drgnx-perf--cmd-lat nil drgnx-perf--timer-ms nil drgnx-perf--busy-ms nil drgnx-perf--ahead nil)
+  (advice-add 'timer-event-handler :around #'drgnx-perf--timers-ad)
   (add-hook 'pre-command-hook #'drgnx-perf--pre -100)
   (add-hook 'post-command-hook #'drgnx-perf--post 100)
   (add-hook 'post-gc-hook #'drgnx-perf--gc))
@@ -364,11 +526,19 @@ with the load on the machine; wall clock does.  :compose is Glitnir's record sin
   (remove-hook 'pre-command-hook #'drgnx-perf--pre)
   (remove-hook 'post-command-hook #'drgnx-perf--post)
   (remove-hook 'post-gc-hook #'drgnx-perf--gc)
+  (drgnx-perf--busy-flush)
+  (setq drgnx-perf--timers-on nil drgnx-perf--timer-cur nil)
+  (unless drgnx-perf--audit (advice-remove 'timer-event-handler #'drgnx-perf--timers-ad))
   (pcase-let ((`(,gcs ,elapsed ,rss ,rows) drgnx-perf--start)
               (compose (drgnx-perf--compose-stats))
-              (stalls (prog1 (drgnx-perf--stalls-end) (drgnx-perf--watchdog-restore))))
+              (stalls (prog1 (drgnx-perf--stalls-end) (drgnx-perf--watchdog-restore)))
+              (workers (drgnx-perf--workers-end)))
     (append
-     stalls
+     stalls workers (drgnx-perf--cal-end)
+     (list :busy-ms (append (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--busy-ms))
+                            (list :sum (drgnx-perf--round (apply #'+ 0.0 drgnx-perf--busy-ms)))))
+     (and drgnx-perf--timer-key
+          (list :timer-ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--timer-ms))))
      (list :gc (drgnx-perf--gc-row drgnx-perf--gc-pauses)
            :typing (drgnx-perf--typing-row drgnx-perf--latencies))
      (list :input (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--latencies))
@@ -460,13 +630,22 @@ timers took while each ran, up to the next command's start.  Process filters are
     (when drgnx-perf--cmd-hooks (push drgnx-perf--cmd-hooks drgnx-perf--hook-samples))
     (setq drgnx-perf--cmd-hooks 0.0)))
 
+(defun drgnx-perf--timer-note (ms)
+  "A timer took MS: it counts for the current command, and for its busy time when the screen already shows it."
+  (when (and drgnx-perf--timers-on drgnx-perf--timer-cur)
+    (cl-incf drgnx-perf--timer-cur ms)
+    (when drgnx-perf--cmd-lat (cl-incf drgnx-perf--timer-after ms))))
+
 (defun drgnx-perf--timers-ad (orig timer &rest args)
   "An :around advice on `timer-event-handler': its time counts for the command it ran under (not the probe's own
 timer, which holds the redisplay)."
   (if (eq (timer--function timer) #'drgnx-perf--finish)
       (apply orig timer args)
     (let ((t0 (float-time)))
-      (unwind-protect (apply orig timer args) (drgnx-perf--hooks-add (* 1000 (- (float-time) t0)))))))
+      (unwind-protect (apply orig timer args)
+        (let ((ms (* 1000 (- (float-time) t0))))
+          (drgnx-perf--hooks-add ms)
+          (drgnx-perf--timer-note ms))))))
 
 (defun drgnx-perf--note (table name hook t0)
   (let ((cell (or (gethash name table) (puthash name (cons nil nil) table)))
@@ -522,7 +701,7 @@ then gives the per-command totals."
       (drgnx-perf--hooks-flush)
       (setq drgnx-perf--audit-stats (mapcar #'drgnx-perf--round2 (drgnx-perf-stats drgnx-perf--hook-samples))))
     (setq drgnx-perf--audit nil drgnx-perf--cmd-hooks nil)
-    (advice-remove 'timer-event-handler #'drgnx-perf--timers-ad)
+    (unless drgnx-perf--timers-on (advice-remove 'timer-event-handler #'drgnx-perf--timers-ad))
     (pcase-dolist (`(,fn . ,ad) advised) (advice-remove fn ad))
     (pcase-dolist (`(,hook . ,pairs) wrapped)
       (let ((now (default-value hook)))
@@ -581,7 +760,21 @@ the GC max with no collection, the GC p95 over fewer than `drgnx-perf-gc-p95-min
   (let ((env (getenv "DRGNX_PERF_CPU_FACTOR")))
     (if (and env (string-match-p "\\`[0-9]+\\(?:\\.[0-9]+\\)?\\'" env)) (string-to-number env) 1)))
 
-(defun drgnx-perf--path-name (path) (mapconcat (lambda (k) (substring (symbol-name k) 1)) path " "))
+(defun drgnx-perf--landed-steps ()
+  "The steps $DRGNX_PERF_LANDED names (comma or space separated), as strings."
+  (split-string (or (getenv "DRGNX_PERF_LANDED") "") "[, ]+" t))
+
+(defun drgnx-perf--report-only-p (budget)
+  "Whether BUDGET (WORKLOAD PATH LIMIT &rest PLIST) is a report-only row whose step has not landed: `:report-only STEP'
+in PLIST, STEP not in $DRGNX_PERF_LANDED.  Such a row never fails; it is reported."
+  (when-let* ((step (plist-get (nthcdr 3 budget) :report-only)))
+    (not (member (format "%s" step) (drgnx-perf--landed-steps)))))
+
+(defun drgnx-perf--landed-p (budget)
+  "Whether BUDGET is a `:report-only' row whose step has landed: from then on it is judged like any other."
+  (and (plist-get (nthcdr 3 budget) :report-only) (not (drgnx-perf--report-only-p budget))))
+
+(defun drgnx-perf--path-name (path)(mapconcat (lambda (k) (substring (symbol-name k) 1)) path " "))
 
 (defun drgnx-perf--budget-applies-p (budget emacs-major)
   "BUDGET is (WORKLOAD PATH LIMIT &rest PLIST); `:emacs MAJOR' in PLIST limits it to that Emacs major version."
@@ -596,7 +789,8 @@ hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (drgnx-perf--gated-p path) (drgnx-perf--budget-applies-p b emacs-major)
+        (when (and (or (drgnx-perf--gated-p path) (drgnx-perf--landed-p b)) (drgnx-perf--budget-applies-p b emacs-major)
+                   (not (drgnx-perf--report-only-p b))
                    (not (and (assq w results) (drgnx-perf--watchdog-row-skipped-p results w path))))
           (let ((v (drgnx-perf--get results w path))
                 (limit (if (eq (car path) :cpu_ms) (* limit cpu-factor) limit)))
@@ -611,11 +805,16 @@ and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
-        (when (and (not (drgnx-perf--gated-p path)) (assq w results)
-                   (drgnx-perf--budget-applies-p b emacs-major))
-          (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
-                        (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
-                out))))
+        (when (and (assq w results) (drgnx-perf--budget-applies-p b emacs-major))
+          (cond ((drgnx-perf--report-only-p b)
+                 (push (format "%s %s %s (budget %s, report-only until %s lands): report" w (drgnx-perf--path-name path)
+                               (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit
+                               (plist-get (nthcdr 3 b) :report-only))
+                       out))
+                ((or (drgnx-perf--gated-p path) (drgnx-perf--landed-p b)))
+                (t (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
+                                 (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
+                         out))))))
     (nreverse out)))
 
 (defun drgnx-perf-history-append (file commit results &optional load)
@@ -761,6 +960,108 @@ lacks a number at PATH."
         (list :verdict 'not-comparable)
       (let ((ci (drgnx-perf--bootstrap-per-round (cl-mapcar #'- bs as) 2000 1)) (th (max 1.0 (* 0.10 (drgnx-perf--median as)))))
         (append (list :verdict (drgnx-perf--classify ci th)) ci (list :threshold th))))))
+
+(defconst drgnx-perf-ab-metric-paths
+  '((:input :p50) (:input :p95) (:input :p99) (:input :max) (:cpu_ms :p50) (:cpu_ms :p90)
+    (:busy-ms :p50) (:busy-ms :p95) (:timer-ms :p95)
+    (:stalls-ge16) (:stalls-ge100) (:complete-ms) (:lsp :handler_ms :max))
+  "The probe values (read from each round's run) whose A/B verdict counts besides the wall samples: per-command input
+p50, p95, p99 and max, the main thread's CPU ms, its busy ms per command (latency plus the timers after it) at p50 and
+p95, the timers' ms per command (p95), the stalls of 16 ms and of 100 ms or more, and the completion metrics
+(`:complete-ms', lsp-burst's slowest handler after its answer's last byte).  The
+workers' phases get no verdict: `drgnx-perf-ab-phase-paths' lists them for the explain block.")
+
+(defun drgnx-perf-ab-phase-paths (rounds)
+  "(:workers :phase-ms PHASE) for every PHASE (a number) either side of any of ROUNDS reports."
+  (let (phases)
+    (dolist (r rounds)
+      (dolist (side '(:a :b))
+        (let ((ph (drgnx-perf--path-value (plist-get r side) '(:workers :phase-ms))))
+          (cl-loop for (k v) on ph by #'cddr when (numberp v) do (cl-pushnew k phases)))))
+    (mapcar (lambda (k) (list :workers :phase-ms k)) (nreverse phases))))
+
+(defun drgnx-perf-ab-metric-verdicts (rounds)
+  "((PATH . VERDICT)…) for ROUNDS (see `drgnx-perf-ab-probe-verdict') over `drgnx-perf-ab-metric-paths': only the
+paths both sides report in every round (a path with no number is left out, not failed).  Worker phases are not
+here: they explain (`drgnx-perf-ab-phase-explain'), they do not decide."
+  (let (out)
+    (dolist (path drgnx-perf-ab-metric-paths)
+      (let ((v (drgnx-perf-ab-probe-verdict rounds path)))
+        (unless (eq (plist-get v :verdict) 'not-comparable) (push (cons path v) out))))
+    (nreverse out)))
+
+(defun drgnx-perf-ab-phase-explain (run-a run-b)
+  "((PHASE A B)…): each worker phase's ms in RUN-A and RUN-B (a run's `:workers :phase-ms', numbers only; the median over
+its rounds), for phases either side reports.  The explain block prints them; no verdict is made of them."
+  (let ((pa (drgnx-perf--path-value run-a '(:workers :phase-ms))) (pb (drgnx-perf--path-value run-b '(:workers :phase-ms))) keys)
+    (cl-loop for (k v) on (append pa pb) by #'cddr when (numberp v) do (cl-pushnew k keys))
+    (mapcar (lambda (k) (list k (plist-get pa k) (plist-get pb k))) (nreverse keys))))
+
+(defun drgnx-perf-ab--phase-total (run)
+  "(PHASES . BUSY) of RUN: the sum of its `:workers :phase-ms' (the `worker-wait-REASON' entries repeat `worker-wait',
+so they are left out) and its `(:busy-ms :sum)'; nil when it has no phases, BUSY nil when it has no busy time."
+  (let ((ph (drgnx-perf--path-value run '(:workers :phase-ms))) (sum 0.0) found)
+    (cl-loop for (k v) on ph by #'cddr
+             when (and (numberp v) (not (string-prefix-p "worker-wait-" (symbol-name k))))
+             do (setq found t sum (+ sum v)))
+    (and found (cons sum (let ((b (drgnx-perf--path-value run '(:busy-ms :sum)))) (and (numberp b) b))))))
+
+(defun drgnx-perf-ab-phase-sum (run-a run-b)
+  "The phase-sum check of the runs RUN-A and RUN-B (a run is the median over a side's rounds): nil when it holds or
+there is nothing to check, else (:phase-sum-mismatch :why TEXT).  Per arm, the sum of the worker phases' ms must not
+exceed the main thread's busy ms (`(:busy-ms :sum)') by more than 1 ms (a phase is time the main thread spent, so
+more means a phase counted time it was not busy).  The change across arms is not judged:
+`drgnx-perf-ab-phase-delta-line' explains it."
+  (let ((a (drgnx-perf-ab--phase-total run-a)) (b (drgnx-perf-ab--phase-total run-b)) why)
+    (cl-loop for (arm . tot) in (list (cons "A" a) (cons "B" b))
+             when (and tot (cdr tot) (> (car tot) (+ (cdr tot) 1.0)))
+             do (push (format "arm %s: phases %.1f ms > busy %.1f ms + 1" arm (car tot) (cdr tot)) why))
+    (and why (list :phase-sum-mismatch :why (string-join (nreverse why) "; ")))))
+
+(defun drgnx-perf-ab-phase-delta-line (run-a run-b)
+  "An explain line (a string, never a verdict) with the change of `(:busy-ms :sum)' and of the phases' sum from RUN-A
+to RUN-B; nil when either run lacks phases or busy time.  `:busy-ms' is a stand-in (latency plus the timers after the
+screen showed the command; Nidhogg reports no per-command main-thread busy time), so run sums of it and of the phases
+do not have to agree, and no run carries a watchdog busy measure to prefer."
+  (let ((a (drgnx-perf-ab--phase-total run-a)) (b (drgnx-perf-ab--phase-total run-b)))
+    (when (and a b (cdr a) (cdr b))
+      (format "busy changed by %.1f ms, the phases' sum by %.1f ms (busy is latency plus timers, a stand-in; not judged)"
+              (- (cdr b) (cdr a)) (- (car b) (car a))))))
+
+(defun drgnx-perf-ab-digest-verdict (rounds)
+  "The correctness verdict on ROUNDS' `:digest' strings: (:verdict regressed :why digest) when any round's two sides
+differ, (:verdict no-regression) when all agree, (:verdict not-comparable) when no round has a digest on both sides."
+  (let ((pairs (delq nil (mapcar (lambda (r) (let ((a (plist-get (plist-get r :a) :digest)) (b (plist-get (plist-get r :b) :digest)))
+                                               (and (stringp a) (stringp b) (cons a b))))
+                                 rounds))))
+    (cond ((null pairs) (list :verdict 'not-comparable))
+          ((seq-some (lambda (p) (not (equal (car p) (cdr p)))) pairs) (list :verdict 'regressed :why 'digest))
+          (t (list :verdict 'no-regression)))))
+
+(defun drgnx-perf-cpuset-args (cpus &optional topology)
+  "The container run arguments that give the lab CPUS cores (\"2\" or \"4\", $DRGNX_PERF_CPUS; review M14):
+`--cpuset-cpus' with the first thread of each of the first CPUS physical cores, so a machine that numbers a core's two
+threads next to each other (a 4900HS: 0,2) gets the same shape as one that does not (a 7900X: 0,1).  TOPOLOGY is
+a list of (CPU . CORE), by default from `lscpu -p=CPU,CORE'; without one, CPUs 0 to CPUS - 1.  Nil for an empty
+CPUS; an error for any other."
+  (let ((n (pcase (format "%s" (or cpus ""))
+             ("" nil)
+             ((and v (or "2" "4")) (string-to-number v))
+             (v (error "perf: DRGNX_PERF_CPUS must be 2 or 4, not %s" v)))))
+    (when n
+      (let ((topology (or topology
+                          (ignore-errors
+                            (mapcar (lambda (l) (let ((f (split-string l ","))) (cons (car f) (cadr f))))
+                                    (seq-remove (lambda (l) (string-prefix-p "#" l))
+                                                (process-lines "lscpu" "-p=CPU,CORE"))))))
+            (seen nil) (picked nil))
+        (dolist (c topology)
+          (when (and (< (length picked) n) (not (member (format "%s" (cdr c)) seen)))
+            (push (format "%s" (cdr c)) seen)
+            (push (format "%s" (car c)) picked)))
+        (list "--cpuset-cpus" (if (= (length picked) n)
+                                  (string-join (nreverse picked) ",")
+                                (format "0-%d" (1- n))))))))
 
 (defun drgnx-perf--path-value (plist path)
   "The value at PATH (a list of keys) in the nested PLIST."
