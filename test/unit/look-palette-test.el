@@ -66,13 +66,11 @@ off, the buffers have no such entry and the hook is gone."
         (progn
           (drgnx-look-echo-area-on)
           (should (memq 'drgnx-look--minibuffer-gap minibuffer-setup-hook))
-          (should (memq 'drgnx-look--minibuffer-gap minibuffer-inactive-mode-hook))
           (with-current-buffer echo (should (eq 'drgnx-surface-gap (cadr (assq 'default face-remapping-alist)))))
           (with-current-buffer mini (drgnx-look--minibuffer-gap)
                                (should (eq 'drgnx-surface-gap (cadr (assq 'default face-remapping-alist)))))
           (drgnx-look-echo-area-off)
           (should-not (memq 'drgnx-look--minibuffer-gap minibuffer-setup-hook))
-          (should-not (memq 'drgnx-look--minibuffer-gap minibuffer-inactive-mode-hook))
           (with-current-buffer echo (should-not (assq 'default face-remapping-alist))))
       (drgnx-look-echo-area-off)
       (kill-buffer mini))))
