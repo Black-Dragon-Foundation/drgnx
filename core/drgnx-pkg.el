@@ -733,10 +733,14 @@ removed from the cache."
 (defun drgnx-pkg--check-cached (desc cached)
   "DESC's file found in the cache as CACHED, with no verified lock entry of its hash: when its archive signs, check
 its signature now (t), and fail the run when it does not pass (the file leaves the cache); nil when the archive does
-not sign.  Whoever put the file there, it installs only as the archive signed it."
-  (when (and (package-desc-archive desc) (drgnx-pkg--checks-signature-p desc))
+not sign, or when the run does not use DESC's archive (an offline sync from the lock: the lock's hash is the check).
+Whoever put the file there, it installs only as the archive signed it."
+  (when-let* (((package-desc-archive desc))
+              (base (ignore-errors (package-archive-base desc)))
+              ((stringp base))
+              ((drgnx-pkg--checks-signature-p desc)))
     (condition-case err
-        (progn (package--check-signature (package-archive-base desc) (drgnx-pkg--file desc) (drgnx-pkg--bytes cached))
+        (progn (package--check-signature base (drgnx-pkg--file desc) (drgnx-pkg--bytes cached))
                t)
       (error (ignore-errors (delete-file cached))
              (drgnx-pkg--error "%s: the cached copy does not pass its signature check (%s); removed from the cache — nothing was changed"
