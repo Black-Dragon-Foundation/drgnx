@@ -9,7 +9,8 @@
 //! - **Tier 1.** [`Project::refresh_now`] lists the files and rebuilds the rows of those whose blob changed.
 //!   [`Project::tick`] does it when the settle core says a watcher's events are due (git after `index.lock` and 2 s
 //!   of quiet, a save after 30 s); without watches, [`Project::fresh_for_query`] diffs the blobs at query time.
-//! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder. Between requests it waits while typing
+//! - **Tier 2.** Requests of [`REQUEST_KEYS`] missing keys to each embedder that answers (a server that is not running
+//!   gets none, and is no failure, until the next change wakes tier 2). Between requests it waits while typing
 //!   holds ([`TYPING_HOLD`] from the last [`Project::note_typing`]) and, on battery, until AC or
 //!   [`Project::index_now`]. What it does is published as a [`Status`].
 
@@ -533,6 +534,10 @@ impl Inner {
             let overriding = self.gates().await;
             let mut sent = false;
             for e in &self.embedders {
+                // a server that is not running is no failure of tier 2: it is asked again at the next change
+                if !e.answers().await {
+                    continue;
+                }
                 let keys = match hrafn::missing(&self.store, e.model(), REQUEST_KEYS).await {
                     Ok(k) => k,
                     Err(err) => {
