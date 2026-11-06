@@ -551,6 +551,180 @@ mod queue {
     }
 }
 
+mod drill {
+    use super::*;
+    use drgnx_ratatoskr::runners::queue::{ROWS, Suite};
+
+    /// [`drive`], with a lost link handed to the queue as the hub's own loop does.
+    async fn drive_through_losses<T>(
+        q: &Queue,
+        events: &mut UnboundedReceiver<LinkEvent>,
+        outcomes: &mut Vec<Outcome>,
+        what: &str,
+        mut check: impl FnMut(&[Outcome]) -> Option<T>,
+    ) -> T {
+        skuld::wait_until_async(what, WAIT, || {
+            while let Ok(ev) = events.try_recv() {
+                outcomes.extend(q.on_link(ev, now()));
+            }
+            outcomes.extend(q.tick(now()).outcomes);
+            std::future::ready(check(outcomes))
+        })
+        .await
+    }
+
+    /// [C] A job of 240 rows (plist lines; a row runs when the selector the hub puts in its command picks it) runs on
+    /// r1, a runner with no grace. It parks after row 150; once the hub's copy of its log shows that row, the link is
+    /// cut. The hub takes rows 1–150 from its copy and requeues the job, and attempt 2 runs only rows 151–240, on r2.
+    /// When r1 is back its late attempt 1 is stopped, so no row runs to its end twice. The result counts all 240 rows
+    /// and says how they split.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_dropped_link_at_row_150_of_240_reruns_only_the_rest() {
+        let (prefix, hub) = ("fldrill", "hubdrill");
+        let (root1, root2) = (root("r1", "fl-drill"), root("r2", "fl-drill"));
+        let img = image("r1");
+        assert_eq!(image("r2"), img, "both runners hold the same base image");
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events) = Queue::new(QueueCfg {
+            hub_id: hub.into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        q.adopt("xbusy", Priority::P1, now());
+        let runner = |name: &str, grace_s: u64| RemoteRunner {
+            name: name.into(),
+            trust: forseti::RunnerTrust::Mine,
+            accept: forseti::Accept::All,
+            grace_s,
+            image: Some(img.clone()),
+        };
+        let (channels, mut child1) = serve("r1", &root1, prefix, hub);
+        q.add_runner(
+            runner("r1", 0),
+            Session::start("r1", channels, q.route(), q.link_events()),
+        );
+        let script = format!(
+            "sel='{ROWS}'; for i in $(seq 1 240); do printf 't%s\\n' $i | grep -q -- \"$sel\" || continue; \
+             echo \"(:name \\\"t$i\\\" :verdict pass)\"; \
+             if [ $i = 150 ]; then mkfifo /tmp/gate; read x < /tmp/gate; fi; done"
+        );
+        let mut s = spec(&script);
+        s.weight = Weight::Heavy;
+        q.submit(
+            Submit {
+                id: "xdrill".into(),
+                session: Some("s1".into()),
+                own: Priority::P3,
+                spec: s,
+                place: Placement {
+                    heavy: true,
+                    send: SendMode::Heavy,
+                    image: Some(img.clone()),
+                    suite: Some(Suite {
+                        parser: "plist".into(),
+                        listed: (1..=240).map(|i| format!("t{i}")).collect(),
+                    }),
+                    ..Placement::default()
+                },
+                pending: serde_json::Value::Null,
+                inputs: None,
+            },
+            now(),
+        );
+        let mut outcomes = vec![];
+        let log = dir.path().join("xdrill/log");
+        drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "row 150 in the hub's copy of the log",
+            |_, _| {
+                std::fs::read_to_string(&log)
+                    .ok()
+                    .filter(|l| l.contains("\"t150\""))
+                    .map(|_| ())
+            },
+        )
+        .await;
+        let (channels, _child2) = serve("r2", &root2, prefix, hub);
+        q.add_runner(
+            runner("r2", 600),
+            Session::start("r2", channels, q.route(), q.link_events()),
+        );
+        // the cut: r1's link is lost, and with no grace attempt 1 ends at once
+        let _ = child1.kill().await;
+        let (attempt, result) =
+            drive_through_losses(&q, &mut events, &mut outcomes, "attempt 2's result", |o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Done {
+                        id,
+                        attempt,
+                        result,
+                        ..
+                    } if id == "xdrill" => Some((*attempt, result.clone())),
+                    _ => None,
+                })
+            })
+            .await;
+        assert_eq!(
+            (attempt, &result["verdict"]),
+            (2, &json!("Pass")),
+            "{result}"
+        );
+        assert_eq!(
+            result["counts"],
+            json!({"ran": 240, "passed": 240, "failed": 0, "skipped": 0, "crashed": 0})
+        );
+        assert_eq!(
+            result["split"],
+            "rows 1–150 on r1 (attempt 1), 151–240 on r2 (attempt 2)"
+        );
+        let rows = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|l| l.starts_with("(:name"))
+                .map(String::from)
+                .collect()
+        };
+        let first = rows(&std::fs::read_to_string(dir.path().join("xdrill/log.1")).unwrap());
+        let second = rows(&std::fs::read_to_string(&log).unwrap());
+        assert_eq!(first.len(), 150, "{first:?}");
+        assert_eq!(
+            second.len(),
+            90,
+            "attempt 2 reran only the rest: {second:?}"
+        );
+        assert!(second[0].contains("\"t151\"") && second[89].contains("\"t240\""));
+        // r1 is back: its attempt 1, late, is stopped where it parked
+        let (channels, _child1) = serve("r1", &root1, prefix, hub);
+        assert!(q.set_session(
+            "r1",
+            Session::start("r1", channels, q.route(), q.link_events())
+        ));
+        let late = drive_through_losses(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "attempt 1's late result",
+            |o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Late {
+                        id,
+                        attempt: 1,
+                        result,
+                    } if id == "xdrill" => Some(result.clone()),
+                    _ => None,
+                })
+            },
+        )
+        .await;
+        assert_eq!(late["verdict"], "Cancelled", "{late}");
+        let late_rows = late["rows"].as_array().map_or(0, Vec::len);
+        assert!(late_rows <= 150, "attempt 1 ran on past row 150: {late}");
+    }
+}
+
 mod link {
     use super::*;
 

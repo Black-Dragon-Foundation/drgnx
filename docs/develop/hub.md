@@ -2132,7 +2132,7 @@ splitter's (`Origin::Splitter`), 3 for an agent's `job_start`, 4 for a plan's or
 
 **A tick** (`Queue::tick(now)`, every 2 s on the hub's clock, at every start and on every link event): the detached
 attempts whose grace ended; then the queued jobs in `forseti`'s order (`effective_priorities`, `queue_order`, then
-`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick` over this machine and every
+`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick_with` over this machine and every
 runner (trust, pin, features, state, the project's send mode, the `machines` cell). `Pick::Local` asks the local
 runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
 it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
@@ -2162,6 +2162,43 @@ runner's `hello` lists them, and jobs running here are adopted by the job layer,
 Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
+
+## Runners: partial rows and learned placement
+
+**Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
+`Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
+rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+(`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
+(`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
+parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The
+`start` frame names the suite's parser, so the runner sends `row` frames; each counts for an attempt placed on that
+runner with that nonce, current or late, until the job's verdict (`attempts::Rows`, and `rq_rows`). A runner sends its
+rows at an attempt's end, so when an attempt is requeued the hub reads the rows its own copy of the log shows (up to the
+last whole line) as that attempt's. A requeued attempt whose rows the next one reruns is cancelled when its runner lists
+it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice.
+
+At the verdict, `attempts::union_result` gives the runner's `result.json` the union's `counts`, `rows` (each with its
+attempt and machine) and `failing`: each row once, from its latest attempt. A `Pass` is judged again over the union
+(`sleipnir::linux::parse::judge` with the job's `expect`), so a row an earlier attempt failed keeps the job red; any other
+verdict stands. When the rows came from more than one attempt the result carries `split`, `exec::summary::split_line`'s
+words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
+summary (the job folder's `split` file).
+
+**Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
+history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time; no grant, and
+warmth is not known yet, so `warm` is false). The queue keeps each key's last 5 runs per machine, and `forseti::Learned`
+learns the speed ratios between machines from each new row (`Learned::observe_run`). Every candidate's estimate reads
+the job's history on every machine, and the pick is `forseti::pick_with` with what was learned and no warmth. After a
+restart `queue::kept` reads `rq_rows` and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and
+learns again in the same order, so placement is what it was; with no history it is the static rule's. Not wired yet:
+learned link rates (the hub times no transfers), and backfill's reservation and head protection
+(`forseti::backfill::reservation`, `admit::head_protection`), which need every machine's budget.
+
+Tests: `runners::attempts::tests::union_with_latest_attempt_winning`,
+`exec::summary::tests::summary_shows_the_split`, `runners::queue::tests::a_requeue_runs_only_the_rows_without_a_result`,
+`learned_placement_comes_back_after_a_restart` [D]; `tests/runners_orders.rs`
+`every_order_each_row_counted_once_latest_wins` [A] (two attempts' rows and a late `finished`, all 280 orders);
+`tests/fleet_runners.rs` `drill::a_dropped_link_at_row_150_of_240_reruns_only_the_rest` [C].
 
 ## Runners: sync and job trust
 

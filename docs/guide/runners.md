@@ -242,7 +242,10 @@ checked it:
 ## When a machine fails
 
 A lost link is never a job's result: a job on a runner whose link drops is *detached*, and comes back when the runner
-answers again (a runner that lingers keeps its jobs for 10 minutes), or goes back to the queue. A **strike** is a
+answers again (a runner that lingers keeps its jobs for 10 minutes), or goes back to the queue. A test job whose suite
+can select rows then runs only the rows that have no result yet, and its old attempt is stopped when its runner answers
+again; the result counts every row once, from its latest attempt, and its summary says where they ran: "rows 1–212 on
+desktop (attempt 1), 213–240 on laptop (attempt 2)". A **strike** is a
 failure that is the runner's, not the job's: setup or sync failed, the job's image is missing, the disk guard couldn't
 free room, the runner's own guard killed jobs, its link was lost while jobs ran (the second time in a day), its health
 check failed, or a key didn't arrive although the link stayed up. A red test, a crash, a job's own out-of-memory, a

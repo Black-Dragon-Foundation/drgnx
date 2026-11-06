@@ -8,7 +8,7 @@
 //! writes why it waits. A runner's frames come back through [`Queue::on_link`]; its verdicts, losses and late results
 //! go to the job layer as [`Outcome`]s.
 
-use super::attempts::{self, Effect, Event as AEvent, Listed};
+use super::attempts::{self, Effect, Event as AEvent, Listed, Rows};
 use super::health::{self, Facts, StrikeCtx, Strikes};
 use super::keys::{self, Keys};
 use super::link::{LinkEvent, Route, Session};
@@ -17,13 +17,14 @@ use super::redact::{self, Redactor};
 use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
-    Accept, Candidate, Drr, Expect, Expected, Job, JobId, JobSpec, JobState, JobTrust, Kind, Lane,
-    Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob, WaitReason, Weight,
+    Accept, Candidate, Drr, Expect, Expected, HistRow, Job, JobId, JobSpec, JobState, JobTrust,
+    Kind, Lane, Learned, Pick, PlaceCtx, Priority, Range, RunnerState, RunnerTrust, RunningJob,
+    WaitReason, Weight,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sleipnir::proto::{Frame, JobRef, ManifestEntry, Nonce, PROTO_VERSION, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -142,6 +143,20 @@ pub struct Placement {
     /// The name of the project's read-only deploy key or token (`drgnx-runners-origin-key`): a `mine` or `my-cloud`
     /// runner fetches a private origin with it. A key like any other: held in memory, sent in a `key` frame.
     pub origin_key: Option<String>,
+    /// A test job's rows, when its suite supports row selection: a requeue then runs only the rows without a result.
+    pub suite: Option<Suite>,
+}
+
+/// What a command takes in place of the selector of the rows an attempt runs (`forseti::split::selector`, an Emacs
+/// regexp read from a string: `^\(a\|b\)$`).
+pub const ROWS: &str = "{rows}";
+
+/// A test job whose suite supports row selection: the row parser that reads its log (`ert`, `cargo-test`, `plist`),
+/// and its rows in listing order. Its command holds [`ROWS`] where the selector goes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Suite {
+    pub parser: String,
+    pub listed: Vec<String>,
 }
 
 impl Default for Placement {
@@ -161,6 +176,7 @@ impl Default for Placement {
             visibility: sync::Visibility::Private,
             shared_overlay: false,
             origin_key: None,
+            suite: None,
         }
     }
 }
@@ -410,6 +426,183 @@ struct St {
     syncs: BTreeMap<(String, u32), SyncSt>,
     /// The started attempts of keyed jobs: the keys sent to each so far.
     keyed: BTreeMap<(String, u32), Vec<String>>,
+    /// Each job's rows so far, by attempt (`rq_rows`).
+    rows: BTreeMap<String, Rows>,
+    /// Requeued attempts whose rows the next attempt reruns: cancelled when their runner lists them again, so a row
+    /// never runs to its end twice.
+    cancel_late: BTreeSet<(String, u32)>,
+    /// The last runs of each history key on each machine (`rq_history`), and what placement learned from all of them.
+    history: BTreeMap<String, BTreeMap<String, Vec<HistRow>>>,
+    learned: Learned,
+}
+
+impl St {
+    /// Learns from ROW, then keeps it among the last [`forseti::history::LAST_RUNS`] of its key on its machine.
+    fn learn(&mut self, row: HistRow) {
+        let all = self.history_of(&row.key);
+        self.learned.observe_run(&row, &all);
+        let runs = self
+            .history
+            .entry(row.key.clone())
+            .or_default()
+            .entry(row.machine.clone())
+            .or_default();
+        runs.push(row);
+        if runs.len() > forseti::history::LAST_RUNS {
+            runs.remove(0);
+        }
+    }
+
+    /// The runs of KEY on every machine.
+    fn history_of(&self, key: &str) -> Vec<HistRow> {
+        self.history
+            .get(key)
+            .map(|m| m.values().flatten().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+/// The spec an attempt of a job runs. With a suite that supports row selection ([`selects_rows`]), its command's
+/// [`ROWS`] becomes the selector of the listed rows that have no result in ROWS (all of them on a first attempt), and
+/// `select` is that selector. Otherwise the spec as it is: a requeue reruns the whole job.
+pub fn attempt_spec(spec: &JobSpec, suite: Option<&Suite>, rows: Option<&Rows>) -> JobSpec {
+    let mut out = spec.clone();
+    let Some(suite) = suite.filter(|s| selects_rows(spec, Some(s))) else {
+        return out;
+    };
+    let done = rows.map(Rows::done).unwrap_or_default();
+    let sel = forseti::split::selector(&forseti::split::remaining_rows(&suite.listed, &done));
+    for a in &mut out.command {
+        *a = a.replace(ROWS, &sel);
+    }
+    out.select = Some(sel);
+    out
+}
+
+/// Whether a job's suite supports row selection: a parser that reads rows, listed rows, and a command that takes the
+/// selector.
+pub fn selects_rows(spec: &JobSpec, suite: Option<&Suite>) -> bool {
+    suite.is_some_and(|s| {
+        !matches!(s.parser.as_str(), "" | "exit")
+            && !s.listed.is_empty()
+            && spec.command.iter().any(|a| a.contains(ROWS))
+    })
+}
+
+/// The history row a runner's result leaves: a pass or a red, undisturbed (a disturbed run's time says little, and
+/// `rq_history` keeps no mark for it); none otherwise. `rq_history` keeps no grant either.
+fn hist_row(spec: &JobSpec, machine: &str, result: &Value, now: u64) -> Option<HistRow> {
+    let verdict = verdict_of(result)?;
+    let full_run = matches!(verdict, forseti::Verdict::Pass | forseti::Verdict::Red);
+    if !full_run || result["disturbed"].as_bool() == Some(true) {
+        return None;
+    }
+    Some(HistRow {
+        key: forseti::history_key(spec),
+        machine: machine.into(),
+        grant: no_grant(),
+        wall_s: result["wall_s"].as_f64()?,
+        cpu_s: result["cpu_s"].as_f64().unwrap_or(0.0),
+        mem_peak_mib: result["mem_peak_mib"].as_u64().unwrap_or(0),
+        verdict,
+        disturbed: false,
+        at: now,
+        warm: false,
+    })
+}
+
+fn no_grant() -> forseti::Grant {
+    forseti::Grant {
+        cores: 0,
+        mem_cap_mib: 0,
+        reserve_mib: 0,
+    }
+}
+
+/// A row `rq_rows` kept.
+#[derive(Clone, Debug)]
+pub struct StoredRow {
+    pub job: String,
+    pub attempt: u32,
+    pub row: String,
+    pub verdict: String,
+    pub machine: String,
+}
+
+/// The rows and the history `runtime.db` kept, for [`Queue::restore_kept`].
+#[derive(Clone, Debug, Default)]
+pub struct Kept {
+    pub rows: Vec<StoredRow>,
+    /// Oldest first, as they were learned from.
+    pub history: Vec<HistRow>,
+}
+
+/// What `rq_rows` and `rq_history` hold.
+pub async fn kept(db: &urdr::Handle) -> Kept {
+    let rows = db
+        .read(|c| {
+            let mut st = c.prepare("select job, attempt, row, verdict, machine from rq_rows")?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok(StoredRow {
+                        job: r.get(0)?,
+                        attempt: r.get::<_, i64>(1)?.max(0) as u32,
+                        row: r.get(2)?,
+                        verdict: r.get(3)?,
+                        machine: r.get(4)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the rows in runtime.db: {e}");
+            vec![]
+        });
+    let history = db
+        .read(|c| {
+            let mut st = c.prepare(
+                "select key, machine, warm, wall, cpu, peak_mib, verdict, at from rq_history order by at, rowid",
+            )?;
+            let rows = st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, bool>(2)?,
+                        r.get::<_, f64>(3)?,
+                        r.get::<_, f64>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, f64>(7)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("runners: the history in runtime.db: {e}");
+            vec![]
+        })
+        .into_iter()
+        .filter_map(|(key, machine, warm, wall_s, cpu_s, peak, verdict, at)| {
+            Some(HistRow {
+                key,
+                machine,
+                grant: no_grant(),
+                wall_s,
+                cpu_s,
+                mem_peak_mib: peak.unwrap_or(0).max(0) as u64,
+                verdict: serde_json::from_str(&verdict).ok()?,
+                disturbed: false,
+                at: at.max(0.0) as u64,
+                warm,
+            })
+        })
+        .collect();
+    Kept { rows, history }
 }
 
 /// A keyed attempt's log as the hub writes it: every key sent masked, and how far into the runner's log it has read.
@@ -1022,6 +1215,7 @@ impl Queue {
                 "rq_offer where job",
                 "rq_admission where job",
                 "rq_detached where job",
+                "rq_rows where job",
             ] {
                 c.execute(&format!("delete from {t} = ?1"), [&id])?;
             }
@@ -1074,6 +1268,100 @@ impl Queue {
         }))
     }
 
+    /// Attempt R on RUNNER gave ROW the result VERDICT: kept with its job's rows, and in `rq_rows`.
+    fn record_row(&self, st: &mut St, r: &JobRef, row: &str, verdict: &str, runner: &str) {
+        st.rows
+            .entry(r.job.clone())
+            .or_default()
+            .record(r.attempt, row, verdict, runner);
+        let (job, attempt, row, verdict, machine) = (
+            r.job.clone(),
+            r.attempt,
+            row.to_string(),
+            verdict.to_string(),
+            runner.to_string(),
+        );
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert or replace into rq_rows(job, attempt, row, verdict, machine) values (?1, ?2, ?3, ?4, ?5)",
+                (job, attempt, row, verdict, machine),
+            )?;
+            Ok(())
+        }));
+    }
+
+    /// The rows the hub's copy of attempt N's log at PATH shows, read with PARSER up to its last whole line, recorded
+    /// as that attempt's: a runner sends its `row` frames at an attempt's end, and a lost attempt sends none.
+    fn rows_from_log(&self, st: &mut St, job: &str, n: u32, parser: &str, path: &std::path::Path) {
+        use sleipnir::linux::parse;
+        let Some(a) = st.attempts.attempt(job, n) else {
+            return;
+        };
+        let (r, runner) = (
+            JobRef {
+                job: job.into(),
+                attempt: n,
+                nonce: a.nonce,
+            },
+            a.runner.clone(),
+        );
+        let Ok(parser) = serde_json::from_value::<parse::Parser>(Value::String(parser.into()))
+        else {
+            return;
+        };
+        let mut log = std::fs::read(path).unwrap_or_default();
+        log.truncate(log.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
+        for (name, v) in parse::parse(parser, &log).rows {
+            let verdict = serde_json::to_value(v)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+            self.record_row(st, &r, &name, &verdict, &runner);
+        }
+    }
+
+    /// RESULT, a runner's verdict for a job of SPEC on MACHINE at NOW, as the history placement learns from
+    /// (`rq_history`).
+    fn record_run(&self, st: &mut St, spec: &JobSpec, machine: &str, result: &Value, now: u64) {
+        let Some(row) = hist_row(spec, machine, result, now) else {
+            return;
+        };
+        let verdict = serde_json::to_string(&row.verdict).unwrap_or_default();
+        let (key, machine, warm, wall, cpu, peak, at) = (
+            row.key.clone(),
+            row.machine.clone(),
+            row.warm,
+            row.wall_s,
+            row.cpu_s,
+            row.mem_peak_mib as i64,
+            row.at as f64,
+        );
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert into rq_history(key, machine, warm, wall, cpu, peak_mib, verdict, at) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (key, machine, warm, wall, cpu, peak, verdict, at),
+            )?;
+            Ok(())
+        }));
+        st.learn(row);
+    }
+
+    /// The rows and the history the database kept (a hub restart): each job's rows come back, and placement learns
+    /// again from the runs, in the order it first did.
+    pub fn restore_kept(&self, k: Kept) {
+        let mut st = self.lock();
+        for r in k.rows {
+            st.rows
+                .entry(r.job)
+                .or_default()
+                .record(r.attempt, &r.row, &r.verdict, &r.machine);
+        }
+        for h in k.history {
+            st.learn(h);
+        }
+    }
+
     /// A job enters the queue at NOW. With frozen inputs, its trust is theirs (design §6.6: from what the public
     /// origin has, and the keys it names), whatever the spec said, and they are kept in `rq_input`.
     pub fn submit(&self, mut s: Submit, now: u64) {
@@ -1121,6 +1409,12 @@ impl Queue {
             };
             let grace_s = st.runners.get(&a.runner).map_or(600, |r| r.r.grace_s);
             let (current, restartable) = (j.attempt == a.attempt, j.s.spec.restartable);
+            // a requeued attempt whose rows the next one reruns still stops when its runner lists it
+            if state == attempts::AttemptState::Requeued
+                && selects_rows(&j.s.spec, j.s.place.suite.as_ref())
+            {
+                st.cancel_late.insert((a.job.clone(), a.attempt));
+            }
             st.attempts.restore(
                 &a.job,
                 a.attempt,
@@ -1334,6 +1628,8 @@ impl Queue {
         let Some(q) = st.jobs.get(&id) else {
             return;
         };
+        // the job's runs on every machine: each candidate's estimate reads them, with what placement learned
+        let history = st.history_of(&forseti::history_key(&job.spec));
         // this machine always (a pin elsewhere filters it), then every runner
         let mut cands = vec![Candidate {
             name: LOCAL.into(),
@@ -1348,7 +1644,7 @@ impl Queue {
             start_s: 0.0,
             wait_s: 0.0,
             speed: 1.0,
-            history: vec![],
+            history: history.clone(),
             cloud: None,
         }];
         // a keyed job's keys reach a runner's job only: this machine is no candidate for it (it never runs without them)
@@ -1378,7 +1674,7 @@ impl Queue {
                 start_s: 0.0,
                 wait_s: 0.0,
                 speed: 1.0,
-                history: vec![],
+                history: history.clone(),
                 cloud: None,
             });
         }
@@ -1391,10 +1687,11 @@ impl Queue {
             now,
             commits_not_on_origin: q.s.inputs.as_ref().map_or(0, Frozen::commits_not_on_origin),
         };
-        // the pick, then this machine's own admission: refused here, the job may still go to a runner
+        // the pick (with what placement learned; no history: the static rule), then this machine's own admission:
+        // refused here, the job may still go to a runner
         let mut here: Option<WaitReason> = None;
         let placed = loop {
-            match forseti::pick(job, &cands, &ctx) {
+            match forseti::pick_with(job, &cands, &ctx, &st.learned, &|_| None) {
                 Pick::Local => {
                     let running: Vec<RunningJob> = st.local_running.values().cloned().collect();
                     match self
@@ -1480,9 +1777,11 @@ impl Queue {
             },
         );
         if let Some(rr) = st.runners.get(name) {
+            // a requeue of a job whose suite selects rows runs only the rows without a result
+            let spec = attempt_spec(&job.spec, j.s.place.suite.as_ref(), st.rows.get(&id));
             rr.session.send(Frame::Offer {
                 r: r.clone(),
-                spec: Box::new(job.spec.clone()),
+                spec: Box::new(spec),
                 priority: eff,
                 input_key: j
                     .s
@@ -1858,6 +2157,17 @@ impl Queue {
                 self.apply(st, effects, now, out);
                 return;
             }
+            Frame::Row { r, name, verdict } => {
+                // a row counts for an attempt the hub placed there with that nonce, its job's current one or a late
+                // one, until the job's verdict is recorded
+                if st.attempts.frame_ok(runner, &r).is_some() && st.jobs.contains_key(&r.job) {
+                    self.record_row(st, &r, &name, &verdict, runner);
+                }
+                AEvent::FrameFrom {
+                    runner: runner.into(),
+                    r,
+                }
+            }
             Frame::Preempting { .. } => {
                 if let Some(r) = st.runners.get_mut(runner) {
                     r.state = RunnerState::Preempting;
@@ -1951,6 +2261,12 @@ impl Queue {
         if keyed {
             self.new_redactor(st, r, false);
         }
+        // a test job's rows come back as `row` frames when its suite names their parser
+        let parser = st
+            .jobs
+            .get(&r.job)
+            .and_then(|j| j.s.place.suite.as_ref())
+            .map_or_else(|| "exit".to_string(), |s| s.parser.clone());
         if let Some(rr) = st.runners.get(runner) {
             rr.session.send(Frame::Start {
                 r: r.clone(),
@@ -1959,7 +2275,7 @@ impl Queue {
                 net_hosts: vec![],
                 // no network reaches a runner job yet (`net_hosts`), so no names to pin either
                 pins: vec![],
-                parser: "exit".into(),
+                parser,
             });
         }
     }
@@ -2167,8 +2483,29 @@ impl Queue {
                         Self::canary_ended(st, &job, Some(verdict));
                         continue;
                     }
-                    if let Some(r) = runner {
-                        Self::strike_of(st, &r, &verdict, now);
+                    if let Some(r) = &runner {
+                        Self::strike_of(st, r, &verdict, now);
+                    }
+                    // the result counts every attempt's rows, a row's latest attempt winning, and says how they split
+                    let mut result = result;
+                    if let Some(j) = st.jobs.get(&job) {
+                        let (spec, suite) = (j.s.spec.clone(), j.s.place.suite.clone());
+                        let rows = st.rows.remove(&job).unwrap_or_default();
+                        // a run of only some rows says nothing of the whole job's time
+                        if let Some(r) = &runner
+                            && !rows.before(attempt)
+                        {
+                            self.record_run(st, &spec, r, &result, now);
+                        }
+                        if !rows.is_empty() {
+                            result = attempts::union_result(&result, &rows, &spec.expect);
+                            let split = suite.and_then(|s| {
+                                crate::exec::summary::split_line(&s.listed, &rows.union())
+                            });
+                            if let (Some(line), Some(o)) = (split, result.as_object_mut()) {
+                                o.insert("split".into(), line.into());
+                            }
+                        }
                     }
                     st.jobs.remove(&job);
                     st.attempts.forget(&job);
@@ -2181,18 +2518,25 @@ impl Queue {
                     });
                 }
                 Effect::Requeue { job, reason } => {
-                    if let Some(j) = st.jobs.get_mut(&job) {
-                        // the next attempt's log starts afresh; this one's is kept as its own
-                        let dir = self.exec_root.join(&job);
-                        let _ = std::fs::rename(
-                            dir.join("log"),
-                            dir.join(format!("log.{}", j.attempt)),
-                        );
-                        j.state = QState::Queued;
-                        j.machine = None;
-                        j.waiting = Some(format!("requeued ({reason})"));
-                        let j = j.clone();
-                        self.put_job(&j, j.s.own);
+                    let Some(j) = st.jobs.get_mut(&job) else {
+                        continue;
+                    };
+                    // the next attempt's log starts afresh; this one's is kept as its own
+                    let (dir, n) = (self.exec_root.join(&job), j.attempt);
+                    let kept = dir.join(format!("log.{n}"));
+                    let _ = std::fs::rename(dir.join("log"), &kept);
+                    j.state = QState::Queued;
+                    j.machine = None;
+                    j.waiting = Some(format!("requeued ({reason})"));
+                    let j = j.clone();
+                    self.put_job(&j, j.s.own);
+                    // the rows its log shows have their results, so the next attempt runs only the rest; this one
+                    // stops once its runner is heard from again
+                    if let Some(suite) = &j.s.place.suite {
+                        self.rows_from_log(st, &job, n, &suite.parser, &kept);
+                        if selects_rows(&j.s.spec, Some(suite)) {
+                            st.cancel_late.insert((job.clone(), n));
+                        }
                     }
                 }
                 Effect::Lost { job } if is_canary(&job) => {
@@ -2201,6 +2545,7 @@ impl Queue {
                     Self::canary_ended(st, &job, Some(lost));
                 }
                 Effect::Lost { job } => {
+                    st.rows.remove(&job);
                     st.jobs.remove(&job);
                     st.attempts.forget(&job);
                     self.drop_job(&job);
@@ -2241,11 +2586,17 @@ impl Queue {
                     } else {
                         continue;
                     };
+                    // a late attempt whose rows the next attempt reruns is stopped, its log and result kept: no row
+                    // runs to its end twice
+                    let stop = st.cancel_late.remove(&(job.clone(), attempt));
                     if let Some(rr) = st.runners.get(&runner) {
                         rr.session.send(Frame::Attach {
-                            r,
+                            r: r.clone(),
                             log_offset: offset,
                         });
+                        if stop {
+                            rr.session.send(Frame::Cancel { r });
+                        }
                     }
                 }
                 Effect::KeepLate { .. } => {}
@@ -2399,6 +2750,86 @@ pub async fn stored(db: &urdr::Handle) -> (Vec<Stored>, Vec<StoredAttempt>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // [D] pure: a first attempt runs every listed row; a requeue only those without a result
+    #[test]
+    fn a_requeue_runs_only_the_rows_without_a_result() {
+        let mut spec = blank_spec("x1");
+        spec.command = vec!["sh".into(), "-c".into(), format!("run '{ROWS}'")];
+        let listed: Vec<String> = (1..=5).map(|i| format!("t{i}")).collect();
+        let suite = Suite {
+            parser: "plist".into(),
+            listed: listed.clone(),
+        };
+        let all = forseti::split::selector(&listed);
+        let first = attempt_spec(&spec, Some(&suite), None);
+        assert_eq!(first.command[2], format!("run '{all}'"));
+        assert_eq!(first.select.as_deref(), Some(all.as_str()));
+        let mut rows = Rows::default();
+        rows.record(1, "t1", "pass", "desktop");
+        rows.record(1, "t3", "fail", "desktop");
+        let rest = forseti::split::selector(&["t2".into(), "t4".into(), "t5".into()]);
+        let second = attempt_spec(&spec, Some(&suite), Some(&rows));
+        assert_eq!(second.command[2], format!("run '{rest}'"));
+        assert_eq!(second.select.as_deref(), Some(rest.as_str()));
+        // the whole job again, as it is: no place for the selector, a parser that reads no rows, or no suite
+        let mut no_place = spec.clone();
+        no_place.command[2] = "run all".into();
+        let exit = Suite {
+            parser: "exit".into(),
+            listed,
+        };
+        for (s, su) in [
+            (&no_place, Some(&suite)),
+            (&spec, Some(&exit)),
+            (&spec, None),
+        ] {
+            assert!(!selects_rows(s, su));
+            assert_eq!(attempt_spec(s, su, Some(&rows)), *s);
+        }
+        assert!(selects_rows(&spec, Some(&suite)));
+    }
+
+    // [D] pure (runtime.db in a folder): what placement learned comes back after a hub restart; with no history,
+    // nothing is learned and placement is the static rule's
+    #[tokio::test]
+    async fn learned_placement_comes_back_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_store, db) = crate::runtime_db::open(dir.path()).unwrap();
+        let queue = |db: Option<urdr::Handle>| {
+            Queue::new(QueueCfg {
+                hub_id: "h".into(),
+                exec_root: dir.path().to_path_buf(),
+                local: LocalRunner::new(super::super::local::Admission::Fixed(1), dir.path()),
+                db,
+            })
+            .0
+        };
+        let fresh = queue(None);
+        fresh.restore_kept(kept(&db).await);
+        assert_eq!(fresh.lock().learned, Learned::default());
+        assert!(fresh.lock().history.is_empty());
+        let mut spec = blank_spec("x1");
+        spec.command = vec!["make".into(), "check".into()];
+        let ran = |verdict: &str, wall: f64, disturbed: bool| json!({"verdict": verdict, "wall_s": wall, "cpu_s": wall, "mem_peak_mib": 100, "disturbed": disturbed});
+        let q = queue(Some(db.clone()));
+        {
+            let mut st = q.lock();
+            q.record_run(&mut st, &spec, "desktop", &ran("Pass", 600.0, false), 10);
+            q.record_run(&mut st, &spec, "laptop", &ran("Red", 900.0, false), 20);
+            // a disturbed run and a timeout teach nothing
+            q.record_run(&mut st, &spec, "laptop", &ran("Pass", 9000.0, true), 30);
+            q.record_run(&mut st, &spec, "laptop", &ran("Timeout", 9000.0, false), 40);
+        }
+        q.flush().await;
+        let live = q.lock().learned.clone();
+        assert_eq!(live.ratio("laptop", "desktop"), Some(1.5));
+        let again = queue(None);
+        again.restore_kept(kept(&db).await);
+        let st = again.lock();
+        assert_eq!(st.learned, live);
+        assert_eq!(st.history_of(&forseti::history_key(&spec)).len(), 2);
+    }
 
     // [D] pure: the design's table, row by row
     #[test]
