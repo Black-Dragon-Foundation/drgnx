@@ -19,11 +19,10 @@
           more))
 
 (defmacro drgnx-extensions-test--with (&rest body)
-  "BODY with a fresh list model and no job layer; the list buffer is killed after."
+  "BODY with a fresh list model and an empty job layer (its state table is fresh); the list buffer is killed after."
   (declare (indent 0) (debug t))
   `(unwind-protect
-       (cl-letf (((symbol-function 'drgnx-extensions-jobs-state) (lambda (_id) nil))
-                 ((symbol-function 'drgnx-extensions-live-restart-pending) (lambda () nil)))
+       (let ((drgnx-extensions-jobs--state (make-hash-table)) (drgnx-extensions-live--restart nil))
          (drgnx-extensions-list--reset)
          (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
          ,@body)
@@ -58,12 +57,12 @@
 
 (ert-deftest drgnx-extensions/local-filters-become-ids ()
   (drgnx-extensions-test--with
-    (cl-letf (((symbol-function 'drgnx-extensions-jobs-state)
-               (lambda (id) (and (member id '("pkg:a" "pkg:b")) (list :status 'failed :error "no")))))
-      (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:a" "pkg:b" "pkg:c"))
-      (let* ((params (drgnx-extensions-list-search-params (drgnx-extensions-parse-query "@failed")))
-             (ids (plist-get (plist-get params :filters) :ids)))
-        (should (equal (sort (append ids nil) #'string<) '("pkg:a" "pkg:b")))))))
+    (drgnx-extensions-jobs--put '(a b) (list :status 'failed :error "no"))
+    ;; the job layer names packages, as symbols; the list's rows are "pkg:NAME"
+    (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(a b c))
+    (let* ((params (drgnx-extensions-list-search-params (drgnx-extensions-parse-query "@failed")))
+           (ids (plist-get (plist-get params :filters) :ids)))
+      (should (equal (sort (append ids nil) #'string<) '("pkg:a" "pkg:b"))))))
 
 (ert-deftest drgnx-extensions/sections-fold-while-a-query-is-typed ()
   (drgnx-extensions-test--with
@@ -78,12 +77,11 @@
 (ert-deftest drgnx-extensions/a-busy-row-shows-step-and-elapsed ()
   (drgnx-extensions-test--with
     (drgnx-extensions-list--receive 'installed (list (drgnx-extensions-test--row "magit" "installed")) 1 0)
-    (cl-letf (((symbol-function 'drgnx-extensions-jobs-state)
-               (lambda (_id) (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))))
-      (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit"))
-      (let ((text (substring-no-properties (drgnx-extensions-list--render "pkg:magit"))))
-        (should (string-match-p "native 14/37" text))
-        (should (string-match-p "12s" text))))))
+    (drgnx-extensions-jobs--put '(magit) (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))
+    (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
+    (let ((text (substring-no-properties (drgnx-extensions-list--render "pkg:magit"))))
+      (should (string-match-p "native 14/37" text))
+      (should (string-match-p "12s" text)))))
 
 (ert-deftest drgnx-extensions/the-second-tick-redraws-busy-rows-only ()
   (drgnx-extensions-test--with
@@ -92,15 +90,14 @@
                                                        (drgnx-extensions-test--row "dash" "installed")) 2 0)
       (with-current-buffer (drgnx-extensions-list--buffer)
         (let (dirty)
-          (cl-letf (((symbol-function 'drgnx-extensions-jobs-state)
-                     (lambda (id) (and (equal id "pkg:magit") (list :status 'busy :step 'download :since (float-time)))))
-                    ((symbol-function 'drgnx-view-dirty) (lambda (_view keys) (push keys dirty))))
-            (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit"))
+          (drgnx-extensions-jobs--put '(magit) (list :status 'busy :step 'download :since (float-time)))
+          (cl-letf (((symbol-function 'drgnx-view-dirty) (lambda (_view keys) (push keys dirty))))
+            (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
             (setq dirty nil)
             (drgnx-test-advance 1.0)
             (should (equal (car dirty) '("pkg:magit"))))
-          (cl-letf (((symbol-function 'drgnx-extensions-jobs-state) (lambda (_id) nil)))
-            (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit")))
+          (remhash 'magit drgnx-extensions-jobs--state)
+          (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
           (should-not (drgnx-timer-active-p 'extensions-list-tick)))))))
 
 (ert-deftest drgnx-extensions/no-timer-without-a-busy-row ()
@@ -109,14 +106,14 @@
       (drgnx-extensions-list--receive 'installed (list (drgnx-extensions-test--row "magit" "installed")) 1 0)
       (with-current-buffer (drgnx-extensions-list--buffer)
         (should-not (drgnx-timer-active-p 'extensions-list-tick))
-        (cl-letf (((symbol-function 'drgnx-extensions-jobs-state) (lambda (_id) (list :status 'queued))))
-          (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit")))
+        (drgnx-extensions-jobs--put '(magit) (list :status 'queued))
+        (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
         (should-not (drgnx-timer-active-p 'extensions-list-tick))
-        (cl-letf (((symbol-function 'drgnx-extensions-jobs-state) (lambda (_id) (list :status 'busy :since (float-time)))))
-          (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit")))
+        (drgnx-extensions-jobs--put '(magit) (list :status 'busy :since (float-time)))
+        (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
         (should (drgnx-timer-active-p 'extensions-list-tick))
-        (cl-letf (((symbol-function 'drgnx-extensions-jobs-state) (lambda (_id) (list :status 'done))))
-          (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '("pkg:magit")))
+        (drgnx-extensions-jobs--put '(magit) (list :status 'done))
+        (run-hook-with-args 'drgnx-extensions-jobs-changed-functions '(magit))
         (should-not (drgnx-timer-active-p 'extensions-list-tick))))))
 
 (ert-deftest drgnx-extensions/the-next-page-is-asked-near-the-end ()

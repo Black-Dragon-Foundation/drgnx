@@ -328,13 +328,22 @@ While a query is typed: the search results alone, or with @generations the gener
             (when (listp r)
               (mapcar (lambda (x) (let ((s (format "%s" x))) (if (string-search ":" s) s (concat "pkg:" s)))) r))))))
 
+(defun drgnx-extensions-list--row-id (x)
+  "The row id of X as the job layer names it: a package (a symbol or a bare name) is \"pkg:NAME\", an id stays; a
+ticket (an integer) has no row, nil."
+  (cond ((integerp x) nil)
+        ((and (stringp x) (string-search ":" x)) x)
+        (t (concat "pkg:" (format "%s" x)))))
+
 (defun drgnx-extensions-list--jobs-changed (ids)
   "`drgnx-extensions-jobs-changed-functions': read the state of IDS, draw their rows, start or stop the timer."
   (let (shown)
-    (dolist (id ids)
-      (let ((st (and (fboundp 'drgnx-extensions-jobs-state) (drgnx-extensions-jobs-state id))))
-        (if st (puthash id st drgnx-extensions-list--jobs) (remhash id drgnx-extensions-list--jobs))
-        (when (gethash id drgnx-extensions-list--rows) (push id shown))))
+    (dolist (name ids)
+      (let* ((id (drgnx-extensions-list--row-id name))
+             (st (and id (fboundp 'drgnx-extensions-jobs-state) (drgnx-extensions-jobs-state name))))
+        (when id
+          (if st (puthash id st drgnx-extensions-list--jobs) (remhash id drgnx-extensions-list--jobs))
+          (when (gethash id drgnx-extensions-list--rows) (push id shown)))))
     (drgnx-extensions-list--note-restart)
     (when-let* ((view (drgnx-extensions-list--view)))
       (when shown (drgnx-view-dirty view shown))
