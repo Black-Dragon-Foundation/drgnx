@@ -286,6 +286,7 @@ pub(crate) fn run_state(
                 id: s.id.clone(),
                 task: s.task.clone(),
                 exited: s.status == Some(SessionStatus::Exited),
+                held_by_user: s.held_by.is_some(),
                 held: held
                     .get(&s.id)
                     .copied()

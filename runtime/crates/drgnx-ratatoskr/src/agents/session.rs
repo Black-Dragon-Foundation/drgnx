@@ -9,12 +9,13 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
-mod turn_core;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;
 use super::queue::{Origin, Queued};
 use super::transcript;
+use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
@@ -25,8 +26,9 @@ use hermod::{Conn, ConnOpts, Event, Incoming, SessionId};
 use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
-    AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
-    RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
+    AgentOp, AgentWheel, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission,
+    PermissionParams, RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript,
+    Usage, Via, WheelSaved, WheelState,
 };
 use runstav::methods::hub::{EnvVar, refused_env_name};
 use runstav::methods::matrix::{Role, Unit};
@@ -50,6 +52,8 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_ANSWER: Duration = Duration::from_secs(2);
 /// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
 const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
+/// How long a give waits for the editor's `agents/wheel/saved`.
+const WHEEL_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -176,6 +180,10 @@ struct State {
     steps_begun: i64,
     /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
     mcp_begun: Vec<(i64, String)>,
+    /// Who drives: the agent, or the user holding (or taking) its wheel ([`super::wheel`]).
+    wheel: Wheel,
+    /// The step snapshot taken when the hold began: what the give measures the user's changes from.
+    wheel_base: Option<String>,
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -186,6 +194,8 @@ struct Stepped {
     answered: Vec<Pending>,
     /// To answer cancelled.
     cancelled: Vec<Pending>,
+    /// The turn the take stopped ended: the wheel is held now.
+    held: bool,
 }
 
 /// A step that has begun.
@@ -261,6 +271,8 @@ impl State {
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
+            wheel: Wheel::Free,
+            wheel_base: None,
             closed: Vec::new(),
             seq: 0,
             entries: Vec::new(),
@@ -483,6 +495,7 @@ impl State {
                 self.wait_end();
             }
         }
+        out.held = wheel::turn_ended(&mut self.wheel, &fx);
         out.fx = fx;
         out
     }
@@ -766,6 +779,8 @@ pub struct Session {
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
+    /// Where the step snapshot at a hold on its wheel is taken (none: the hub has no state folder).
+    snap: Option<crate::timeline::Snap>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
     /// The count of those steps sent and written.
@@ -837,11 +852,13 @@ struct Launched {
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
 /// chat in a project writes nothing (the hub serves `fs/write_text_file` outside the sandbox, which binds the project
-/// read-only).
+/// read-only).  While the user holds the session's wheel it writes nothing at all.
 pub(crate) struct Fence {
     pub cwd: PathBuf,
     pub document: Option<PathBuf>,
     pub read_only: bool,
+    /// The user holds the wheel ([`Fence::held`]).
+    pub held: bool,
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -880,10 +897,19 @@ fn resolve(p: &Path) -> PathBuf {
 }
 
 impl Fence {
+    /// Whether the user holds SESSION's wheel (the turn the take stopped has ended): every write of it is refused,
+    /// by this fence and by the pair door alike.
+    pub(crate) fn held(session: &Session) -> bool {
+        lock(&session.state).wheel == Wheel::Held
+    }
+
     fn check(&self, path: &str, write: bool) -> Result<PathBuf, String> {
         let p = Path::new(path);
         if !p.is_absolute() {
             return Err(format!("{path}: not an absolute path"));
+        }
+        if write && self.held {
+            return Err(format!("{path}: {}", wheel::HELD));
         }
         let real = resolve(p);
         if write && let Some(doc) = &self.document {
@@ -1899,6 +1925,7 @@ fn assemble(
         gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
+        snap: crate::timeline::Snap::of(front),
         steps,
         flow,
         done,
@@ -2215,6 +2242,15 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         None => Default::default(),
     };
     lock(&s.state).core.resume(queue, paused, told);
+    // the user held its wheel when the hub ended: still held, from the same snapshot
+    if let Some(store) = &s.store
+        && let (true, base) = store.load_wheel(&sid)
+    {
+        let mut st = lock(&s.state);
+        st.wheel = Wheel::Held;
+        st.wheel_base = base;
+        st.core.set_wheel(true);
+    }
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2796,6 +2832,9 @@ impl Session {
         for p in s.cancelled {
             reply(p.resp, None);
         }
+        if s.held {
+            self.wheel_held();
+        }
         for e in s.fx {
             match e {
                 TurnEffect::StartTurn { turn, item } => self.start_turn(turn, item),
@@ -2924,7 +2963,8 @@ impl Session {
             via: Some(self.via),
             mode: self.mode,
             queue: st.core.queue().texts(),
-            paused: st.core.paused().then_some(true),
+            // a take holds the queue at once, though the turn it stops ends after its tool call
+            paused: (st.core.paused() || st.wheel != Wheel::Free).then_some(true),
             permissions: st.permissions.iter().map(|p| p.public.clone()).collect(),
             reviews: Vec::new(),
             usage: st.usage.clone(),
@@ -2947,6 +2987,7 @@ impl Session {
                 Some(self.live.ids(&self.id).join(","))
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
+            held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
         }
     }
 
@@ -2966,6 +3007,7 @@ impl Session {
             document: self.document.clone(),
             read_only: self.role == Role::Chat
                 && self.cwd != launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+            held: Fence::held(self),
         }
     }
 
@@ -3447,6 +3489,111 @@ impl Session {
         Ok(())
     }
 
+    /// The user takes the wheel ([`super::wheel`]): the turn running stops after its tool call, no turn starts until
+    /// the give, and once no turn runs the wheel is held.  A second take changes nothing.
+    pub(crate) fn wheel_take(self: &Arc<Self>) -> Result<(), Error> {
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let (taken, fx) =
+                wheel::take(&mut st.wheel, &mut st.core).map_err(|m| invalid("id", m))?;
+            if taken == wheel::Taken::Already {
+                return Ok(());
+            }
+            let mut stepped = st.stepped(fx);
+            stepped.held |= taken == wheel::Taken::Held;
+            stepped
+        };
+        self.persist_wheel();
+        self.perform(stepped);
+        self.changed();
+        Ok(())
+    }
+
+    /// The wheel is held (the turn the take stopped has ended, or none ran): the step snapshot first, kept with the
+    /// hold for a restart, then `agent-wheel held`.
+    fn wheel_held(self: &Arc<Self>) {
+        let me = self.clone();
+        crate::clock::spawn("session:wheel-held", async move {
+            let base = match &me.snap {
+                Some(s) => s.wheel_held(&me.id, &me.cwd).await,
+                None => None,
+            };
+            lock(&me.state).wheel_base = base;
+            me.persist_wheel();
+            me.changed();
+            me.editors.broadcast(
+                "agent-wheel",
+                json!(AgentWheel {
+                    id: me.id.clone(),
+                    state: WheelState::Held,
+                }),
+            );
+        });
+    }
+
+    /// The user gives the wheel back: refused until held.  A session in a worktree of its own has the editor save
+    /// its buffers there first (refused while one stays unsaved); then the user's changes since the hold go to the
+    /// agent first ([`wheel::give_text`]), its queue after, and `agent-wheel free`.
+    pub(crate) async fn wheel_give(self: &Arc<Self>) -> Result<(), Error> {
+        let base = {
+            let st = lock(&self.state);
+            wheel::can_give(st.wheel).map_err(refuse)?;
+            st.wheel_base.clone()
+        };
+        let diff = if wheel::saves_on_give(self.role) {
+            let cwd = self.cwd.to_string_lossy().into_owned();
+            let unsaved = self
+                .editors
+                .wheel_save(&self.id, &cwd, WHEEL_SAVE_WAIT)
+                .await;
+            if !unsaved.is_empty() {
+                return Err(refuse(&format!(
+                    "not given back: save these files first: {}",
+                    unsaved.join(", ")
+                )));
+            }
+            match (&self.snap, base) {
+                (Some(s), Some(b)) => s
+                    .changes_since(&self.id, &self.cwd, &b)
+                    .await
+                    .unwrap_or_default(),
+                _ => String::new(),
+            }
+        } else {
+            // a chat works in the user's checkout: its edits there reach it from the edit history, not from here
+            String::new()
+        };
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let fx = wheel::give(&mut st.wheel, &mut st.core, wheel::give_text(&diff))
+                .map_err(refuse)?;
+            st.wheel_base = None;
+            st.stepped(fx)
+        };
+        self.persist_wheel();
+        self.perform(stepped);
+        self.editors.broadcast(
+            "agent-wheel",
+            json!(AgentWheel {
+                id: self.id.clone(),
+                state: WheelState::Free,
+            }),
+        );
+        Ok(())
+    }
+
+    /// The hold on the wheel, kept for a restart.
+    fn persist_wheel(&self) {
+        let Some(store) = &self.store else { return };
+        let st = lock(&self.state);
+        let held = st.wheel != Wheel::Free;
+        if let Err(e) = store.save_wheel(&self.id, held, st.wheel_base.as_deref()) {
+            tracing::warn!(sid = self.id, "the wheel's hold not kept: {e}");
+        }
+    }
+
     /// What the supervisor reads of this session.
     pub(crate) fn observe(&self) -> crate::supervisor::Obs {
         let st = lock(&self.state);
@@ -3467,6 +3614,7 @@ impl Session {
                 .as_ref()
                 .and_then(|u| Some(u.used? / u.size.filter(|s| *s > 0.0)?)),
             jobs: self.live.ids(&self.id),
+            held: st.wheel != Wheel::Free,
         }
     }
 
@@ -4097,6 +4245,30 @@ pub fn tool_input(
         raw_input,
         truncated,
     })
+}
+
+/// `agents/wheel/take`: the user takes the session's wheel.
+pub fn wheel_take(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user takes an agent's wheel"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_take()?;
+    Ok(true)
+}
+
+/// `agents/wheel/give`: the user gives the session's wheel back.
+pub async fn wheel_give(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user gives an agent's wheel back"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_give().await?;
+    Ok(true)
+}
+
+/// `agents/wheel/saved`: the editor's answer to `wheel-save`.
+pub fn wheel_saved(f: &Front, _: &Caller, p: WheelSaved) -> Result<bool, Error> {
+    let unsaved = p.unsaved.iter().map(|a| a.as_str().to_string()).collect();
+    Ok(f.editors.wheel_saved(p.req, unsaved))
 }
 
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
@@ -4999,6 +5171,7 @@ mod tests {
             cwd: cwd.clone(),
             document: None,
             read_only: false,
+            held: false,
         };
         let s = |p: &Path| p.to_string_lossy().into_owned();
         assert!(f.check(&s(&cwd.join("a.txt")), true).is_ok());
@@ -5007,6 +5180,16 @@ mod tests {
         assert!(f.check(&s(&cwd.join("../secret")), false).is_err());
         assert!(f.check(&s(&cwd.join("link")), false).is_err());
         assert!(f.check("relative.txt", false).is_err());
+        // while the user holds the wheel nothing is written; reads stay
+        let held = Fence {
+            cwd: cwd.clone(),
+            document: None,
+            read_only: false,
+            held: true,
+        };
+        let refused = held.check(&s(&cwd.join("a.txt")), true).unwrap_err();
+        assert!(refused.contains(wheel::HELD), "{refused}");
+        assert!(held.check(&s(&cwd.join("a.txt")), false).is_ok());
     }
 
     #[test]
@@ -5017,6 +5200,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: Some(doc.clone()),
             read_only: true,
+            held: false,
         };
         assert!(f.check(&doc.to_string_lossy(), true).is_ok());
         assert!(
@@ -5037,6 +5221,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: None,
             read_only: true,
+            held: false,
         };
         let src = dir.path().join("src.rs");
         assert!(f.check(&src.to_string_lossy(), false).is_ok());

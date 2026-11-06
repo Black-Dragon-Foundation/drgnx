@@ -833,7 +833,41 @@ user's decision replaces at once (no card). `DiffIndex` is task id → path → 
 The runner's hooks: `before_review(run, decisions, diffs, task) -> ReviewGate { clashes, wait }` (the review waits
 for a new against-decision clash or an open clash card about the task) and `ReviewerHook::start(clash, long)` via
 `start_reviewers` (not for `stale` and `overlap`). A stale card's key includes the held count, so the runner
-clears the count after carding.
+clears the count after carding. A session whose wheel the user holds (next section) is never stale.
+
+## Take the wheel (`agents/wheel.rs`)
+
+The user can stop an agent after its step, work in its place and give the wheel back with what they changed. User
+connections only (`agents/wheel/take`, `agents/wheel/give`, and `agents/pause`; an agent's own connection gets
+`not-allowed`). ACP has no pause: `session/cancel` ends the turn, so the take is part 1's pause after the tool call
+and the UI says "stops after its current step", never "pauses".
+
+1. **Take** (`agents/wheel/take {id}`): the turn running is cancelled once its tool call in flight completes, and no
+   turn starts until the give (prompts sent or delivered meanwhile wait in the queue). The snapshot says
+   `paused: true` and `held_by: "user"` at once. A second take changes nothing.
+2. **Held:** when that turn has ended (the tool call completed, the cancel answered) — at once when no turn ran — the
+   hub takes a step snapshot of the worktree (`refs/drgnx/s/<sid>/wheel` in its shadow repository) and then sends
+   `agent-wheel {id, state: held}`. From then the session's fence refuses every write (`Fence::check`, through
+   `Fence::held(session)`, the one test the pair door calls too), so nothing of the agent's lands under the user's
+   edits.
+3. **Give** (`agents/wheel/give {id}`): refused until held ("it stops after its current step"). A session in a
+   worktree of its own (a worker, a manager) first sends `wheel-save {req, id, worktree}`; the editor saves its
+   buffers there, never asking, and answers `agents/wheel/saved {req, unsaved: [path]}`. A file left unsaved refuses
+   the give with its name, and the wheel stays held; no editor connected, or none answering within 5 s, is nothing
+   unsaved. A chat gets no `wheel-save`: its worktree is the user's checkout, so the give saves nothing there.
+4. **What the agent is sent:** the worktree's diff against the snapshot at held (the interim base until the edit
+   history's boundary replaces it), as the first prompt, a user message keyed `wheel:edits` and headed "Edits by you
+   while you held the wheel": the unified diff up to 200 lines, else only its `diff --git` and `@@` lines with "Read
+   these files again before you change them". Nothing changed (and, until the edit history is wired, every chat's
+   give) sends "Continue." keyed `wheel:resumed` ("resumed by you"). The messages queued while held follow in order,
+   and `agent-wheel {id, state: free}` goes out.
+5. **It lasts:** the hold survives an editor's disconnect and a hub restart (`<sid>.wheel.json` beside the queue,
+   with the snapshot's tree); the hub never gives the wheel back on its own. While held the supervisor's rules
+   (`silent`, `repeat`, …) and the plan run's `stale` rule pass the session by.
+
+The order logic is pure (`wheel::{take, turn_ended, give}` over the wheel and the session's turn core, under the
+session's lock) and is tested in every order of the take, the give, the tool call's end, the agent's answer and a
+delivery (`agents::wheel::tests`); the rows are `test/conformance/wheel/*` and the restart is `tests/wheel.rs`.
 
 ## The permissions matrix
 

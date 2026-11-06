@@ -42,6 +42,8 @@ pub struct Obs {
     pub context: Option<f64>,
     /// The jobs this session started that run.
     pub jobs: Vec<String>,
+    /// The user holds its wheel (or is taking it): it is stopped on purpose, so no rule holds for it.
+    pub held: bool,
 }
 
 /// What is read elsewhere (the graph, the job rows, the tree) for one session.
@@ -119,7 +121,8 @@ pub fn may_stall_on_lines(o: &Obs, t: &Thresholds) -> bool {
 /// The rules that hold for O now, each with the words of its card.  Pure: NOW and the thresholds are arguments.
 pub fn judge(o: &Obs, f: &Facts, t: &Thresholds, now: f64) -> Vec<(Rule, String)> {
     let mut out = Vec::new();
-    if o.status == SessionStatus::Exited {
+    // a session the user holds the wheel of is stopped on purpose: no stall, no other rule
+    if o.status == SessionStatus::Exited || o.held {
         return out;
     }
     let after = if brainstorm(o) {
@@ -416,6 +419,7 @@ mod tests {
             refusals: 0,
             context: None,
             jobs: vec![],
+            held: false,
         }
     }
 

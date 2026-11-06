@@ -302,6 +302,16 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             crate::methods::say::SayFailed,
             "a planning session gave up: its blocks did not hold, with the reasons"
         ),
+        event!(
+            "agent-wheel",
+            crate::methods::agents::AgentWheel,
+            "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back"
+        ),
+        event!(
+            "wheel-save",
+            crate::methods::agents::WheelSave,
+            "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved"
+        ),
     ];
     v.sort_by_key(|e| e.name);
     v
@@ -369,6 +379,9 @@ mod tests {
                     "say-proposal",
                     "say-message",
                     "say-failed",
+                    // agent system part 3: take the wheel
+                    "agent-wheel",
+                    "wheel-save",
                 ]
                 .contains(&n.as_str())
             })
@@ -383,7 +396,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 27);
+        assert_eq!(events().len(), 29);
         assert!(event("settings/proposed").is_some());
         // ids only: a key-shaped value is no id, and nothing but `providers` is taken
         let changed = event("gateway/keys-changed").unwrap();

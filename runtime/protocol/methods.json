@@ -168,6 +168,13 @@
                   "null"
                 ]
               },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -912,6 +919,39 @@
       },
       "doc": "a session's step opened or closed, with its class, stamps and anchors (to subscribers that asked)",
       "name": "agent-step"
+    },
+    {
+      "data": {
+        "$defs": {
+          "WheelState": {
+            "description": "Where a session's wheel is: `held` once the turn the take stopped has ended, `free` once it is given back.",
+            "enum": [
+              "held",
+              "free"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agent-wheel`: session ID's wheel is now in STATE.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/WheelState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "AgentWheel",
+        "type": "object"
+      },
+      "doc": "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back",
+      "name": "agent-wheel"
     },
     {
       "data": {
@@ -2101,6 +2141,35 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the\neditor saves its buffers there and answers `agents/wheel/saved` with the same REQ.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "req",
+          "id",
+          "worktree"
+        ],
+        "title": "WheelSave",
+        "type": "object"
+      },
+      "doc": "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved",
+      "name": "wheel-save"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "The data of `work-map`: what changed in one view since version `base`.",
         "properties": {
           "base": {
@@ -2593,6 +2662,13 @@
                   "null"
                 ]
               },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -3010,6 +3086,13 @@
                 "format": "int64",
                 "type": [
                   "integer",
+                  "null"
+                ]
+              },
+              "held_by": {
+                "description": "Who holds the session's wheel (`user`, from `agents/wheel/take` until the give): the agent stops after its\nstep and nothing of it is written until the wheel is given back.",
+                "type": [
+                  "string",
                   "null"
                 ]
               },
@@ -4568,6 +4651,118 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user gives the wheel back (refused until held, and while the editor has unsaved buffers in the session's own worktree): the user's changes since the take go to the agent first, then its queue",
+      "name": "agents/wheel/give",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's answer to wheel-save: the files it left unsaved (true when a give was waiting for it)",
+      "name": "agents/wheel/saved",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`agents/wheel/saved` (the editor): the answer to `wheel-save` REQ, with the files whose buffers stayed unsaved\n(empty: everything there is on disk).",
+        "properties": {
+          "req": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsaved": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "req"
+        ],
+        "title": "WheelSaved",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user takes the session's wheel: it stops after its current step, and once that turn has ended (agent-wheel held) nothing of it is written until the give",
+      "name": "agents/wheel/take",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
     },
     {
       "classes": [

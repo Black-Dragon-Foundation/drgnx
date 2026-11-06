@@ -125,6 +125,31 @@ impl Snap {
         }
         Some(tree)
     }
+
+    /// The step snapshot of WORKTREE when the user's hold on SID's wheel began: the base the give measures from.
+    pub async fn wheel_held(&self, sid: &str, worktree: &Path) -> Option<String> {
+        let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
+        crate::clock::blocking(move || snapshot::take_held(&root, &wt, &sid_))
+            .await
+            .ok()?
+            .map_err(|e| tracing::warn!(sid, "wheel snapshot not taken: {e}"))
+            .ok()
+    }
+
+    /// What changed in WORKTREE since BASE (the snapshot at the hold), as a unified diff.
+    pub async fn changes_since(&self, sid: &str, worktree: &Path, base: &str) -> Option<String> {
+        let (root, wt, sid_, base) = (
+            self.root.clone(),
+            worktree.to_path_buf(),
+            sid.to_string(),
+            base.to_string(),
+        );
+        crate::clock::blocking(move || snapshot::diff_now(&root, &wt, &sid_, &base))
+            .await
+            .ok()?
+            .map_err(|e| tracing::warn!(sid, "the changes since the hold not read: {e}"))
+            .ok()
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> Error {
