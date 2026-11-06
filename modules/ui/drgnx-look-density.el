@@ -6,7 +6,8 @@
 ;; `drgnx-look-density' (compact, comfortable, roomy) sets the look's sizes in logical pixels: the code line, the
 ;; tree row, the tab row, the status bar, the title row, the gap between cards, the panel padding and the tree
 ;; indent.  This file applies the code line (as the frame parameter `line-spacing', in device pixels, on every
-;; frame, again when the frame is resized or its scale or font changes) and answers the UI rows' spacing; the
+;; frame and every frame made later, again when the frame is resized or its scale or font changes) and answers the
+;; UI rows' spacing; the
 ;; chrome reads the other sizes through `drgnx-look-density-value'.  The code line's owners: the code role's
 ;; `:line-height' when the user set it, then the density.  A `line-spacing' set as the default stays (the obsolete
 ;; `drgnx-face-line-spacing' sets one), and then the frame parameter is left alone.
@@ -99,6 +100,13 @@ user set a default `line-spacing', which then stays."
     (when (and (frame-live-p frame) (frame-parameter frame drgnx-look-density--saved-parameter))
       (drgnx-look-density-apply-frame frame))))
 
+(defun drgnx-look-density--frame-added (data)
+  "The store's `frame-added' (now lane, before the frame is drawn): a frame made after setup (`C-x 5 2',
+`emacsclient -c', a daemon's first graphical frame) gets the code line too."
+  (let ((frame (plist-get data :frame)))
+    (when (and (frame-live-p frame) (display-graphic-p frame) (not (frame-parent frame)))
+      (drgnx-look-density-apply-frame frame))))
+
 (defun drgnx-look-density--settings-apply ()
   "The `:apply' of `drgnx-look-density': at once, while ui/look runs."
   (when (drgnx-module-running-p 'ui/look)
@@ -117,12 +125,14 @@ line height) to the tree row at DENSITY and SCALE: the extra pixels half above a
 (defun drgnx-look-density-on ()
   "The code line follows the density and the code role, on every graphical frame and as the frames change."
   (drgnx-state-subscribe 'frame-resized #'drgnx-look-density--frame-resized)
+  (drgnx-state-subscribe 'frame-added #'drgnx-look-density--frame-added :lane 'now)
   (add-hook 'drgnx-look-fonts-applied-hook #'drgnx-look-density-apply)
   (drgnx-look-density-apply))
 
 (defun drgnx-look-density-off ()
   "Undo `drgnx-look-density-on': every frame's line spacing as it was."
   (drgnx-state-unsubscribe 'frame-resized #'drgnx-look-density--frame-resized)
+  (drgnx-state-unsubscribe 'frame-added #'drgnx-look-density--frame-added)
   (remove-hook 'drgnx-look-fonts-applied-hook #'drgnx-look-density-apply)
   (dolist (f (frame-list)) (drgnx-look-density--restore-frame f)))
 

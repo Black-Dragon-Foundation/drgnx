@@ -197,7 +197,8 @@ pixels (a frame at scale 2 draws twice as many):
 | Tree indent | 12 | 12 | 14 |
 
 **The code line** is the frame's `line-spacing` parameter, worked out in device pixels (the line less the font's own
-height) for every frame, and again when the frame is resized, its scale changes or the code font changes. Who decides,
+height) for every frame, a frame made later included (`C-x 5 2`, `emacsclient -c`, a daemon's first graphical
+frame), and again when the frame is resized, its scale changes or the code font changes. Who decides,
 first match: the `:line-height` you set on `drgnx-look-font-code`, then the density. A `line-spacing` you set
 yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
 code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.
