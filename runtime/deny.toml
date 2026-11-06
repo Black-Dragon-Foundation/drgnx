@@ -16,7 +16,8 @@ ignore = [
   "RUSTSEC-2024-0436",
   # im 15.1.0, sized-chunks 0.6.5 and bitmaps 2.1.0 come through Loro (loro-internal 1.17.1; verdandi, the edit
   # history), whose only non-test use is one im::HashMap<u64, i32> (its version vector), built on SparseChunk and Bits.
-  # LORO-IMBL-FORK-1: imbl via an org fork before launch. Reviewed 2026-11-06; review again at each Loro bump.
+  # They stay until Loro moves to imbl through an org fork, planned before launch. Reviewed 2026-11-06; review again
+  # at each Loro bump.
   "RUSTSEC-2026-0248", # im: unmaintained (archived upstream); no code defect
   "RUSTSEC-2023-0126", # im: unsound OrdSet insert; not reached, Loro never builds an OrdSet
   "RUSTSEC-2026-0251", # sized-chunks: unmaintained (archived upstream); no code defect
@@ -38,7 +39,7 @@ allow = [
 exceptions = [
   # Loro's persistent collections (verdandi, the edit history): MPL-2.0 is file-level copyleft and allows a larger work
   # under GPL-3.0-or-later; the crates are used unmodified from crates.io. imbl is MPL-2.0 too, so the exception stays
-  # after LORO-IMBL-FORK-1 with its crate names. Reviewed 2026-11-06.
+  # after Loro moves to imbl, with imbl's crate names. Reviewed 2026-11-06.
   { allow = ["MPL-2.0"], crate = "im" },
   { allow = ["MPL-2.0"], crate = "sized-chunks" },
   { allow = ["MPL-2.0"], crate = "bitmaps" },
