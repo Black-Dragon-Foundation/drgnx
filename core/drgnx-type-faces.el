@@ -7,7 +7,9 @@
 ;; small code, agent prose and the terminal.  Their `defface' specs hold drgnx's defaults, and `drgnx-type-defaults'
 ;; is the one table of those defaults, read by the font settings (modules/ui/drgnx-look-fonts.el) as their default
 ;; values.  A face spec holds `:family', `:height' (relative to the default face) and `:weight' only, never `:font'
-;; (a font is tied to one display).  Sizes are ratios to the code size, so zooming scales every role together.
+;; (a font is tied to one display).  Sizes are ratios to the code size, so zooming scales every role together.  While
+;; ui/look runs, the chrome's faces (UI text, heading, caption, title, small code) get the absolute height their ratio
+;; gives, kept up to date by modules/ui/drgnx-look-fonts.el: a float height costs a font spec copy at every face run.
 ;; No colours here: these faces only choose letters.
 
 ;;; Code:

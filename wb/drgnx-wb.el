@@ -31,7 +31,7 @@
 ;; The close button's face is the kit's; the old name stays, so a saved customization of it still applies.
 (put 'drgnx-wb-close 'face-alias 'drgnx-ui-close)
 
-(defface drgnx-wb-bar '((t :inherit tab-line :height 1.0 :box nil))
+(defface drgnx-wb-bar '((t :inherit tab-line :box nil))
   "The band of a header row (breadcrumb, a dock section's title, a panel's tab row): the theme's tab-line
 background, not the header line's, so every row of chrome is one colour and follows the theme." :group 'drgnx)
 
@@ -205,7 +205,10 @@ again.  Cheap: two overlays are touched."
   "Make the current dock buffer's rows UI rows: `default' remapped to the UI text face and the row height of the
 density, on the graphical frame that shows it (or the selected one).  Call it from the buffer's major mode; a density
 change, a scale change and the buffer's first showing on a graphical frame fit the rows again
-\(`drgnx-wb-rows-follow')."
+\(`drgnx-wb-rows-follow').
+The remap costs a font spec copy at every face lookup of the buffer; the UI face put under the rows' own faces as text
+properties instead was measured dearer still (the perf lab's explorer allocation p50: 9984 objects, 7913 with the
+remap)."
   (face-remap-add-relative 'default 'drgnx-ui-text)
   (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
