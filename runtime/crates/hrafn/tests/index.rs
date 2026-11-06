@@ -282,8 +282,9 @@ mod fresh {
         assert!(st.success(), "git {args:?}");
     }
 
+    /// Under the temp dir's real path: a root with a link in its path is refused (macOS's /var is one).
     fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         git(dir.path(), &["init", "-q"]);
         for (p, c) in files {
             std::fs::write(dir.path().join(p), c).unwrap();

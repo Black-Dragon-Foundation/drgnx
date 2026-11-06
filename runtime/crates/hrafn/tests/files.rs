@@ -13,9 +13,11 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(st.success(), "git {args:?}");
 }
 
-/// A repository in a temp dir, built from a manifest of (path, content); everything is added to the index.
+/// A repository in a temp dir, built from a manifest of (path, content); everything is added to the index. The temp dir
+/// is under the real path of the system's: `list` refuses a root with a link in its path, as the hub never gives it one
+/// (it canonicalizes the root first), and macOS's temp dir is under /var, a link to /private/var.
 fn repo(manifest: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     git(dir.path(), &["init", "-q"]);
     for (p, c) in manifest {
         let f = dir.path().join(p);
