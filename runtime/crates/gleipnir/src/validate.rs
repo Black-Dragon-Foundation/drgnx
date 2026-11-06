@@ -1808,7 +1808,9 @@ mod tests {
     }
 
     /// A spec for `target` with the browser: a second relay port for the web (3130), the local port 8080 (one of
-    /// `extra_tcp_ports`), the program a file under `other` (an extra read).
+    /// `extra_tcp_ports`), the program a file under `other` (an extra read). Its own dir is [`BROWSER_DIR_FULL`], a
+    /// place inside; on a target without mounts it is a host path, so it is the true name of the host's `/tmp` (a link
+    /// to `/private/tmp` on macOS, which rule 1 would refuse before rule 12 says what the row is about).
     fn with_browser(fx: &Fx, target: Target) -> Spec {
         fs::write(fx.p("other/chrome"), "x").unwrap();
         let mut s = fx.spec(target);
@@ -1818,9 +1820,14 @@ mod tests {
             let socket = first.socket.with_file_name("web.sock");
             relay.push(RelayPort { port: 3130, socket });
         }
+        let own_dir = if no_mounts(target) {
+            fs::canonicalize("/tmp").unwrap().join("drgnx-browser")
+        } else {
+            BROWSER_DIR_FULL.into()
+        };
         s.browser = Some(crate::spec::SpecBrowser {
             program: fx.p("other/chrome"),
-            own_dir: BROWSER_DIR_FULL.into(),
+            own_dir,
             web_port: 3130,
             local_ports: vec![8080],
             extra_read: vec![fx.p("other")],
