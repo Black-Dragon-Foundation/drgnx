@@ -1,10 +1,13 @@
 //! The Extensions catalog at the size of the four archives (7,150 packages): `catalog-load` (the file parsed and merged
 //! into the index) and `search` (a ranked query over the rows).  Budgets (design §13): load at most 100 ms and 15 MB
-//! resident, a search at most 3 ms at the 95th percentile.  Ignored in normal runs; the combined gate pass runs it under
+//! kept (live bytes of the parsed file and the index, as the hub's cache holds them, counted by the bench's
+//! allocator), a search at most 3 ms at the 95th percentile.  Ignored in normal runs; the combined gate pass runs it under
 //! the perf lock: `cargo test -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture`.  It measures and prints;
 //! the pass judges.  The catalog is made here from fixed arithmetic (no network, no random numbers), in the shape
 //! `drgnx extensions refresh` writes.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use drgnx_ratatoskr::extensions::catalog::{Inputs, build, parse_catalog};
@@ -86,13 +89,45 @@ fn catalog() -> Vec<u8> {
     .unwrap()
 }
 
-/// Resident memory in kB (Linux), 0 where there is no /proc.
-fn rss_kb() -> u64 {
-    std::fs::read_to_string("/proc/self/statm")
-        .ok()
-        .and_then(|s| s.split_whitespace().nth(1).and_then(|p| p.parse::<u64>().ok()))
-        .map(|pages| pages * 4)
-        .unwrap_or(0)
+/// The bench's allocator: `System`, counting the bytes live now.  Exact, unlike resident memory, which a warm
+/// process's arenas hide (freed pages stay resident and are reused).
+struct Counting;
+
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+// SAFETY: every call goes to `System` unchanged; the counter only adds and subtracts the sizes it was given.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // SAFETY: the caller's contract for `alloc`, passed on.
+        let p = unsafe { System.alloc(layout) };
+        if !p.is_null() {
+            LIVE.fetch_add(layout.size(), Ordering::Relaxed);
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller's contract for `dealloc`, passed on.
+        unsafe { System.dealloc(ptr, layout) };
+        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        // SAFETY: the caller's contract for `realloc`, passed on.
+        let p = unsafe { System.realloc(ptr, layout, new_size) };
+        if !p.is_null() {
+            LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+            LIVE.fetch_add(new_size, Ordering::Relaxed);
+        }
+        p
+    }
+}
+
+#[global_allocator]
+static ALLOC: Counting = Counting;
+
+fn live_bytes() -> usize {
+    LIVE.load(Ordering::Relaxed)
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {
@@ -126,22 +161,27 @@ fn catalog_load() {
         percentile(&times, 0.95),
         times.last().unwrap()
     );
-    // resident: the index alone, as the hub keeps it (the bytes and the parsed file are gone by then)
-    let before = rss_kb();
-    let index = {
+    // what the hub keeps: its cache holds the parsed file beside the index; the file's bytes are dropped once parsed
+    let before = live_bytes();
+    let (file, index) = {
+        let bytes = catalog();
         let file = parse_catalog(&bytes).unwrap();
-        build(Inputs {
+        let index = build(Inputs {
             catalog: Some(&file),
             ..Inputs::default()
-        })
+        });
+        (file, index)
     };
-    let after = rss_kb();
+    let kept = live_bytes().saturating_sub(before);
+    let index_only = {
+        drop(file);
+        live_bytes().saturating_sub(before)
+    };
     println!(
-        "catalog-load: index of {} rows resident +{} kB (budget 15360 kB; rss {} kB before, {} after)",
+        "catalog-load: index of {} rows and the parsed file kept: {} kB live (budget 15360 kB; the index alone {} kB)",
         index.entries.len(),
-        after.saturating_sub(before),
-        before,
-        after
+        kept / 1024,
+        index_only / 1024
     );
 }
 
@@ -155,7 +195,14 @@ fn search() {
         ..Inputs::default()
     });
     let queries = [
-        "magit", "dash helm", "e", "ts", "fixture package", "vterm-ivy", "zzzz", "",
+        "magit",
+        "dash helm",
+        "e",
+        "ts",
+        "fixture package",
+        "vterm-ivy",
+        "zzzz",
+        "",
     ];
     let filters = [
         w::Filters::default(),
@@ -173,7 +220,11 @@ fn search() {
     for round in 0..40 {
         for q in &queries {
             for f in &filters {
-                let sort = if round % 4 == 3 { w::Sort::Downloads } else { w::Sort::Relevance };
+                let sort = if round % 4 == 3 {
+                    w::Sort::Downloads
+                } else {
+                    w::Sort::Relevance
+                };
                 let t = Instant::now();
                 let hits = rank::search(&index.entries, q, f, sort);
                 times.push(t.elapsed().as_secs_f64() * 1000.0);
