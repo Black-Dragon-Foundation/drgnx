@@ -664,8 +664,8 @@ pub async fn for_tasks(
     Ok(for_job(front, job_key, wants).await?.0)
 }
 
-/// The wants of a job from its data: `tasks` (number, role, dependencies, body), the profile each task is reassigned
-/// to or its role's route, and the project the job runs in.
+/// The wants of a job from its data: `tasks` (number, role, dependencies, body, model), the profile each task names or
+/// is reassigned to, else its role's route, and the project the job runs in.
 pub(crate) fn wants_from(front: &Front, job_id: &str, data: &Map<String, Value>) -> Vec<Want> {
     let project = data
         .get("project")
@@ -679,16 +679,20 @@ pub(crate) fn wants_from(front: &Front, job_id: &str, data: &Map<String, Value>)
         .filter_map(|t| {
             let n = t.get("n")?.as_i64()?;
             let role = t.get("role").and_then(Value::as_str).unwrap_or("implement");
-            let profile = crate::runner::data_for(data, "profiles", &format!("{job_id}#{n}"))
-                .and_then(Value::as_str)
+            let named = crate::runner::data_for(data, "profiles", &format!("{job_id}#{n}"))
+                .and_then(Value::as_str);
+            let profile = named
                 .or_else(|| routes.and_then(|r| r.get(role)).and_then(Value::as_str))
                 .map(str::to_owned)
                 .or_else(|| crate::runner::route(front, role).into_iter().next())
                 .unwrap_or_else(|| "claude".into());
+            // a named profile runs its own model; with none named, the model the plan asked for is the hint
+            let hint = t.get("model").and_then(Value::as_str).map(str::to_owned);
+            let runs = find_profile(front, &profile).and_then(|p| p.model);
             Some(Want {
                 n,
                 role: role.to_owned(),
-                model: find_profile(front, &profile).and_then(|p| p.model),
+                model: if named.is_some() { runs } else { hint.or(runs) },
                 profile,
                 project: project.clone(),
                 brief_bytes: t

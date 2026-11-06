@@ -1239,12 +1239,36 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         MergeGate::Review => "review",
         MergeGate::ReviewAccept => "review+accept",
     };
+    // a task that names its profile runs on it (the job's reassignment for it); its model is then only a hint, and
+    // one that differs from what the profile runs is said, never silently dropped
+    let mut profiles = Map::new();
+    let mut ignored: Vec<String> = Vec::new();
+    for t in &tasks {
+        let Some(p) = &t.profile else { continue };
+        profiles.insert(format!("{id}#{}", t.n), json!(p));
+        let runs = crate::agents::session::find_profile(front, p).and_then(|p| p.model);
+        if let Some(m) = t.model.as_ref().filter(|m| runs.as_ref() != Some(*m)) {
+            ignored.push(format!(
+                "task {}: model {m} ignored, profile {p} runs {}",
+                t.n,
+                runs.as_deref().unwrap_or("its own default model")
+            ));
+        }
+    }
     let mut data = json!({
         "plan": file.to_string_lossy(), "hash": read.hash, "repo": repo, "title": read.title,
-        "tasks": tasks.iter().map(|t| json!({"n": t.n, "title": t.title, "role": t.role,
-                                              "deps": t.deps, "body": t.body})).collect::<Vec<_>>(),
+        "tasks": tasks.iter().map(|t| {
+            let mut o = json!({"n": t.n, "title": t.title, "role": t.role, "deps": t.deps, "body": t.body});
+            if let Some(m) = &t.model {
+                o["model"] = json!(m);
+            }
+            o
+        }).collect::<Vec<_>>(),
         "routes": routes, "budget": budget, "gate": gate,
     });
+    if !profiles.is_empty() {
+        data["profiles"] = Value::Object(profiles);
+    }
     // the forecast: from the history of similar tasks, before the write; a forecast that fails never blocks a
     // proposal (the estimate then has the prior's tokens and no range)
     let project = {
@@ -1274,6 +1298,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     if let Some(f) = &forecast {
         warnings.extend(budget_warnings(f, budget));
     }
+    warnings.extend(ignored);
     data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
     data["warnings"] = json!(warnings);
     let title = match &forecast {
@@ -1864,6 +1889,141 @@ mod price_tests {
             .await;
         assert!(got.is_err());
         assert!(load(&f, "J", false).await.unwrap().is_none());
+    }
+}
+
+/// What a graph plan's tasks name (their role, profile, model and body) reaching the proposal.
+#[cfg(test)]
+pub(crate) mod graph_plan_tests {
+    use super::*;
+    use crate::store::WorkDb;
+    use runstav::proof::Cap;
+
+    pub(crate) fn front(dir: &Path) -> Front {
+        Front::new(
+            Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// The user's profiles: PROFILES, an object of name → plist as JSON.
+    pub(crate) async fn set_profiles(f: &Front, profiles: Value) {
+        f.settings
+            .set_overrides(
+                None,
+                vec![crate::settings::overrides::Override {
+                    name: "drgnx-agents-profiles".into(),
+                    value: profiles,
+                    source: "test".into(),
+                }],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A graph plan of TASKS proposed by the user for REPO: the job's id and data.
+    pub(crate) async fn proposed(
+        f: &Front,
+        repo: &Path,
+        tasks: Value,
+    ) -> (String, Map<String, Value>) {
+        let w = effects::plans_write(
+            f,
+            &user(),
+            serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let p: ProposeParams =
+            serde_json::from_value(json!({"plan": w.plan, "repo": repo.to_string_lossy()}))
+                .unwrap();
+        let s = propose(f, &user(), p).await.unwrap();
+        let l = load(f, &s.id, false).await.unwrap().unwrap();
+        (s.id, data_of(&l.job))
+    }
+
+    /// Pure (D): a temp store.  A task's named profile is the job's reassignment for it, which `profile_of` answers.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_proposed_task_runs_on_its_named_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "opus", "blocks": ["1"], "body": "y"}]),
+        )
+        .await;
+        assert_eq!(
+            data_for(&data, "profiles", &format!("{id}#2")),
+            Some(&json!("opus"))
+        );
+        assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        let t2 = l
+            .tasks
+            .iter()
+            .find(|t| t.row.id == format!("{id}#2"))
+            .unwrap();
+        assert_eq!(t2.row.role.as_deref(), Some("review"));
+        assert_eq!(profile_of(&f, &data, t2), "opus");
+    }
+
+    /// Pure (D): a temp store.  A model beside a profile is not what runs: the profile does, and the proposal says
+    /// the model was ignored.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_task_with_model_and_profile_runs_on_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(
+            &f,
+            json!({"opus": {"command": ["claude-agent-acp"], "model": "claude-opus-5-5"}}),
+        )
+        .await;
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "profile": "opus", "body": "x"}]),
+        )
+        .await;
+        assert_eq!(
+            data_for(&data, "profiles", &format!("{id}#1")),
+            Some(&json!("opus"))
+        );
+        let warnings: Vec<&str> = data
+            .get("warnings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            warnings.contains(
+                &"task 1: model claude-haiku-5-5 ignored, profile opus runs claude-opus-5-5"
+            ),
+            "{warnings:?}"
+        );
+        let wants = crate::forecast::wants_from(&f, &id, &data);
+        assert_eq!(wants[0].profile, "opus");
+        assert_eq!(wants[0].model.as_deref(), Some("claude-opus-5-5"));
+    }
+
+    /// Pure (D): a temp store.  With no profile named, the task's model is what the forecast prices.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_without_a_profile_is_the_forecasts_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "body": "x"}]),
+        )
+        .await;
+        assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
+        let wants = crate::forecast::wants_from(&f, &id, &data);
+        assert_eq!(wants[0].model.as_deref(), Some("claude-haiku-5-5"));
     }
 }
 

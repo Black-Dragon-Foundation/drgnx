@@ -15247,6 +15247,16 @@
                   "null"
                 ]
               },
+              "body": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "interfaces": {
                 "anyOf": [
                   {
@@ -15267,6 +15277,20 @@
               "number": {
                 "maxLength": 16,
                 "type": "string"
+              },
+              "profile": {
+                "maxLength": 128,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "maxLength": 32,
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "status": {
                 "anyOf": [

@@ -758,8 +758,8 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
 ### Plans, reports and decisions (`runner/effects.rs`, `norn/src/tools/{plan,reports}.rs`)
 
 - **A plan in the graph** is a `plan` entity; its tasks are `task` entities under it (`parent_of`) with
-  `data.{number, model, interfaces, steps, role}`; a task waits on the tasks that `block` it. `plans/get` (and the
-  `plan_read` tool) returns the tasks with status, deps, steps, their reports and the latest report's interfaces;
+  `data.{number, model, interfaces, steps, role, profile, body}`; a task waits on the tasks that `block` it.
+  `plans/get` (and the `plan_read` tool) returns the tasks with status, deps, steps, their reports and the latest report's interfaces;
   `plans/write` (`plan_write`) creates or changes a plan, its tasks (by number), steps and `blocks` in one
   transaction and is refused when `base_version` is behind. An agent's write needs the matrix's `graph.change`
   (the worker column; an Ask makes a card and the write is refused until it is settled); a task written `done` also
@@ -767,7 +767,11 @@ reuses a live one, and `agents/stop` and `agents/kill` close it. Test builds run
   session's project: the plan run's, else the one its folder is in): `plans/get`, `plans/write`, `reports/get` and the
   manager's `report_read` refuse another project's records, and a new plan lands in the agent's project (naming
   another is refused); a record of no project, such as a job's tasks, belongs to its job: only that job's sessions and their manager reach it (else the session that wrote it). `job/propose` takes the
-  entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job.
+  entity id too: the plan's tasks (numbers must start with digits), roles and dependencies become the job. A task's
+  `body` is its section of the brief, before its steps and interfaces; a task's `profile` is the profile it runs on
+  (the job's `data.profiles` entry for it, as a reassignment would be; none: its role's route). Its `model` is only
+  the forecast's hint when no profile is named: beside a profile, the profile runs its own model, and when that
+  differs the proposal's `warnings` say `task N: model X ignored, profile P runs Y`.
 - **Imported plans** get the same shape: `graph import-records` puts each `### Task N:` piece under the plan's head
   (`parent_of`), with `data.{number, role, model, interfaces, steps}`, `**Depends:** Task M` as `blocks` links and the
   `**Repo:**` line as the head's `data.repo`; so `plan_read` and `job/propose` on the head's entity id work.
