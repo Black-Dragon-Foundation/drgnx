@@ -3,7 +3,9 @@
 //! Only the user's own jobs (the Extensions view's) do that.
 
 /// drgnx's commands that change packages (`bin/drgnx sync|upgrade|…`, and `drgnx update`, which changes drgnx itself).
-const DRGNX_COMMANDS: &[&str] = &["pkg", "sync", "upgrade", "rollback", "lock", "bisect", "update"];
+const DRGNX_COMMANDS: &[&str] = &[
+    "pkg", "sync", "upgrade", "rollback", "lock", "bisect", "update",
+];
 
 /// The Lisp an Emacs would run to change packages: Emacs's package functions and drgnx's package layer.
 const LISP: &[&str] = &[
@@ -27,7 +29,11 @@ fn is_separator(c: char) -> bool {
 
 /// Where one word ends: blanks, quotes, Lisp's parentheses, `=` (`--eval=(…)`) and `$(`.
 fn is_break(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '\'' | '"' | '(' | ')' | '=' | '$' | '{' | '}' | '<' | '>')
+    c.is_whitespace()
+        || matches!(
+            c,
+            '\'' | '"' | '(' | ')' | '=' | '$' | '{' | '}' | '<' | '>'
+        )
 }
 
 fn basename(word: &str) -> &str {
@@ -38,10 +44,18 @@ fn basename(word: &str) -> &str {
 /// `-c` string, an Emacs's `-eval`) cut at the shell's separators.
 fn commands(argv: &[String]) -> Vec<Vec<&str>> {
     let mut out = vec![argv.iter().map(String::as_str).collect::<Vec<_>>()];
-    for a in argv.iter().skip(1).filter(|a| a.chars().any(char::is_whitespace)) {
+    for a in argv
+        .iter()
+        .skip(1)
+        .filter(|a| a.chars().any(char::is_whitespace))
+    {
         out.extend(
             a.split(is_separator)
-                .map(|seg| seg.split(is_break).filter(|w| !w.is_empty()).collect::<Vec<_>>())
+                .map(|seg| {
+                    seg.split(is_break)
+                        .filter(|w| !w.is_empty())
+                        .collect::<Vec<_>>()
+                })
                 .filter(|seg| !seg.is_empty()),
         );
     }
@@ -75,7 +89,10 @@ pub fn changes_packages(argv: &[String]) -> Option<String> {
         .collect();
     if words.iter().any(|w| basename(w).starts_with("emacs")) {
         for w in &words {
-            if let Some(f) = LISP.iter().find(|f| *w == **f || (**f == "drgnx-pkg" && w.starts_with("drgnx-pkg-"))) {
+            if let Some(f) = LISP
+                .iter()
+                .find(|f| *w == **f || (**f == "drgnx-pkg" && w.starts_with("drgnx-pkg-")))
+            {
                 return Some(format!("an Emacs that runs {f}"));
             }
         }
@@ -101,11 +118,29 @@ mod tests {
             &["drgnx", "sync"],
             &["drgnx", "rollback", "3"],
             &["drgnx-pkg", "install", "magit"],
-            &["emacs", "--batch", "-l", "drgnx-pkg", "-f", "drgnx-pkg-cli", "--", "sync"],
+            &[
+                "emacs",
+                "--batch",
+                "-l",
+                "drgnx-pkg",
+                "-f",
+                "drgnx-pkg-cli",
+                "--",
+                "sync",
+            ],
             &["emacs", "--batch", "-eval", "(package-install 'magit)"],
-            &["emacs-31.1", "-Q", "--batch", "--eval=(progn (require 'package) (package-vc-install \"x\"))"],
+            &[
+                "emacs-31.1",
+                "-Q",
+                "--batch",
+                "--eval=(progn (require 'package) (package-vc-install \"x\"))",
+            ],
             &["sh", "-c", "cd /tmp && bin/drgnx upgrade"],
-            &["bash", "-lc", "true; emacs --batch --eval \"(package-upgrade 'magit)\""],
+            &[
+                "bash",
+                "-lc",
+                "true; emacs --batch --eval \"(package-upgrade 'magit)\"",
+            ],
         ] {
             assert!(changes_packages(&argv(a)).is_some(), "{a:?}");
         }
@@ -120,7 +155,16 @@ mod tests {
             &["bin/drgnx", "doctor"],
             &["grep", "-rn", "drgnx-pkg", "core/"],
             &["rg", "package-install", "lisp/"],
-            &["emacs", "--batch", "-l", "ert", "-l", "test/unit/pkg-test.el", "-f", "ert-run-tests-batch-and-exit"],
+            &[
+                "emacs",
+                "--batch",
+                "-l",
+                "ert",
+                "-l",
+                "test/unit/pkg-test.el",
+                "-f",
+                "ert-run-tests-batch-and-exit",
+            ],
             &["cargo", "test", "-p", "norn"],
         ] {
             assert_eq!(changes_packages(&argv(a)), None, "{a:?}");
