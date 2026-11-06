@@ -158,15 +158,33 @@ fn steps_where(conn: &Tx, filter: &str, key: &str) -> Result<Vec<S>, CoordError>
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
-/// `(profile, role)` of session entity ID.
-fn session_facts(conn: &Tx, id: &str) -> Result<(Option<String>, Option<String>), CoordError> {
+/// `(profile, review)` of session entity ID: its profile, and whether it reviews the task (the runner marks it).
+fn session_facts(conn: &Tx, id: &str) -> Result<(Option<String>, bool), CoordError> {
     Ok(opt(conn.query_row(
-        "select json_extract(data, '$.profile'), json_extract(data, '$.role') from entity \
+        "select json_extract(data, '$.profile'), coalesce(json_extract(data, '$.review'), 0) from entity \
          where id = ?1 and retired_tx is null",
         [id],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0)),
     ))?
-    .unwrap_or((None, None)))
+    .unwrap_or((None, false)))
+}
+
+/// The step of STEPS whose session did the task: the last one of a session that is no review (a reviewer's steps
+/// count on the task, but the task's class is its worker's), else the last.
+fn worker_step<'a>(conn: &Tx, steps: &'a [S]) -> Result<(&'a S, Option<String>), CoordError> {
+    let mut seen: Option<&str> = None;
+    for s in steps.iter().rev() {
+        if seen == Some(s.session.as_str()) {
+            continue;
+        }
+        seen = Some(&s.session);
+        let (profile, review) = session_facts(conn, &s.session)?;
+        if !review {
+            return Ok((s, profile));
+        }
+    }
+    let last = steps.last().expect("a task with steps");
+    Ok((last, session_facts(conn, &last.session)?.0))
 }
 
 /// The sample of TASK (`JOB#N`, or `JOB#manager`) from its steps and the gateway's spend; `None` when it has no
@@ -226,7 +244,7 @@ pub fn gather(
     if turns == 0 {
         return Ok(None);
     }
-    let (profile, _) = session_facts(conn, &last.session)?;
+    let (worker, profile) = worker_step(conn, &steps)?;
     let f = facts(profile.as_deref(), &role);
     let secs = |s: &S| s.end.map_or(0.0, |e| (e - s.start).max(0.0));
     let sum_class = |classes: &[&str]| -> f64 {
@@ -275,7 +293,7 @@ pub fn gather(
         project: last.project.clone(),
         role,
         profile,
-        provider: last.provider.clone(),
+        provider: worker.provider.clone(),
         model: f.model,
         brief_bytes,
         tasks,
@@ -609,6 +627,55 @@ mod tests {
         put(&mut tx, &row).unwrap();
         put(&mut tx, &row).unwrap();
         assert_eq!(all(tx.sql(), 10).unwrap().len(), 1);
+    }
+
+    /// Pattern D. The reviewer's steps come last and count on the task, but the task's class is its worker's: the
+    /// sample takes the profile of the last session that is no review (a review session is marked `review`).
+    #[test]
+    fn a_reviewers_profile_is_not_the_tasks() {
+        let mut c = db7();
+        let mut tx = tx_of(&mut c);
+        job(&mut tx, "J", 1);
+        session(&mut tx, "w", "p1", "worker", "J");
+        entity::create(
+            &mut tx,
+            EntityNew {
+                id: "session:r".into(),
+                kind: "session".into(),
+                project: None,
+                title: Some("r".into()),
+                status: None,
+                body: None,
+                priority: None,
+                assignee: None,
+                data: json!({"profile": "p2", "role": "worker", "job": "J", "review": true}),
+                origin: Origin::Recorded,
+                source: None,
+            },
+        )
+        .unwrap();
+        step(
+            &tx,
+            "w",
+            Some("J#1"),
+            StepClass::Think,
+            (0.0, 4.0),
+            10,
+            Some("t1"),
+        );
+        step(
+            &tx,
+            "r",
+            Some("J#1"),
+            StepClass::Think,
+            (5.0, 9.0),
+            20,
+            Some("t2"),
+        );
+        finish(&mut tx, "J#1", "done");
+        let row = gather(tx.sql(), "J#1", &facts).unwrap().unwrap();
+        assert_eq!(row.tokens_in, 30);
+        assert_eq!(row.profile.as_deref(), Some("p1"));
     }
 
     /// Pattern D. A reviewer's steps carry the task they review and count on it.

@@ -2267,7 +2267,10 @@ at hub start, which backfills the history of earlier runs, and at the end of eac
 pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
 second sweep and a task reopened after review are all the same query and leave one row per task. Every step with the
 task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
-A session with no task (a chat, a fork) makes no sample. The row's profile is the last session's, its model comes
+A session with no task (a chat, a fork) makes no sample. The row's profile and provider are those of the last session
+that is no review: the runner marks a task's reviewer session (`review` in its record), whose steps count on the task
+but whose profile is not the task's class (else the next proposal would find the worker's class empty and fall to
+the role). Its model comes
 from the profile's setting, a wake is a job wait and a cold one is longer than the cache TTL (assumed 300 s).
 
 ## The CDP broker
