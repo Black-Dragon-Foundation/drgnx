@@ -1445,9 +1445,12 @@ topic note and design document, so that a resumed brainstorm keeps its write fen
 The hub cuts each turn into steps from its own clock (`think` between tool calls, `tool` from the tool call to its
 `completed`/`failed` with the title and ACP kind, `user-wait` while a permission request waits, `paused` while the
 queue is held) and writes each closed step to schema 8's `step` table (`norn::write::steps`), in order, from one
-writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
-announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
-loses the row (logged), not the event.
+writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). The steps that
+closed while the writer was busy go in one transaction (at most 256): the graph writer holds a transaction open for
+its linger after the first request, so one transaction per step capped a session at about one step per linger, and a
+10,000-step turn's steps were readable (`timeline/get` waits for them) only minutes after it ended. A batch that fails
+is written again one step at a time, so a bad row loses only itself. Each write is announced as an `agent-step` event
+(`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready loses the row (logged), not the event.
 
 **Step detail** (`work::detail::of`, schema 9's `step_detail`): a tool step also records what it read, searched or
 fetched, in the same transaction as the step, taken when the call completes because `rawInput` is refined while it

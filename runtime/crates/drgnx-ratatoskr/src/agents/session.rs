@@ -2286,65 +2286,72 @@ struct StepCtx {
     cwd: PathBuf,
 }
 
-/// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
-/// and on the hub's step channel.  Best effort: a store that is not ready loses the row, not the announcement.
-async fn write_steps(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
-    sink: StepSink,
-    ctx: StepCtx,
-) {
+/// The most closed steps one transaction of [`write_steps`] takes.
+const STEP_BATCH: usize = 256;
+
+/// A closed step's row: what `step` gets at its open and at its close, and its detail.
+type StepRow = (
+    norn::write::steps::StepNew,
+    norn::write::steps::StepEnd,
+    Option<norn::write::work::StepDetail>,
+);
+
+fn step_row(c: &ClosedStep, sink: &StepSink, ctx: &StepCtx) -> StepRow {
     use norn::write::steps as table;
-    let caller = Caller {
-        class: Class::Service,
-        sid: None,
-        job: None,
-        conn_id: 0,
+    let class_name = serde_json::to_value(c.open.class)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let (plan, project) = sink
+        .scopes
+        .as_ref()
+        .and_then(|s| s.get(&ctx.session))
+        .map_or((None, None), |(p, j)| (Some(p), j));
+    let new = table::StepNew {
+        session: format!("session:{}", ctx.session),
+        task: ctx.task.clone(),
+        plan,
+        project,
+        agent: Some(format!("agent:{}", ctx.agent)),
+        provider: ctx.provider.clone(),
+        class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
+        start: c.open.start,
+        tool: c.open.tool.clone(),
+        tool_kind: c.open.tool_kind.clone(),
+        message_id: c.open.message_id.clone(),
+        turn_id: c.turn_id.clone(),
+        snapshot: None,
+        log_version: None,
     };
-    let mut local = 0u64;
-    let mut turn_start = true;
-    while let Some(c) = rx.recv().await {
-        local += 1;
-        let class_name = serde_json::to_value(c.open.class)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        let (plan, project) = sink
-            .scopes
-            .as_ref()
-            .and_then(|s| s.get(&ctx.session))
-            .map_or((None, None), |(p, j)| (Some(p), j));
-        let new = table::StepNew {
-            session: format!("session:{}", ctx.session),
-            task: ctx.task.clone(),
-            plan,
-            project,
-            agent: Some(format!("agent:{}", ctx.agent)),
-            provider: ctx.provider.clone(),
-            class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
-            start: c.open.start,
-            tool: c.open.tool.clone(),
-            tool_kind: c.open.tool_kind.clone(),
-            message_id: c.open.message_id.clone(),
-            turn_id: c.turn_id.clone(),
-            snapshot: None,
-            log_version: None,
-        };
-        let mut end = table::StepEnd {
-            end: c.end,
-            tokens_in: c.tokens_in,
-            tokens_out: c.tokens_out,
-            cache_read: c.cache_read,
-            cache_write: c.cache_write,
-            cost: c.cost,
-            cost_unit: c.cost.map(|_| "usd-est".to_string()),
-            snapshot: None,
-            log_version: None,
-            context: c.context,
-        };
-        let detail = c.detail.clone();
-        let (id, seq, log_version) = match sink
-            .writer
-            .write(&caller, "agents/step", move |tx| {
+    let end = table::StepEnd {
+        end: c.end,
+        tokens_in: c.tokens_in,
+        tokens_out: c.tokens_out,
+        cache_read: c.cache_read,
+        cache_write: c.cache_write,
+        cost: c.cost,
+        cost_unit: c.cost.map(|_| "usd-est".to_string()),
+        snapshot: None,
+        log_version: None,
+        context: c.context,
+    };
+    (new, end, c.detail.clone())
+}
+
+/// A written step's id, seq and log version.
+type StepIds = (i64, i64, Option<i64>);
+
+/// ROWS in one transaction, in order: each one's ids.
+async fn write_rows(
+    sink: &StepSink,
+    caller: &Caller,
+    rows: Vec<StepRow>,
+) -> Result<Vec<StepIds>, norn::store::CoordError> {
+    use norn::write::steps as table;
+    sink.writer
+        .write(caller, "agents/step", move |tx| {
+            let mut out = Vec::with_capacity(rows.len());
+            for (new, mut end, detail) in rows {
                 let id = table::open(tx, new)?;
                 end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
                 let log_version = end.log_version;
@@ -2356,145 +2363,200 @@ async fn write_steps(
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
-                Ok((id, seq, log_version))
-            })
-            .await
-        {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(sid = ctx.session, "step not recorded: {e}");
-                (0, local as i64, None)
+                out.push((id, seq, log_version));
             }
-        };
-        ctx.flow.written.send_modify(|w| *w += 1);
-        let snapshot = anchor(
-            &sink,
-            &ctx,
-            &caller,
-            id,
-            seq,
-            c.turn_id.as_deref(),
-            &c.open,
-            turn_start,
-        )
-        .await;
-        turn_start = c.turn_id.is_some();
-        let step = Step {
-            id,
-            session: ctx.session.clone(),
-            task: ctx.task.clone(),
-            plan: None,
-            project: None,
-            agent: Some(ctx.agent.clone()),
-            provider: ctx.provider.clone(),
-            seq: seq as u64,
-            class: c.open.class,
-            start: c.open.start,
-            end: Some(c.end),
-            tool: c.open.tool,
-            tool_kind: c.open.tool_kind,
-            message_id: c.open.message_id,
-            turn_id: c.turn_id,
-            snapshot,
-            log_version: log_version.map(|v| v as u64),
-            tokens_in: Some(c.tokens_in as u64),
-            tokens_out: Some(c.tokens_out as u64),
-            cache_read: Some(c.cache_read as u64),
-            cache_write: Some(c.cache_write as u64),
-            cost: c.cost,
-            cost_unit: c.cost.map(|_| Unit::UsdEst),
-            detail: c.detail.as_ref().map(crate::work::detail::wire),
-        };
-        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
-        if let Some(live) = &sink.presence
-            && id != 0
-            && (c.detail.is_some() || c.command.is_some())
-        {
-            let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
-            let files = crate::clock::blocking(move || {
-                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
-            })
-            .await
-            .unwrap_or_default();
-            if !files.is_empty() {
-                let changed = live.apply(crate::work::presence::PresenceEv::Step {
-                    session: ctx.session.clone(),
-                    step: id,
-                    at: step.start,
-                    files,
-                });
-                if let Some(map) = &sink.map {
-                    map.presence(&live.now_in(&changed));
+            Ok(out)
+        })
+        .await
+}
+
+/// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
+/// and on the hub's step channel.  The steps that closed while the last were written go in one transaction (the
+/// graph writer holds each transaction open a moment for more requests: one per step made a long turn's steps wait
+/// that long each).  Best effort: a store that is not ready loses the rows, not the announcements; a batch that fails
+/// is written again one step at a time, so a bad row loses only itself.
+async fn write_steps(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
+    sink: StepSink,
+    ctx: StepCtx,
+) {
+    let caller = Caller {
+        class: Class::Service,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let mut local = 0u64;
+    let mut turn_start = true;
+    while let Some(first) = rx.recv().await {
+        let mut batch = vec![first];
+        while batch.len() < STEP_BATCH {
+            match rx.try_recv() {
+                Ok(c) => batch.push(c),
+                Err(_) => break,
+            }
+        }
+        let rows = batch.iter().map(|c| step_row(c, &sink, &ctx)).collect();
+        let written: Vec<Result<StepIds, norn::store::CoordError>> =
+            match write_rows(&sink, &caller, rows).await {
+                Ok(ids) => ids.into_iter().map(Ok).collect(),
+                Err(e) if batch.len() == 1 => vec![Err(e)],
+                Err(_) => {
+                    let mut each = Vec::with_capacity(batch.len());
+                    for c in &batch {
+                        each.push(
+                            write_rows(&sink, &caller, vec![step_row(c, &sink, &ctx)])
+                                .await
+                                .map(|mut v| v.remove(0)),
+                        );
+                    }
+                    each
                 }
-            }
-        }
-        // the step's class is the agent card's activity
-        if let Some(map) = &sink.map
-            && id != 0
-        {
-            map.step(&ctx.session, id, &step.class, step.start);
-        }
-        // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
-        // overlaps, also once the edit is no longer in flight
-        if let Some(map) = &sink.map
-            && step.snapshot.is_some()
-        {
-            map.edited(&ctx.session).await;
-        }
-        // a shell step closed: what its traced command opened goes out once its listener ended too
-        if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
-            && id != 0
-        {
-            traces
-                .step_closed(&ctx.session, id, cmd.clone(), step.start)
-                .await;
-        }
-        // a conclusion's tool step is written, or the turn ended: the stamps that are due
-        if let Some(stamps) = &sink.stamps {
-            use crate::work::conclusions::StampEv;
-            let mut due = Vec::new();
-            if c.open.mcp && id != 0 {
-                due.extend(stamps.step(StampEv::StepClosed {
-                    session: ctx.session.clone(),
-                    step: c.open.key,
-                    id,
-                }));
-            }
-            if step.turn_id.is_some() {
-                due.extend(stamps.step(StampEv::TurnEnd {
-                    session: ctx.session.clone(),
-                }));
-            }
-            crate::work::conclusions::put(&sink.writer, due).await;
-        }
-        // a spec an agent just wrote is stored at once, not at the next scan
-        if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
-            && d.kind.as_deref() == Some("edit")
-            && let Some(p) = &d.path
-        {
-            crate::work::specs::on_written(
-                &sink.writer,
-                tools,
-                sink.asks.as_ref(),
-                &ctx.session,
-                &ctx.cwd.join(p),
+            };
+        for (c, row) in batch.into_iter().zip(written) {
+            local += 1;
+            let (id, seq, log_version) = match row {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::warn!(sid = ctx.session, "step not recorded: {e}");
+                    (0, local as i64, None)
+                }
+            };
+            ctx.flow.written.send_modify(|w| *w += 1);
+            let snapshot = anchor(
+                &sink,
+                &ctx,
+                &caller,
+                id,
+                seq,
+                c.turn_id.as_deref(),
+                &c.open,
+                turn_start,
             )
             .await;
-        }
-        // a shell step may have committed: link the new commits to the decisions this session recorded
-        if let Some(task) = &ctx.task
-            && step.class == StepClass::Tool
-            && matches!(step.tool_kind.as_deref(), None | Some("execute"))
-        {
-            crate::runner::effects::link_new_commits(&sink.writer, &ctx.session, task, &ctx.cwd)
+            turn_start = c.turn_id.is_some();
+            let step = Step {
+                id,
+                session: ctx.session.clone(),
+                task: ctx.task.clone(),
+                plan: None,
+                project: None,
+                agent: Some(ctx.agent.clone()),
+                provider: ctx.provider.clone(),
+                seq: seq as u64,
+                class: c.open.class,
+                start: c.open.start,
+                end: Some(c.end),
+                tool: c.open.tool,
+                tool_kind: c.open.tool_kind,
+                message_id: c.open.message_id,
+                turn_id: c.turn_id,
+                snapshot,
+                log_version: log_version.map(|v| v as u64),
+                tokens_in: Some(c.tokens_in as u64),
+                tokens_out: Some(c.tokens_out as u64),
+                cache_read: Some(c.cache_read as u64),
+                cache_write: Some(c.cache_write as u64),
+                cost: c.cost,
+                cost_unit: c.cost.map(|_| Unit::UsdEst),
+                detail: c.detail.as_ref().map(crate::work::detail::wire),
+            };
+            // the files the step was in: the presence model (a shell step's command looked up off the async threads)
+            if let Some(live) = &sink.presence
+                && id != 0
+                && (c.detail.is_some() || c.command.is_some())
+            {
+                let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
+                let files = crate::clock::blocking(move || {
+                    crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
+                })
+                .await
+                .unwrap_or_default();
+                if !files.is_empty() {
+                    let changed = live.apply(crate::work::presence::PresenceEv::Step {
+                        session: ctx.session.clone(),
+                        step: id,
+                        at: step.start,
+                        files,
+                    });
+                    if let Some(map) = &sink.map {
+                        map.presence(&live.now_in(&changed));
+                    }
+                }
+            }
+            // the step's class is the agent card's activity
+            if let Some(map) = &sink.map
+                && id != 0
+            {
+                map.step(&ctx.session, id, &step.class, step.start);
+            }
+            // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
+            // overlaps, also once the edit is no longer in flight
+            if let Some(map) = &sink.map
+                && step.snapshot.is_some()
+            {
+                map.edited(&ctx.session).await;
+            }
+            // a shell step closed: what its traced command opened goes out once its listener ended too
+            if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
+                && id != 0
+            {
+                traces
+                    .step_closed(&ctx.session, id, cmd.clone(), step.start)
+                    .await;
+            }
+            // a conclusion's tool step is written, or the turn ended: the stamps that are due
+            if let Some(stamps) = &sink.stamps {
+                use crate::work::conclusions::StampEv;
+                let mut due = Vec::new();
+                if c.open.mcp && id != 0 {
+                    due.extend(stamps.step(StampEv::StepClosed {
+                        session: ctx.session.clone(),
+                        step: c.open.key,
+                        id,
+                    }));
+                }
+                if step.turn_id.is_some() {
+                    due.extend(stamps.step(StampEv::TurnEnd {
+                        session: ctx.session.clone(),
+                    }));
+                }
+                crate::work::conclusions::put(&sink.writer, due).await;
+            }
+            // a spec an agent just wrote is stored at once, not at the next scan
+            if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
+                && d.kind.as_deref() == Some("edit")
+                && let Some(p) = &d.path
+            {
+                crate::work::specs::on_written(
+                    &sink.writer,
+                    tools,
+                    sink.asks.as_ref(),
+                    &ctx.session,
+                    &ctx.cwd.join(p),
+                )
                 .await;
+            }
+            // a shell step may have committed: link the new commits to the decisions this session recorded
+            if let Some(task) = &ctx.task
+                && step.class == StepClass::Tool
+                && matches!(step.tool_kind.as_deref(), None | Some("execute"))
+            {
+                crate::runner::effects::link_new_commits(
+                    &sink.writer,
+                    &ctx.session,
+                    task,
+                    &ctx.cwd,
+                )
+                .await;
+            }
+            let ev = AgentStep {
+                session: ctx.session.clone(),
+                step,
+            };
+            sink.editors.broadcast("agent-step", json!(ev));
+            let _ = sink.bus.send(ev);
         }
-        let ev = AgentStep {
-            session: ctx.session.clone(),
-            step,
-        };
-        sink.editors.broadcast("agent-step", json!(ev));
-        let _ = sink.bus.send(ev);
     }
     // no more rows will come: whoever waits for one stops waiting
     ctx.flow.written.send_replace(u64::MAX);
@@ -4710,6 +4772,82 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    // test-pattern: D
+    /// Steps that closed while the writer was busy go to the step table in one transaction, not one each: the graph
+    /// writer holds a batch open for its linger after the first request, and one write per step made a long turn's
+    /// steps wait that long each (a 10,000-step turn took minutes to be readable).
+    #[tokio::test]
+    async fn queued_steps_are_written_in_one_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(64);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let flow: Arc<StepFlow> = Arc::default();
+        let ctx = StepCtx {
+            flow: flow.clone(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        for i in 0..50 {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: f64::from(i),
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: f64::from(i) + 0.5,
+                turn_id: None,
+                tokens_in: 0,
+                tokens_out: 0,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+                detail: None,
+                command: None,
+                context: None,
+            })
+            .unwrap();
+        }
+        let before = writer.signals.writes();
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let mut seqs = Vec::new();
+        for _ in 0..50 {
+            seqs.push(seen.recv().await.unwrap().step.seq);
+        }
+        assert_eq!(seqs, (1..=50).collect::<Vec<u64>>(), "every step, in order");
+        assert_eq!(
+            writer.signals.writes() - before,
+            1,
+            "the 50 queued steps are one transaction"
+        );
+        assert_eq!(*flow.written.borrow(), 50, "and all count as written");
     }
 
     // test-pattern: D
