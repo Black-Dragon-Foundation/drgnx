@@ -8,7 +8,9 @@
 ;;   DRGNX_TEST_ANNOUNCE     states the child announces and parks at (handshake-fixture.el), separated by spaces:
 ;;                           `wait' and `held' (the sync lock: `drgnx-pkg--after-lock-function'), `native' (the first
 ;;                           native compilation: `drgnx-pkg--step-function')
-;;   DRGNX_TEST_STEP_LOG     a directory: each step of a `--progress' run is logged there (`drgnx-pkg-child--log')(require 'drgnx-pkg)
+;;   DRGNX_TEST_STEP_LOG     a directory: each step of a `--progress' run is logged there (`drgnx-pkg-child--log')
+;;   DRGNX_TEST_SIGNED_DIRS  non-empty: an archive that is a directory counts as one that signs, as a URL archive does
+;;   DRGNX_TEST_GPG          the gpg program (`epg-gpg-program'), e.g. one that is not there(require 'drgnx-pkg)
 (require 'drgnx-handshake-fixture (expand-file-name "handshake-fixture" (file-name-directory (or load-file-name (macroexp-file-name)))))
 
 (defvar drgnx-pkg-child--announce (split-string (or (getenv "DRGNX_TEST_ANNOUNCE") "") " " t)
@@ -54,6 +56,11 @@ the plan file then (when there is one), NNN-STEP.elpa the package directories th
   (advice-add 'drgnx-pkg--module-specs :filter-args #'drgnx-pkg-child--modules-dir))
 (setq drgnx-pkg-shipped-lock (getenv "DRGNX_TEST_SHIPPED"))
 (setq drgnx-pkg-native-compile (and (getenv "DRGNX_TEST_NATIVE") (fboundp 'native-comp-available-p) (native-comp-available-p)))
+(when (getenv "DRGNX_TEST_SIGNED_DIRS")
+  (advice-add 'drgnx-pkg--directory-archive-p :override #'ignore))
+(when (getenv "DRGNX_TEST_GPG")
+  (require 'epg-config)
+  (setq epg-gpg-program (getenv "DRGNX_TEST_GPG")))
 (setq drgnx-pkg--after-lock-function #'drgnx-pkg-child--state)
 (setq drgnx-pkg--step-function #'drgnx-pkg-child--step)
 

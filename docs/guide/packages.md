@@ -120,6 +120,29 @@ and runs every entry as one sync (one generation). So clicks made while a sync r
 queue survives the editor closing. A ticket is never given twice; Cancel takes an entry out while it is still queued.
 `drgnx sync --pending` with an empty queue prints `nothing queued` and changes nothing.
 
+### Signatures
+
+GNU and NonGNU ELPA sign their archive contents and every package file; a sync, an upgrade and `--stage` check
+those signatures with gpg, against drgnx's keyring (`~/.local/share/drgnx/gnupg`, which starts with the GNU ELPA
+key Emacs ships), and a file that does not pass is never used: a missing or bad signature on a package stops the
+run (`fa-1.0.el: download failed (…) — nothing was changed`), and on an archive's contents names the archive. MELPA
+and stable MELPA do not sign, nor do archives that are directories: their files are checked by hash only. Another
+archive that does not sign goes in `packages.eld`:
+
+```elisp
+(:archives (("gnu" . "https://elpa.gnu.org/packages/") ("mine" . "https://elpa.example.org/"))
+ :unsigned-archives ("mine"))
+```
+
+A lock entry carries `:verified t` when its file passed the check — downloaded now from an archive that signs, or
+taken from the cache with the hash of an entry that was verified (a `--staged` file keeps what `--stage` found).
+Without gpg, a sync that uses an archive that signs stops before it changes anything ("gpg is needed to check GNU
+ELPA's signatures"); `drgnx doctor` says the same (`packages-gpg`). Install gnupg2 (macOS: `brew install gnupg`).
+
+A package you install yourself with `M-x package-install` (or list-packages) takes the same sync lock: while a sync
+runs it is refused at once ("a sync is running; try again when it ends") instead of writing the packages directory
+under it.
+
 ### Packages from Git
 
 A package no archive has comes from its repository, pinned to a commit. Name it in `packages.eld`:
@@ -377,6 +400,11 @@ bringing its wants back, and a run killed during native compilation leaving a co
 a whole object, the plan file before every swap and kept after, the order of the steps, what a plan names,
 `upgrade --only`, `--stage` and `--staged` (a changed cached file refused), the rotation keeping a live session's
 generation and dropping a dead one's, the settings index after upgrade and rollback, and the generations' notes.
+`test/unit/pkg-signed-test.el` signs a fixture archive with a test key made in a temp GNUPGHOME: `:verified` in the
+lock (also through a cache hit with the same hash and through `--stage`/`--staged`, never for MELPA or a file cached
+unchecked), a stripped `.sig` failing the sync with nothing changed, an archive that does not sign naming
+`:unsigned-archives`, no gpg failing the sync and the doctor check, and a stock install refused while a child sync
+holds the lock.
 
 ## Settings of installed packages
 

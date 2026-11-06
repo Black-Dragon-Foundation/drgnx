@@ -172,5 +172,37 @@ ANNOUNCE (a list of strings); its output is the process property :out."
                            (directory-files dir))
                #'string<))))
 
+;;;; Signed archives: a test key in ROOT/signer/ (a GNUPGHOME of its own), its public half in the sandbox's keyring
+
+(defun drgnx-pkg-child--gpg (home &rest args)
+  "Run gpg on the GNUPGHOME HOME with ARGS: its output; a failure is an error with it."
+  (with-temp-buffer
+    (let ((rc (apply #'call-process "gpg" nil t nil "--homedir" home "--batch" "--no-tty" "--quiet" args)))
+      (unless (eql rc 0) (error "gpg %s failed (%s): %s" (string-join args " ") rc (buffer-string)))
+      (buffer-string))))
+
+(defun drgnx-pkg-child-signer (root)
+  "Make a signing key without a passphrase in ROOT/signer/, and import its public half into ROOT's package keyring
+\(data/gnupg: the sandbox's `package-gnupghome-dir')."
+  (let ((home (concat root "signer")) (ring (concat root "data/gnupg")) (pub (concat root "signer.asc")))
+    (dolist (d (list home ring)) (make-directory d t) (set-file-modes d #o700))
+    (drgnx-pkg-child--gpg home "--pinentry-mode" "loopback" "--passphrase" ""
+                          "--quick-gen-key" "drgnx test <test@example.invalid>" "ed25519" "sign" "never")
+    (drgnx-pkg-child--gpg home "--yes" "--armor" "--output" pub "--export")
+    (drgnx-pkg-child--gpg ring "--import" pub)))
+
+(defun drgnx-pkg-child-gpg-stop (root)
+  "Stop the gpg agents of ROOT's GNUPGHOMEs (the signer's and the keyring's)."
+  (dolist (home (list (concat root "signer") (concat root "data/gnupg")))
+    (when (file-directory-p home)
+      (ignore-errors (call-process "gpgconf" nil nil nil "--homedir" home "--kill" "all")))))
+
+(defun drgnx-pkg-child-sign-archive (root dir)
+  "Sign the archive DIR with ROOT's test key: an armored FILE.sig beside archive-contents and each package file.  DIR."
+  (dolist (f (cons (expand-file-name "archive-contents" dir) (directory-files dir t "\\.el\\'")))
+    (drgnx-pkg-child--gpg (concat root "signer") "--yes" "--pinentry-mode" "loopback" "--passphrase" ""
+                          "--armor" "--detach-sign" "--output" (concat f ".sig") f))
+  dir)
+
 (provide 'pkg-fixture)
 ;;; pkg-fixture.el ends here

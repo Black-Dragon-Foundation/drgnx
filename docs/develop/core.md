@@ -500,6 +500,14 @@ ROOT)` reads it.
   reads `<state>/elpa-in-use/PID.eld` (live stamps only; with SWEEP the others are deleted): snapshot rotation and
   an upgrade's restore keep those generations. `drgnx-pkg--after-change` (settings index, then
   `drgnx-pkg-after-change-functions`) follows a sync, upgrade or rollback of the CLI that worked.
+- **Signatures**: `drgnx-pkg-with-archive-settings` is the one place that binds `package-check-signature` to `t`,
+  `package-unsigned-archives` (`drgnx-pkg-unsigned-archives`: MELPA by name or host, directory archives —
+  `drgnx-pkg--directory-archive-p`, which the signed tests override — and `packages.eld`'s `:unsigned-archives`), the
+  keyring and the priorities; the sync runs inside it. `drgnx-pkg--refresh` checks for gpg first and turns a failed
+  check of an archive's contents (package.el only logs it) into a `drgnx-pkg-error`. `drgnx-pkg--install` writes
+  `:verified t` for a file fetched from a signing archive, or a cache hit whose hash is a verified entry's (a staged
+  entry is the pin of a `--staged` run). The guard (`drgnx-pkg--guard`) takes `sync.lock` around a stock install a
+  user runs, never waiting (`user-error` while a sync holds it).
 
 **The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
 name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
