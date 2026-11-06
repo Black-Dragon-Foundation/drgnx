@@ -1,4 +1,4 @@
-{"scenario": "panel/features-from-capabilities", "requires": ["v1", "test-hooks"], "doc": "[C] initialize advertises clientCapabilities._meta[\"_drgnx/panel\"] {version: 1}. The agent's advertised features (the mock with --panel, one name unknown) become the snapshot's panel.features, known names only; with before-tool the kinds the lock leaves unhooked are hooked by the adapter. An agent that advertises nothing has no panel, and those kinds stay unhooked."}
+{"scenario": "panel/features-from-capabilities", "requires": ["v1", "test-hooks"], "doc": "[C] initialize advertises clientCapabilities._meta[\"_drgnx/panel\"] {version: 1}. The agent's advertised features (the mock with --panel, one name unknown) become the snapshot's panel.features, known names only. An agent that advertises nothing has no panel. Claude has no delete tool, so a rule subscribing to it lists delete nowhere (the lock refuses a launch with unhooked kinds before its features are known, so before-tool moves nothing to by_adapter)."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
@@ -11,8 +11,8 @@
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
 {"do": "file", "path": "$ROOT/acp.log", "contains": "\"_drgnx/panel\":{\"version\":1}", "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
-{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "panel": {"features": ["context", "drop", "before-tool"], "context": "$absent"}, "hooked": {"before_tool": ["execute"], "by_adapter": ["delete"], "unhooked": [], "why": "$absent"}}}}, "within_ms": 10000}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "panel": {"features": ["context", "drop", "before-tool"], "context": "$absent"}, "hooked": {"before_tool": ["execute"], "by_adapter": [], "unhooked": [], "why": "$absent"}}}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-plain", "cwd": "$ROOT/work", "role": "worker"}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:plain", "name": "$string"}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$plain"}}}
-{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"id": "$plain", "panel": "$absent", "hooked": {"before_tool": ["execute"], "by_adapter": [], "unhooked": ["delete"]}}}}, "within_ms": 10000}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"session": {"id": "$plain", "panel": "$absent", "hooked": {"before_tool": ["execute"], "by_adapter": [], "unhooked": [], "why": "$absent"}}}}, "within_ms": 10000}
