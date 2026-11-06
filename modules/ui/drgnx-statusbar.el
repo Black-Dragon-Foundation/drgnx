@@ -38,6 +38,8 @@
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-notices)                ; the two counts the bar shows, and `drgnx-notice-tick'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function drgnx-notice-toast-more-count "drgnx-notice-toast")
+(declare-function drgnx-notice-toast-more-text "drgnx-notice-toast")
 (declare-function drgnx-file-write "drgnx-file")
 (declare-function drgnx-state-dir "drgnx-paths")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
@@ -130,7 +132,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -138,7 +140,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   "The segments on the right of the status bar, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs drgnx trust)
+(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust)
   "Segments dropped, first to last, when the bar is wider than its window.
 The branch is cut with an ellipsis instead, and only after these are gone.  `needs-you' is never dropped."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
@@ -147,7 +149,7 @@ The branch is cut with an ellipsis instead, and only after these are gone.  `nee
   "The segments the other editor groups show (the most recently used one shows the whole bar)."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-quiet '(folder branch agents jobs needs-you drgnx tests misc)
+(defcustom drgnx-statusbar-quiet '(folder branch agents jobs needs-you drgnx toasts tests misc)
   "The segments of the quiet bar (`drgnx-statusbar-quiet-modes': the start page), on the left, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -811,6 +813,10 @@ dir (the doctor's `statusbar-misc' check reads it).  Never prompts and never rai
 
 ;;;; The memo: a redisplay that changes nothing reuses the bar
 
+(defun drgnx-statusbar--toasts-waiting ()
+  "How many notices wait for a toast's place (a key of the bar: 0 without the toasts).  Allocates nothing."
+  (if (fboundp 'drgnx-notice-toast-more-count) (drgnx-notice-toast-more-count) 0))
+
 (drgnx-memo-define statusbar-position :on window
                    :keys ((current-buffer) (window-point object) (buffer-chars-modified-tick) (point-min)
                           (and mark-active (mark t)) (drgnx-statusbar--selected-p object))
@@ -830,7 +836,7 @@ changed.")
 (drgnx-memo-define statusbar-bar :on window
                    :keys ((drgnx-epoch 'buffer-look (current-buffer)) (drgnx-epoch 'flymake (current-buffer))
                           (drgnx-epoch 'eglot (current-buffer)) (drgnx-epoch 'git) (drgnx-epoch 'misc-info)
-                          (drgnx-epoch 'statusbar) (drgnx-notice-tick)
+                          (drgnx-epoch 'statusbar) (drgnx-notice-tick) (drgnx-statusbar--toasts-waiting)
                           (drgnx-statusbar--position-key object compact)
                           (buffer-chars-modified-tick) (point-min) (point-max) width compact
                           (drgnx-statusbar--layout-key object)
@@ -841,7 +847,8 @@ changed.")
                           (drgnx-statusbar--which-func object) (drgnx-statusbar--misc))
                    :doc "A window's escaped bar (`drgnx-statusbar--bar'), evaluated in its buffer with WIDTH its width and
 COMPACT whether it shows the compact bar.  Six epochs, the notice model's tick (`drgnx-notice-tick': the two counts
-the `needs-you' and `drgnx' segments show), then plain values compared with `eq': the position the bar shows (its own
+the `needs-you' and `drgnx' segments show) and the count of toasts that wait (the `toasts' segment), then plain values
+compared with `eq': the position the bar shows (its own
 memo's text, `drgnx-statusbar--position-key': not the point, so a move the bar does not show builds nothing), the
 text's change count, the narrowing, width and kind, whether you are in it, the mark of a selection; the buffer,
 `default-directory', `mode-line-process', a keyboard macro being recorded, keycast's keys, which-function's name and
@@ -1156,6 +1163,11 @@ Reads the cache only (a remote buffer has no entry)."
     (cond ((and s (not (string-empty-p s))) s)
           (face (propertize (drgnx-statusbar--glyph glyph) 'face face))
           (t (drgnx-statusbar--glyph glyph)))))
+
+(defun drgnx-statusbar--seg-toasts ()
+  "`+N': the notices that wait for a toast's place while the most toasts show; nothing when none waits."
+  (when-let* (((fboundp 'drgnx-notice-toast-more-text)) (s (drgnx-notice-toast-more-text)))
+    (propertize s 'face 'drgnx-status-info)))
 
 (defun drgnx-statusbar--seg-mode ()
   "The buffer's `mode-name' (Magit, Help, … : the buffers that are not files)."
@@ -1564,6 +1576,8 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
                                   :help "Waiting on you: click for the newest, or the Notices list")
   (drgnx-statusbar-define-segment 'drgnx :fn #'drgnx-notice-problems-text :click #'drgnx-notices-show
                                   :help "drgnx's problems: click for the Notices list")
+  (drgnx-statusbar-define-segment 'toasts :fn #'drgnx-statusbar--seg-toasts :click #'drgnx-notices-show
+                                  :help "Notices waiting for a toast's place: click for the Notices list")
   (drgnx-statusbar-define-segment 'modal :fn #'drgnx-statusbar--seg-modal :help "Modal editing state")
   (drgnx-statusbar-define-segment 'mode :fn #'drgnx-statusbar--seg-mode :help "The buffer's major mode")
   (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc

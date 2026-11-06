@@ -168,6 +168,7 @@ Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch.
 | `agents` | `◎ 1 busy` (the Agents module's: gone when it is off) | the Agents tab |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
+| `toasts` | `+2`: the notices that wait for a place while three toasts show (notices.md, "Toasts") | the Notices list |
 | `modal` | the modal-editing state (`NORMAL`, `INSERT` …), when that module is loaded | |
 | `mode` | the buffer's `mode-name`: the bar of Magit, Help and the other read-only buffers (`drgnx-statusbar-other`) | |
 | `misc` | what stock Emacs shows beside the file: evil's state tag (`<N>`, when evil runs without drgnx's `editor/evil` module; with it, `modal` shows the state), the last key and command of **Show Keys As I Type** (keycast), a keyboard macro being recorded (`● Rec`), `Narrowed`, `Remote: host`, the buffer's process (`:run`), the function point is in (`which-function-mode`), and what other packages add to `mode-line-misc-info` and `global-mode-string` (the clock, a battery, other modules' marks) without the job badge | |
@@ -205,7 +206,7 @@ The most recently used editor window shows the whole bar; the other editor group
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
 (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
-quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, tests and `misc`), no line and column,
+quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, `toasts`, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
@@ -275,9 +276,9 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
-| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |

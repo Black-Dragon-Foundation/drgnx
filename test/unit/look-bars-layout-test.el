@@ -284,5 +284,24 @@ nothing when the same bar is laid out again.  The counts are printed."
         (drgnx-statusbar-render 60)
         (should (= 0 calls))))))
 
+(require 'drgnx-notice-toast)
+
+(ert-deftest drgnx-look-bars/waiting-toasts-are-counted ()
+  "Pattern D: the toasts that wait for a place are counted in the status bar (\"+N\", the `toasts' segment of the
+default bar), the bar is built again when the count changes, and with none waiting the segment says nothing."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (should (memq 'toasts (eval (car (get 'drgnx-statusbar-left 'standard-value)) t)))
+    (let ((drgnx-statusbar-left '(toasts a)) (drgnx-notice-toast--waiting nil))
+      (should-not (string-match-p "\\+" (substring-no-properties (drgnx-statusbar-render 200))))
+      (setq drgnx-notice-toast--waiting (list '(:source a :id 1) '(:source a :id 2)))
+      (should (string-match-p "\\+2" (substring-no-properties (drgnx-statusbar-render 200))))
+      (drgnx-statusbar-test--in-buffer 'emacs-lisp-mode
+        (let ((two (drgnx-statusbar-mode-line)))
+          (push '(:source a :id 3) drgnx-notice-toast--waiting)
+          (let ((three (drgnx-statusbar-mode-line)))
+            (should-not (eq two three))
+            (should (string-match-p "\\+3" (substring-no-properties three)))))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here
