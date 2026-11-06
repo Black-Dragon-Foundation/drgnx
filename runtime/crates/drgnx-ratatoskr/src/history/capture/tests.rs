@@ -235,6 +235,29 @@ fn link_is_recorded_as_a_link() {
     assert_eq!(v[0].blob.as_deref(), Some(want.as_str()));
 }
 
+// [D] pure: a hub write the after-edit hook changed is recorded as the bytes that reach the disk, not the agent's own
+#[test]
+fn records_the_bytes_after_the_hook() {
+    let f = fixture(&[("a.txt", "one\n")]);
+    let asked = b"one\ntwo\n";
+    let written = b"one\ntwo\n// checked\n";
+    let v = f
+        .hub
+        .on_agent_write(&f.tree, "a.txt", written, "s1", cause("2"), 10.0)
+        .unwrap();
+    assert_eq!(v.len(), 1);
+    let git_dir = f.repo.path().join(".git");
+    let blob = |bytes: &[u8]| {
+        super::super::blob::hash_object(&git_dir, f.repo.path(), "a.txt", bytes).unwrap()
+    };
+    assert_eq!(v[0].blob.as_deref(), Some(blob(written).as_str()));
+    assert_ne!(v[0].blob.as_deref(), Some(blob(asked).as_str()));
+    assert_eq!(
+        f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+        Some("one\ntwo\n// checked\n")
+    );
+}
+
 #[test]
 fn reads_through_eitri_only() {
     let f = fixture(&[("src/a.rs", "fn a() {}\n")]);

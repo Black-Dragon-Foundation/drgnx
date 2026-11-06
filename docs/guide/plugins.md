@@ -123,3 +123,22 @@ bad regex, an id used twice) refuses the whole list, naming the place (`[2].id`)
 **Kinds are the agent protocol's.** A kind an agent reports that is not one of the list above counts as `other`, and
 only the hub's own servers say `drgnx`, so an agent cannot pass its step off as one of the hub's tools. A notebook
 edit, which the Claude adapter reports as `other`, counts as `edit`.
+
+## After an edit
+
+The `after-edit` point runs off the agent's turn, in its own task: it never holds up the editor or the agent's other
+requests, and it shares one 5 s budget. What it can do depends on who made the edit.
+
+- **An edit the hub writes** (the agent's `fs/write_text_file` request): a hook may **annotate**, **deny** or
+  **change** the content before it reaches the disk.
+  - *Deny* answers the agent's request with the error `drgnx refused the write: REASON` and writes nothing.
+  - *Change* writes the changed content, and the agent is told: "drgnx's hook NAME changed your write to PATH; read
+    the file before editing it again".
+- **An edit the agent made itself** (its own tools wrote the file): the file is already on disk, so a hook may only
+  **annotate** or **deny**. A change is a failure of that hook. A deny steers the refusal to the agent, marks the step
+  "refused by hook" in the timeline, and leaves the edit on disk and in the history. You can still accept it.
+- A note is shown under the step.
+
+**Which agents are changed.** `change` reaches only agents that write through the client. With Claude's adapter,
+Claude Code makes its edits itself (the adapter's `writeTextFile` is a pass-through its tools do not call), so for
+Claude a hook can annotate or deny but never change.
