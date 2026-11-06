@@ -880,7 +880,9 @@ cell is never (the message names the row; it is not started without the project 
 directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;
 test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
 handshake, `lock::verify` (a lock that does not hold kills the session; Codex's, proven or not, holds only when the
-mode `session/new`'s answer reports, `hermod::Conn::reported_mode`, is `read-only`). Every permission request then goes through
+mode `session/new`'s answer reports, `hermod::Conn::reported_mode`, is `read-only`; an enforced Gemini's, when its
+`initialize` reports `_meta["_drgnx/panel"].adminPolicy`, only when the admin policy loaded with at least the rules
+the lock wrote, `lock::gemini_policy_confirmed`). Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
 refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
 browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card

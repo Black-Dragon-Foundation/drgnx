@@ -28,6 +28,31 @@ pub fn note(argv: &[String]) -> Value {
     json!({"gemini": "loadSession only", "admin_policy": policy})
 }
 
+/// What drgnx's Gemini fork (`--panel-policy engine|short`; none: the stock adapter) adds to `initialize`'s
+/// `agentCapabilities._meta["_drgnx/panel"]` for a client whose PARAMS offer `_drgnx/panel` version 1
+/// (`packages/cli/src/acp/acpDrgnxPanel.ts:92-106`): `adminPolicy {loaded, rules}`, the rules Gemini holds from the
+/// `--admin-policy` files, a file dropped by its loader holding none (`acpDrgnxPanel.ts:74-86`); `short` reports one
+/// rule fewer.  Each `[[rule]]` counts once: the hub's rules name one tool each.
+pub fn panel(argv: &[String], params: &Value) -> Option<Value> {
+    let how = argv.windows(2).find(|w| w[0] == "--panel-policy")?[1].clone();
+    if params.pointer("/clientCapabilities/_meta/_drgnx~1panel/version") != Some(&json!(1)) {
+        return None;
+    }
+    let mut rules: u64 = argv
+        .windows(2)
+        .filter(|w| w[0] == "--admin-policy")
+        .filter_map(|w| std::fs::read_to_string(&w[1]).ok())
+        .filter(|text| problem(text).is_none())
+        .map(|text| text.lines().filter(|l| l.trim() == "[[rule]]").count() as u64)
+        .sum();
+    if how == "short" {
+        rules = rules.saturating_sub(1);
+    }
+    Some(
+        json!({"version": 1, "features": [], "adminPolicy": {"loaded": rules > 0, "rules": rules}}),
+    )
+}
+
 /// Why Gemini CLI 0.67's loader drops the policy TEXT, if it does.  Its schema (`packages/core/src/policy/
 /// toml-loader.ts:39-70`) needs on every `[[rule]]`: `toolName`, a string or an array of strings (`:40`; an empty one
 /// is refused too, `:419-430`), `decision` one of `allow`, `deny`, `ask_user` (`:46`, `types.ts:10-14`), and

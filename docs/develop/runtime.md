@@ -678,7 +678,8 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini
 (`loadSession` only; the rest answers -32601; its log's `admin_policy` says whether an `--admin-policy` file passes
 Gemini CLI 0.67's loader, `loaded`, or would be dropped, `dropped: WHY`; the session starts either way, as Gemini's
-does), dsh (an overlay `--patch` names is read as DeepSeek Harness 0.2.2 reads it: one that is not a top-level list of
+does; `--panel-policy engine|short` is drgnx's fork, which answers an `initialize` offering `_drgnx/panel` version 1
+with `adminPolicy {loaded, rules}`, `short` one rule fewer), dsh (an overlay `--patch` names is read as DeepSeek Harness 0.2.2 reads it: one that is not a top-level list of
 loader patches stops it before it speaks ACP, exit 1; its log has the policy, sandbox mode and asked kinds). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this

@@ -371,13 +371,19 @@ impl Agent {
         let reply = |result: Value| send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
         match method.as_str() {
             "initialize" => {
-                self.log("initialize", params);
-                reply(json!({"protocolVersion": 1, "authMethods": [],
+                let mut r = json!({"protocolVersion": 1, "authMethods": [],
                     "agentInfo": {"name": format!("ratatoskr-mock-{}", self.kind_name()), "version": "0.1.0"},
                     "agentCapabilities": {"loadSession": matches!(self.kind, Kind::Gemini | Kind::Kimi),
                         "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
                         "mcpCapabilities": {"http": false, "sse": false},
-                        "sessionCapabilities": self.session_caps()}}));
+                        "sessionCapabilities": self.session_caps()}});
+                if self.kind == Kind::Gemini
+                    && let Some(panel) = gemini::panel(&self.argv, &params)
+                {
+                    r["agentCapabilities"]["_meta"] = json!({"_drgnx/panel": panel});
+                }
+                self.log("initialize", params);
+                reply(r);
             }
             "session/new" => {
                 if self.kind == Kind::Codex

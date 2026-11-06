@@ -480,6 +480,59 @@ fn gemini_policy_problem(text: &str) -> Option<String> {
     })
 }
 
+/// How many rules the lock wrote in the policy file PLAN's `--admin-policy` names (none passed: 0).
+pub fn gemini_policy_rules(plan: &LaunchPlan) -> usize {
+    let Some(file) = plan
+        .argv
+        .windows(2)
+        .find(|w| w[0] == "--admin-policy")
+        .map(|w| PathBuf::from(&w[1]))
+    else {
+        return 0;
+    };
+    plan.ro_files
+        .iter()
+        .find(|(p, _)| *p == file)
+        .map_or(0, |(_, b)| {
+            String::from_utf8_lossy(b)
+                .lines()
+                .filter(|l| l.trim() == "[[rule]]")
+                .count()
+        })
+}
+
+/// Whether Gemini holds the WROTE rules of the lock's admin policy, by what drgnx's Gemini fork reports in
+/// `initialize` (CAPS, the agent's capabilities: `_meta["_drgnx/panel"].adminPolicy {loaded, rules}`,
+/// `packages/cli/src/acp/acpRpcDispatcher.ts:94-123`).  No report (the stock adapter) leaves the check before launch
+/// ([`gemini_policy_problem`]) as the only one.
+pub fn gemini_policy_confirmed(caps: Option<&Value>, wrote: usize) -> Result<(), LockBroken> {
+    if wrote == 0 {
+        return Ok(());
+    }
+    let Some(report) = caps.and_then(|c| c.pointer("/_meta/_drgnx~1panel/adminPolicy")) else {
+        return Ok(());
+    };
+    let (Some(loaded), Some(rules)) = (
+        report.get("loaded").and_then(Value::as_bool),
+        report.get("rules").and_then(Value::as_u64),
+    ) else {
+        return Err(LockBroken(format!(
+            "Gemini's report of drgnx's admin policy cannot be read: {report}"
+        )));
+    };
+    if !loaded {
+        Err(LockBroken(
+            "Gemini says drgnx's admin policy did not load".into(),
+        ))
+    } else if rules < wrote as u64 {
+        Err(LockBroken(format!(
+            "Gemini holds {rules} of the {wrote} rules of drgnx's admin policy"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 const GEMINI_POLICY_DROPPED: &str =
     "drgnx's admin policy would not load in Gemini CLI, which would run without it";
 
@@ -1035,20 +1088,28 @@ pub fn codex_mode_confirmed(reported: Option<&str>) -> Result<(), LockBroken> {
     }
 }
 
-/// Checks the lock at session start (ENFORCED is the plan's): the mode the CLI is put in is the asking one.  Codex's
-/// mode is checked whether or not its lock is proven: the one it reports must be [`CODEX_MODE`].  With an enforced
-/// lock, Claude, Gemini and Kimi Code are set to `default` (a refusal ends the session), and DeepSeek Harness has no
-/// modes; a profile with no lock fails.
+/// Checks the lock of PLAN at session start, with CAPS the agent's capabilities from `initialize`: the mode the CLI is
+/// put in is the asking one.  Codex's mode is checked whether or not its lock is proven: the one it reports must be
+/// [`CODEX_MODE`].  With an enforced lock, Gemini must hold its admin policy's rules when it reports them
+/// ([`gemini_policy_confirmed`]); Claude, Gemini and Kimi Code are set to `default` (a refusal ends the session), and
+/// DeepSeek Harness has no modes; a profile with no lock fails.
 pub async fn verify(
     conn: &hermod::Conn,
     sid: &hermod::SessionId,
     p: &AgentProfile,
-    enforced: Enforced,
+    plan: &LaunchPlan,
+    caps: Option<&Value>,
 ) -> Result<(), LockBroken> {
     match p.provider() {
         Some(Provider::Codex) => codex_mode_confirmed(conn.reported_mode(sid).as_deref()),
-        _ if enforced != Enforced::Yes => Ok(()),
-        Some(Provider::Claude | Provider::Gemini | Provider::Kimi) => conn
+        _ if plan.enforced != Enforced::Yes => Ok(()),
+        Some(Provider::Gemini) => {
+            gemini_policy_confirmed(caps, gemini_policy_rules(plan))?;
+            conn.set_mode(sid, "default")
+                .await
+                .map_err(|e| LockBroken(format!("`default` mode refused: {e}")))
+        }
+        Some(Provider::Claude | Provider::Kimi) => conn
             .set_mode(sid, "default")
             .await
             .map_err(|e| LockBroken(format!("`default` mode refused: {e}"))),

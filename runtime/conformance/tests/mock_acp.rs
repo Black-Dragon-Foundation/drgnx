@@ -271,6 +271,59 @@ fn gemini_loads_or_drops_its_admin_policy() {
     }
 }
 
+// [C] handshake: drgnx's Gemini fork (`--panel-policy`) answers an `initialize` that offers `_drgnx/panel` version 1
+// with `agentCapabilities._meta["_drgnx/panel"].adminPolicy {loaded, rules}`, the rules Gemini holds from the
+// `--admin-policy` files by their names (`packages/cli/src/acp/acpRpcDispatcher.ts:94-123`, `acpDrgnxPanel.ts:52-106`):
+// none when the file was dropped; `--panel-policy short` reports one rule fewer.  The stock adapter (no flag) and a
+// client that offers nothing get no report.
+#[test]
+fn gemini_fork_reports_its_admin_policy() {
+    let d = dir();
+    let good = d.path().join("good.toml");
+    std::fs::write(
+        &good,
+        "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+         [[rule]]\nmcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+    )
+    .unwrap();
+    let bad = d.path().join("bad.toml");
+    std::fs::write(
+        &bad,
+        "[[rule]]\nmcpName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+    )
+    .unwrap();
+    let offer = json!({"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": false,
+        "writeTextFile": false}, "terminal": false, "_meta": {"_drgnx/panel": {"version": 1}}}});
+    let report = |extra: &[&str], file: &std::path::Path, offered: bool| {
+        let mut args = vec!["--as", "gemini", "--admin-policy", file.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        let r = if offered {
+            a.call("initialize", offer.clone())
+        } else {
+            a.init()
+        };
+        r["result"]["agentCapabilities"]["_meta"]["_drgnx/panel"]["adminPolicy"].clone()
+    };
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &good, true),
+        json!({"loaded": true, "rules": 2})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &bad, true),
+        json!({"loaded": false, "rules": 0})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "short"], &good, true),
+        json!({"loaded": true, "rules": 1})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &good, false),
+        Value::Null
+    );
+    assert_eq!(report(&[], &good, true), Value::Null);
+}
+
 #[test]
 fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
     let d = dir();

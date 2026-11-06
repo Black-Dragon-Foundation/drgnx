@@ -288,6 +288,50 @@ fn gemini_policy_is_checked_as_gemini_loads_it() {
     }
 }
 
+// [D] pure: drgnx's Gemini fork says in `initialize` whether the `--admin-policy` file loaded and how many rules
+// Gemini holds from it (`agentCapabilities._meta["_drgnx/panel"].adminPolicy {loaded, rules}`:
+// `packages/cli/src/acp/acpRpcDispatcher.ts:94-123`, `acpDrgnxPanel.ts:46-106`): not loaded, fewer rules than the
+// lock wrote, or a report it cannot read refuses the session; the stock adapter (no report) keeps the check before
+// launch, and a lock that wrote no policy has nothing to check.
+#[test]
+fn gemini_policy_must_be_reported_loaded() {
+    let caps = |p: Value| json!({"loadSession": true, "_meta": {"_drgnx/panel": {"version": 1, "features": [], "adminPolicy": p}}});
+    for (report, wrote) in [
+        (json!({"loaded": true, "rules": 4}), 4),
+        (json!({"loaded": true, "rules": 6}), 4),
+        (json!({"loaded": false, "rules": 0}), 0),
+    ] {
+        assert_eq!(
+            gemini_policy_confirmed(Some(&caps(report.clone())), wrote),
+            Ok(()),
+            "{report}"
+        );
+    }
+    for (report, want) in [
+        (json!({"loaded": false, "rules": 0}), "did not load"),
+        (json!({"loaded": true, "rules": 3}), "3 of the 4"),
+        (json!({"loaded": true}), "cannot be read"),
+        (json!("yes"), "cannot be read"),
+    ] {
+        let LockBroken(why) = gemini_policy_confirmed(Some(&caps(report.clone())), 4).unwrap_err();
+        assert!(why.contains(want), "{report}: {why}");
+    }
+    assert_eq!(
+        gemini_policy_confirmed(Some(&json!({"loadSession": true})), 4),
+        Ok(())
+    );
+    assert_eq!(gemini_policy_confirmed(None, 4), Ok(()));
+    // what the lock wrote: the rules of the file `--admin-policy` names
+    let d = tempfile::tempdir().unwrap();
+    let g = profile(&["gemini", "--acp"], None, &[], None);
+    let plan = locked(&g, &["read", "execute"], d.path());
+    let file = d.path().join("run/lock/gemini-policy.toml");
+    let n = file_of(&plan, &file).unwrap().matches("[[rule]]").count();
+    assert!(n >= 4, "{n}");
+    assert_eq!(gemini_policy_rules(&plan), n);
+    assert_eq!(gemini_policy_rules(&locked(&g, &[], d.path())), 0);
+}
+
 // [D] pure: a policy in Gemini's system folder makes it ignore `--admin-policy`: the lock says so, the kinds are
 // unhooked, and a session they are subscribed for is refused.
 #[test]
