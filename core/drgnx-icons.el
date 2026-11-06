@@ -102,12 +102,17 @@ through the text around it, on a graphical frame with SVG and `drgnx-look-icons'
   "The icon name for FILE: a folder (OPEN: an open one), or the file kind from its name and major mode."
   (if (or (directory-name-p file) (file-directory-p file))
       (if open 'folder-open 'folder)
-    (let ((class (or (car (cl-find-if (lambda (e) (let ((case-fold-search t)) (string-match-p (cdr e) file)))
-                                      drgnx-icons--extensions))
-                     (drgnx-icons--mode-class file))))
-      (pcase class
-        ('code 'file-code) ('text 'file-text) ('cog 'file-cog) ('image 'file-image) ('archive 'file-archive)
-        (_ 'file)))))
+    (drgnx-look-file-name-icon-name file)))
+
+(defun drgnx-look-file-name-icon-name (name)
+  "The icon name for the file called NAME (a path or a bare name; nothing is read from disk): its kind from the name
+and the major mode."
+  (let ((class (or (car (cl-find-if (lambda (e) (let ((case-fold-search t)) (string-match-p (cdr e) name)))
+                                    drgnx-icons--extensions))
+                   (drgnx-icons--mode-class name))))
+    (pcase class
+      ('code 'file-code) ('text 'file-text) ('cog 'file-cog) ('image 'file-image) ('archive 'file-archive)
+      (_ 'file))))
 
 (defun drgnx-look-file-icon (file &optional face size open)
   "The icon of FILE's kind (`drgnx-look-file-icon-name') as `drgnx-look-icon' draws it."

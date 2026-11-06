@@ -281,27 +281,42 @@ buffer, and they keep both in step.")
 (defcustom drgnx-explorer-git t "Show git status in the Explorer (letters, colours, dimmed ignored files)."
   :type 'boolean)
 
+(defvar drgnx-explorer--fontify-point nil "Point of the Explorer buffer while `drgnx-explorer--fontify' paints.")
+
 (defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
-  "Colour the name and put the status letter (● for a folder with changes) at the right edge.
+  "Colour the name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
+\(`drgnx-wb-row-tail-overlay'): the control shows on the row at point, and is hidden on the others until hovered.
 A row of a repository whose status is not read yet asks for it (`drgnx-explorer--git-unread')."
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
-  (when-let* ((status (and drgnx-explorer-git (drgnx-git-status path))))
-    (pcase-let ((`(,letter ,face) (drgnx-git-look status)))
-      (add-face-text-property name-start eol face)
-      (let ((mark (if (and dirp (not (memq status '(ignored untracked)))) "●" letter)))
-        (when mark
-          (let ((o (make-overlay eol eol)))
-            (overlay-put o 'drgnx-git t)
-            ;; a terminal window has no fringe: its last column shows the truncation `$', so one more column stays
-            ;; free.  The overlay is painted once for every frame that shows the buffer, so it is the same everywhere.
-            (overlay-put o 'after-string (concat (propertize " " 'display '(space :align-to (- right 3)))
-                                                 (propertize mark 'face face)))))))
-    (ignore bol)))
+  (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
+         (look (and status (drgnx-git-look status)))
+         (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (car look)))))
+    (when look (add-face-text-property name-start eol (cadr look)))
+    ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
+    (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status))
+                               (and drgnx-explorer--fontify-point (<= bol drgnx-explorer--fontify-point eol)))))
+
+(defun drgnx-explorer--icons (bol depth name-start dirp name)
+  "Draw the row's chevron and file or folder icon over the two characters of its prefix, and the indent of each
+level as `tree-indent' pixels, when icons are drawn as images (graphical frames).  The text stays as it is."
+  (let* ((chevron (if (= depth 0) bol (- name-start 2)))
+         (open (eq (char-after chevron) ?▾))
+         (img (lambda (icon) (get-text-property 0 'display (drgnx-look-icon icon)))))
+    (when-let* ((file (funcall img (if dirp (if open 'folder-open 'folder) (drgnx-look-file-name-icon-name name)))))
+      (when (and dirp (funcall img 'chevron-down))
+        (put-text-property chevron (1+ chevron) 'display (funcall img (if open 'chevron-down 'chevron-right))))
+      (put-text-property (1+ chevron) (+ chevron 2) 'display file)
+      (when (and (fboundp 'drgnx-look-density-value) (> depth 1))
+        (let ((px (round (* (drgnx-pixels-scale) (drgnx-look-density-value 'tree-indent)))) (p bol))
+          (while (< p chevron)
+            (put-text-property p (+ p 2) 'display `(space :width (,px)))
+            (setq p (+ p 2))))))))
 
 (defun drgnx-explorer--fontify (beg end)
   "Paint the rows between BEG and END (jit-lock: only what is displayed): guides and chevron, the
-name's face, the hover highlight, the git status."
+name's face, the hover highlight, the icons, the git status and the ⋯ control."
   (save-excursion
+    (setq drgnx-explorer--fontify-point (point))
     (goto-char beg)
     (forward-line 0)
     (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol)))
@@ -314,9 +329,11 @@ name's face, the hover highlight, the git status."
             (put-text-property (point) name-start 'face 'drgnx-explorer-guide)
             (add-text-properties name-start (pos-eol)
                                  (list 'face (cond ((= depth 0) 'drgnx-explorer-root) ((aref v 2) 'drgnx-explorer-directory)
-                                                   (t 'drgnx-explorer-file))
-                                       'mouse-face 'highlight))
-            (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start)
+                                                   (t 'drgnx-explorer-file))))
+            (unless (or (drgnx-explorer--placeholder-p v) (equal (aref v 0) drgnx-explorer--reading-row))
+              (put-text-property (point) (pos-eol) 'mouse-face 'drgnx-hover-row)
+              (drgnx-explorer--icons (point) depth name-start (aref v 2) (aref v 0))
+              (drgnx-explorer--git-decorate (point) (pos-eol) (drgnx-explorer--path v) (aref v 2) name-start))
             (when (and drgnx-explorer--selection (member (drgnx-explorer--path v) drgnx-explorer--selection))
               (add-face-text-property name-start (pos-eol) 'drgnx-explorer-selected)))
           (forward-line 1)
@@ -942,12 +959,12 @@ excluded names left out.  A root that is your home or / and not a project is ref
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))
         (goto-char (point-min))
         (when-let* ((w (drgnx-wb-section-window 'explorer)))
-          (set-window-parameter w 'header-line-format (drgnx-wb-section-header (format " EXPLORER — %s" query))))))))
+          (set-window-parameter w 'header-line-format (drgnx-wb-section-header (format "Files — %s" query))))))))
 
 (defun drgnx-explorer--plain-title ()
   "The Explorer's title without a Find query."
   (when-let* ((w (drgnx-wb-section-window 'explorer)))
-    (set-window-parameter w 'header-line-format (drgnx-wb-section-header " EXPLORER"))))
+    (set-window-parameter w 'header-line-format (drgnx-wb-section-header "Files"))))
 
 (defun drgnx-explorer--forget-find ()
   "The Explorer was killed: its Find goes too (else the live updates would wait for it forever)."
@@ -1355,6 +1372,7 @@ is read.  File events and timers read none."
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
   (hl-line-mode 1)
+  (drgnx-wb-rows-setup)
   (jit-lock-register #'drgnx-explorer--fontify)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--forget-find nil t))
@@ -1369,11 +1387,12 @@ is over — its release will not come here (Wayland)."
   "Put the Explorer in the dock and let it follow the editor."
   (drgnx-wb-define-section 'explorer :slot 0 :buffer #'drgnx-explorer--buffer
                            :title (lambda () (if drgnx-explorer--find
-                                                 (format " EXPLORER — %s" (plist-get drgnx-explorer--find :query))
-                                               " EXPLORER"))
+                                                 (format "Files — %s" (plist-get drgnx-explorer--find :query))
+                                               "Files"))
                            ;; Like VS Code: showing the Explorer reveals the active editor's file.
                            :on-show (lambda (_w) (drgnx-explorer--follow (window-buffer (drgnx-wb-editor-window)))))
   (drgnx-signal-subscribe 'editor-changed #'drgnx-explorer--follow)
+  (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
   ;; A save changes git status; so does git itself (another window, a terminal): check on focus.
   (drgnx-signal-subscribe 'modified-changed (lambda (_) (drgnx-explorer--git-refresh)))
   (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))
