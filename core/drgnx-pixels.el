@@ -60,12 +60,13 @@ its own faces.  Call it when a row's memo changes, never on every redisplay."
   (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
 
 (defun drgnx-pixels-font-extent (face &optional frame)
-  "(ASCENT . DESCENT) in pixels of the font FACE shows on a graphical FRAME, or nil (a terminal, no such font)."
+  "(ASCENT . DESCENT) in pixels of the font FACE shows on a graphical FRAME, or nil (a terminal, no such font).
+They are the 9th and 10th fields of `font-info''s vector (the 8th is MAX-WIDTH)."
   (let ((frame (or frame (selected-frame))))
     (when (display-graphic-p frame)
       (when-let* ((font (ignore-errors (face-font face frame ?x)))
                   (info (ignore-errors (font-info font frame))))
-        (cons (aref info 7) (aref info 8))))))
+        (cons (aref info 8) (aref info 9))))))
 
 (defun drgnx-pixels-box-height (face height &optional frame)
   "The width of the box above and below text in FACE that makes a row of HEIGHT pixels (0 when the text is taller or

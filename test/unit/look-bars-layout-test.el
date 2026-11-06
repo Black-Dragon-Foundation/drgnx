@@ -183,5 +183,25 @@ are in sentence case."
   (should (equal (mapcar #'cadr drgnx-start--buttons)
                  '("Open a folder…" "Open the work graph" "All keys" "Don't show this again"))))
 
+(defconst drgnx-look-bars-test--font-info-fields
+  '(OPENED-NAME FULL-NAME SIZE HEIGHT BASELINE-OFFSET RELATIVE-COMPOSE DEFAULT-ASCENT MAX-WIDTH ASCENT DESCENT
+                SPACE-WIDTH AVERAGE-WIDTH FILENAME CAPABILITY)
+  "The fields of `font-info''s vector, in the order its documentation gives them.")
+
+(ert-deftest drgnx-look-bars/font-extent-reads-ascent-and-descent ()
+  "Pattern D: `drgnx-pixels-font-extent' is the ASCENT and DESCENT fields of `font-info''s documented vector.  The
+fields are the ones its docstring lists; the vector gives each field a value of its own (100 plus its place)."
+  (let ((doc (replace-regexp-in-string "[ \t\n]+" " " (or (documentation 'font-info) ""))))
+    (should (string-match-p (regexp-quote (mapconcat #'symbol-name drgnx-look-bars-test--font-info-fields " "))
+                            doc)))
+  (let* ((fields drgnx-look-bars-test--font-info-fields)
+         (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
+         (at (lambda (field) (aref info (seq-position fields field)))))
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+              ((symbol-function 'face-font) (lambda (&rest _) "a font"))
+              ((symbol-function 'font-info) (lambda (&rest _) info)))
+      (should (equal (cons (funcall at 'ASCENT) (funcall at 'DESCENT))
+                     (drgnx-pixels-font-extent 'default))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here
