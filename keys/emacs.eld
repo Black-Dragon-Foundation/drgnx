@@ -27,6 +27,8 @@
         (records-accept-proposal :none "C-c C-a in the proposal's diff buffer; the palette")
         (records-reject-proposal :none "C-c C-r in the proposal's diff buffer; the palette")
         (say-it :none "the palette")
+        (say-show :none "the proposal's notice; the palette")
+        (say-answer :none "the planning agent's question notice; the palette")
         (say-approve :none "C-c C-c in the proposal buffer; the palette")
         (say-revise :none "C-c C-e in the proposal buffer; the palette")
         (say-reject :none "C-c C-k in the proposal buffer; the palette")
