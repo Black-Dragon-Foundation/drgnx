@@ -968,6 +968,34 @@ macOS (no /proc there)."
             (should (equal (funcall ks) '("0" "1")))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/orders-runs-its-files-at-the-same-time ()
+  ;; test-pattern: C (handshake): a file's run leaves its marker and waits for another file's; run one file at a time
+  ;; and the first run never sees a second marker.  The wait is bounded (10 s) so a serial run fails instead of hanging
+  (let* ((dir (make-temp-file "drgnx-bin-orders" t))
+         (parent (expand-file-name "parent" dir))
+         (marks (expand-file-name "marks" dir))
+         (drgnx-bin-test--cwd dir))
+    (unwind-protect
+        (progn
+          (make-directory parent)
+          (make-directory marks)
+          (let ((r (drgnx-bin-test--call
+                    drgnx-bin-test--bin
+                    (append
+                     (drgnx-bin-test--env
+                      dir parent
+                      (concat "DRGNX_EMACS="
+                              (drgnx-bin-test--fake-emacs
+                               (expand-file-name "fake-emacs" dir)
+                               (concat "echo \"drgnx-gate-swap-pairs: 0\"; : > " marks "/$(basename \"$DRGNX_TEST_ONLY\"); n=0;"
+                                       " while [ \"$(ls " marks " | wc -l)\" -lt 2 ]; do n=$((n + 1));"
+                                       " [ $n -gt 100 ] && { echo 'no other file ran at the same time'; exit 1; }; sleep 0.1; done"))))
+                     '("DRGNX_ORDERS_JOBS=2"))
+                    "test" "--orders")))
+            (should (eql 0 (car r)))
+            (should (string-match-p "green, [0-9]+ gated file" (cdr r)))))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/a-container-run-forwards-the-test-selector ()
   ;; A narrowed `bin/drgnx test --container' stays narrow inside the container.
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))

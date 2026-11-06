@@ -382,6 +382,16 @@ test_orders() { # [--only FILE] [--container] — each gated file once per K of 
     while IFS= read -r f; do files+=("$f"); done < <(orders_files)
     [ ${#files[@]} -gt 0 ] || { echo "drgnx: test --orders: no gated files" >&2; return 2; }
   fi
+  # Several files: one `--orders --only FILE' per file, DRGNX_ORDERS_JOBS at a time (default: the CPUs), each one's output
+  # printed whole when it ends. A file's own Ks stay in sequence (K goes up to the largest pair count seen so far); a red
+  # file stops only its own loop, and the others finish, so one run names every red file.
+  if [ -z "$only" ] && [ ${#files[@]} -gt 1 ]; then
+    printf '%s\0' "${files[@]}" | xargs -0 -n1 -P "${DRGNX_ORDERS_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)}" \
+      sh -c 'out=$(mktemp "${TMPDIR:-/tmp}/drgnx-orders-file.XXXXXX"); "$0" test --orders "$@" >"$out" 2>&1; rc=$?; cat "$out"; rm -f -- "$out"; exit "$rc"' \
+      "$here/bin/drgnx" ${container[@]+"${container[@]}"} --only || return 1
+    echo "drgnx: orders: green, ${#files[@]} gated file(s)" >&2
+    return 0
+  fi
   log="$(mktemp "${TMPDIR:-/tmp}/drgnx-orders.XXXXXX")"
   for f in "${files[@]}"; do
     f="${f#"$here"/}"; pairs=0; k=0; skipped0=""

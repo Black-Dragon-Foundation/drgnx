@@ -231,7 +231,8 @@ A seed is the two files at once, 62 tests in about 20 s on a desktop (the `:timi
 few minutes after `bins-linux`, the image pull and the binaries' download.
 
 After the seeds the job's last step runs `bin/drgnx test --orders --container`, whatever the seeds said and with no
-rerun: every file whose `;; test-pattern:` line names `gated` once per swapped pair of lines across connections
+rerun (the files at the same time, one per CPU: in sequence, 82 runs of 9 files took 19 minutes, with 2 files to go,
+past the job's 20): every file whose `;; test-pattern:` line names `gated` once per swapped pair of lines across connections
 ([Orders](check.md#orders-bindrgnx-test---orders)). A red names the file and its K, and
 `DRGNX_TEST_GATE_SWAP=K DRGNX_TEST_ONLY=FILE bin/drgnx test --container` replays it.
 
