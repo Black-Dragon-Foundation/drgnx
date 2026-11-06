@@ -757,6 +757,11 @@ get its situation fails instead of measuring something else. Mock agents only; n
 | work-typing-mirror | the same with the map shown and a transcript of one agent open (the mirror of 30 streaming agents) | `:input :p95` 16 ms, `:stalls` 0; at most 1 ms over `typing` (same rule function) |
 | work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened until its first rows are drawn, then 20 steps appended (each with its draw) | `:draw_ms` 100; `:append_ms :max` 1 |
 
+Beside the budget rows the workloads report where their time goes (results JSON, not judged): work-relayout's
+`:to_frame` (command to the frame's arrival), work-live's `:long` (each draw over 4 ms as `(MS TOUCHED ROWS GC-MS)`),
+work-trail's `:settled_s` (seconds from the turn to its 10,000 steps readable) and, when the hub never holds them, a
+trace of the newest step with the hub's and the session's CPU seconds in the premise's error.
+
 The timing rows belong on the desktop's perf island (`perf-exclusive.sh` outermost; the relative rules need the shown
 and hidden workloads in one run). Allocation, CPU and rows are not budgeted yet (`drgnx-perf-run-unseeded`). The Rust
 rows (`vegvisir`'s layout and core step, the shell parse, the trace rows) are their crates' tests.
