@@ -153,7 +153,7 @@ jobs:
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks -- -D warnings
       # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
       # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
       # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
@@ -183,7 +183,7 @@ jobs:
       - if: ${{ !cancelled() }}
         env:
           DRGNX_TEST_ADAPTER: llvmpipe
-        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks
+        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
       - id: build

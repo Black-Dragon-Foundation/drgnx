@@ -50,7 +50,7 @@ runtime/
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
-| `drgnx-px` | a networked container job's relay sidecar: the channel's frame codec, so far ([drgnx-px.md](drgnx-px.md)) |
+| `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, and the `drgnx-px` binary; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.

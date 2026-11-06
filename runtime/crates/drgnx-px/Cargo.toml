@@ -7,6 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# test-only flags of the binary (`--test-log-frames`, `--test-panic-on-beat`); never in a shipped build
+test-hooks = []
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }
