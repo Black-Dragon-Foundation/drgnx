@@ -27,6 +27,7 @@
 (require 'drgnx-user-lisp)
 (require 'drgnx-pkg-activate)
 (require 'drgnx-pkg-wants)
+(require 'drgnx-pkg-progress)
 
 (defvar native-comp-eln-load-path)
 (defvar byte-compile-warnings)
@@ -410,13 +411,16 @@ process took the lock meanwhile: it is put back and this is a `drgnx-pkg-sync-bu
 ;;;; Directories: staging, swap, generations
 
 (defun drgnx-pkg--copy-dir (from to)
-  "Copy directory FROM to TO (reflinks where the file system has them)."
+  "Copy directory FROM to TO (reflinks where the file system has them; on macOS APFS clones, `cp -c')."
   (make-directory (file-name-directory (directory-file-name to)) t)
-  (if (and (memq system-type '(gnu/linux)) (executable-find "cp"))
-      (unless (zerop (call-process "cp" nil nil nil "-a" "--reflink=auto"
-                                   (directory-file-name from) (directory-file-name to)))
-        (drgnx-pkg--error "could not copy %s to %s" from to))
-    (copy-directory from to t t t)))
+  (cond ((and (memq system-type '(gnu/linux)) (executable-find "cp"))
+         (unless (zerop (call-process "cp" nil nil nil "-a" "--reflink=auto"
+                                      (directory-file-name from) (directory-file-name to)))
+           (drgnx-pkg--error "could not copy %s to %s" from to)))
+        ;; clonefile(2) where APFS has it; on another file system cp -c fails and the copy is a plain one
+        ((and (memq system-type '(darwin)) (executable-find "cp")
+              (zerop (call-process "cp" nil nil nil "-c" "-R" "-p" (directory-file-name from) (directory-file-name to)))))
+        (t (copy-directory from to t t t))))
 
 (defun drgnx-pkg--staging () (expand-file-name "elpa.staging/" (drgnx-data-dir)))
 
@@ -471,7 +475,8 @@ should be restarted to use the new ones (the CLI says so)."
 
 (defun drgnx-pkg-snapshot (&optional note)
   "Snapshot the packages directory and the lock as a new generation (written as N.tmp, then renamed);
-keep the newest five.  Returns N."
+keep the newest five, and every one a running drgnx uses (`drgnx-pkg-generations-in-use', whose files of sessions
+that are gone are deleted here).  Returns N."
   (let* ((n (1+ (or (car (car (drgnx-pkg-generations))) 0)))
          (dir (drgnx-pkg--generation-dir n))
          (tmp (concat (directory-file-name dir) ".tmp/")))
@@ -485,8 +490,10 @@ keep the newest five.  Returns N."
                       :header ";; drgnx generation" :pretty t)
     (rename-file (directory-file-name tmp) (directory-file-name dir))
     (drgnx-pkg--set-current n)
-    (dolist (g (nthcdr drgnx-pkg-generations-kept (drgnx-pkg-generations)))
-      (delete-directory (drgnx-pkg--generation-dir (car g)) t))
+    (let ((in-use (drgnx-pkg-generations-in-use t)))   ; read once per snapshot
+      (dolist (g (nthcdr drgnx-pkg-generations-kept (drgnx-pkg-generations)))
+        (unless (memq (car g) in-use)
+          (delete-directory (drgnx-pkg--generation-dir (car g)) t))))
     n))
 
 (defun drgnx-pkg-rollback (&optional n)
@@ -501,12 +508,16 @@ lock.  Files come back at the same path, so their native code stays valid.  Retu
       (let ((dir (drgnx-pkg--generation-dir n)) (staging (drgnx-pkg--staging)))
         (when (file-exists-p staging) (delete-directory staging t))
         (drgnx-pkg--copy-dir (expand-file-name "elpa" dir) staging)
+        ;; the current generation holds the copies of what the swap takes away
+        (apply #'drgnx-pkg-progress-plan current (drgnx-pkg--dirs-change staging (drgnx-elpa-dir)))
+        (drgnx-pkg-progress 'swap :seq drgnx-pkg--plan-seq)
         (drgnx-pkg--swap-in staging)
         (let ((lock (expand-file-name "drgnx.lock.eld" dir)))
           (when (memq (plist-get (drgnx-config-read 'lock) :status) '(problem newer))   ; one we cannot read or write is kept aside
             (drgnx-file-backup (drgnx-pkg-lock-file)))
           (if (file-exists-p lock) (copy-file lock (drgnx-pkg-lock-file) t)
-            (when (file-exists-p (drgnx-pkg-lock-file)) (delete-file (drgnx-pkg-lock-file)))))
+            (when (file-exists-p (drgnx-pkg-lock-file)) (delete-file (drgnx-pkg-lock-file))))
+          (drgnx-pkg-progress 'lock))
         (drgnx-pkg--set-current n)
         n))))
 
@@ -581,13 +592,8 @@ archive signs) before it enters the cache; the cached path.  Any failure is a `d
 
 (defun drgnx-pkg--progress (fmt &rest args) (when drgnx-pkg-verbose (apply #'message fmt args)))
 
-(defvar drgnx-pkg--step-function nil
-  "For tests: called with each step of a run (a symbol: `native' before each file compiled to native code)
-and its plist.")
-
-(defun drgnx-pkg--step (step &rest plist)
-  "Report STEP of a run (with PLIST) to `drgnx-pkg--step-function'."
-  (when drgnx-pkg--step-function (apply drgnx-pkg--step-function step plist)))
+(defvar drgnx-pkg--step-pkg nil
+  "While a sync installs a package: the plist its download, unpack and byte steps carry, (:pkg NAME :i I :n N).")
 
 (defun drgnx-pkg--unpack (desc file)
   "Install DESC from the package FILE into `package-user-dir' (byte-compiled; no native code yet).  A
@@ -595,14 +601,16 @@ file that does not byte-compile is a warning (the package runs it uncompiled)."
   ;; Loaded first: the wrapper below calls, and afterwards puts back, the real function.  Captured as an autoload,
   ;; the first package's compile loads bytecomp, the autoload comes back and every later call fails (symbolp).
   (require 'bytecomp)
+  (apply #'drgnx-pkg-progress 'unpack drgnx-pkg--step-pkg)
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally file)
     ;; Third-party compiler warnings are not the user's to fix: kept out of the sync's output.
     (let ((save-silently t) (package-native-compile nil) (byte-compile-warnings nil)
-          (compile (symbol-function 'byte-compile-file)))
+          (compile (symbol-function 'byte-compile-file)) (said nil))
       (cl-letf (((symbol-function 'byte-compile-file)
                  (lambda (f &rest args)
+                   (unless said (setq said t) (apply #'drgnx-pkg-progress 'byte drgnx-pkg--step-pkg))
                    (let ((r (apply compile f args)))
                      (unless r                        ; nil: it did not compile
                        (drgnx-pkg--warn "%s: %s does not byte-compile (it runs uncompiled)"
@@ -617,6 +625,7 @@ fails its hash or does not install is removed from the cache."
   (let* ((file (drgnx-pkg--file desc)) (cached (drgnx-pkg--cached desc))
          (want (and (equal (plist-get lock-entry :version) (package-version-join (package-desc-version desc)))
                     (plist-get lock-entry :sha256))))
+    (apply #'drgnx-pkg-progress 'download (append drgnx-pkg--step-pkg (list :cached (file-exists-p cached))))
     (unless (file-exists-p cached)
       (unless (package-desc-archive desc) (drgnx-pkg--error "%s is not in the cache" file))
       (drgnx-pkg--fetch desc want))
@@ -668,19 +677,24 @@ fails its hash or does not install is removed from the cache."
 own eln cache — the first place sessions look (drgnx-pkg-activate), never another Emacs's.  DIRS are
 in the packages directory itself: an .eln's name hashes its source's path."
   (when (and drgnx-pkg-native-compile (fboundp 'native-compile))
-    (dolist (dir dirs)
-      (drgnx-pkg--progress "compiling %s to native code" (file-name-nondirectory (directory-file-name dir)))
-      (dolist (f (directory-files dir t "\\`[^.].*\\.el\\'"))
-        ;; compat-NN.el need their siblings at compile time; compat loads one only on an Emacs older than NN
-        (unless (or (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
-                    (and (string-match "/compat-\\([0-9]+\\)\\.el\\'" f)
-                         (<= (string-to-number (match-string 1 f)) emacs-major-version)))
-          (drgnx-pkg--step 'native :pkg (file-name-nondirectory (directory-file-name dir)) :file (file-name-nondirectory f))
+    (let* ((files (seq-mapcat
+                   (lambda (dir)
+                     (mapcar (lambda (f) (cons dir f))
+                             ;; compat-NN.el need their siblings at compile time; compat loads one only on an Emacs older than NN
+                             (seq-remove (lambda (f) (or (string-match-p "-\\(pkg\\|autoloads\\)\\.el\\'" f)
+                                                         (and (string-match "/compat-\\([0-9]+\\)\\.el\\'" f)
+                                                              (<= (string-to-number (match-string 1 f)) emacs-major-version))))
+                                         (directory-files dir t "\\`[^.].*\\.el\\'"))))
+                   dirs))
+           (n (length files)) (i 0) (last nil))
+      (pcase-dolist (`(,dir . ,f) files)
+        (let ((pkg (file-name-nondirectory (directory-file-name dir))))
+          (unless (equal dir last) (setq last dir) (drgnx-pkg--progress "compiling %s to native code" pkg))
+          (drgnx-pkg-progress 'native :pkg pkg :file (file-name-nondirectory f) :i (setq i (1+ i)) :n n)
           (condition-case err (let ((native-comp-eln-load-path (cons (drgnx-pkg-eln-dir) native-comp-eln-load-path)))
                                 (native-compile f))
             (error (drgnx-pkg--warn "%s: %s does not compile to native code (%s; it runs byte-compiled)"
-                                    (file-name-nondirectory (directory-file-name dir)) (file-name-nondirectory f)
-                                    (error-message-string err)))))))))
+                                    pkg (file-name-nondirectory f) (error-message-string err)))))))))
 
 (defun drgnx-pkg-quickstart-file () (expand-file-name "drgnx-quickstart.el" (drgnx-elpa-dir)))
 
@@ -900,11 +914,12 @@ rebuild from its commit (`drgnx-pkg--restore-prepare')."
              (drgnx-pkg--entry-desc name pin))
         (nth 1 (assq name drgnx-pkg--restored)))))
 
-(defun drgnx-pkg--plan (manifest lock offline upgrade missing &optional pin-failed)
+(defun drgnx-pkg--plan (manifest lock offline upgrade missing &optional pin-failed too-old newest)
   "The packages to install, dependencies first: descs.  What cannot be had goes on MISSING (a cons
 whose car is the alist NAME → reason); a locked version that cannot be had, or one older than a package
 needs, goes on PIN-FAILED too (same shape; reason: \"shipped V no longer served\" or \"shipped V is older
-than V2 needs\")."
+than V2 needs\"), and the name of one older than a package needs on TOO-OLD (a cons whose car is a list).  NEWEST:
+names of MANIFEST outside LOCK to take at the archives' newest version, as UPGRADE takes every one."
   (let* ((locked (unless upgrade (drgnx-pkg--lock-closure manifest lock)))
          ;; resolved by package.el: the manifest's packages outside the lock, and what locked ones need beyond it
          (others (let ((o (mapcar #'list (seq-difference manifest locked))))
@@ -943,7 +958,7 @@ than V2 needs\")."
         ;; Each other package on its own: one that cannot be resolved does not stop the others.
         (pcase-dolist (`(,name . ,min) others)
           (let ((want (if min (list name min) (list name))))
-            (when-let* ((newest (and upgrade (car (alist-get name package-archive-contents))))
+            (when-let* ((newest (and (or upgrade (memq name newest)) (car (alist-get name package-archive-contents))))
                         (inst (drgnx-pkg--installed-desc name)))
               (when (version-list-< (package-desc-version inst) (package-desc-version newest))
                 (setq want (list name (package-desc-version newest)))))
@@ -971,6 +986,7 @@ than V2 needs\")."
                                         ((and need (version-list-< (version-to-list (plist-get pin :version)) need))
                                          (pin-fail name (format "shipped %s is older than %s needs" (plist-get pin :version)
                                                                 (package-version-join need)))
+                                         (when too-old (push name (car too-old)))
                                          (miss name (format "the lock pins %s, but %s is needed — drgnx upgrade moves the lock"
                                                             (plist-get pin :version) (package-version-join need)))
                                          nil)
@@ -1048,6 +1064,13 @@ except one whose LOCK entry has no hash (installed by hand or seeded) and that i
 The names deleted, sorted."
   (setq package-alist nil)
   (package-load-all-descriptors)
+  (let ((doomed (drgnx-pkg--removed-by names manifest lock)))
+    (dolist (n doomed) (dolist (d (alist-get n package-alist)) (package-delete d t t)))
+    doomed))
+
+(defun drgnx-pkg--removed-by (names manifest lock)
+  "What `drgnx-pkg--remove' deletes for NAMES, MANIFEST and LOCK from the packages as loaded (`package-alist'):
+names, sorted."
   (let ((prunable (mapcar #'car (drgnx-pkg--prunable manifest))) closure)
     (cl-labels ((visit (n)
                   (unless (memq n closure)
@@ -1055,12 +1078,43 @@ The names deleted, sorted."
                       (push n closure)
                       (dolist (r (package-desc-reqs d)) (visit (car r)))))))
       (mapc #'visit names))
-    (let ((doomed (seq-filter (lambda (n) (and (memq n prunable)
-                                               (or (memq n names)
-                                                   (and (assq n lock) (not (drgnx-pkg--hand-installed-p (alist-get n lock)))))))
-                              closure)))
-      (dolist (n doomed) (dolist (d (alist-get n package-alist)) (package-delete d t t)))
-      (sort doomed (lambda (a b) (string< a b))))))
+    (sort (seq-filter (lambda (n) (and (memq n prunable)
+                                       (or (memq n names)
+                                           (and (assq n lock) (not (drgnx-pkg--hand-installed-p (alist-get n lock)))))))
+                      closure)
+          (lambda (a b) (string< a b)))))
+
+(defun drgnx-pkg--dir-name (desc) (file-name-nondirectory (directory-file-name (package-desc-dir desc))))
+
+(defun drgnx-pkg--plan-swap (descs removes)
+  "Announce the swap a sync makes (`drgnx-pkg-progress-plan'), from the packages directory being built as loaded
+\(`package-alist'): it installs DESCS (a version of a package installed at another one replaces it) and deletes the
+packages named REMOVES.  The current generation holds the copies of what goes."
+  (let (replaces gone adds)
+    (dolist (d descs)
+      (if-let* ((old (alist-get (package-desc-name d) package-alist)))
+          (dolist (o old)
+            (unless (equal (package-desc-version o) (package-desc-version d)) (push (drgnx-pkg--dir-name o) replaces)))
+        (push (package-desc-full-name d) adds)))
+    (dolist (n removes)
+      (dolist (o (alist-get n package-alist)) (push (drgnx-pkg--dir-name o) gone)))
+    (cl-flet ((sorted (l) (sort (delete-dups l) #'string<)))
+      (drgnx-pkg-progress-plan (drgnx-pkg-current-generation) (sorted replaces) (sorted gone) (sorted adds)))))
+
+(defun drgnx-pkg-staged-file ()
+  "The update fetched and checked for review (`drgnx upgrade --stage'): <state>/extensions/staged.eld."
+  (expand-file-name "extensions/staged.eld" (drgnx-state-dir)))
+
+(defun drgnx-pkg--stage (desc)
+  "Fetch DESC's file into the cache and check it (as an install does), without installing it: its staged entry
+\(NAME :version V :file F :sha256 S :verified BOOL) — verified when this fetch checked its signature."
+  (let* ((cached (drgnx-pkg--cached desc)) (fetch (not (file-exists-p cached))))
+    (apply #'drgnx-pkg-progress 'download (append drgnx-pkg--step-pkg (list :cached (not fetch))))
+    (when fetch (drgnx-pkg--fetch desc nil))
+    (list (package-desc-name desc) :version (package-version-join (package-desc-version desc))
+          :file (drgnx-pkg--file desc) :sha256 (drgnx-pkg--sha256 cached)
+          :verified (and fetch (package-check-signature)
+                         (not (member (package-desc-archive desc) package-unsigned-archives)) t))))
 
 (defun drgnx-pkg--lock-entries (new-entries lock add remove kept)
   "The lock after a run, from the packages directory as loaded (`package-alist'): NEW-ENTRIES for what it installed,
@@ -1078,7 +1132,8 @@ entry carries its marks (`drgnx-pkg--marked'): ADD's names are wanted, REMOVE's 
       (when-let* ((old (assq (car m) lock))) (unless (assq (car m) entries) (push old entries))))
     (mapcar (lambda (e) (drgnx-pkg--marked e (assq (car e) lock) add remove)) entries)))
 
-(cl-defun drgnx-pkg-sync (&key (archives nil archives-given) offline upgrade seed modules-dir prune add remove strict note)
+(cl-defun drgnx-pkg-sync (&key (archives nil archives-given) offline upgrade seed modules-dir prune add remove strict note
+                               only stage staged)
   "Install the manifest into the packages directory.  ARCHIVES: alist (NAME . URL-or-DIR) — when not
 given, `drgnx-pkg-archives'; nil: none; OFFLINE: only the lock and the cache; UPGRADE: the archives'
 newest versions, not the lock's; SEED: a directory of installed packages to copy first (another
@@ -1090,7 +1145,12 @@ version, when given) and marked `:wanted user' in the lock; REMOVE: names to rem
 STRICT (set by ADD and REMOVE): a run that cannot have everything it asked for — an ADD name or a package it brings —
 stops before anything changes; a package missing outside the request is reported and does not stop it, and the lock
 and the generation are written.  NOTE: the generation's note (default \"sync\" or \"upgrade\").
-Returns (:ok :installed :removed :pruned :missing :generation :warnings).
+ONLY: names to take at the archives' newest version while the rest stays as locked; a locked dependency too old for
+what they need comes with them.  STAGE: fetch and check what the run would install into the cache, write
+`drgnx-pkg-staged-file', and stop there (no swap, no lock, no generation).  STAGED: those entries, installed exactly
+\(their hashes are checked; a cached file that changed since is refused).
+Each swap is announced first (`drgnx-pkg-progress-plan'), before anything is downloaded.
+Returns (:ok :installed :removed :pruned :missing :generation :warnings :staged).
 A failed download or install, a hash mismatch, a busy or unreadable lock is a `drgnx-pkg-error' and
 changes nothing; packages that cannot be had are reported (the rest is installed, the lock kept).  With no
 lock yet (a new user) and no SEED, the shipped lock (`drgnx-pkg-shipped-lock-file') is copied to the user's
@@ -1109,7 +1169,7 @@ load byte-compiled, and the next sync compiles what is missing."
                                    remove))
          (staging (drgnx-pkg--staging))
          (missing (list nil)) (drgnx-pkg--warnings nil) (drgnx-pkg--restored nil) (drgnx-pkg--restore-failed nil)
-         lock installed new-entries generation pruned removed)
+         lock installed new-entries generation pruned removed staged-out)
     (drgnx-pkg--with-sync-lock
       (unless (or upgrade seed) (drgnx-pkg--start-from-shipped-lock))   ; seeded versions are the user's choice
       (setq lock (drgnx-pkg-read-lock))                 ; a mistake in it → error before anything changes
@@ -1138,16 +1198,23 @@ load byte-compiled, and the next sync compiles what is missing."
                    ;; the shipped lock's entries for packages the user's lock lacks (a module turned on later): soft pins,
                    ;; like a first sync's; a seeded sync's packages are the user's choice
                    (extras (and plain (not seed) (drgnx-pkg--shipped-extras lock)))
-                   (git-names (seq-filter #'drgnx-pkg-git-source manifest))
+                   (git-names (and (not stage) (seq-filter #'drgnx-pkg-git-source manifest)))   ; staged: archive files
                    (git (drgnx-pkg--git-prepare git-names (append lock extras) offline upgrade missing))
                    (needs (seq-difference (delete-dups (mapcar #'car (seq-mapcat (lambda (p) (package-desc-reqs (nth 1 p))) git)))
                                           (cons 'emacs git-names))))
-              (let* ((names (sort (delete-dups (append (seq-difference manifest git-names) needs)) (lambda (a b) (string< a b))))
-                     ;; a version asked for (--add NAME@V) is a pin of its own, never a soft one
-                     (asked-versions (seq-filter (lambda (a) (and (consp a) (cdr a))) add))
-                     (pins (append (mapcar (lambda (a) (list (car a) :version (cdr a))) asked-versions)
-                                   (seq-remove (lambda (e) (or (eq (plist-get (cdr e) :kind) 'git) (assq (car e) asked-versions)))
+              (let* ((names (sort (delete-dups (append (seq-difference manifest git-names) needs
+                                                       (seq-filter #'drgnx-pkg--installed-desc only)))
+                                  (lambda (a b) (string< a b))))
+                     ;; a version asked for (--add NAME@V) is a pin of its own, never a soft one; so is a staged file
+                     (asked-versions (append (mapcar (lambda (a) (cons (car a) (plist-get (cdr a) :version))) staged)
+                                             (seq-filter (lambda (a) (and (consp a) (cdr a))) add)))
+                     (pins (append staged
+                                   (mapcar (lambda (a) (list (car a) :version (cdr a)))
+                                           (seq-remove (lambda (a) (assq (car a) staged)) asked-versions))
+                                   (seq-remove (lambda (e) (or (eq (plist-get (cdr e) :kind) 'git) (assq (car e) asked-versions)
+                                                               (memq (car e) only)))
                                                (append lock extras))))
+                     (newest (copy-sequence only))
                      (soft-names (seq-remove (lambda (n) (assq n asked-versions))
                                              (mapcar #'car (if (and plain (drgnx-pkg--lock-from-shipped-p)) pins
                                                              (seq-remove (lambda (e) (eq (plist-get (cdr e) :kind) 'git)) extras)))))
@@ -1158,11 +1225,16 @@ load byte-compiled, and the next sync compiles what is missing."
                 ;; and package.el resolves the name — from the entry's own archive when it still has the package —
                 ;; then the plan is made again.  Each round drops a pin: at most as many rounds as there are pins.
                 (when plain (drgnx-pkg--restore-prepare names pins soft-names))
-                (while (let* ((m (list (copy-sequence git-missing))) (failed (list nil))
-                              (_ (setq plan (drgnx-pkg--plan names pins offline upgrade m failed)))
+                (while (let* ((m (list (copy-sequence git-missing))) (failed (list nil)) (too-old (list nil))
+                              (_ (setq plan (drgnx-pkg--plan names pins offline upgrade m failed too-old newest)))
                               (soft-failed (seq-filter (lambda (f) (memq (car f) soft-names)) (car failed))))
-                         (if (null soft-failed)
-                             (progn (setcar missing (car m)) nil)
+                         (cond
+                          ;; ONLY's new versions need a newer dependency than the lock's: it is upgraded with them
+                          ((and only (car too-old))
+                           (dolist (n (car too-old)) (push n newest) (setq pins (assq-delete-all n pins)))
+                           t)
+                          ((null soft-failed) (setcar missing (car m)) nil)
+                          (t
                            (pcase-dolist (`(,name . ,why) soft-failed)
                              (let* ((e (alist-get name pins))
                                     (d (seq-find (lambda (d) (equal (package-desc-archive d) (plist-get e :archive)))
@@ -1172,14 +1244,26 @@ load byte-compiled, and the next sync compiles what is missing."
                                ;; first, not alone: a dependent may need a newer version than that archive has
                                (when d (setf (alist-get name package-archive-contents)
                                              (cons d (delete d (alist-get name package-archive-contents)))))))
-                           t)))
-                (dolist (desc plan)
-                  (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
-                  (let ((entry (if-let* ((prep (assq (package-desc-name desc) drgnx-pkg--restored)) ((eq desc (nth 1 prep))))
-                                   (drgnx-pkg--restore-install prep (alist-get (package-desc-name desc) pins))
-                                 (drgnx-pkg--install desc (alist-get (package-desc-name desc) pins)))))
-                    (drgnx-pkg--drop-other-versions desc)
-                    (push entry new-entries) (push (package-desc-name desc) installed)))
+                           t))))
+                ;; the swap is announced before anything is downloaded: a session repoints meanwhile
+                (unless stage
+                  (drgnx-pkg--plan-swap (append plan (mapcar #'cadr git))
+                                        (append (and remove (drgnx-pkg--removed-by remove manifest lock))
+                                                (and prune (not (car missing)) (mapcar #'car (drgnx-pkg--prunable manifest))))))
+                (let ((i 0) (n (length plan)))
+                  (dolist (desc plan)
+                    (drgnx-pkg--progress "installing %s" (package-desc-full-name desc))
+                    (let ((drgnx-pkg--step-pkg (list :pkg (symbol-name (package-desc-name desc)) :i (setq i (1+ i)) :n n)))
+                      (if stage
+                          (push (drgnx-pkg--stage desc) staged-out)
+                        (let ((entry (if-let* ((prep (assq (package-desc-name desc) drgnx-pkg--restored)) ((eq desc (nth 1 prep))))
+                                         (drgnx-pkg--restore-install prep (alist-get (package-desc-name desc) pins))
+                                       (drgnx-pkg--install desc (alist-get (package-desc-name desc) pins)))))
+                          ;; a staged file keeps the check it had when it was staged
+                          (when (plist-get (alist-get (package-desc-name desc) staged) :verified)
+                            (setq entry (cons (car entry) (plist-put (copy-sequence (cdr entry)) :verified t))))
+                          (drgnx-pkg--drop-other-versions desc)
+                          (push entry new-entries) (push (package-desc-name desc) installed))))))
                 (pcase-dolist (`(,name ,why) (reverse dropped))
                   (when-let* ((e (assq name new-entries)))
                     (drgnx-pkg--warn "%s: %s; installed %s" name why (plist-get (cdr e) :version)))))
@@ -1189,6 +1273,13 @@ load byte-compiled, and the next sync compiles what is missing."
                     (push (cons (car p) (format "needs %s, which cannot be installed" (car dep))) (car missing))
                   (drgnx-pkg--progress "installing %s from Git" (car p))
                   (push (drgnx-pkg--git-install p) new-entries) (push (car p) installed))))
+            ;; A staging run stops here: what it fetched is in the cache, listed for `--staged'.
+            (when stage
+              (drgnx-file-write (drgnx-pkg-staged-file) (setq staged-out (nreverse staged-out))
+                                :header ";; drgnx: the update fetched for review (drgnx upgrade --staged installs it)" :pretty t)
+              (cl-return-from drgnx-pkg-sync
+                (list :ok (null (car missing)) :staged (mapcar #'car staged-out) :missing (nreverse (car missing))
+                      :warnings (reverse drgnx-pkg--warnings))))
             ;; A run that asked for something stops here, before the swap, when it cannot have all of it.
             (when strict
               (let* ((asked (drgnx-pkg--asked add-names lock))
@@ -1207,6 +1298,7 @@ load byte-compiled, and the next sync compiles what is missing."
             (dolist (f '("archives" "unused-quickstart.el" "unused-quickstart.elc"))
               (let ((p (expand-file-name f staging)))
                 (cond ((file-directory-p p) (delete-directory p t)) ((file-exists-p p) (delete-file p)))))
+            (drgnx-pkg-progress 'swap :seq drgnx-pkg--plan-seq)
             (drgnx-pkg--swap-in staging))
         (when (file-exists-p staging) (delete-directory staging t))
         (dolist (p drgnx-pkg--restored)                 ; the rebuilds not installed (a failed sync, a dependency missing)
@@ -1217,6 +1309,7 @@ load byte-compiled, and the next sync compiles what is missing."
         (drgnx-pkg--quickstart)
         (when (or strict (not (car missing)))
           (drgnx-pkg-write-lock (drgnx-pkg--lock-entries new-entries lock add-names remove (car missing)))
+          (drgnx-pkg-progress 'lock)
           (setq generation (drgnx-pkg-snapshot (or note (if upgrade "upgrade" "sync")))))
         (drgnx-pkg--native-compile (delq nil (mapcar (lambda (n) (when-let* ((d (drgnx-pkg--installed-desc n))) (package-desc-dir d)))
                                                      installed)))))
@@ -1247,24 +1340,41 @@ else its output."
                               "--batch" "-Q" "--eval" "(require 'package)" "--eval" (prin1-to-string form))))
         (unless (eql rc 0) (string-trim (buffer-string)))))))
 
-(cl-defun drgnx-pkg-upgrade (&key (archives nil archives-given) smoke modules-dir)
+(cl-defun drgnx-pkg-upgrade (&key (archives nil archives-given) smoke modules-dir only stage staged)
   "Snapshot, upgrade every package to the archives' newest, then run SMOKE (default `drgnx-pkg-smoke';
 called with the manifest, nil means it works).  If the upgrade or the smoke test fails, the snapshot
 comes back.  One lock held throughout.  ARCHIVES as `drgnx-pkg-sync''s (not given: packages.eld's).
-Returns (:ok :generation :restored :smoke :missing :error)."
+ONLY: upgrade those names (and a dependency too old for them), the rest stays as locked.  STAGE: fetch and check the
+update into the cache and list it (`drgnx-pkg-staged-file'), changing nothing else.  STAGED: install exactly what
+was staged (then the list goes).
+Returns (:ok :generation :restored :smoke :missing :error), with STAGE (:ok :staged :missing)."
+  (let* ((sync-args (append (list :modules-dir modules-dir) (and archives-given (list :archives archives))))
+         (entries (and staged (or (plist-get (drgnx-file-read (drgnx-pkg-staged-file)) :data)
+                                  (drgnx-pkg--error "nothing is staged (drgnx upgrade --stage first)"))))
+         (names (or only (mapcar #'car entries))))
+    (if stage
+        (apply #'drgnx-pkg-sync :stage t :upgrade (null only) :only only sync-args)
+      (setq sync-args (append (if (or only staged) (list :only only :staged entries) (list :upgrade t))
+                              (list :note (if names (concat "update " (mapconcat #'symbol-name names ", ")) "upgrade"))
+                              sync-args))
+      (drgnx-pkg--upgrade-1 sync-args smoke modules-dir (and staged (drgnx-pkg-staged-file))))))
+
+(defun drgnx-pkg--upgrade-1 (sync-args smoke modules-dir staged-file)
+  "`drgnx-pkg-upgrade' with `drgnx-pkg-sync''s SYNC-ARGS, SMOKE and MODULES-DIR; STAGED-FILE goes once it worked."
   (drgnx-pkg--with-sync-lock
     (drgnx-pkg--recover)
     (let* ((before (drgnx-pkg-snapshot "before upgrade"))
-           (r (condition-case err (apply #'drgnx-pkg-sync :upgrade t :modules-dir modules-dir
-                                         (and archives-given (list :archives archives)))
+           (r (condition-case err (apply #'drgnx-pkg-sync sync-args)
                 (drgnx-pkg-error (list :ok nil :error (cadr err)))))
            (failure (and (plist-get r :ok)
                          (condition-case err (funcall (or smoke #'drgnx-pkg-smoke) (drgnx-pkg-manifest modules-dir))
                            (error (error-message-string err))))))
       (if (and (plist-get r :ok) (not failure))
-          (list :ok t :generation (plist-get r :generation) :warnings (plist-get r :warnings))
+          (progn (when (and staged-file (file-exists-p staged-file)) (delete-file staged-file))
+                 (list :ok t :generation (plist-get r :generation) :warnings (plist-get r :warnings)))
         (drgnx-pkg-rollback before)
-        (when-let* ((g (plist-get r :generation))) (delete-directory (drgnx-pkg--generation-dir g) t))
+        (when-let* ((g (plist-get r :generation)) ((not (memq g (drgnx-pkg-generations-in-use)))))   ; a session may use it
+          (delete-directory (drgnx-pkg--generation-dir g) t))
         (list :ok nil :smoke failure :missing (plist-get r :missing) :error (plist-get r :error) :restored before)))))
 
 ;;;; Bisect
@@ -1473,7 +1583,21 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
              (drgnx-pkg--print "settings index: %d entries" (drgnx-settings-index-build)))
     (error (drgnx-pkg--print "WARNING settings index not written: %s" (error-message-string err)))))
 
+(defvar drgnx-pkg-after-change-functions nil
+  "Functions called with no arguments after a `drgnx sync', `upgrade' or `rollback' that worked, once the settings
+index is written.  A failure of one is only said.")
+
+(defun drgnx-pkg--after-change ()
+  "What follows a change of the packages directory that worked: the settings index, then
+`drgnx-pkg-after-change-functions'."
+  (drgnx-pkg--index-settings)
+  (condition-case err (run-hooks 'drgnx-pkg-after-change-functions)
+    (error (drgnx-pkg--print "WARNING after the change: %s" (error-message-string err)))))
+
+(defvar drgnx-pkg--outcome nil "The CLI command's result as its done step tells it: (:warnings :error).")
+
 (defun drgnx-pkg--report (r)
+  (setq drgnx-pkg--outcome (list :warnings (plist-get r :warnings) :error (plist-get r :error)))
   (when (plist-get r :installed)
     (drgnx-pkg--print "installed: %s" (mapconcat #'symbol-name (plist-get r :installed) " ")))
   (when (plist-get r :removed)
@@ -1505,6 +1629,7 @@ lock (`drgnx-pkg-pending-take'): its entries join the run, which prints their ti
   (if pending
       (drgnx-pkg--with-sync-lock
         (let ((taken (drgnx-pkg-pending-take)))
+          (drgnx-pkg-progress 'start :command "sync" :tickets (vconcat (mapcar (lambda (e) (plist-get e :ticket)) taken)))
           (when drgnx-pkg--after-lock-function (funcall drgnx-pkg--after-lock-function 'held))
           (when taken
             (drgnx-pkg--print "start tickets: %s" (mapconcat (lambda (e) (number-to-string (plist-get e :ticket))) taken " ")))
@@ -1519,11 +1644,28 @@ lock (`drgnx-pkg-pending-take'): its entries join the run, which prints their ti
                                                     (list :add add :remove remove :note (drgnx-pkg--change-note add remove)))
                                                opts)))))
       (drgnx-pkg--report r)
-      (when (plist-get r :ok) (drgnx-pkg--index-settings))
+      (when (plist-get r :ok) (drgnx-pkg--after-change))
       (if (plist-get r :ok) 0 1))))
 
 (defun drgnx-pkg-cli-run (args)
-  "Run the package command ARGS (strings); the exit code."
+  "Run the package command ARGS (strings); the exit code.  `--progress FILE' anywhere in ARGS: the run's steps go to
+FILE (`drgnx-pkg-progress'), from start to done."
+  (let* ((at (seq-position args "--progress"))
+         (file (and at (nth (1+ at) args)))
+         (drgnx-pkg--progress-file (and file (expand-file-name file)))
+         (drgnx-pkg--plan-seq 0) (drgnx-pkg--outcome nil))
+    (when at (setq args (append (seq-take args at) (seq-drop args (+ at 2)))))
+    (unless (and (equal (car args) "sync") (member "--pending" args))   ; that one says its tickets once it has them
+      (drgnx-pkg-progress 'start :command (car args)))
+    (let ((rc (drgnx-pkg--cli-run-1 args)))
+      (drgnx-pkg-progress 'done :ok (if (eql rc 0) t :false)
+                          :generation (ignore-errors (drgnx-pkg-current-generation))
+                          :warnings (vconcat (plist-get drgnx-pkg--outcome :warnings))
+                          :error (plist-get drgnx-pkg--outcome :error))
+      rc)))
+
+(defun drgnx-pkg--cli-run-1 (args)
+  "Run the package command ARGS (strings), without `--progress'; the exit code."
   (condition-case err
       (pcase args
         (`("sync" . ,flags)
@@ -1549,15 +1691,31 @@ lock (`drgnx-pkg-pending-take'): its entries join the run, which prints their ti
                  0)
              (let ((drgnx-pkg--sync-wait wait))
                (drgnx-pkg--cli-sync opts add remove pending)))))
-        (`("upgrade")
-         (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade))))
-           (drgnx-pkg--report r)
-           (when (plist-get r :smoke) (drgnx-pkg--print "the smoke test failed:\n%s" (plist-get r :smoke)))
-           (when (plist-get r :restored) (drgnx-pkg--print "restored generation %d" (plist-get r :restored)))
-           (if (plist-get r :ok) 0 1)))
+        (`("upgrade" . ,flags)
+         (let (only stage staged)
+           (while flags
+             (pcase (pop flags)
+               ("--only" (while (and flags (not (string-prefix-p "--" (car flags)))) (push (intern (pop flags)) only))
+                (unless only (drgnx-pkg--error "--only needs a package name")))
+               ("--stage" (setq stage t))
+               ("--staged" (setq staged t))
+               (f (drgnx-pkg--error "unknown upgrade option %s (--only NAME…, --stage, --staged)" f))))
+           (when (and staged (or only stage)) (drgnx-pkg--error "--staged goes alone: it installs what --stage fetched"))
+           (let ((r (let ((drgnx-pkg-verbose t)) (drgnx-pkg-upgrade :only (nreverse only) :stage stage :staged staged))))
+             (drgnx-pkg--report r)
+             (when (plist-get r :smoke) (drgnx-pkg--print "the smoke test failed:\n%s" (plist-get r :smoke)))
+             (when (plist-get r :restored) (drgnx-pkg--print "restored generation %d" (plist-get r :restored)))
+             (when stage
+               (drgnx-pkg--print "%s" (if (plist-get r :staged)
+                                          (format "staged: %s (drgnx upgrade --staged installs them)"
+                                                  (mapconcat #'symbol-name (plist-get r :staged) " "))
+                                        "nothing to stage")))
+             (when (and (plist-get r :ok) (not stage)) (drgnx-pkg--after-change))
+             (if (plist-get r :ok) 0 1))))
         (`("rollback" . ,n)
          (drgnx-pkg--print "generation %d restored" (drgnx-pkg-rollback (and n (string-to-number (car n)))))
          (drgnx-pkg--print "%s" drgnx-pkg--restart-note)
+         (drgnx-pkg--after-change)
          0)
         (`("generations")
          (pcase-dolist (`(,n . ,info) (drgnx-pkg-generations))
@@ -1615,10 +1773,14 @@ lock (`drgnx-pkg-pending-take'): its entries join the run, which prints their ti
            (if dir (drgnx-pkg--print "wrote %s (not installed: see docs/guide/packages.md)" (expand-file-name "drgnx.service" (car dir)))
              (princ unit)))
          0)
-        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait] | upgrade | rollback [N] | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR | --refresh]")
+        (_ (drgnx-pkg--print "usage: drgnx sync [--offline] [--seed DIR] [--prune] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait] | upgrade [--only NAME…] [--stage | --staged] | rollback [N] (each with [--progress FILE]) | generations | lock [--ship] | bisect [-- CMD…] | service-unit [DIR | --refresh]")
            2))
-    (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err)) 1)
-    (error (drgnx-pkg--print "drgnx: unexpected error: %s" (error-message-string err)) 1)))
+    (drgnx-pkg-error (drgnx-pkg--print "drgnx: %s" (cadr err))
+                     (setq drgnx-pkg--outcome (plist-put drgnx-pkg--outcome :error (cadr err)))
+                     1)
+    (error (drgnx-pkg--print "drgnx: unexpected error: %s" (error-message-string err))
+           (setq drgnx-pkg--outcome (plist-put drgnx-pkg--outcome :error (error-message-string err)))
+           1)))
 
 (defun drgnx-pkg-cli ()
   "bin/drgnx's package commands: the arguments after --."

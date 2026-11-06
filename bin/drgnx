@@ -2018,8 +2018,12 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                --prune --dry-run: only list them; --add/--remove: install (and mark as
                                yours in the lock) or remove packages, all or nothing; --pending: run the
                                Extensions view's queue; --wait: wait for a running sync instead of refusing
-       drgnx upgrade           newest packages; the previous generation comes back if they break
+       drgnx upgrade [--only NAME…] [--stage | --staged]
+                               newest packages; the previous generation comes back if they break;
+                               --only: those (and a dependency too old for them), the rest stays;
+                               --stage: fetch and check into the cache only; --staged: install that
        drgnx rollback [N]      the packages of generation N (default: the one before)
+                               (sync, upgrade and rollback take --progress FILE: JSON steps, for the editor)
        drgnx generations | lock
        drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)

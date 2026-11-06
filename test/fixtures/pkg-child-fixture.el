@@ -8,7 +8,7 @@
 ;;   DRGNX_TEST_ANNOUNCE     states the child announces and parks at (handshake-fixture.el), separated by spaces:
 ;;                           `wait' and `held' (the sync lock: `drgnx-pkg--after-lock-function'), `native' (the first
 ;;                           native compilation: `drgnx-pkg--step-function')
-(require 'drgnx-pkg)
+;;   DRGNX_TEST_STEP_LOG     a directory: each step of a `--progress' run is logged there (`drgnx-pkg-child--log')(require 'drgnx-pkg)
 (require 'drgnx-handshake-fixture (expand-file-name "handshake-fixture" (file-name-directory (or load-file-name (macroexp-file-name)))))
 
 (defvar drgnx-pkg-child--announce (split-string (or (getenv "DRGNX_TEST_ANNOUNCE") "") " " t)
@@ -20,8 +20,30 @@
     (setq drgnx-pkg-child--announce (delete (symbol-name state) drgnx-pkg-child--announce))
     (drgnx-test-child-announce (symbol-name state))))
 
+(defvar drgnx-pkg-child--steps 0 "The steps logged so far.")
+
+(defun drgnx-pkg-child--log (step)
+  "Log STEP into DRGNX_TEST_STEP_LOG, when set: NNN-STEP.json is the progress file as the step left it, NNN-STEP.plan
+the plan file then (when there is one), NNN-STEP.elpa the package directories then and NNN-STEP.gens the generations."
+  (when-let* ((dir (getenv "DRGNX_TEST_STEP_LOG")) (file (bound-and-true-p drgnx-pkg--progress-file)))
+    (make-directory dir t)
+    (let ((base (expand-file-name (format "%03d-%s" (setq drgnx-pkg-child--steps (1+ drgnx-pkg-child--steps)) step) dir))
+          (elpa (drgnx-elpa-dir)) (gens (drgnx-generations-dir)))
+      (copy-file file (concat base ".json") t)
+      (when (file-exists-p (concat file ".plan.json")) (copy-file (concat file ".plan.json") (concat base ".plan") t))
+      (with-temp-file (concat base ".elpa")
+        (prin1 (and (file-directory-p elpa)
+                    (sort (seq-filter (lambda (d) (file-directory-p (expand-file-name d elpa))) (directory-files elpa nil "\\`[^.]"))
+                          #'string<))
+               (current-buffer)))
+      (with-temp-file (concat base ".gens")
+        (prin1 (and (file-directory-p gens)
+                    (sort (mapcar #'string-to-number (directory-files gens nil "\\`[0-9]+\\'")) #'<))
+               (current-buffer))))))
+
 (defun drgnx-pkg-child--step (step &rest _plist)
-  "`drgnx-pkg--step-function' of the child: STEP may be a state to announce."
+  "`drgnx-pkg--step-function' of the child: STEP is logged, and may be a state to announce."
+  (drgnx-pkg-child--log step)
   (drgnx-pkg-child--state step))
 
 (defun drgnx-pkg-child--modules-dir (args)

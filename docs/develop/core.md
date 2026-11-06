@@ -487,6 +487,19 @@ ROOT)` reads it.
   `drgnx-pkg-sync-busy` (a `drgnx-pkg-error`), retried every 0.5 s. Tests hook a batch child through
   `drgnx-pkg--after-lock-function` (`wait`, `held`) and `drgnx-pkg--step-function` (`native`), set by
   `test/fixtures/pkg-child-fixture.el`.
+- **Progress** (`core/drgnx-pkg-progress.el`): `(drgnx-pkg-progress STEP &rest PLIST)` replaces
+  `drgnx-pkg--progress-file` (the CLI's `--progress FILE`, bound in `drgnx-pkg-cli-run`) with one JSON object of at
+  most 1 KiB (long lists dropped first), never failing the run, then calls `drgnx-pkg--step-function` (the child
+  fixture logs each step there). `drgnx-pkg-progress-plan GENERATION REPLACES REMOVES ADDS` writes `FILE.plan.json`,
+  then the plan step, before every swap: a sync computes it from its plan and the removals against the staging
+  directory as loaded (`drgnx-pkg--plan-swap`, before the downloads), a rollback (and an upgrade's restore) from the
+  generation against `elpa/` (`drgnx-pkg--dirs-change`). `drgnx-pkg-sync`'s `:only NAMES` (`drgnx-pkg--plan`'s
+  NEWEST; a pin too old for them, its TOO-OLD, is dropped and the plan made again), `:stage` (fetch into the cache,
+  write `drgnx-pkg-staged-file`, return before the swap) and `:staged ENTRIES` (exact pins with their hashes; their
+  `:verified` carried into the lock) back `drgnx upgrade --only/--stage/--staged`. `drgnx-pkg-generations-in-use`
+  reads `<state>/elpa-in-use/PID.eld` (live stamps only; with SWEEP the others are deleted): snapshot rotation and
+  an upgrade's restore keep those generations. `drgnx-pkg--after-change` (settings index, then
+  `drgnx-pkg-after-change-functions`) follows a sync, upgrade or rollback of the CLI that worked.
 
 **The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
 name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from

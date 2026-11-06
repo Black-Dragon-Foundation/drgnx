@@ -16,6 +16,9 @@ drgnx sync --add NAME[@V]…  install packages you ask for (marked as yours in t
 drgnx sync --remove NAME…   remove packages and what only they needed; refused while something else asks for them
 drgnx sync --pending        run the queue of the Extensions view's clicks as one sync (add --wait to queue behind a running one)
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
+drgnx upgrade --only NAME…  update those packages (and a dependency too old for them); the rest stays as locked
+drgnx upgrade --stage       fetch and check the update into the cache for review, changing nothing (with --only too)
+drgnx upgrade --staged      install exactly the files --stage fetched
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
 drgnx lock                  what the lock pins (version, and the archive or, for Git, the commit)
@@ -241,8 +244,10 @@ beyond the lock).
 Packages live at one fixed path, `~/.local/share/drgnx/elpa` (`$DRGNX_DATA_DIR`). A sync installs into a copy and
 swaps it in with two renames only when everything arrived, so an interrupted sync leaves the old directory as it
 was (a crash between the two renames is repaired by the next sync). Each successful sync snapshots the directory
-and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them —
-on a file system without them, every sync copies the packages twice; five kept).
+and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them,
+APFS clones (`cp -c`) on macOS — on a file system without them, every sync copies the packages twice; five kept).
+Each generation's note says what made it: `install magit`, `update magit`, `remove eat`, `before remove eat`,
+`before upgrade`, `upgrade`, `sync`.
 
 A run swaps the new directory in, writes its activation file, the lock and the generation, and only then compiles
 to native code: a run stopped during native compilation (Cancel, the job's time box) leaves a consistent generation
@@ -255,6 +260,35 @@ has a file of its name); if the upgrade or the smoke test fails, the snapshot an
 says why. With the default archive priorities ([above](#what-gets-installed)) an upgrade keeps the packages that come from GNU or
 NonGNU ELPA releases (magit, …) on their newest release rather than moving them to MELPA's latest builds; set your own
 priorities, or `:archive-priorities ()`, to take the newest version wherever it is.
+
+`drgnx upgrade --only magit` updates magit alone, through the same snapshot and smoke test: every other package keeps
+its locked version, except a dependency the new magit needs a newer version of, which is updated with it.
+`--stage` (alone or with `--only`) downloads and checks the update into the package cache and lists it in
+`~/.local/state/drgnx/extensions/staged.eld` (name, version, file, sha256, whether its signature was checked), and
+changes nothing else: no swap, no lock, no generation — the files can be reviewed. `drgnx upgrade --staged` then
+installs exactly those files: a cached file whose hash is no longer the staged one is refused and nothing changes.
+
+After a sync, upgrade or rollback that worked, the settings index of the installed packages is written again
+([below](#settings-of-installed-packages)), then `drgnx-pkg-after-change-functions` run.
+
+### Progress
+
+`drgnx sync`, `upgrade` and `rollback` take `--progress FILE`: FILE is replaced, by rename, with one JSON object (at
+most 1 KiB) at each step, so a reader always finds a whole one — `start` (with the queue's `tickets` for
+`--pending`), `plan`, `download`, `unpack` and `byte` per package (`pkg`, `i` of `n`), `swap`, `lock`, `native` per
+file (`pkg`, `i` of `n`), and `done` (`ok`, `generation`, `warnings`, `error`). The `plan` comes before anything is
+downloaded and before every swap: `{"step":"plan","seq":1,"generation":7,"replaces":["magit-4.1"],"removes":["eat-0.9"],"adds":["forge-0.5"]}`
+— the package directories the swap takes away (generation N holds their copies) and the ones it brings. It also goes
+to `FILE.plan.json`, written once before its swap and never by a later step, so a reader that missed the step still
+finds it; `seq` counts the swaps of the run (an upgrade whose smoke test fails swaps twice: its restore has a plan of
+its own). Writing the progress never fails the run.
+
+### Generations a running drgnx uses
+
+A running drgnx can load files from a generation (after a swap took its packages away). Each such session lists
+the generations it uses in `~/.local/state/drgnx/elpa-in-use/PID.eld` (`(:pid P :start S :generations (N…))`), and
+the rotation of generations keeps every one a live session names, beyond the five; the file of a session that is
+gone (its pid not running since that start time) is deleted at the next rotation.
 
 A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
 so). One writer at a time: a sync, upgrade or rollback refuses while another runs (`drgnx sync --wait` waits for it
@@ -339,6 +373,10 @@ package it could not get and installing the rest. `test/unit/pkg-wants-test.el` 
 for): `--add` marking only on success, a partly missing request changing nothing, removals refused or taking only what
 they alone needed, two `--pending --wait` runs never taking the same ticket, the shipped lock without wants, a rollback
 bringing its wants back, and a run killed during native compilation leaving a consistent generation.
+`test/unit/pkg-progress-test.el` (children the same way, each logging every step it writes): the progress file always
+a whole object, the plan file before every swap and kept after, the order of the steps, what a plan names,
+`upgrade --only`, `--stage` and `--staged` (a changed cached file refused), the rotation keeping a live session's
+generation and dropping a dead one's, the settings index after upgrade and rollback, and the generations' notes.
 
 ## Settings of installed packages
 
