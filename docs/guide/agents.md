@@ -633,8 +633,9 @@ hello — will still show there when it works in a git worktree, with the worktr
 
 ## Say it
 
-Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`; the editor's command
-comes with the Work cockpit). A planning chat drafts the plan with no access to your repository or your records: it
+Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`). In the editor, **Say It**
+(from the palette) asks for your words and plans in the current project's repository; nothing blocks while it plans.
+When the proposal is ready you get a notice ("A proposal is waiting for your OK"), and **Show** opens it. A planning chat drafts the plan with no access to your repository or your records: it
 sees only your words and a list of your profiles, routes and roles. Each task gets a role, a profile when it names
 one, and a body that becomes the start of its brief. The hub checks the draft (known roles and profiles, at most 32
 tasks, no task over 16 KiB, no dependency loops, a budget in dollars) and asks the chat again when it does not hold;
@@ -643,6 +644,19 @@ a question from the chat comes back to you instead.
 The job then waits for your OK, like any proposal: the proposal card's title is the hub's, never the chat's, and
 nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
 is rejected and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
+
+**The proposal buffer** shows the hub's facts first: status, tasks and profiles, the budget with its unit, the forecast
+(cost, tokens and time as ranges: a middle and a high end, one run in ten goes past it), the cold wakes inside it
+("of which wakes"), the manager's own spend beside the total, what the plan does to each subscription's week ("at this
+pace: Thursday; with this plan: Wednesday (estimate)", or "no pace yet"), warnings and the date of the price table.
+Under **Basis** each task says what its forecast came from ("12 implement tasks on sonnet"). A profile with no price
+reads "not priced" with its tokens and time, never a zero. The planning agent's title and task bodies come last, under
+"Written by the planning agent". `C-c C-c` approves (the job starts and the planning chat ends), `C-c C-e` asks for a
+change (it reads your words in the command) and `C-c C-k` rejects (the job stops and the chat ends); each is also in
+the palette as **Say It: Approve**, **Say It: Revise** and **Say It: Reject**. A question from the planning chat comes
+as a notice whose **Answer** reads your reply, and a planning that failed says why. **Forecast Accuracy** (palette)
+lists, per role and profile, how many finished tasks were forecast, how many stayed within their high end, and the
+median of actual over middle.
 
 **Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
 the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,

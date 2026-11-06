@@ -1201,7 +1201,7 @@ peer and stay; the others say "not converted". The audit holds every other test 
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
 only loses entries; `drgnx-lint/the-registers-equal-their-constants` holds the two equal, as for the pattern register.
 `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
-`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files and the Say it test file bind or set it.
 `drgnx-test-gate-waiting-ok` (origins a barrier may find inside a real wait) is fenced the same way by
 `drgnx-lint/gate-waiting-ok-only-where-listed`: only the gate's own test binds it; a file that keeps a job running
 through a barrier on purpose is added by the owner's decision. A process
