@@ -386,9 +386,15 @@ async fn a_crashed_browser_starts_fresh_on_the_next_connection() {
 async fn reconnect_during_detach_resumes_paused_targets() {
     let fx = Fx::new(Duration::from_secs(600));
     let mut a = fx.connect().await;
-    // a page attached under the agent's session, paused for the debugger, never resumed by the agent
+    // a page attached under the agent's session, paused for the debugger, never resumed by the agent. The reply and
+    // the attach event are two messages: the agent leaves only once it has the event, so the broker saw the attach
+    // before the close (pattern C, a handshake on the event itself)
     a.send(r#"{"id":1,"method":"Fake.attach"}"#).await;
-    a.reply(1).await;
+    let mut got = vec![a.msg().await, a.msg().await];
+    got.sort_by_key(|v| v["id"].is_null());
+    assert_eq!(got[0]["id"], 1, "{got:?}");
+    assert_eq!(got[1]["method"], "Target.attachedToTarget", "{got:?}");
+    assert_eq!(got[1]["params"]["sessionId"], "child-1", "{got:?}");
     a.close().await;
     // the next agent at once: its message waits for the router's new attach
     let mut b = fx.connect().await;

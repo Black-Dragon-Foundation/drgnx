@@ -6,7 +6,8 @@
 ;; (d) the snapshot with Glitnir on equals the one with it off, after typing, scrolling and a popup shown and hidden;
 ;; (b) with it off no call is made into Glitnir; and the panic fallback leaves the picture the stock path draws.
 ;; Each skips unless Glitnir is active and the pinned child-frame packages are present (so on a stock Nidhogg they are
-;; skipped).  The fixture has no chrome (`child-frame-chrome' nil): the pictures must be the same, pixel for pixel.
+;; skipped).  The fixture has no chrome (`child-frame-chrome' and `drgnx-look-chrome' nil): the pictures must be the
+;; same, pixel for pixel.
 
 (require 'ert)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -20,6 +21,8 @@
 (defvar corfu-auto)
 (defvar corfu--frame)
 (defvar corfu-popupinfo-delay)
+(defvar drgnx-quickhelp--frame)
+(defvar drgnx-quickhelp--card-up)
 (declare-function corfu-quit "corfu")
 (declare-function corfu-mode "corfu")
 (declare-function corfu-popupinfo-mode "corfu-popupinfo")
@@ -123,32 +126,41 @@ Rows are compared whole first, so equal pictures cost one string compare a row."
   "Run BODY on a bare root frame, no chrome, in a fixture buffer with corfu and quick help available.
 The fixture is 60 lines of Lisp (so it scrolls) with the cursor on the last line; popups are shown by BODY.
 Eldoc documents nothing in it: its idle timer (`global-eldoc-mode' runs it in any buffer it supports) would write the
-signature at point to the echo area, in one picture and not the other."
+signature at point to the echo area, in one picture and not the other.
+No chrome means the quick help card's too: it takes `drgnx-look-chrome' as frame parameters once ui/look is loaded (an
+earlier row in the session may have loaded it), and is made once and reused, so the fixture binds that to nil and
+makes the card again.  With chrome its shadow margins are part of its surface, which Glitnir composes and the stock
+picture fills with the card's background: the two pictures would differ by the margins."
   (declare (indent 0))
   `(let ((glitnir-debug nil) (child-frame-chrome nil))
-     (drgnx-test-glitnir--skip-unless-ready)
-     (require 'corfu) (require 'corfu-popupinfo)
-     (let* ((root (drgnx-uitest-root-frame))
-            (corfu-auto nil) (corfu-popupinfo-delay '(0.0 . 0.0))
-            (buf (generate-new-buffer "parity-fixture.el")))
-       (drgnx-uitest-bare-frame)
-       (unwind-protect
-           (with-selected-frame root
-             (delete-other-windows)
-             (switch-to-buffer buf)
-             (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
-             (emacs-lisp-mode)
-             (setq-local eldoc-documentation-strategy #'ignore)
-             (drgnx-test-glitnir--candidates '("car-alpha" "car-beta" "car-gamma") "Documentation.")
-             (corfu-mode 1)
-             (message nil)
-             (drgnx-test-glitnir--settle)
-             ,@body)
-         (ignore-errors (drgnx-test-glitnir--hide-popups))
-         (ignore-errors (corfu-mode -1))
-         (setq glitnir-enable t)
-         (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
-         (message nil)))))
+     ;; bound only when ui/look is loaded: a let of the unloaded library's variable would outlive its load
+     (cl-progv (and (boundp 'drgnx-look-chrome) '(drgnx-look-chrome)) '(nil)
+       (drgnx-test-glitnir--skip-unless-ready)
+       (require 'corfu) (require 'corfu-popupinfo)
+       (when (frame-live-p drgnx-quickhelp--frame)
+         (delete-frame drgnx-quickhelp--frame)
+         (setq drgnx-quickhelp--frame nil drgnx-quickhelp--card-up nil))
+       (let* ((root (drgnx-uitest-root-frame))
+              (corfu-auto nil) (corfu-popupinfo-delay '(0.0 . 0.0))
+              (buf (generate-new-buffer "parity-fixture.el")))
+         (drgnx-uitest-bare-frame)
+         (unwind-protect
+             (with-selected-frame root
+               (delete-other-windows)
+               (switch-to-buffer buf)
+               (dotimes (i 60) (insert (format "(defun fixture-%d (x) \"A function.\" (car (cdr x)))\n" i)))
+               (emacs-lisp-mode)
+               (setq-local eldoc-documentation-strategy #'ignore)
+               (drgnx-test-glitnir--candidates '("car-alpha" "car-beta" "car-gamma") "Documentation.")
+               (corfu-mode 1)
+               (message nil)
+               (drgnx-test-glitnir--settle)
+               ,@body)
+           (ignore-errors (drgnx-test-glitnir--hide-popups))
+           (ignore-errors (corfu-mode -1))
+           (setq glitnir-enable t)
+           (when (buffer-live-p buf) (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
+           (message nil))))))
 
 (defun drgnx-test-glitnir--off-snapshot (root)
   "ROOT's snapshot with Glitnir off (stock painting after a full redraw); Glitnir is left off."

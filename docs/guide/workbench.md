@@ -401,7 +401,8 @@ there whether the popup borrows the panel or has a window of its own, borrowing 
 compositor) `auto` is `float`: the popup shows in one child frame of the window, bottom-centre above the echo area,
 as wide as its text (at most 0.9 of the frame) and at most a third of the frame high. The frame is made once per
 window and reused; ending the popup (`delete-window`, `quit-window`, `bury-buffer`, killing the buffer) hides it, and
-it is never deleted while the window lives. It never takes focus: transient and which-key keep their keys in the
+it is never deleted while the window lives. A popup that came up while you were in the minibuffer (`*Completions*`)
+ends when you leave it, with `RET` or `C-g`, as the window lane's does. It never takes focus: transient and which-key keep their keys in the
 editor, and a click on a candidate in `*Completions*` chooses it. Without Glitnir, or with `window`, the lane is the
 window described above.
 

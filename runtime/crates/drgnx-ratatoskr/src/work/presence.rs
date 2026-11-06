@@ -272,6 +272,12 @@ impl Sub {
     }
 }
 
+/// A file or folder a caller names (an editor's buffer, a workspace root) as the model keys it: the model's files come
+/// from [`place`], so one that exists is known by its true name (macOS's `/tmp/…` is `/private/tmp/…`).
+fn true_name(asked: &str) -> RepoPath {
+    place(Path::new("/"), asked)
+}
+
 /// Whether FILE is ROOT or under it, at a `/`.
 fn under(file: &str, root: &str) -> bool {
     let root = root.trim_end_matches('/');
@@ -376,6 +382,15 @@ impl Live {
         }
     }
 
+    /// Who is in the file a caller named ASKED: looked up by its true name ([`true_name`]), the answer naming it as
+    /// asked.
+    fn file_asked(&self, asked: &str, at: f64) -> FilePresence {
+        FilePresence {
+            file: asked.to_string(),
+            ..self.file(&true_name(asked), at)
+        }
+    }
+
     fn file(&self, file: &str, at: f64) -> FilePresence {
         FilePresence {
             file: file.to_string(),
@@ -473,7 +488,9 @@ pub async fn subscribe(
     let live = &f.core.presence;
     let _ = live.editors.set(f.editors.clone());
     let at = crate::clock::wall_secs();
-    let files: Vec<RepoPath> = {
+    // the names asked, by their true names (the model's keys): a root's files are named as the model has them, a
+    // single file as it was asked
+    let files: Vec<FilePresence> = {
         let mut subs = lock(&live.subs);
         let s = subs.entry(c.conn_id).or_default();
         match (&p.workspace, &p.file) {
@@ -481,39 +498,42 @@ pub async fn subscribe(
                 let roots: Vec<String> = ws
                     .roots
                     .iter()
-                    .map(|r| r.to_string_lossy().into_owned())
+                    .map(|r| true_name(&r.to_string_lossy()))
                     .collect();
                 s.roots.extend(roots.iter().cloned());
-                let model = lock(&live.model);
                 let mut all: BTreeSet<RepoPath> = BTreeSet::new();
-                for r in &roots {
-                    all.extend(model.files_under(r, at));
+                {
+                    let model = lock(&live.model);
+                    for r in &roots {
+                        all.extend(model.files_under(r, at));
+                    }
                 }
-                all.into_iter().collect()
+                all.iter().map(|file| live.file(file, at)).collect()
             }
             (None, Some(file)) => {
-                s.files.insert(file.clone());
-                vec![file.clone()]
+                s.files.insert(true_name(file));
+                vec![live.file_asked(file, at)]
             }
             (None, None) => Vec::new(),
         }
     };
     Ok(PresenceFiles {
         files: files
-            .iter()
-            .map(|file| live.file(file, at))
+            .into_iter()
             .filter(|fp| !fp.entries.is_empty())
             .collect(),
     })
 }
 
-/// `agents/presence/get`: who is in P's file now.
+/// `agents/presence/get`: who is in P's file now, by whichever of its names P gives.
 pub async fn get(
     f: &Front,
     _: &Caller,
     p: PresenceGet,
 ) -> Result<FilePresence, runstav::wire::Error> {
-    Ok(f.core.presence.file(&p.file, crate::clock::wall_secs()))
+    Ok(f.core
+        .presence
+        .file_asked(&p.file, crate::clock::wall_secs()))
 }
 
 #[cfg(test)]

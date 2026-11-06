@@ -52,10 +52,14 @@
             ;; A new window: same split, same files, same Explorer folders.
             (should (eql 0 (plist-get (drgnx-ui-new-frame sess) :exit)))
             (let (after)
+              ;; the widths too: the new window's frame takes its size from the compositor after the layout is put
+              ;; back, and the split follows that resize a moment later
               (condition-case nil
                   (drgnx-test-wait (lambda ()
-                                     (equal (butlast (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout)))
-                                            (butlast before)))
+                                     (setq after (drgnx-persist-reopen--eval sess drgnx-persist-reopen--layout))
+                                     (and (equal (butlast after) (butlast before))
+                                          (= (length (car (last after))) (length (car (last before))))
+                                          (cl-every (lambda (a b) (<= (abs (- a b)) 1)) (car (last after)) (car (last before)))))
                                    :secs 15 :what "the reopened window's layout")
                 (ert-test-failed nil))
               (should (equal (butlast after) (butlast before)))
