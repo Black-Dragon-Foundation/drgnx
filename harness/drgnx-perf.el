@@ -799,21 +799,30 @@ hold.  Gated: `drgnx-perf-gated-metrics' — allocation (:alloc :p50, measured x
                   ((> v limit) (push (format "%s %s %s > %s" w (drgnx-perf--path-name path) (drgnx-perf--round v) limit) out)))))))
     (nreverse out)))
 
+(defun drgnx-perf--report-value (results w path)
+  "The value at PATH of workload W in RESULTS as a report line shows it: rounded, else \"-\", saying why when it is a
+p95 or p99 of fewer than 100 samples (`drgnx-perf-stats' gives those no tail)."
+  (let ((v (drgnx-perf--get results w path))
+        (n (and (memq (car (last path)) '(:p95 :p99)) (drgnx-perf--get results w (append (butlast path) '(:n))))))
+    (cond ((numberp v) (drgnx-perf--round v))
+          ((and (numberp n) (< n 100)) (format "- (n=%d, under 100: not judged)" n))
+          (t "-"))))
+
 (cl-defun drgnx-perf-report (results budgets &key (emacs-major emacs-major-version))
   "Lines for every BUDGETS path of a measured workload that is not gated (wall clock): the value, the budget,
-and that it is reported, not judged.  A p95 or p99 below n = 100 has no value."
+and that it is reported, not judged.  A p95 or p99 below n = 100 has no value: the line says so."
   (let (out)
     (dolist (b budgets)
       (pcase-let ((`(,w ,path ,limit . ,_) b))
         (when (and (assq w results) (drgnx-perf--budget-applies-p b emacs-major))
           (cond ((drgnx-perf--report-only-p b)
                  (push (format "%s %s %s (budget %s, report-only until %s lands): report" w (drgnx-perf--path-name path)
-                               (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit
+                               (drgnx-perf--report-value results w path) limit
                                (plist-get (nthcdr 3 b) :report-only))
                        out))
                 ((or (drgnx-perf--gated-p path) (drgnx-perf--landed-p b)))
                 (t (push (format "%s %s %s (budget %s): reported (wall clock; judge with --perf --ab)" w (drgnx-perf--path-name path)
-                                 (or (drgnx-perf--round (drgnx-perf--get results w path)) "-") limit)
+                                 (drgnx-perf--report-value results w path) limit)
                          out))))))
     (nreverse out)))
 

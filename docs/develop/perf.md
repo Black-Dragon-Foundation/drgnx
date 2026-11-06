@@ -147,7 +147,8 @@ not move. A broken one fails the run (`drgnx-perf-verdict`; `--perf` exits 1):
 `:slice_ms`, the GC numbers): wall clock. The run prints `report ...` lines with the value and the budget and does not
 judge them; the paired A/B run at n >= 100 does. The numbers the design fixed - keystroke and scroll p95 < 16 ms, max
 50 ms, a GC pause p95 < 50 ms, a new frame p95 < 500 ms, a daemon's server ready < 1 s, modules < 1.8 s, redisplay p95
-16 ms - stay in the file as the targets those reports are read against; a p95 of fewer than 100 samples is shown as `-`.
+16 ms - stay in the file as the targets those reports are read against; a p95 or p99 of fewer than 100 samples is shown
+as `- (n=N, under 100: not judged)`.
 
 **Seeding.** `:alloc` and `:rows` come from the Emacs 31.1 container (the GUI image; `bin/drgnx test --container`
 has no `--perf` yet, so the tier runs by hand: `podman run --memory 4g --memory-swap 4g --security-opt
