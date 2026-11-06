@@ -931,9 +931,10 @@ else (Gemini, an agent without the capability) `summary`.
 - **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
   assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
   the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
-  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
-  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
-  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
+  turn that completed at or before the step, cut at that turn's last message, because a Codex fork point is inclusive
+  and cannot be a turn in progress. A turn's end is its last step: once a turn ends every step of it carries its
+  `turn_id` (the step writer's anchors), so a step inside an ended turn rounds down too. The steps a cut drops are
+  `retained`: a labelled summary carries them, so the revert needs the user's message (`needs_message`). No id found (or the first turn still running): `summary`, carrying every step up to
   the one asked for.
 - **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
   fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the

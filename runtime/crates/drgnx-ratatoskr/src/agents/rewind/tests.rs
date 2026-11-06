@@ -85,20 +85,41 @@ fn point_rounds_a_subagent_step_to_before_its_task_call() {
 
 #[test]
 fn point_turn_rounds_down_mid_turn() {
+    // as the `step` table holds them: once a turn ends, every one of its steps carries its id; a running turn's none
     let steps = [
-        step(1, Some("u1"), None),
+        step(1, Some("u1"), Some("t1")),
         step(2, Some("a1"), Some("t1")),
-        step(3, Some("u2"), None),
-        step(4, Some("a2"), None),
+        step(3, Some("u2"), Some("t2")),
+        step(4, Some("a2"), Some("t2")),
+        step(5, Some("a2"), Some("t2")),
+        step(6, Some("u3"), None),
     ];
     let p = point_for(&steps, 4, RestoreLevel::Turn);
     assert_eq!(
         (mid(&p), p.source_step, p.level, p.retained),
         (Some("a1"), Some(2), RestoreLevel::Turn, Some((3, 4))),
-        "turn two is still running at step 4: the end of turn one, and steps 3-4 as a summary"
+        "step 4 is inside turn two: the end of turn one, and steps 3-4 as a summary"
     );
-    let p = point_for(&steps, 2, RestoreLevel::Turn);
-    assert_eq!((mid(&p), p.retained), (Some("a1"), None));
+    let p = point_for(&steps, 6, RestoreLevel::Turn);
+    assert_eq!(
+        (mid(&p), p.source_step, p.retained),
+        (Some("a2"), Some(5), Some((6, 6))),
+        "turn three is still running at step 6: the end of turn two"
+    );
+    for (seq, want) in [(2, "a1"), (5, "a2")] {
+        let p = point_for(&steps, seq, RestoreLevel::Turn);
+        assert_eq!(
+            (mid(&p), p.source_step, p.retained),
+            (Some(want), Some(seq), None),
+            "step {seq} ends its turn"
+        );
+    }
+    let p = point_for(&steps, 1, RestoreLevel::Turn);
+    assert_eq!(
+        (p.level, p.at, p.retained),
+        (RestoreLevel::Summary, None, Some((1, 1))),
+        "inside the first turn no turn has ended"
+    );
 }
 
 #[test]

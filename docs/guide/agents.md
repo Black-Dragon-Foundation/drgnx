@@ -796,7 +796,7 @@ trail's session, else the one running, and its last step):
 
 How much of the conversation comes back depends on the provider. Claude Code with fork support goes back to the step's
 own message (**Message** level); Codex goes back to the last turn that finished at or before the step (**Turn**; a step in
-the middle of a turn rounds down); anything else, and any fork that fails (Claude Code deletes old transcripts after about
+the middle of a turn rounds down, and the rest of that turn up to the step goes in as a summary with your message); anything else, and any fork that fails (Claude Code deletes old transcripts after about
 30 days), starts a new conversation and tells it a labelled summary of what happened up to the step (**Summary**), which
 is why a summary revert asks for your message: no turn starts unasked. A step inside a subagent rounds down to the message
 before the parent's `Task` call. A revert goes forward: the restored text is one new commit (never a reset, never a

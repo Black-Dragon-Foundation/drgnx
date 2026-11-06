@@ -372,6 +372,9 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
 - Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
 - A revert to a subagent's step cuts the conversation at the message before the Task call and carries what the cut
   leaves out in a summary, so it needs the user's message, and the card says so (`needs_message`).
+- A revert of a Codex session to a tool call inside a turn that has ended forks the conversation at the end of the
+  turn before (the mock's fork keeps one turn), and the steps of the later turn up to the call go in a summary, so it
+  needs the user's message too.
 
 `cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
 later deletes); it is a measurement, not a gate.

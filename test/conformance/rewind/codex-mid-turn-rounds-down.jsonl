@@ -1,8 +1,8 @@
-{"scenario": "rewind/codex-mid-turn-rounds-down", "requires": ["v1", "test-hooks"], "doc": "A Codex turn wrote two files. A revert to the first tool call inside that turn cannot cut the conversation mid-turn: the conversation goes back to the end of the turn before, the card says the level is a turn, and the files of the whole later turn go back with it."}
+{"scenario": "rewind/codex-mid-turn-rounds-down", "requires": ["v1", "test-hooks"], "doc": "A Codex turn made two tool calls. A revert to the first of them, once the turn has ended, cannot cut the conversation inside that turn: the conversation is forked at the end of the turn before (the mock's fork keeps one turn), the card says the level is a turn and that the user's message is needed, since the steps of the later turn up to the target go in as a summary with it."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--state\" \"$ROOT/state\" \"--log\" \"$ROOT/m.log\")))))\n"}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
@@ -18,8 +18,9 @@
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:mid", "class": "tool"}}}, "within_ms": 15000}
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$mid"}}}
-{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$mid", "level": "turn", "needs_message": false, "blocked": []}}, "within_ms": 15000}
-{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": []}}}
-{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "conversation": {"state": "restored"}, "op": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$mid", "level": "turn", "needs_message": true, "blocked": []}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": [], "message": "carry on from the first turn"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "level": "turn", "conversation": {"state": "restored"}, "op": "$number"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "grep '\"session/fork\"' $ROOT/m.log | grep -q '\"turns\":1[,}]'"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/get", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"entries": {"$contains": [{"type": "user", "text": "say first"}]}}}, "within_ms": 15000}

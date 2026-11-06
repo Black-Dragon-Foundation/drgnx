@@ -57,9 +57,10 @@ pub(crate) struct Point {
 ///
 /// Message: the last message id at or before SEQ (the steps of one message share it).  A subagent's step rounds down
 /// to the message before the one that holds its `Task` call, so the cut never lands inside a call with no result; the
-/// steps it drops are RETAINED.  Turn: the end of the last turn completed at or before SEQ (the step that carries its
-/// turn id), cut at that turn's last message; a step inside a running turn rounds down, and the steps after the cut are
-/// RETAINED.  Neither found, or Summary asked: Summary, carrying every step up to SEQ.
+/// steps it drops are RETAINED.  Turn: the end of the last turn completed at or before SEQ (the last step of STEPS that
+/// carries its turn id: an ended turn's id is on all its steps), cut at that turn's last message; a step inside a turn,
+/// running or ended, rounds down, and the steps after the cut are RETAINED.  Neither found, or Summary asked: Summary,
+/// carrying every step up to SEQ.
 pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> Point {
     let upto: Vec<&PointStep> = steps.iter().filter(|s| s.seq <= seq).collect();
     let summary = Point {
@@ -96,13 +97,25 @@ pub(crate) fn point_for(steps: &[PointStep], seq: i64, level: RestoreLevel) -> P
                 }
             }
         }
-        RestoreLevel::Turn => upto
-            .iter()
-            .rposition(|s| s.turn_id.is_some())
-            .and_then(|i| {
+        RestoreLevel::Turn => {
+            // once a turn ends every one of its steps carries its id (the step writer's anchors), so its end is
+            // the last step that does, among all the session's steps
+            let mut last: std::collections::HashMap<&str, i64> = std::collections::HashMap::new();
+            for s in steps {
+                if let Some(t) = s.turn_id.as_deref() {
+                    last.insert(t, s.seq);
+                }
+            }
+            let ends = |s: &PointStep| {
+                s.turn_id
+                    .as_deref()
+                    .is_some_and(|t| last.get(t) == Some(&s.seq))
+            };
+            upto.iter().rposition(|s| ends(s)).and_then(|i| {
                 let end = upto[i].seq;
                 last_id(i + 1, None).map(|(_, m)| ((end, m), (end < seq).then_some((end + 1, seq))))
-            }),
+            })
+        }
     };
     match cut {
         Some(((source, message_id), retained)) => Point {
