@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 162, "{names:?}");
+        assert_eq!(names.len(), 164, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -409,8 +409,8 @@ mod tests {
             "history/resync",
             "history/unregister",
         ]);
-        // a revert to here: the files, the steps, the conversation and a commit
-        want.push("history/revert/apply");
+        // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
+        want.extend(["history/revert/apply", "history/revert/hunk"]);
         // a fork from here, its drop, and the text taken across or redone
         want.extend([
             "history/fork",
@@ -669,7 +669,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 117);
+        assert_eq!(with, 119);
     }
 
     #[test]

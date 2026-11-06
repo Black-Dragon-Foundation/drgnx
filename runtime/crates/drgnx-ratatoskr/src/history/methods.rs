@@ -1,13 +1,14 @@
 //! The hub's side of the editor's tracking: `register` a buffer's file, `batch` its changes, `resync` its text,
 //! `unregister` it.  A batch's changes are character offsets in the document's LF text, applied as the batch's origin's
-//! peer: the user's, or `agent:<session>` for a change merged in from an agent.
+//! peer: the user's, or `agent:<session>` for a change merged in from an agent.  `revert:<op>` is the user's change
+//! applying a hunk's revert (`history/revert/hunk`): its operations are one `revert` record naming OP.
 
 use super::capture::{diff, is_secret};
 use super::{Buffer, Hub, Tree, blob};
 use norn::deny::{DenyList, Verdict};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use verdandi::{BranchKind, Change, Error, Result};
+use verdandi::{BranchKind, Change, DocId, Error, PeerId, Result};
 
 /// A batch with more inserted bytes than this is refused with `split-required`: the editor splits it.
 pub const BATCH_MAX: usize = 1 << 20;
@@ -20,6 +21,9 @@ pub struct BatchChange {
     pub inserted: String,
     pub origin: String,
 }
+
+/// A hunk's revert an editor applied in one batch: the record it reverts, the user's peer, the operations' spans.
+type HunkRevert = (verdandi::OpId, PeerId, Vec<(DocId, verdandi::Span)>);
 
 /// What `register` answers.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,8 +124,20 @@ impl Hub {
             (b.doc, b.branch)
         };
         let mut spans = Vec::new();
+        // the editor applying a hunk's revert (`history/revert/hunk`): the user's operations, in one `revert` record
+        let mut reverts: Vec<HunkRevert> = Vec::new();
         for c in changes {
-            let (key, author) = author_of(&c.origin);
+            let reverting = c
+                .origin
+                .strip_prefix("revert:")
+                .and_then(|n| n.parse().ok())
+                .map(verdandi::OpId)
+                .filter(|op| g.h.op(*op).is_ok());
+            let (key, author) = author_of(if reverting.is_some() {
+                "user"
+            } else {
+                &c.origin
+            });
             let peer = g.peer(branch, &key, &author)?;
             let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
             let ch = Change {
@@ -129,15 +145,22 @@ impl Hub {
                 old_len: c.old_len,
                 inserted: c.inserted.clone(),
             };
-            match ad.apply(peer, &ch) {
-                Ok(s) => spans.extend(s.into_iter().map(|s| (peer, s))),
+            match (ad.apply(peer, &ch), reverting) {
+                (Ok(s), Some(op)) => match reverts.iter_mut().find(|r| r.0 == op) {
+                    Some(r) => r.2.extend(s.into_iter().map(|s| (doc, s))),
+                    None => reverts.push((op, peer, s.into_iter().map(|s| (doc, s)).collect())),
+                },
+                (Ok(s), None) => spans.extend(s.into_iter().map(|s| (peer, s))),
                 // a change outside the text: the buffer is not the document
-                Err(Error::Refused(_)) => return Ok(BatchReply::Resync),
-                Err(e) => return Err(e),
+                (Err(Error::Refused(_)), _) => return Ok(BatchReply::Resync),
+                (Err(e), _) => return Err(e),
             }
         }
         for (peer, s) in spans {
             g.settler.change(doc, peer, &[s], now);
+        }
+        for (op, peer, s) in reverts {
+            g.h.record_hunk_revert(op, s, peer, now)?;
         }
         let text = g.h.activate(doc, branch, || Ok(String::new()))?.text();
         Ok(if hash(&text) == region_hash {
