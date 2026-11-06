@@ -2629,8 +2629,11 @@ records it: kind `build`, author `user`, reason "started by the Autonomous prese
 
 The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
 is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
-waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first (`job/stop`,
-while it is still proposed) and prompts again only when it was withdrawn (or the user had rejected it). A say has at
+waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first and prompts
+again only when it was withdrawn (or the user had rejected it). The withdrawal and `job/approve` each decide in their
+own store write whether the job is still `proposed` (`norn::write::jobs::withdraw_proposal`, `approve_proposal`), and
+the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
+and the withdrawal runs on, never stopped (every order tested). A say has at
 most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
 withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
 their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that

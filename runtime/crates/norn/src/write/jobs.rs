@@ -134,6 +134,58 @@ pub fn job_set(
     Ok(())
 }
 
+/// Whether job ID is `proposed`, read in TX.
+fn proposed(tx: &WTx<'_>, id: &str) -> Result<bool, CoordError> {
+    let status: Option<Option<String>> =
+        opt(tx
+            .sql()
+            .query_row("select status from job where id = ?1", [id], |r| r.get(0)))?;
+    Ok(status.flatten().as_deref() == Some("proposed"))
+}
+
+/// Job ID approved: `running`, its data DATA, only while it is still `proposed`, read in this same transaction (the
+/// store's writes are one at a time), so of an approval and a withdrawal of one proposal exactly one holds.  Whether
+/// it was.
+pub fn approve_proposal(
+    tx: &mut WTx<'_>,
+    id: &str,
+    data: &Value,
+    now: f64,
+) -> Result<bool, CoordError> {
+    if !proposed(tx, id)? {
+        return Ok(false);
+    }
+    job_set(tx, id, Some("running"), Some(data), now)?;
+    Ok(true)
+}
+
+/// Job ID's proposal withdrawn: `stopped`, its data marked MARK (a proposal that never started), only while it is
+/// still `proposed`, read in this same transaction: a job approved before it runs on.  Whether it was.
+pub fn withdraw_proposal(
+    tx: &mut WTx<'_>,
+    id: &str,
+    mark: &str,
+    now: f64,
+) -> Result<bool, CoordError> {
+    if !proposed(tx, id)? {
+        return Ok(false);
+    }
+    let data: Option<Option<String>> =
+        opt(tx
+            .sql()
+            .query_row("select data from job where id = ?1", [id], |r| r.get(0)))?;
+    let mut data = match data
+        .flatten()
+        .and_then(|d| serde_json::from_str::<Value>(&d).ok())
+    {
+        Some(Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+    data.insert(mark.into(), json!(true));
+    job_set(tx, id, Some("stopped"), Some(&Value::Object(data)), now)?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +242,115 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// A revision's withdrawal and the user's approval of one proposal: each reads the status, then writes.
+    #[derive(Clone, Debug)]
+    enum Ev {
+        WithdrawRead,
+        WithdrawWrite,
+        ApproveRead,
+        ApproveWrite,
+    }
+    skuld::events!(Ev {
+        WithdrawRead,
+        WithdrawWrite,
+        ApproveRead,
+        ApproveWrite
+    });
+
+    /// A store with proposal `j`, and what each side saw and did.
+    struct Race {
+        c: urdr::Connection,
+        withdraw_saw: bool,
+        approve_saw: bool,
+        withdrawn: bool,
+        approved: bool,
+    }
+
+    impl Race {
+        fn new() -> Race {
+            let mut c = db7();
+            let mut tx = tx_of(&mut c);
+            job_create(
+                &mut tx,
+                NewJob {
+                    id: "j".into(),
+                    title: "J".into(),
+                    plan: None,
+                    repo: None,
+                    tasks: Vec::new(),
+                    data: None,
+                },
+                1.0,
+            )
+            .unwrap();
+            tx.commit_for_test().unwrap();
+            Race {
+                c,
+                withdraw_saw: false,
+                approve_saw: false,
+                withdrawn: false,
+                approved: false,
+            }
+        }
+
+        fn status(&self) -> String {
+            self.c
+                .query_row("select status from job where id = 'j'", [], |r| r.get(0))
+                .unwrap()
+        }
+
+        /// F in one transaction, committed.
+        fn write(&mut self, f: impl FnOnce(&mut WTx<'_>) -> bool) -> bool {
+            let mut tx = tx_of(&mut self.c);
+            let done = f(&mut tx);
+            tx.commit_for_test().unwrap();
+            done
+        }
+    }
+
+    impl skuld::Core for Race {
+        type Event = Ev;
+        fn step(&mut self, ev: Ev) -> Vec<Ev> {
+            match ev {
+                Ev::WithdrawRead => self.withdraw_saw = self.status() == "proposed",
+                Ev::WithdrawWrite if self.withdraw_saw => {
+                    self.withdrawn =
+                        self.write(|tx| withdraw_proposal(tx, "j", "never_approved", 2.0).unwrap());
+                }
+                Ev::ApproveRead => self.approve_saw = self.status() == "proposed",
+                Ev::ApproveWrite if self.approve_saw => {
+                    self.approved =
+                        self.write(|tx| approve_proposal(tx, "j", &json!({}), 3.0).unwrap());
+                }
+                _ => {}
+            }
+            Vec::new()
+        }
+    }
+
+    /// A (every order): an approval between a withdrawal's status read and its write.  Exactly one of them holds,
+    /// and an approved job is never stopped by the withdrawal (running work stops only on an explicit stop).
+    #[test]
+    fn every_order_an_approval_and_a_withdrawal_never_stop_a_running_job() {
+        let mut p = skuld::Partial::new();
+        p.source("say", vec![Ev::WithdrawRead, Ev::WithdrawWrite]);
+        p.source("user", vec![Ev::ApproveRead, Ev::ApproveWrite]);
+        let r = skuld::every_order(&p, skuld::Bound::default(), Race::new, |s, order| {
+            let status =
+                s.c.query_row("select status from job where id = 'j'", [], |r| {
+                    r.get::<_, String>(0)
+                });
+            let status = status.map_err(|e| e.to_string())?;
+            if s.approved && status != "running" {
+                return Err(format!("an approved job is {status} in {order:?}"));
+            }
+            if s.approved && s.withdrawn {
+                return Err(format!("approved and withdrawn both in {order:?}"));
+            }
+            Ok(())
+        });
+        assert!(r.orders > 1, "{r:?}");
     }
 }

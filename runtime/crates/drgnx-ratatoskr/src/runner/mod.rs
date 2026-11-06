@@ -1483,35 +1483,55 @@ async fn approve_job(
     if status != "proposed" {
         return Err(invalid(format!("Job {id} is {status}, not proposed")));
     }
-    settle_cards(front, caller, id, |c| {
-        (c.kind.as_deref() == Some("proposal")).then_some("approve")
-    })
-    .await?;
     let mut data = data_of(&l.job);
     if let Some(b) = budget {
         data.insert("budget".into(), json!(b));
     }
-    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
-    if let Some(b) = data.get("budget").and_then(Value::as_f64) {
-        fallback::set_budget(front, &l.job, b, true);
-    }
+    let budget = data.get("budget").and_then(Value::as_f64);
+    // only while it is still a proposal, in the write itself: a withdrawal that came first wins
     let jid = id.to_owned();
-    front
+    let approved = front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::job_set(
-                tx,
-                &jid,
-                Some("running"),
-                Some(&Value::Object(data.clone())),
-                now(),
-            )
+            write_jobs::approve_proposal(tx, &jid, &Value::Object(data.clone()), now())
         })
         .await
         .map_err(fail)?;
+    if !approved {
+        return Err(invalid(format!("Job {id} is no longer proposed")));
+    }
+    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
+    if let Some(b) = budget {
+        fallback::set_budget(front, &l.job, b, true);
+    }
+    settle_cards(front, caller, id, |c| {
+        (c.kind.as_deref() == Some("proposal")).then_some("approve")
+    })
+    .await?;
     changed(front, id).await;
     front.core.runs.wake();
     Ok(())
+}
+
+/// Job ID's proposal withdrawn (a revision replaces it): stopped as a rejected proposal, its card settled reject, only
+/// while it is still proposed, decided in the write itself, so an approval that came first runs on.  Whether it was.
+pub(crate) async fn withdraw(front: &Front, caller: &Caller, id: &str) -> Result<bool, Error> {
+    let jid = id.to_owned();
+    let withdrawn = front
+        .writer
+        .write(caller, "coord/job-set", move |tx| {
+            write_jobs::withdraw_proposal(tx, &jid, NEVER_APPROVED, now())
+        })
+        .await
+        .map_err(fail)?;
+    if withdrawn {
+        settle_cards(front, caller, id, |c| {
+            (c.kind.as_deref() == Some("proposal")).then_some("reject")
+        })
+        .await?;
+        changed(front, id).await;
+    }
+    Ok(withdrawn)
 }
 
 pub async fn approve(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {

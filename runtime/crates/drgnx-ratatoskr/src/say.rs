@@ -929,27 +929,25 @@ async fn perform(
     }
 }
 
-/// Job JOB stopped while it is still a proposal (a job the user approved since runs on): whether it never started
-/// (it was a proposal, or one the user rejected, or it is gone).
+/// Job JOB stopped while it is still a proposal, decided in the store's write (a job the user approved, even just
+/// now, runs on): whether it never started (it was a proposal, or one the user rejected, or it is gone).
 async fn stop_proposal(front: &Front, job: &str) -> bool {
-    let Some(l) = crate::runner::load(front, job, false).await.ok().flatten() else {
-        return true;
-    };
-    match l.job.status.as_deref() {
-        Some("proposed") => {
-            let by_id: ById =
-                serde_json::from_value(json!({ "id": job })).expect("a job id is an id");
-            if let Err(e) = crate::runner::stop(front, &crate::runner::user(), by_id).await {
-                tracing::warn!(job, "say: the proposal was not stopped: {}", e.message);
-            }
-            true
-        }
-        _ => l
-            .job
-            .data
-            .as_ref()
-            .is_some_and(|d| d.get(crate::runner::NEVER_APPROVED).is_some()),
+    match crate::runner::withdraw(front, &crate::runner::user(), job).await {
+        Ok(true) => return true,
+        Ok(false) => {}
+        Err(e) => tracing::warn!(job, "say: the proposal was not withdrawn: {}", e.message),
     }
+    // not a proposal: never one again, so what it is now is what it will stay
+    crate::runner::load(front, job, false)
+        .await
+        .ok()
+        .flatten()
+        .is_none_or(|l| {
+            l.job
+                .data
+                .as_ref()
+                .is_some_and(|d| d.get(crate::runner::NEVER_APPROVED).is_some())
+        })
 }
 
 /// The plan P's last block drew, written and proposed as the user would, in the repository `say/start` named: the
