@@ -363,8 +363,11 @@ the preview and apply, and the restart of the hub on the same root. The mock's `
 recorded in (`history/revert/preview {decision}`). Things the rows fix as they are:
 
 - A revert's *files* come from the checkpoint a step holds. A turn's first step holds the tree as it was before the
-  turn's prompt went to the agent, so a revert to it never keeps a write of that turn; an edit's checkpoint is taken
-  once its step is written, so a write the agent makes at once after it can already be in it.
+  turn's prompt went to the agent, so a revert to it never keeps a write of that turn. An edit's checkpoint is the
+  tree before the agent's next write that the hub serves (`fs/write_text_file`), when the step's row is written after
+  that write, so a revert to it keeps that edit and removes the next. An agent that writes files itself, outside ACP
+  (its own tools, a shell), is not covered: no hub write marks the point, so such a write made at once after an edit
+  can still be in the edit's checkpoint.
 - The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
   keep-mine puts the checkpoint's file back over them.
 - A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
@@ -377,7 +380,8 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   needs the user's message too.
 
 `cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
-later deletes); it is a measurement, not a gate.
+later deletes); it is a measurement, not a gate. `cargo test -p drgnx-ratatoskr --lib write_tree_before_cost -- --ignored
+--nocapture` prints what the tree taken before an agent's write costs per write, for 100, 1,000 and 10,000 files.
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some

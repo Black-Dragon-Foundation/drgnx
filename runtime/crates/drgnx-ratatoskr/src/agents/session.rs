@@ -164,6 +164,9 @@ struct State {
     closed: Vec<ClosedStep>,
     /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
     before: Option<String>,
+    /// The checkpoints of the edit steps closed since the agent's last served write, which their step's writer may
+    /// not have taken yet: the next write takes them first ([`crate::timeline::Snap::before_write`]).
+    edits: Vec<crate::timeline::EditCell>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
@@ -210,6 +213,14 @@ struct OpenStep {
     parent_tool: Option<String>,
 }
 
+impl OpenStep {
+    /// A tool call that changes files: its step gets a checkpoint.
+    fn is_edit(&self) -> bool {
+        self.class == StepClass::Tool
+            && matches!(self.tool_kind.as_deref(), Some("edit" | "delete" | "move"))
+    }
+}
+
 /// A step that ended, waiting to be written to the `step` table and announced.
 #[derive(Clone, Debug)]
 struct ClosedStep {
@@ -230,6 +241,8 @@ struct ClosedStep {
     context: Option<i64>,
     /// On a turn's first step: the tree the worktree held before the prompt went to the agent, its checkpoint.
     before: Option<String>,
+    /// On an edit step: its checkpoint, taken by the writer or before the agent's next write, whichever is first.
+    cell: Option<crate::timeline::EditCell>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -270,6 +283,7 @@ impl State {
             mcp_begun: Vec::new(),
             closed: Vec::new(),
             before: None,
+            edits: Vec::new(),
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
@@ -321,7 +335,14 @@ impl State {
                     .parent_tool = Some(p.clone());
             }
             let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
+            let cell = open.is_edit().then(|| {
+                let c = crate::timeline::EditCell::default();
+                self.edits.retain(|e| !e.is_done());
+                self.edits.push(c.clone());
+                c
+            });
             self.closed.push(ClosedStep {
+                cell,
                 detail,
                 command,
                 open,
@@ -2567,7 +2588,7 @@ async fn write_steps(
             seq,
             c.turn_id.as_deref(),
             &c.open,
-            (turn_start, c.before.as_deref()),
+            (turn_start, c.before.as_deref(), c.cell.as_ref()),
             c.end,
         )
         .await;
@@ -2704,8 +2725,9 @@ async fn write_steps(
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
 /// last), and a snapshot of the worktree after a completed edit and at the turn's first step (BEFORE: the tree taken
-/// before the turn's prompt went, else the worktree now), with the worktree's commit then (from its ref files).  Best
-/// effort; answers the snapshot and the commit.
+/// before the turn's prompt went, else the worktree now; CELL: an edit's, the tree taken before the agent's next write
+/// when the session served one first), with the worktree's commit then (from its ref files).  Best effort; answers the
+/// snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2715,14 +2737,13 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
-    (turn_start, before): (bool, Option<&str>),
+    (turn_start, before, cell): (bool, Option<&str>, Option<&crate::timeline::EditCell>),
     end: f64,
 ) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
         return (None, None, None);
     }
-    let edit = open.class == StepClass::Tool
-        && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let edit = open.is_edit();
     let turn_start = turn_start || before.is_some();
     let history_op = if edit || turn_start {
         newest_record(ctx, end).await
@@ -2732,8 +2753,14 @@ async fn anchor(
     let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
             let before = before.filter(|_| !edit);
-            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, before, &sink.editors)
-                .await
+            s.after_edit(
+                &ctx.session,
+                &ctx.cwd,
+                seq as u64,
+                (before, cell),
+                &sink.editors,
+            )
+            .await
         }
         _ => None,
     };
@@ -3891,6 +3918,13 @@ impl Session {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
         let content = req.get("content").and_then(Value::as_str).unwrap_or("");
         let real = self.fence().check(path, true)?;
+        // the edit steps closed since the last write hold the tree as it is now, before this one
+        let cells = std::mem::take(&mut lock(&self.state).edits);
+        if let Some(s) = &self.snap
+            && !cells.is_empty()
+        {
+            s.before_write(&self.id, &self.cwd, cells).await;
+        }
         self.record_write(&real, content).await;
         tokio::fs::write(&real, content)
             .await
@@ -4997,6 +5031,7 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                cell: None,
             })
             .unwrap();
         }
@@ -5094,6 +5129,7 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                cell: None,
             })
             .unwrap();
         }
@@ -5192,6 +5228,7 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                cell: None,
             })
             .unwrap();
         }
@@ -5269,6 +5306,7 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                cell: None,
             })
             .unwrap();
         }
