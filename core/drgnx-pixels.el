@@ -59,14 +59,27 @@ its own faces.  Call it when a row's memo changes, never on every redisplay."
   "FRAME's scale (1.0 without a native shell): a logical pixel is this many device pixels."
   (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
 
-(defun drgnx-pixels-font-extent (face &optional frame)
-  "(ASCENT . DESCENT) in pixels of the font FACE shows on a graphical FRAME, or nil (a terminal, no such font).
-They are the 9th and 10th fields of `font-info''s vector (the 8th is MAX-WIDTH)."
+(defvar drgnx-pixels--fonts (make-hash-table :test #'eq :weakness 'key)
+  "A font's name (the string `face-font' gives: the font's own, the same string while a face shows that font) →
+\(HEIGHT ASCENT . DESCENT), its fields of `font-info'.  `font-info' makes a new vector and strings at each call, and
+the bars ask on every build, so a font is read once.  Weak on the name: an entry goes with its font.")
+
+(defun drgnx-pixels-font-metrics (face &optional frame)
+  "(HEIGHT ASCENT . DESCENT) in pixels of the font FACE shows on a graphical FRAME, or nil (a terminal, no such font).
+They are the 4th, 9th and 10th fields of `font-info''s vector (the 8th is MAX-WIDTH), read once per font
+\(`drgnx-pixels--fonts'): a face that shows another font (a font role, a zoom, a scale) gives another name.
+Allocates nothing for a font already read."
   (let ((frame (or frame (selected-frame))))
     (when (display-graphic-p frame)
-      (when-let* ((font (ignore-errors (face-font face frame ?x)))
-                  (info (ignore-errors (font-info font frame))))
-        (cons (aref info 8) (aref info 9))))))
+      (when-let* ((font (ignore-errors (face-font face frame ?x))))
+        (or (gethash font drgnx-pixels--fonts)
+            (when-let* ((info (ignore-errors (font-info font frame))))
+              (puthash font (cons (aref info 3) (cons (aref info 8) (aref info 9))) drgnx-pixels--fonts)))))))
+
+(defun drgnx-pixels-font-extent (face &optional frame)
+  "(ASCENT . DESCENT) in pixels of the font FACE shows on a graphical FRAME, or nil (a terminal, no such font)
+\(`drgnx-pixels-font-metrics': allocates nothing for a font already read)."
+  (cdr (drgnx-pixels-font-metrics face frame)))
 
 (defun drgnx-pixels-box-height (face height &optional frame)
   "The width of the box above and below text in FACE that makes a row of HEIGHT pixels (0 when the text is taller or

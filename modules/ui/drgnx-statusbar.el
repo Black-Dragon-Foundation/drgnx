@@ -173,6 +173,13 @@ Setting one of them bumps the epoch `buffer-look': the list as it is when the st
 (defvar drgnx-statusbar--segments (make-hash-table :test #'eq)
   "Segment ID → plist (:fn :click :help).")
 
+(defvar drgnx-statusbar--texts (make-hash-table :test #'eq)
+  "Segment ID → [TEXT COLUMNS SHOWN]: a copy of the text the segment's function gave last, whether the bar counted
+columns (a terminal's), and the bar's copy of it with its click and help properties.  A segment that says the same
+again gets the same SHOWN string, whose width the bar keeps (`drgnx-statusbar--kept-width'), so an unchanged segment
+is neither copied nor measured.  One entry per defined segment (a finite set); a segment's entry goes when it is
+defined again or undefined.")
+
 (defvar drgnx-statusbar--errors nil
   "Alist ID → (MESSAGE . TIME) of the error a segment function (or the bar itself, ID `host') signalled.
 Recorded, never shown as a message; a segment that failed is skipped for `drgnx-statusbar-retry-seconds', then tried
@@ -213,6 +220,7 @@ modules defining the same ID may be torn down in either order (`drgnx-module--cl
 (defun drgnx-statusbar--put-segment (id spec)
   "Make SPEC the definition of segment ID: a new chance after an error, and the bars drawn again."
   (puthash id spec drgnx-statusbar--segments)
+  (remhash id drgnx-statusbar--texts)                                            ; its help may be another
   (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))   ; a new definition gets a new chance
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
@@ -222,6 +230,7 @@ modules defining the same ID may be torn down in either order (`drgnx-module--cl
 `-right' then shows nothing.  Non-nil if ID was defined."
   (when (gethash id drgnx-statusbar--segments)
     (remhash id drgnx-statusbar--segments)
+    (remhash id drgnx-statusbar--texts)
     (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))
     (drgnx-statusbar--bump)
     (force-mode-line-update t)
@@ -269,7 +278,9 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
     (< (- (drgnx-statusbar--now) (cddr e)) drgnx-statusbar-retry-seconds)))
 
 (defun drgnx-statusbar--text (id)
-  "The text of segment ID with its properties, or nil when it has nothing to say (or failed)."
+  "The text of segment ID with its properties, or nil when it has nothing to say (or failed).
+The same string as last time when the segment's function gave a text `equal-including-properties' to its last
+\(`drgnx-statusbar--texts')."
   (when-let* ((seg (gethash id drgnx-statusbar--segments))
               (fn (plist-get seg :fn))
               ((not (drgnx-statusbar--failed-p id)))
@@ -279,17 +290,23 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
                          (setq drgnx-statusbar--errors (assq-delete-all id drgnx-statusbar--errors))))
                    (error (drgnx-statusbar--note-error id err) nil)))
               ((stringp s)) ((not (string-empty-p s))))
-    (let ((s (copy-sequence s)))
-      ;; a terminal's bar counts columns of characters: a `display' property could show something of another width
-      ;; (a pixel bar measures what is shown, icons included)
-      (when (eq drgnx-statusbar--measure #'string-width)
-        (remove-text-properties 0 (length s) '(display nil) s))
-      (add-text-properties 0 (length s)
-                           (list 'drgnx-statusbar-segment id 'local-map drgnx-statusbar--map
-                                 'mouse-face 'drgnx-hover
-                                 'help-echo (or (plist-get seg :help) (symbol-name id)))
-                           s)
-      s)))
+    (let ((columns (eq drgnx-statusbar--measure #'string-width))
+          (kept (gethash id drgnx-statusbar--texts)))
+      ;; TEXT is a copy: a function that changes its string in place is still seen to say something else
+      (if (and kept (eq (aref kept 1) columns) (equal-including-properties (aref kept 0) s))
+          (aref kept 2)
+        (let ((shown (copy-sequence s)))
+          ;; a terminal's bar counts columns of characters: a `display' property could show something of another width
+          ;; (a pixel bar measures what is shown, icons included)
+          (when columns
+            (remove-text-properties 0 (length shown) '(display nil) shown))
+          (add-text-properties 0 (length shown)
+                               (list 'drgnx-statusbar-segment id 'local-map drgnx-statusbar--map
+                                     'mouse-face 'drgnx-hover
+                                     'help-echo (or (plist-get seg :help) (symbol-name id)))
+                               shown)
+          (puthash id (vector (copy-sequence s) columns shown) drgnx-statusbar--texts)
+          shown)))))
 
 ;;;; Layout
 ;; Columns on a terminal, pixels on a graphical frame: the same functions count in UNITS, measured by
@@ -326,8 +343,10 @@ nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
 scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
 the LEFTOVER pixel (0 or 1) an odd difference leaves."
-  (let* ((height (drgnx-statusbar--row-height (window-frame w)))
-         (text (window-font-height w drgnx-statusbar--bar-face))
+  (let* ((frame (window-frame w))
+         (height (drgnx-statusbar--row-height frame))
+         ;; the font's height, read once per font: `window-font-height' made a new `font-info' vector at every build
+         (text (or (car (drgnx-pixels-font-metrics drgnx-statusbar--bar-face frame)) (frame-char-height frame)))
          (box (max 0 (/ (- height text) 2))))
     (list height text box (max 0 (- height text (* 2 box))))))
 
@@ -368,19 +387,32 @@ Emptied when the measure function changes (`drgnx-statusbar--widths-measure') an
   '(local-map keymap help-echo mouse-face drgnx-statusbar-segment pointer)
   "Text properties that change no width: left out of a kept width's key.")
 
+(defvar drgnx-statusbar--width-of (make-hash-table :test #'eq :weakness 'key)
+  "A string the bar measured (the object) → (LAYOUT FACE . WIDTH): the bar measures the same strings several times
+while it fits them (its segments' texts, which `drgnx-statusbar--text' gives again while a segment says the same,
+and its separators), and building the key of `statusbar-widths' allocates.  Weak on the string (a text the bar no
+longer shows goes with it); emptied when the measure function changes.")
+
 (defun drgnx-statusbar--kept-width (measure s face layout)
   "S's width by MEASURE in FACE, kept in `statusbar-widths' under LAYOUT (a measure asked for while one runs, an
-estimate, is not kept)."
+estimate, is not kept).  The same string object again, in the same FACE and LAYOUT, is answered from
+`drgnx-statusbar--width-of' without allocating."
   (if (bound-and-true-p drgnx-pixels--measuring)
       (funcall measure s face)
     (unless (eq measure drgnx-statusbar--widths-measure)
       (drgnx-cache--clear 'statusbar-widths)
+      (clrhash drgnx-statusbar--width-of)
       (setq drgnx-statusbar--widths-measure measure))
-    (let ((key (let ((c (copy-sequence s)))
-                 (remove-list-of-text-properties 0 (length c) drgnx-statusbar--width-blind-properties c)
-                 (list (substring-no-properties c) (object-intervals c) face layout))))
-      (or (drgnx-cache-get 'statusbar-widths key)
-          (drgnx-cache-put 'statusbar-widths key (funcall measure s face))))))
+    (let ((hit (gethash s drgnx-statusbar--width-of)))
+      (if (and hit (eql (car hit) layout) (eq (cadr hit) face))
+          (cddr hit)
+        (let* ((key (let ((c (copy-sequence s)))
+                      (remove-list-of-text-properties 0 (length c) drgnx-statusbar--width-blind-properties c)
+                      (list (substring-no-properties c) (object-intervals c) face layout)))
+               (width (or (drgnx-cache-get 'statusbar-widths key)
+                          (drgnx-cache-put 'statusbar-widths key (funcall measure s face)))))
+          (puthash s (cons layout (cons face width)) drgnx-statusbar--width-of)
+          width)))))
 
 (defun drgnx-statusbar--measure-fn (&optional frame face layout)
   "The function (STRING) → pixels the bars on FRAME use, measuring in FACE, or nil: the frame counts columns.
@@ -422,10 +454,10 @@ key must not allocate).  Allocates nothing (a memo key)."
 (defconst drgnx-statusbar--branch-min 14 "Spaces' width the branch is cut to before other segments are dropped for it.")
 
 (defun drgnx-statusbar--run-width (segs sep)
-  "Units of the texts in SEGS (an alist ID → text) joined by SEP."
+  "Units of the texts in SEGS (an alist ID → text) joined by SEP.  A plain loop: the fit asks several times per build."
   (if segs
-      (+ (apply #'+ (mapcar (lambda (s) (drgnx-statusbar--w (cdr s))) segs))
-         (* (drgnx-statusbar--w sep) (1- (length segs))))
+      (let ((sum (* (drgnx-statusbar--w sep) (1- (length segs)))))
+        (dolist (s segs sum) (setq sum (+ sum (drgnx-statusbar--w (cdr s))))))
     0))
 
 (defun drgnx-statusbar--total (left right)
@@ -463,21 +495,45 @@ ellipsis is found by halving (a start's width grows with its length): a few meas
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
 First the segments of `drgnx-statusbar-drop-order' go, then the branch is cut to a short form, then the others go
 (right to left, then left to right, the branch last), and last the branch is cut as far as it takes."
-  (let ((order drgnx-statusbar-drop-order))
-    (while (and (> (drgnx-statusbar--total left right) width) order)
+  ;; The segments that go are collected in GONE (their cells) and left out of the totals; the lists are made once
+  ;; after each step: a bar too wide for its window used to copy both lists for every id it tried.
+  (let ((order drgnx-statusbar-drop-order) (gone nil))
+    (while (and (> (drgnx-statusbar--total-without left right gone) width) order)
       (let ((id (pop order)))
-        (setq left (assq-delete-all id (copy-sequence left)) right (assq-delete-all id (copy-sequence right))))))
-  (when (> (drgnx-statusbar--total left right) width)
-    (setq left (or (drgnx-statusbar--cut-branch left right width (* drgnx-statusbar--branch-min drgnx-statusbar--space)) left)))
-  (while (and (> (drgnx-statusbar--total left right) width)
-              (or right (seq-find (lambda (s) (not (eq (car s) 'branch))) left)))
-    (if right
-        (setq right (butlast right))
-      (let ((last (car (last (seq-remove (lambda (s) (eq (car s) 'branch)) left)))))
-        (setq left (delq last (copy-sequence left))))))
+        (dolist (s left) (when (eq (car s) id) (push s gone)))
+        (dolist (s right) (when (eq (car s) id) (push s gone)))))
+    (when gone
+      (setq left (drgnx-statusbar--without left gone) right (drgnx-statusbar--without right gone) gone nil))
+    (when (> (drgnx-statusbar--total left right) width)
+      (setq left (or (drgnx-statusbar--cut-branch left right width (* drgnx-statusbar--branch-min drgnx-statusbar--space)) left)))
+    (let (last)
+      (while (and (> (drgnx-statusbar--total-without left right gone) width)
+                  (setq last (or (drgnx-statusbar--last-kept right gone nil)
+                                 (drgnx-statusbar--last-kept left gone 'branch))))
+        (push last gone)))
+    (when gone
+      (setq left (drgnx-statusbar--without left gone) right (drgnx-statusbar--without right gone))))
   (when (> (drgnx-statusbar--total left right) width)
     (setq left (or (drgnx-statusbar--cut-branch left right width drgnx-statusbar--space) left)))
   (cons left right))
+
+(defun drgnx-statusbar--total-without (left right gone)
+  "`drgnx-statusbar--total' of LEFT and RIGHT less the segments (cells) in GONE, counted without making the lists."
+  (let ((lw 0) (ln 0) (rw 0) (rn 0))
+    (dolist (s left) (unless (memq s gone) (setq lw (+ lw (drgnx-statusbar--w (cdr s))) ln (1+ ln))))
+    (dolist (s right) (unless (memq s gone) (setq rw (+ rw (drgnx-statusbar--w (cdr s))) rn (1+ rn))))
+    (+ (* 2 drgnx-statusbar--pad)
+       lw (if (> ln 1) (* (drgnx-statusbar--w drgnx-statusbar--left-sep) (1- ln)) 0)
+       rw (if (> rn 1) (* (drgnx-statusbar--w drgnx-statusbar--right-sep) (1- rn)) 0)
+       (if (> rn 0) (* drgnx-statusbar--space (if (> ln 0) 2 1)) 0))))
+
+(defun drgnx-statusbar--last-kept (segs gone skip)
+  "The last segment (cell) of SEGS not in GONE whose id is not SKIP, or nil."
+  (let (last) (dolist (s segs last) (unless (or (memq s gone) (eq (car s) skip)) (setq last s)))))
+
+(defun drgnx-statusbar--without (segs gone)
+  "SEGS less the segments (cells) in GONE, in order."
+  (let (out) (dolist (s segs (nreverse out)) (unless (memq s gone) (push s out)))))
 
 (defun drgnx-statusbar--join (segs sep)
   (let ((sep (propertize sep 'face 'shadow)))
