@@ -11,7 +11,7 @@ Git decides merged text; Loro holds element ids; the selective revert is drgnx's
 ## `history.db`
 
 One per project (`History::open(dir)` → `<dir>/history.db`), on urdr's store: WAL, `0600`, full sync, migrations as
-data (`schema.rs`; schema 1). The hub is its only writer. A record and the document updates it carries go in one
+data (`schema.rs`; schema 4). The hub is its only writer. A record and the document updates it carries go in one
 transaction (`History::put_op`), so a multi-file action is all there or not at all.
 
 | Table | Holds |
@@ -25,6 +25,9 @@ transaction (`History::put_op`), so a multi-file action is all there or not at a
 | `peer` | a Loro peer per author per branch (`History::peer`): the user's session, an agent run, `external:<source>` |
 | `pending` | a revert in progress (the hub finishes it at start-up) |
 | `preview` | a revert preview until it is applied: its branch, the documents' versions then, its scope |
+| `provenance` | per record, the source element ids of text applied by diff (a redo of part, a take) |
+| `anchor` | a cursor on an element id, the version it was made at and its owner |
+| `doc_cut` | where compaction cut a document's history on a branch |
 
 Ids: `DocId`, `OpId`, `PeerId`, `BranchId`; `WorktreeId::of(path, common_dir)` is the hex of both. A `Span { peer,
 start, end }` names the element ids a record's operations made in one document (a peer's counters); a `Frontier` is
@@ -100,6 +103,81 @@ case made is found, and no other.
 
 **Roll back mine too** (`Mode::RollBackMine`). The text goes back to what it was before the scope, applied as new
 operations; the document as it was is kept as branch `undone/<record>`, so its hunks can be redone.
+
+## Redo, fork, compare, take across
+
+`History::redo(revert, branch, choices, peer, at)` is a revert of the revert (keep mine), written as a `redo` record
+whose parent is the revert. `History::redo_part(revert, branch, docs, peer, at)` redoes only some files of a roll back:
+each takes the text it had on `undone/<revert>`, applied by diff over its text now (`set_text_range`: one edit over the
+part that differs). The record keeps **provenance**: the element ids in the source that the new text came from
+(`History::provenance(op)`, table `provenance`, schema 2), so the history can say the text is the agent's, not the redoing
+user's.
+
+`History::fork(at, from, name, author, now)` makes branch `name` (kind `fork`) holding `from`'s documents as they were
+after record `at` (`fork_at` its stored version), and writes a `fork` record whose parent is `at`.
+
+Two branches of a file share the element ids up to where they parted, so `History::compare(a, b)` finds hunks exactly:
+the elements only one holds, between two both hold. A `Hunk` has both ranges and texts, and for what `b` wrote its author
+and record (a deletion has none: an element id does not name its deleter). Text one branch took from the other is new
+elements with the same characters and is no hunk. `History::take(from, to, hunks, peer, at)` takes whole hunks (a
+`HunkRef` is the file and the exact range in `from`'s text) as new operations by `peer`, in one `merge` record with the
+source ids as provenance. A range that is not exactly one hunk is refused and nothing changes: a subset of a hunk is never
+imported.
+
+## Merges
+
+`History::record_merge(target, source, git_merged, author, at)` runs after git has merged. Each document of the source is
+imported into the target's (a Loro union), so every element keeps its id and an anchor on it stays true. `git_merged` is
+git's merged text by path: where the union equals it nothing more is written; where it differs (a conflict the user
+resolved, rebased or squashed work) one correction is written as new operations by `author`, one `merge` record for the
+whole merge. For the text a correction inserts, each line the source holds gets the source's element ids as the record's
+provenance (a rebase shares no ids with the original, so this is the only trace). `History::element_ids(doc, branch)`
+lists a text's element ids.
+
+## Anchors, who wrote this, hunks
+
+`History::anchor(doc, branch, pos, side, owner)` keeps a Loro cursor on an element id (`anchor` table, schema 3) with the
+version it was made at. `History::resolve(anchor, When::Now)` follows every edit, and a reload of the document from its
+rows; when the text it held on to is deleted it says so (`deleted`) and where the text was, with the line as it was
+written (`text_then`). `When::Then` answers in the text as it was when the anchor was made. `History::blame(doc, branch,
+range)` names, per run of characters, the peer and the record whose operations made them; base text (the seed's peers)
+and typing no record holds yet are left out.
+
+`History::hunks(branch, since)` is the one list the review view and the edits ledger draw: per file, the hunks from its
+text after record `since` to its text now, numbered as `git diff --unified=0` numbers them (the crate runs `git diff
+--no-index` over two private temporary files, as the 3-way check does `git merge-file`). A file with no change is left
+out.
+
+## Privacy: redaction and excise
+
+`redact::scan(batch)` runs on capture, before a change reaches a document: the shapes of well-known keys (`sk-…`,
+GitHub tokens, `AKIA…`, `AIza…`, Slack and GitLab tokens, private key blocks) at a word boundary, inside one change, become
+`*`, a character for a character so the buffer's offsets hold. `Batch::hash` is the SHA-256 of the inserted texts after
+redaction. A key typed one character at a time is not seen by the scan; excise takes it out afterwards.
+
+`History::excise(doc, branch, target, author, at)` removes text for good: `Target::Range` (characters of the text now on
+`branch`) or `Target::Pattern` (every place the text was typed, deleted or not, on any branch). Each branch's document is
+exported as JSON updates, the characters become `*`, and the result is imported into a fresh document that replaces the
+rows, so every element id, position and anchor stays. Then `secure_delete` is on, previews are dropped, backups
+(`History::backup(name)` → `<dir>/backup/<name>.db`, `VACUUM INTO`) are deleted, and `VACUUM` plus a truncating WAL
+checkpoint leave the secret in no file. The `excise` record says how many characters, never which.
+
+`history.db` is the sixth door of the personal-notes canary (`runtime/crates/norn/tests/canary.rs`): a file the
+deny-list names is never registered, so the notes are in no document, snapshot or log.
+
+## Size, expiry, compaction
+
+`History::size()` is the database's size (pages in use, the log included); the cap is `DEFAULT_CAP`, 2 GiB per project.
+`History::expire(now)` removes the undone branches and frozen worktrees (`History::freeze(branch, at)`; a roll back
+freezes its `undone/<record>` at once) set aside 90 days or more before `now`, unless pinned (`History::pin`), with their
+documents and anchors. `History::compact(cap, author, now)`, when the history is over the cap, cuts every document
+shallow (Loro's shallow snapshot) at the oldest live reference: an anchor's record, or another branch of the document,
+live, frozen or undone, from its first record on (an undone branch from its roll back's); with nothing pinning it, just
+before the newest record. A cut never passes a live reference, so the anchors still resolve, in the text then as well as
+now; an expired branch pins no more. Under the cap (default 2 GiB) nothing is cut. The cut is the `doc_cut` table (schema 4), and one `compact` record says it happened. A revert
+of a record at or before a cut is refused with the reason (the file was compacted, its history up to that record is
+gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
+owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).
 
 ## The hub
 

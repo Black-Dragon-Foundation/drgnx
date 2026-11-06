@@ -82,7 +82,7 @@ struct Stored {
 }
 
 /// The element id of each character of T, in order.
-fn char_ids(t: &LoroText) -> Vec<ID> {
+pub(crate) fn char_ids(t: &LoroText) -> Vec<ID> {
     (0..t.len_unicode())
         .map(|i| {
             t.get_cursor(i, Side::Right)
@@ -185,7 +185,7 @@ struct Found {
 fn overlaps(d: &LoroDoc, sc: &Scope) -> Result<Vec<Found>> {
     let now = char_ids(&d.get_text(TEXT));
     let pos: HashMap<ID, usize> = now.iter().enumerate().map(|(i, id)| (*id, i)).collect();
-    let then = d.fork_at(&sc.after).map_err(loro)?;
+    let then = crate::docs::version_of(d, &sc.after)?;
     let ids1 = char_ids(&then.get_text(TEXT));
     let mut out = Vec::new();
     // the user typed between two scoped characters that were neighbours
@@ -267,7 +267,7 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
     let mut dels: Vec<&Deletion> = sc.deletions.iter().collect();
     dels.sort_by_key(|a| std::cmp::Reverse(a.order));
     for del in dels {
-        let pre = d.fork_at(&del.before).map_err(loro)?;
+        let pre = crate::docs::version_of(d, &del.before)?;
         let pt = pre.get_text(TEXT);
         let ids0 = char_ids(&pt);
         let chars: Vec<char> = pt.to_string().chars().collect();
@@ -316,6 +316,11 @@ fn keep_mine(d: &LoroDoc, sc: &Scope, found: &[Found], choices: &[OverlapChoice]
 
 /// Replace D's text with TARGET as one edit over the part that differs.
 fn set_text(d: &LoroDoc, target: &str) -> Result<()> {
+    set_text_range(d, target).map(|_| ())
+}
+
+/// [`set_text`], and where the inserted part of TARGET sits in it: (character offset, characters).
+pub(crate) fn set_text_range(d: &LoroDoc, target: &str) -> Result<(usize, usize)> {
     let t = d.get_text(TEXT);
     let now: Vec<char> = t.to_string().chars().collect();
     let want: Vec<char> = target.chars().collect();
@@ -336,12 +341,12 @@ fn set_text(d: &LoroDoc, target: &str) -> Result<()> {
     if !ins.is_empty() {
         t.insert(pre, &ins).map_err(loro)?;
     }
-    Ok(())
+    Ok((pre, ins.chars().count()))
 }
 
 /// The text of D at version F.
 fn text_at(d: &LoroDoc, f: &Frontiers) -> Result<String> {
-    Ok(d.fork_at(f).map_err(loro)?.get_text(TEXT).to_string())
+    Ok(crate::docs::version_of(d, f)?.get_text(TEXT).to_string())
 }
 
 impl History {
@@ -379,6 +384,7 @@ impl History {
     /// [`History::apply_revert`].  Changes no document.
     pub fn preview_revert(&mut self, branch: BranchId, scope: &[OpId]) -> Result<RevertPreview> {
         let by = self.scope_spans(scope)?;
+        self.refuse_past_cut(branch, scope)?;
         let mut files = Vec::new();
         let mut all = Vec::new();
         let mut stored = Vec::new();
@@ -456,6 +462,19 @@ impl History {
     /// one transaction.
     pub fn apply_revert(
         &mut self,
+        preview: i64,
+        choices: &[OverlapChoice],
+        mode: Mode,
+        peer: PeerId,
+        at: f64,
+    ) -> Result<OpId> {
+        self.apply_scope(Kind::Revert, preview, choices, mode, peer, at)
+    }
+
+    /// [`History::apply_revert`] writing a record of KIND (a redo is a revert of a revert).
+    pub(crate) fn apply_scope(
+        &mut self,
+        kind: Kind,
         preview: i64,
         choices: &[OverlapChoice],
         mode: Mode,
@@ -540,13 +559,13 @@ impl History {
         }
         let view = self.view()?;
         let r = Record {
-            kind: Kind::Revert,
+            kind,
             author: peer,
             cause: Default::default(),
             spans,
             parents: scope,
             git: None,
-            summary: format!("revert in {} files", keep.len()),
+            summary: format!("{} in {} files", kind.as_str(), keep.len()),
             at,
         };
         let written = (|| -> Result<OpId> {
@@ -555,8 +574,8 @@ impl History {
             if mode == Mode::RollBackMine {
                 let name = format!("undone/{}", id.0);
                 tx.execute(
-                    "insert into branch (name, kind, base_commit) values (?1, ?2, null)",
-                    params![name, BranchKind::Undone.as_str()],
+                    "insert into branch (name, kind, base_commit, frozen_at) values (?1, ?2, null, ?3)",
+                    params![name, BranchKind::Undone.as_str(), at],
                 )?;
                 let ub = BranchId(tx.last_insert_rowid());
                 for (doc, bytes) in &keep {
