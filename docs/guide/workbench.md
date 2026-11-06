@@ -439,7 +439,9 @@ While `ui/look` runs under Glitnir, the Explorer, the panel, the right dock and 
 1 px ring just outside in the `drgnx-border` colour and a soft shadow, on a gap that comes from the density
 ([The look](look.md#density): 4, 6 or 8 logical pixels). The ring is 60 % opaque in the dark theme, 80 % in the light one
 and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the light one and absent in High Contrast.
-`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
+`drgnx-look-card` holds the radius and the shape (logical pixels; the ring is a face and an opacity, never a colour).
+Glitnir draws window cards from Nidhogg `.6` on; under `.5` the windows get the card parameters and the gap, but the
+corners, ring and shadow are not drawn.The gap is the frame's `right-divider-width` and `bottom-divider-width` (set in device pixels, so the gap is the same
 number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
 frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
