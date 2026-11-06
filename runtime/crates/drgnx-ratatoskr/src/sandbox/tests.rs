@@ -343,7 +343,73 @@ fn browser_plan(env: Vec<(String, String)>) -> crate::agents::lock::LaunchPlan {
         enforced: crate::agents::lock::Enforced::Yes,
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     }
+}
+
+// [D] pure: the lock's files (`LaunchPlan::ro_files`). One in the session's own folder, which the agent reads and never
+// writes on every target, is written there; one elsewhere (Codex's `/etc/codex`) is bound read-only at its path from a
+// copy in the session's scratch on the full tier, and the launch is refused on any other.
+#[test]
+fn lock_files_are_written_bound_or_refused() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let run = paths::session_dir(&env, &paths::socket_path(&env), "S2").unwrap();
+    let shape = SessionShape {
+        sid: "S2".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        browser: None,
+    };
+    let mut plan = browser_plan(vec![]);
+    let etc = PathBuf::from("/etc/codex/requirements.toml");
+    plan.ro_files = vec![
+        (run.join("lock/policy.toml"), b"a = 1\n".to_vec()),
+        (etc.clone(), b"b = 2\n".to_vec()),
+    ];
+    let scratch = crate::agents::launch::scratch_dir(&env, "S2").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    assert_eq!(
+        fs::read_to_string(run.join("lock/policy.toml")).unwrap(),
+        "a = 1\n"
+    );
+    let bind = built
+        .spec
+        .binds
+        .iter()
+        .find(|b| b.dest == etc)
+        .expect("bound at its path");
+    assert_eq!(bind.mode, Mode::Ro);
+    assert!(bind.source.starts_with(&scratch), "{bind:?}");
+    assert_eq!(fs::read_to_string(&bind.source).unwrap(), "b = 2\n");
+    let refused = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Reduced,
+        Target::LinuxReduced,
+    )
+    .unwrap_err();
+    assert!(
+        refused.message.contains("/etc/codex/requirements.toml"),
+        "{refused}"
+    );
 }
 
 #[test]

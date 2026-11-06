@@ -174,12 +174,16 @@ The `before-tool` point runs where the hub sees an agent's tool call:
   seam does not run the hooks again for such a step, but it still checks the step against the matrix, as it always
   did (`code.edit`); its row says "hooked at the hub's server".
 - **Steps an agent allows itself.** Most agents run some tools without asking. When a rule or a hook of the
-  session's plugin set looks at a kind, drgnx makes Claude ask about it too, through the managed ask rules of its
-  lock (read → `Read`; search → `Grep`, `Glob`; fetch → `WebFetch`, `WebSearch`; execute → `Bash`; edit → `Edit`,
-  `Write`, `NotebookEdit`), so those steps reach the seam. The session shows which kinds are hooked and which are
-  not ("not hooked: think"): Claude's own tools that ask nothing (`TodoWrite`), and, for Gemini and Codex, reads and
-  searches. That Claude's ask rule makes a read-only command ask is expected, not yet checked against the real
-  Claude Code.
+  session's plugin set looks at a kind, each agent's lock makes it ask about that kind too, so those steps reach the
+  seam: Claude through managed ask rules (read → `Read`, `NotebookRead`; search → `Grep`, `Glob`, `LS`; fetch →
+  `WebFetch`, `WebSearch`; execute → `Bash`, `BashOutput`, `KillShell`; edit → `Edit`, `Write`, `MultiEdit`,
+  `NotebookEdit`; think → `Task`, `TodoWrite`; switch_mode → `ExitPlanMode`; other → its MCP resource tools), Gemini
+  through an admin policy, Kimi Code through ask rules in its config, DeepSeek Harness through drgnx's ask plugin.
+  Codex's shell steps reach the hooks through its managed hook ("hooked by the adapter"; it fails open on a timeout,
+  while Codex's own approvals still fail closed). What can never ask is withheld (Codex's hosted web search, Gemini's
+  subagents). An agent that would still run a subscribed kind unseen is not started, and the refusal names the kinds
+  ([the security guide](security.md), "What each provider obeys"). The session shows which kinds are hooked and how.
+  That these locks make the real CLIs ask is expected, and checked against mocks of them only so far.
 
 What the agent is told of a refusal comes from drgnx, with the rule's or hook's words quoted: "drgnx refused Bash;
 the hook deny-rm-hook said: «no rm -rf»". It is steered into the agent's running turn, so it does not retry. A note

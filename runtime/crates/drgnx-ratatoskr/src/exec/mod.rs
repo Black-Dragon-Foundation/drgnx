@@ -1067,6 +1067,8 @@ impl Inner {
                     enforced: Enforced::Yes,
                     gateway: false,
                     trace: None,
+                    ro_files: Vec::new(),
+                    gateway_url_env: Vec::new(),
                 };
                 let shape = SessionShape {
                     sid: sid.clone(),

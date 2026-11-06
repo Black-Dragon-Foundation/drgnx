@@ -176,6 +176,9 @@ tail). There is no SDK role framework.
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
   `ext_request(method, params, deadline)` sends an extension request (`_drgnx/context/drop` …) and returns the
   agent's result as it is, for the caller to check.
+  `reported_mode(sid)` is the mode (`modes.currentModeId`) the answer that opened the session on this connection
+  reported (`session/new`, `load`, `resume` or `fork`), or `None` when it reported none: the mode a lock checks,
+  never the one it asked for.
 - **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
   mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
   caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
@@ -675,12 +678,23 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--panel FEATURES` (a comma list) adds
-  drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize` advertises the
-  features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
+  `_codex/rateLimits`; its answers that open a session report `modes` as codex-acp 2.5.0 picks them: one of its four
+  mode ids from `INITIAL_AGENT_MODE`, `agent` for an unset or unknown one, and `session/set_mode` to an unknown id is
+  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini
+  (`loadSession` only; the rest answers -32601; its log's `admin_policy` says whether an `--admin-policy` file passes
+  Gemini CLI 0.67's loader, `loaded`, or would be dropped, `dropped: WHY`; the session starts either way, as Gemini's
+  does; `--panel-policy engine|short` is drgnx's fork, which answers an `initialize` offering `_drgnx/panel` version 1
+  with `adminPolicy {loaded, rules}`, `short` one rule fewer, beside any `--panel` features), kimi (its answers that
+  open a session report its four modes, `default` current, or MODE with `--start-mode MODE`; `session/set_mode` to
+  another id is -32602, and a switch, or the prompt word `mode MODE`, sends a `current_mode_update`), dsh (an overlay
+  `--patch` names is read as DeepSeek Harness 0.2.2 reads it: one that is not a top-level list of loader patches stops
+  it before it speaks ACP, exit 1; its log has the policy, sandbox mode and asked kinds). `--panel FEATURES` (a comma
+  list) adds drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize`
+  advertises the features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
   (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
   `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
-  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the
+  `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
