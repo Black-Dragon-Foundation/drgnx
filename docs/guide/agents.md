@@ -774,6 +774,30 @@ hub applies the operations if the records did not change meanwhile, then rewrite
 edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
 review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
 
+## Going back to a step, and forking from one
+
+Four commands work on a step of an agent's work (from a step in the work trail, or from the palette, where they take the
+trail's session, else the one running, and its last step):
+
+- **History: Revert to Here** opens a card and changes nothing yet. The card lists first what the revert cannot undo
+  (pushed commits, merges, running jobs, settings the agent changed, tasks it filed, messages already read, what was
+  spent), then the files and the later edits of yours it meets, then how much of the conversation comes back. At the
+  Summary level (an agent whose conversation cannot be rewound) the card says so and asks for a message the new
+  conversation is told first (`e`). `k` keeps your later edits, `r` rolls them back too (your versions are kept), `t` at an
+  overlap takes the reverted file there, `a` applies. A revert that other sessions' merged work depends on is
+  blocked: the card offers **Fork** instead of Apply. A finished worker's card says "conversation not restored: the
+  agent has finished" and offers Apply (code, decisions and commit) beside Fork.
+- **History: Fork from Here** asks for the new agent's first message (the prompt shows what one more run like this costs
+  when the forecast is available), starts a second agent from the step in its own tree, and opens the comparison of
+  its work with the first's.
+- **History: Redo a Revert** puts back what the revert that abandoned the step took away.
+- **History: Compare Branches** lists what one branch of the edit history has that another does not, each hunk with who
+  wrote it and in which step. **History: Who Wrote This** says the same for the text at point.
+
+After a revert, a file you have open reverts quietly. A buffer with unsaved changes in a file the revert wrote is never
+touched: a notice leads to **History: Resolve Unsaved Changes**, a card showing the difference with *keep mine*,
+*take theirs* or *edit* (Ediff).
+
 ## A manager agent
 
 A chat session becomes a **manager** when you say so: `agents/role` with `role: manager` (no editor command yet). Only

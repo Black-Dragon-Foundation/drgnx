@@ -249,7 +249,10 @@ pieces of at most a quarter of that many characters, and batches are filled up t
 against the hash of the buffer's whole text, which costs time in proportion to the buffer (about 4 ms per MB), so a
 buffer over 256 K characters is drained only after 0.3 s of idleness and its changes wait in the ring meanwhile. When the hub answers
 `resync` (or Nidhogg drains the symbol `resync`), the ring is dropped and the whole text goes as `history/resync`. A hub
-that goes drops every registration; the next connection registers the buffers again.
+that goes drops every registration; the next connection registers the buffers again. After a drain that sent changes,
+`drgnx-history-drained-functions` runs with `(BUFFER COUNTER CHANGES)`: the buffer, the number of its drains that sent
+changes so far, and the changes sent (the hub's shape, 0-based `:start`). With no listener it costs nothing; a listener
+that signals is skipped.
 
 The module `tools/work-space` turns the mode on in its setup and off in its teardown.
 A buffer that holds a large file (`drgnx-large-file-p`) is never registered, and one that becomes a large file is
@@ -259,6 +262,18 @@ An indirect buffer shares its base's text, so only the base is registered and ea
 `drgnx-history-with-origin` binds `nidhogg-history-origin` for code that writes into buffers for someone else (a merge,
 a revert, git): the changes carry that origin. Emacs's own undo of them runs outside the macro, so it is the user's
 change. Auto-revert binds `external:disk`.
+
+`core/drgnx-history-revert.el` and `core/drgnx-history-compare.el` hold the commands (`drgnx-history-revert-to-here`,
+`-fork-here`, `-redo`, each `(SESSION SEQ)`; `-compare (A B)`; `-who-wrote-this`). The step defaults to `timeline/get`'s
+newest, and redo finds the revert record in the step's `undone_by`. The revert card is drawn from `history/revert/preview`
+and sent by `history/revert/apply` (mode, one choice per overlap in the card's order, the message); a skipped path whose
+reason names a hook shows as "refused by hook". The fork prompt reads the message with `read-string` in the command and
+adds `drgnx-forecast-line`'s line when that function exists and `forecast/session` answers. `history/applied` is handled
+by `drgnx-history-revert--event`, the only code here that runs from the event connection (it never prompts or waits; a
+lint reads its source): clean buffers revert under `drgnx-history-with-origin "revert"`, buffers with unsaved changes are
+kept in a bounded list and a notice carries `drgnx-history-resolve-dirty`, whose card offers keep mine, take theirs and
+edit. `drgnx-history-who-wrote-this` asks `history/blame {path, worktree_root, start, end}` (0-based offsets) and reads
+`:spans` of `{start, end, author, step}`; the hub half of that method lands with the views.
 
 ## Testing
 
