@@ -344,7 +344,6 @@ no file name handler runs on it (`drgnx-work-code-local-dir')."
                    (format " live · %s" (if drgnx-work-live-file--agent (drgnx-agent-session-name drgnx-work-live-file--agent) "")))
              (view-mode 1))
     (view-mode -1)
-    (remove-hook 'after-save-hook #'drgnx-work-live-file--saved t)
     (setq buffer-read-only drgnx-work-live-file--was-read-only)))
 
 (defun drgnx-work-live-file--maybe ()
@@ -353,26 +352,16 @@ no file name handler runs on it (`drgnx-work-code-local-dir')."
     (setq drgnx-work-live-file--agent s)
     (drgnx-work-live-file-mode 1)))
 
-(defun drgnx-work-live-file--saved ()
-  "`after-save-hook' of a file whose wheel was taken: the agent is told which file changed (queued; part 3's protocol
-replaces this later)."
-  (when-let* ((s drgnx-work-live-file--agent) (id (drgnx-agent-session-remote s)) (file buffer-file-name))
-    (drgnx-hub-call "agents/send"
-                    ;; the file's name is the agent's: it stays on the message's one line
-                    (list :id id :text (format "I edited %s while you were paused. Read it again before you change it."
-                                               (drgnx-work-code-one-line (file-name-nondirectory file))))
-                    #'ignore)))
+(declare-function drgnx-agents-take-wheel "drgnx-agents-follow")
 
 (defun drgnx-work-take-wheel ()
-  "Take the wheel of the agent holding this file: it is paused after its current tool call, the buffer becomes editable,
-and saving tells the agent which file you changed."
+  "Kept for one release cycle under its id: the same as `drgnx-agents-take-wheel' (the module tools/agents-in-editor),
+which the hub's wheel protocol drives.  It has no key of its own."
   (interactive)
-  (let ((s (or drgnx-work-live-file--agent (user-error "No live agent holds this file"))))
-    (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-hub-call "agents/pause" (list :id id) #'ignore))
-    (view-mode -1)
-    (setq buffer-read-only nil)
-    (add-hook 'after-save-hook #'drgnx-work-live-file--saved nil t)
-    (message "Work: %s is paused and this file is yours; save to tell it" (drgnx-agent-session-name s))))
+  (unless drgnx-work-live-file--agent (user-error "No live agent holds this file"))
+  (if (fboundp 'drgnx-agents-take-wheel)
+      (call-interactively #'drgnx-agents-take-wheel)
+    (user-error "Taking the wheel needs the module tools/agents-in-editor")))
 
 ;;;; The module
 

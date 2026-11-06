@@ -14,6 +14,7 @@
 (declare-function drgnx-agents-follow-stop "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-resume "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-edit-hint "drgnx-agents-follow")
+(declare-function drgnx-agents-take-wheel "drgnx-agents-follow")
 (declare-function drgnx-agents-follow--event "drgnx-agents-follow")
 (declare-function drgnx-agents-follow--open "drgnx-agents-follow")
 (defvar drgnx-agents-follow--view)
@@ -123,6 +124,26 @@
           (should-not (buffer-modified-p))
           (should (= (marker-position marker) (save-excursion (goto-char (point-min)) (forward-line 2) (point)))))
         (should (= 4 (drgnx-agents-follow-test--line w)))))))
+
+(ert-deftest drgnx-agents-follow/buffer-stays-read-only-until-held ()
+  (drgnx-agents-follow-test--with
+    (let ((file (expand-file-name "a.el" root)) (said nil))
+      (drgnx-agents-follow-test--write file "one\ntwo\n")
+      (drgnx-agents-follow-start "s1")
+      (drgnx-agents-follow-test--move file 1)
+      (let* ((w drgnx-agents-follow--window) (buf (window-buffer w)))
+        (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+          (with-selected-window w (drgnx-agents-take-wheel))
+          (should (equal (list :id "s1") (cdr (assoc "agents/wheel/take" calls))))
+          (should (cl-some (lambda (s) (string-match-p "\\`Stopping after Read a.el" s)) said))
+          ;; the hub has not said `held': still read-only
+          (should (buffer-local-value 'buffer-read-only buf))
+          (drgnx-agents-follow--event "agent-wheel" (list :id "s1" :state "held"))
+          (should-not (buffer-local-value 'buffer-read-only buf))
+          (should (cl-some (lambda (s) (string-match-p "You hold agent s1's wheel · W gives it back" s)) said))
+          ;; free again: locked again
+          (drgnx-agents-follow--event "agent-wheel" (list :id "s1" :state "free"))
+          (should (buffer-local-value 'buffer-read-only buf)))))))
 
 (provide 'agents-follow-test)
 ;;; agents-follow-test.el ends here

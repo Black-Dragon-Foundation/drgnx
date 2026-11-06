@@ -120,6 +120,15 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   global `post-command-hook` function that ends the follow, added at start and removed at stop. The keys are the
   profiles' rows for `agents-follow-resume`, `agents-follow-stop`, `agents-follow-panel` on
   `drgnx-agents-follow-mode-map`; `agents-follow-here` is in the palette.
+- **The wheel (also `drgnx-agents-follow.el`):** `drgnx-agents-take-wheel` (`agents-take-wheel`; `agents-follow-wheel`
+  is `W` in the follow window, `work-take-wheel` keeps `W` in live files and calls it) asks `agents/wheel/take` on the
+  subscribed connection and records the buffers it was taken from in `drgnx-agents-follow--wheel`; they stay
+  read-only until the `agent-wheel` event says `held`, and lock again on `free`. While held, the same command gives
+  the wheel back (`agents/wheel/give`). `wheel-save` (sent only for a session in a worktree of its own) is answered by
+  saving every modified buffer under that worktree inside `drgnx-with-no-prompts` and replying
+  `agents/wheel/saved {req, unsaved}`; a give the hub refuses reports those files. A chat gets no `wheel-save`, so its
+  buffers are never saved here. The session for a wheel key comes from the follow window, a live file, the panel or the
+  who-is-here row. The interim `agents/pause` + `after-save-hook` of the Work space is gone.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.
 

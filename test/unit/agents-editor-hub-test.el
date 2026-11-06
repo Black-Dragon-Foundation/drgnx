@@ -41,7 +41,7 @@ not used: the module fixture moves the config, and the hub's socket with it."
            (drgnx-agents-follow-stop)
            (when-let* ((b (get-file-buffer file))) (with-current-buffer b (set-buffer-modified-p nil)) (kill-buffer b)))))))
 
-(defun drgnx-agents-editor-hub-test--start (dir &optional role)
+(defun drgnx-agents-editor-hub-test--start(dir &optional role)
   "Start the mock Claude in DIR (as ROLE, default worker); its session id, once its mirror is idle."
   (let ((id (plist-get (drgnx-agents-mirror-test--ask
                         "agents/start" (list :profile "asks" :role (or role "worker") :cwd (directory-file-name dir)))
@@ -78,6 +78,90 @@ not used: the module fixture moves the config, and the hub's socket with it."
         (let ((this-command 'next-line)) (run-hooks 'post-command-hook)))
       (should-not drgnx-agents-follow--session)
       (should (memq (drgnx-agents-mirror-test--ask "agents/unfollow" (list :view view)) '(nil :json-false))))))
+
+;;;; The wheel
+
+(defvar drgnx-agents-follow--wheel)
+(defvar drgnx-agents-follow--unsaved)
+(declare-function drgnx-agents-take-wheel "drgnx-agents-follow")
+(declare-function drgnx-agents-give-wheel "drgnx-agents-follow")
+(declare-function drgnx-agents-follow--wheel-save "drgnx-agents-follow")
+
+(defun drgnx-agents-editor-hub-test--held-p (id)
+  (eq 'held (plist-get (gethash id drgnx-agents-follow--wheel) :state)))
+
+(defun drgnx-agents-editor-hub-test--take(id buffer)
+  "Take ID's wheel from BUFFER and wait for the hub's `held'."
+  (with-current-buffer buffer (drgnx-agents-take-wheel id))
+  (drgnx-agents-mirror-test--settle (lambda () (drgnx-agents-editor-hub-test--held-p id)) "the wheel held")
+  (should-not (buffer-local-value 'buffer-read-only buffer)))
+
+;; The hub's request sequencer serves one request at a time, so a real give (which waits for this editor's
+;; `agents/wheel/saved') cannot be driven through the gate: the editor's answer would queue behind the give.  The take
+;; goes through the real hub; the hub's `wheel-save' event is fed to the editor as the hub sends it, and the editor's
+;; answer is recorded (the conformance row `wheel/give-with-and-without-edits' drives the real round trip).
+(defun drgnx-agents-editor-hub-test--wheel-save (id dir)
+  "Feed `wheel-save' for ID in DIR; the params of the editor's answer."
+  (let (answer)
+    (cl-letf (((symbol-function 'drgnx-agents-follow--send) (lambda (_method params) (setq answer params))))
+      (drgnx-agents-follow--event "wheel-save" (list :req 7 :id id :worktree (directory-file-name dir))))
+    answer))
+
+(ert-deftest drgnx-agents-editor-hub/give-saves-without-prompting ()
+  (drgnx-agents-editor-hub-test--with
+    (let* ((id (drgnx-agents-editor-hub-test--start dir)) (buf (find-file-noselect file)) (require-final-newline 'ask) answer)
+      (unwind-protect
+          (progn
+            (drgnx-agents-editor-hub-test--take id buf)
+            ;; no final newline and `require-final-newline' `ask': a plain save would ask
+            (with-current-buffer buf (goto-char (point-max)) (delete-char -1) (insert "\nedited by you"))
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) (error "asked a question"))))
+              (setq answer (drgnx-agents-editor-hub-test--wheel-save id dir)))
+            (should (equal (list :req 7 :unsaved []) answer))
+            (should-not (buffer-modified-p buf))
+            (should (string-search "edited by you" (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agents-editor-hub/give-on-a-chat-saves-nothing ()
+  (drgnx-agents-editor-hub-test--with
+    (let* ((id (drgnx-agents-editor-hub-test--start dir "chat")) (buf (find-file-noselect file)) (saves 0)
+           (orig (symbol-function 'drgnx-agents-follow--wheel-save)))
+      (unwind-protect
+          (progn
+            (drgnx-agents-editor-hub-test--take id buf)
+            (with-current-buffer buf (goto-char (point-max)) (insert "unsaved edit\n"))
+            (cl-letf (((symbol-function 'drgnx-agents-follow--wheel-save) (lambda (data) (cl-incf saves) (funcall orig data))))
+              (drgnx-agents-give-wheel id)
+              (drgnx-agents-mirror-test--settle (lambda () (null (gethash id drgnx-agents-follow--wheel))) "the wheel given back"))
+            (should (= 0 saves))
+            (should (buffer-modified-p buf))
+            (should-not (string-search "unsaved edit" (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agents-editor-hub/give-refused-lists-unsaved-buffers ()
+  (drgnx-agents-editor-hub-test--with
+    (let* ((id (drgnx-agents-editor-hub-test--start dir)) (buf (find-file-noselect file)) (said nil) answer)
+      (unwind-protect
+          (progn
+            (with-current-buffer buf (goto-char (point-max)) (insert "mine\n"))
+            ;; the file changed on disk behind the buffer: saving would ask about it, so it is not saved and is listed
+            (set-file-times file (time-convert 4000000000 'list))
+            (setq answer (drgnx-agents-editor-hub-test--wheel-save id dir))
+            (should (equal (list :req 7 :unsaved (vector file)) answer))
+            (should (buffer-modified-p buf))
+            ;; the hub refuses a give of a wheel that is not held; the message carries the list
+            (cl-letf (((symbol-function 'message) (lambda (fmt &rest args) (push (apply #'format fmt args) said))))
+              (drgnx-agents-give-wheel id)
+              (drgnx-agents-mirror-test--settle
+               (lambda () (cl-some (lambda (s) (string-match-p "was not given back.*not saved: a\\.txt" s)) said))
+               "the refusal naming the unsaved buffer")))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agents-editor-hub/the-interim-save-hook-is-gone ()
+  (load (expand-file-name "modules/tools/drgnx-work-space" drgnx-dir) nil t)
+  (should-not (fboundp 'drgnx-work-live-file--saved)))
 
 (provide 'agents-editor-hub-test)
 ;;; agents-editor-hub-test.el ends here

@@ -73,3 +73,13 @@ nothing and runs nothing), no large-file question and no language server.
   says so and the window stays until you close it.
 - **Follow in This Window** (`agents-follow-here`, in the palette) follows in the window you are working in instead;
   any command there stops it at once.
+
+## Take the wheel
+
+**Take the Wheel from the Agent** (`agents-take-wheel`: `C-k W` in VS Code, `C-c w W` in Emacs, `SPC a W` in Vim; `W`
+in a followed file or a file an agent is editing) stops the agent after its current step. The file stays read-only
+and the echo area says "Stopping after Edit jobs.rs…" until the hub has stopped it; then it is yours: "You hold
+NAME's wheel · W gives it back". Pressing **W** again (or **Give the Wheel Back**, `agents-give-wheel`) gives it back:
+for an agent in a worktree of its own your modified buffers there are saved first, without a question, and if one
+cannot be saved the wheel stays yours and the message lists it. A chat works in your own checkout, so nothing is saved
+for it. The agent is then sent what you changed. The panel header says "held by you" meanwhile.

@@ -23,8 +23,15 @@
 (require 'drgnx-registry)
 (require 'drgnx-hub-client)
 (require 'drgnx-large-file)
+(require 'drgnx-no-prompt)
 
 (declare-function drgnx-agents-editor-here--name "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-fact "drgnx-agents-editor")
+(declare-function drgnx-agent-session-remote "drgnx-agents")
+(declare-function drgnx-work-live-file-mode "drgnx-work-space")
+(declare-function drgnx-agents-here--row-at-point "drgnx-agents-editor-here")
+(defvar drgnx-work-live-file--agent)
+(defvar drgnx-agent-panel--session)
 (declare-function drgnx-agents-editor-line--nearest "drgnx-agents-editor-line")
 (declare-function drgnx-agents-editor-line--symbol "drgnx-agents-editor-line")
 (declare-function drgnx-agents-editor-frame "drgnx-agents-editor")
@@ -67,7 +74,7 @@
     (define-key m [remap indent-for-tab-command] #'drgnx-agents-follow-edit-hint)
     m)
   "Keys of a followed agent's file: an edit key only says how to take the wheel.  The key profiles bind the commands
-\(`agents-follow-resume', `agents-follow-stop', `agents-follow-panel').")
+\(`agents-follow-resume', `agents-follow-stop', `agents-follow-panel', `agents-follow-wheel').")
 
 (define-minor-mode drgnx-agents-follow-mode
   "A file followed in a follow window: read-only until you hold the wheel; navigation detaches the follow."
@@ -79,7 +86,8 @@
     (setq buffer-read-only drgnx-agents-follow--was-read-only)))
 
 (defconst drgnx-agents-follow--own-commands
-  '(drgnx-agents-follow-edit-hint drgnx-agents-follow-resume drgnx-agents-follow-stop drgnx-agents-follow-panel)
+  '(drgnx-agents-follow-edit-hint drgnx-agents-follow-resume drgnx-agents-follow-stop drgnx-agents-follow-panel
+                                  drgnx-agents-follow-wheel)
   "The commands of the follow window that are not navigation.")
 
 (defun drgnx-agents-follow--after-command ()
@@ -286,6 +294,117 @@ already have is used as it is."
   (interactive)
   (drgnx-agents-follow-start (drgnx-agents-follow--session-at-point) t))
 
+;;;; Take and give the wheel
+
+(defvar drgnx-agents-follow--wheel (make-hash-table :test 'equal)
+  "Session id → (:state stopping|held :buffers (BUFFER…)): the wheels this editor is taking or holds.  Bounded by the
+sessions you took a wheel of; an entry goes when the hub says the wheel is free.")
+(defvar drgnx-agents-follow--unsaved nil "The files the last `wheel-save' could not save.")
+
+(defun drgnx-agents-follow--held-p (session)
+  (or (eq (plist-get (gethash session drgnx-agents-follow--wheel) :state) 'held)
+      (equal (drgnx-agents-editor-fact session :held_by) "user")))
+
+(defun drgnx-agents-follow--wheel-session ()
+  "The session whose wheel a wheel key means here: the followed file's, a live file's, the panel's, a who-is-here row's."
+  (or (and (bound-and-true-p drgnx-agents-follow-mode) drgnx-agents-follow--session)
+      (and (bound-and-true-p drgnx-work-live-file--agent) (drgnx-agent-session-remote drgnx-work-live-file--agent))
+      (and (derived-mode-p 'drgnx-agent-panel-mode) drgnx-agent-panel--session)
+      (and (derived-mode-p 'drgnx-agents-here-mode) (car (drgnx-agents-here--row-at-point)))
+      drgnx-agents-follow--session
+      (user-error "No agent to take the wheel from here")))
+
+(defun drgnx-agents-take-wheel (&optional session)
+  "Take the wheel of SESSION (default: the agent of this file, follow window, panel or who-is-here row): it stops after
+its current step, this buffer stays read-only until the hub says it is held, then it is yours.  While you hold it,
+this gives the wheel back."
+  (interactive)
+  (let ((sid (or session (drgnx-agents-follow--wheel-session))))
+    (if (drgnx-agents-follow--held-p sid)
+        (drgnx-agents-give-wheel sid)
+      (let ((buffers (delete-dups (delq nil (list (current-buffer)
+                                                  (and (window-live-p drgnx-agents-follow--window)
+                                                       (equal sid drgnx-agents-follow--session)
+                                                       (window-buffer drgnx-agents-follow--window)))))))
+        (puthash sid (list :state 'stopping :buffers buffers) drgnx-agents-follow--wheel)
+        (condition-case err
+            (drgnx-agents-follow--ask "agents/wheel/take" (list :id sid)
+                                      (lambda (error)
+                                        (when error
+                                          (remhash sid drgnx-agents-follow--wheel)
+                                          (message "The wheel was not taken: %s" error))))
+          (error (remhash sid drgnx-agents-follow--wheel)
+                 (user-error "The wheel was not taken: %s" (error-message-string err))))
+        (message "Stopping after %s…"
+                 (or (and (equal sid drgnx-agents-follow--session) (plist-get drgnx-agents-follow--last :step_title))
+                     "its current step"))))))
+
+(defun drgnx-agents-give-wheel (&optional session)
+  "Give SESSION's wheel back: an agent in a worktree of its own first has this editor save that worktree's buffers
+\(without asking); the hub then sends it your edits.  A chat's worktree is your checkout, so nothing is saved."
+  (interactive)
+  (let ((sid (or session (drgnx-agents-follow--wheel-session))))
+    (drgnx-agents-follow--ask
+     "agents/wheel/give" (list :id sid)
+     (lambda (error)
+       (if error
+           (message "The wheel was not given back: %s%s" error
+                    (if drgnx-agents-follow--unsaved
+                        (format " (not saved: %s)" (mapconcat #'file-name-nondirectory drgnx-agents-follow--unsaved ", "))
+                      ""))
+         (setq drgnx-agents-follow--unsaved nil)
+         (message "You gave %s's wheel back" (drgnx-agents-editor-here--name sid)))))))
+
+(defun drgnx-agents-follow-wheel ()
+  "`W' in the follow window: take the followed agent's wheel, or give it back."
+  (interactive)
+  (drgnx-agents-take-wheel drgnx-agents-follow--session))
+
+(defun drgnx-agents-follow--ask (method params fn)
+  "Ask the hub METHOD with PARAMS; FN gets the error text, or nil.  Not on the subscribed connection: a give waits for
+the editor's `agents/wheel/saved', which comes in on that one and would queue behind it."
+  (drgnx-hub-call method params (lambda (_result error) (funcall fn error))))
+
+(defun drgnx-agents-follow--editable (buffer editable)
+  "BUFFER becomes editable (EDITABLE) or read-only again, the way its mode keeps it."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (cond ((bound-and-true-p drgnx-agents-follow-mode) (setq buffer-read-only (not editable)))
+            ((and (boundp 'drgnx-work-live-file--agent) drgnx-work-live-file--agent (fboundp 'drgnx-work-live-file-mode))
+             (if editable
+                 (progn (when (bound-and-true-p drgnx-work-live-file-mode) (drgnx-work-live-file-mode -1))
+                        (setq buffer-read-only nil))
+               (drgnx-work-live-file-mode 1)))
+            (t (setq buffer-read-only (not editable)))))))
+
+(defun drgnx-agents-follow--wheel-event (data)
+  "The hub's word on a wheel (`agent-wheel'): held, the buffers you took it from become yours; free, they lock again."
+  (let* ((sid (plist-get data :id)) (entry (gethash sid drgnx-agents-follow--wheel)))
+    (pcase (plist-get data :state)
+      ("held"
+       (puthash sid (list :state 'held :buffers (plist-get entry :buffers)) drgnx-agents-follow--wheel)
+       (dolist (b (plist-get entry :buffers)) (drgnx-agents-follow--editable b t))
+       (message "You hold %s's wheel · W gives it back" (drgnx-agents-editor-here--name sid)))
+      ("free"
+       (dolist (b (plist-get entry :buffers)) (drgnx-agents-follow--editable b nil))
+       (remhash sid drgnx-agents-follow--wheel)))))
+
+(defun drgnx-agents-follow--wheel-save (data)
+  "The hub gives the wheel of an agent in a worktree of its own back: save that worktree's modified buffers inside
+`drgnx-with-no-prompts', and answer with the files that stayed unsaved."
+  (let ((worktree (file-name-as-directory (plist-get data :worktree))) unsaved)
+    (dolist (b (buffer-list))
+      (let ((file (buffer-file-name b)))
+        (when (and file (string-prefix-p worktree file) (buffer-modified-p b))
+          (with-current-buffer b
+            (let ((why (drgnx-with-no-prompts (save-buffer))))
+              (when (or why (buffer-modified-p)) (push file unsaved)))))))
+    (setq drgnx-agents-follow--unsaved (nreverse unsaved))
+    (condition-case nil
+        (drgnx-agents-follow--send "agents/wheel/saved"
+                                   (list :req (plist-get data :req) :unsaved (vconcat drgnx-agents-follow--unsaved)))
+      (error nil))))
+
 ;;;; The feed
 
 (defun drgnx-agents-follow--event (event data)
@@ -298,7 +417,9 @@ already have is used as it is."
      (when (and drgnx-agents-follow--session (equal (plist-get data :id) drgnx-agents-follow--session))
        (let ((status (plist-get (plist-get data :session) :status)))
          (setq drgnx-agents-follow--finished (and (member status '("idle" "exited")) t))
-         (drgnx-agents-follow--header))))))
+         (drgnx-agents-follow--header))))
+    ("agent-wheel" (drgnx-agents-follow--wheel-event data))
+    ("wheel-save" (drgnx-agents-follow--wheel-save data))))
 
 ;;;; Setup
 
@@ -313,17 +434,27 @@ already have is used as it is."
   (drgnx-command-define 'agents-follow-here :category "Agents" :title "Follow in This Window"
                         :command #'drgnx-agents-follow-here-command
                         :doc "Follow the agent nearest point in the window you work in; any command there stops it")
+  (drgnx-command-define 'agents-take-wheel :category "Agents" :title "Take the Wheel from the Agent"
+                        :command #'drgnx-agents-take-wheel
+                        :doc "The agent stops after its current step and its file becomes yours; again, it gives the wheel back")
+  (drgnx-command-define 'agents-give-wheel :category "Agents" :title "Give the Wheel Back"
+                        :command #'drgnx-agents-give-wheel
+                        :doc "Save the agent's worktree buffers and give the wheel back with your edits")
   (let ((in-follow (lambda () (bound-and-true-p drgnx-agents-follow-mode))))
     (pcase-dolist (`(,id ,title ,fn ,doc)
                    '((agents-follow-resume "Resume Following" drgnx-agents-follow-resume "Jump to the agent and follow it again")
                      (agents-follow-stop "Stop Following" drgnx-agents-follow-stop "End following and close the window")
-                     (agents-follow-panel "Open the Followed Agent's Panel" drgnx-agents-follow-panel "The panel of the agent you follow")))
+                     (agents-follow-panel "Open the Followed Agent's Panel" drgnx-agents-follow-panel "The panel of the agent you follow")
+                     (agents-follow-wheel "Take or Give Back the Wheel" drgnx-agents-follow-wheel
+                                          "Take the followed agent's wheel, or give it back")))
       (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
                             :map 'drgnx-agents-follow-mode-map :when in-follow))))
 
 (defun drgnx-agents-follow-teardown ()
-  "End following."
-  (drgnx-agents-follow-stop))
+  "End following, forget the wheels."
+  (drgnx-agents-follow-stop)
+  (clrhash drgnx-agents-follow--wheel)
+  (setq drgnx-agents-follow--unsaved nil))
 
 (provide 'drgnx-agents-follow)
 ;;; drgnx-agents-follow.el ends here

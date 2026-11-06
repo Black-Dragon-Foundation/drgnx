@@ -144,10 +144,10 @@ A file in the worktree of an agent that is still alive (running, waiting, waitin
 with a "live · NAME" chip in the mode line, so you cannot write over what the agent is changing. Your own checkout,
 and the worktree of an agent that has finished, stay editable.
 
-**`W`** (or the keys that would make the buffer editable) takes the wheel: the agent is paused after the tool call it is
-in, the buffer becomes editable, and when you save, a message tells the agent which file you changed, so it reads it
-again before touching it. Resume the agent when you are done. Turning the Work space module off gives every such
-buffer back its old read-only state.
+**`W`** (or the keys that would make the buffer editable) takes the wheel, as **Take the Wheel from the Agent** does
+anywhere (see "Take the wheel" in the guide to agents in the editor): the agent stops after the step it is in, the
+buffer becomes editable once it has, and **W** again gives the wheel back with your edits. Turning the Work space
+module off gives every such buffer back its old read-only state.
 
 ### Into the code
 
