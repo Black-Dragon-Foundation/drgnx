@@ -2709,6 +2709,22 @@ unspecified never makes colour code signal.
 | `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
 | `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
 
+### Where colours may be written
+
+Colour literals live only in `themes/drgnx-tokens.eld`, the token table of drgnx's three themes. Faces inherit
+semantic or standard faces. A colour worked out from a theme at theme change goes only through this library's callers:
+`drgnx-look-derive` (`modules/ui/drgnx-look-derive.el`, the one function that derives panel, text and agent colours
+for a theme that does not set them), quick help and the adapters' roles.
+
+`drgnx-lint/no-hard-coded-colours` (`test/unit/lint-test.el`) reads every `.el` file under `core/`, `wb/`, `modules/`,
+`harness/` and `themes/` with the Lisp reader and fails on a hex string anywhere and on a string after `:foreground`,
+`:background`, `:distant-foreground` or `:color` (a face spec's `:box` colour is one). The token table is `.eld`, so
+it is not scanned. `test/unit/lint-contrast-test.el` holds the other colour lints: every pair of the look's contrast
+bars under drgnx Dark, Light and High Contrast (`drgnx-lint/contrast-own-themes`; the documented exceptions are
+disabled text, and status marks on the selection at 3:1), the derived colours under modus-operandi, modus-vivendi,
+leuven and a Doom One stand-in (`drgnx-lint/contrast-third-party-themes`), and that no drgnx face's `:inherit` chain
+loops under any of the seven (`drgnx-lint/no-face-inheritance-cycles`). A failure names the face pair and the ratio.
+
 ## Read and write through drgnx-file
 
 A file drgnx keeps (a config file, a state file, a report) is read and written through `drgnx-file`

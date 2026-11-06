@@ -94,7 +94,8 @@ is non-nil or the frame is a terminal.  The caller puts `mouse-face' `drgnx-hove
 The effective spec is the first enabled theme's that names FACE, else the defface's."
   (let ((spec (or (cl-some (lambda (theme) (cadr (assq theme (get face 'theme-face)))) custom-enabled-themes)
                   (get face 'face-defface-spec))))
-    (when-let* ((clause (cl-find-if (lambda (c) (or (eq (car c) t)
+    ;; a display of `t' or `default' (a standard face's fallback spec) holds on every display
+    (when-let* ((clause (cl-find-if (lambda (c) (or (memq (car c) '(t default))
                                                     (cl-every (lambda (x) (drgnx-faces--condition-p x kind)) (car c))))
                                     spec)))
       (if (consp (cadr clause)) (cadr clause) (cdr clause)))))
