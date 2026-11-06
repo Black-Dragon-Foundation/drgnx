@@ -934,7 +934,7 @@ jobs:
           path: ../test-models
           key: ${{ steps.models.outputs.cache-primary-key }}
           enableCrossOsArchive: true
-      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No DRGNX_TEST_ADAPTER: the
+      # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run

@@ -170,7 +170,8 @@
   ;; the shaders on llvmpipe; macOS has no adapter and ignores its GPU rows
   (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (list (drgnx-ci-test--file ".github/ci/models.txt"))
          (packages (drgnx-ci-test--file "test/container/rust-packages.sh")))
-    (skip-unless (and rt list packages))
+    (skip-unless (and rt packages))
+    (should list)
     (dolist (job '("linux" "macos"))
       (let* ((text (drgnx-ci-test--job rt job))
              (fetch (string-search "models.sh ../test-models\n" text))
@@ -424,6 +425,9 @@
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
                   (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
+                  ;; the model files: main and a pull request from this repository (CACHE_SAVE_PR), once models.sh
+                  ;; checked every file's sum
+                  (string-search "(env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
