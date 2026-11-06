@@ -211,6 +211,12 @@ of a record at or before a cut is refused with the reason (the file was compacte
 gone). `History::pins()` names what keeps the size up, the biggest first: pinned branches, set-aside branches, and each
 owner's anchors, for the doctor's `history` row (with the hub's watch budget and resync counter).
 
+The hub runs this on its clock: `Hub::sweep(now, cap)` expires, compacts when over the cap (by a `system` peer's
+`compact` record) and writes `size-report.json` (size, cap, the eight biggest pins) beside `history.db`. The first sweep
+comes a minute after the history opens, then every six hours. The doctor reads the report files and never opens the live
+database: its `history` row gives each project's size against its cap and the biggest pin, and warns at 80 % of the cap
+naming what keeps the size up.
+
 ## The hub
 
 `drgnx-ratatoskr/src/history/` is the hub side: capture, the editor's methods and the watcher feed. One `Hub` per

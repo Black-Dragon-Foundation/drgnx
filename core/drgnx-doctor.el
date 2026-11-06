@@ -1041,12 +1041,22 @@ server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind t
   (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
          (h (plist-get store :history))
          (copies (or (plist-get h :copies) 0))
-         (age (plist-get h :newest_age_s)))
+         (age (plist-get h :newest_age_s))
+         (sizes (mapconcat
+                 (lambda (row)
+                   (let ((pin (aref (or (plist-get row :pins) [nil]) 0)))
+                     (format "%s %d MiB of %d MiB%s" (plist-get row :project)
+                             (/ (or (plist-get row :size) 0) 1048576) (/ (or (plist-get row :cap) 0) 1048576)
+                             (if pin (format ", pinned by %s" (plist-get pin :name)) ""))))
+                 (plist-get store :history_size) "; "))
+         (warnings (append (plist-get store :history_warnings) nil)))
     (cond
      ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
+     (warnings (list 'warn (mapconcat #'identity warnings "; ") "Pin less, drop old forks and worktrees, or let the 90-day expiry run"))
      ((zerop copies) (list 'ok "no copy of an edit history yet (the nightly backup makes one per project)" nil))
-     (t (list 'ok (format "%d project cop%s, newest %s ago" copies (if (= copies 1) "y" "ies")
-                          (if age (format "%d h" (/ age 3600)) "?"))
+     (t (list 'ok (format "%d project cop%s, newest %s ago%s" copies (if (= copies 1) "y" "ies")
+                          (if age (format "%d h" (/ age 3600)) "?")
+                          (if (string-empty-p sizes) "" (concat "; " sizes)))
               nil)))))
 
 (drgnx-doctor-define 'history :group "Agents"

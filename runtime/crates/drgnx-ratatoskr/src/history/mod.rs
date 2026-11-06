@@ -27,7 +27,7 @@ pub mod methods;
 pub mod origin;
 pub mod revert;
 pub(crate) mod revert_core;
-mod timers;
+pub mod timers;
 pub mod tree;
 pub mod views;
 pub mod watch;
@@ -111,6 +111,8 @@ pub(crate) struct Inner {
 pub struct Hub {
     pub(crate) inner: Mutex<Inner>,
     events: tokio::sync::broadcast::Sender<FileVersion>,
+    /// The folder `history.db` is in; the sweep's report is written beside it.
+    pub(crate) dir: std::path::PathBuf,
 }
 
 impl Hub {
@@ -125,6 +127,7 @@ impl Hub {
                 buffers: HashMap::new(),
             }),
             events: tokio::sync::broadcast::channel(256).0,
+            dir: dir.to_path_buf(),
         })
     }
 
