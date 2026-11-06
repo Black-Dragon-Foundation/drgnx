@@ -206,6 +206,11 @@ first match: the `:line-height` you set on `drgnx-look-font-code`, then the dens
 yourself (`setq-default`) stays: drgnx then leaves the frames alone. `drgnx-face-line-spacing` is obsolete (use the
 code role's `:line-height`); while it is set it still wins, as a default `line-spacing`.
 
+**The rows, tabs and the status bar** follow a change at once too, with no restart: the Explorer, Open and Outline
+rows take the new tree row, every editor's tab row the new tab row and every status bar its new height. They are made
+in the pixels of the frame that shows them, again when its scale changes (a frame moved to a ×2 monitor), and a
+sidebar made before any graphical frame (a daemon's) gets its rows when a graphical frame first shows it.
+
 ## Popups and the palette
 
 Under Glitnir (the compositor; not in a terminal, and not where it is off) popups and the floating command palette are
@@ -245,7 +250,9 @@ A change applies to the icons drawn from then on.
 For code, `(drgnx-look-icon 'folder 'shadow)` is the string for the icon `folder` in the face `shadow` (the optional
 third argument is the size), and `(drgnx-look-file-icon "main.rs")` is the icon of a file's kind: code, text, config,
 image, archive, or a plain file, and a folder (open or closed) for a directory. The kind comes from the file name,
-then from the major mode in `auto-mode-alist`; there are no per-language logos.
+then from the major mode in `auto-mode-alist`; there are no per-language logos. It is worked out once per extension
+(once per name for a name without one: `Makefile`, `LICENSE`) and kept, at most 256 of them, the least recently used
+going first; a change of `auto-mode-alist` works them out again.
 
 The icons are from Lucide (ISC licence) and a few from Feather (MIT licence); both notices are in `etc/icons/`
 (`LICENSE-lucide`, `LICENSE-feather`) and must stay with the icons in any copy.

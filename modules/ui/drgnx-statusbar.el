@@ -38,6 +38,8 @@
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (require 'drgnx-notices)                ; the two counts the bar shows, and `drgnx-notice-tick'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function drgnx-notice-toast-more-count "drgnx-notice-toast")
+(declare-function drgnx-notice-toast-more-text "drgnx-notice-toast")
 (declare-function drgnx-file-write "drgnx-file")
 (declare-function drgnx-state-dir "drgnx-paths")
 (declare-function drgnx-wb-editor-window "drgnx-wb")
@@ -116,8 +118,9 @@ the glyphs changed (`drgnx-statusbar--bump').")
                     :doc "Bumped before each redisplay (`pre-redisplay-functions', while the status bar is on): other
 packages' entries of the mode line are formatted once per value, for each buffer a bar shows (`drgnx-statusbar--misc').")
 
-(defconst drgnx-statusbar--declared '(buffer-look flymake eglot git misc-info statusbar redisplay statusbar-bar)
-  "The epochs and the memo `drgnx-statusbar-setup' activates: watched while `ui/face' is on, emptied when it is off.")
+(defconst drgnx-statusbar--declared
+  '(buffer-look flymake eglot git misc-info statusbar redisplay statusbar-bar statusbar-position statusbar-widths)
+  "The epochs, memos and cache `drgnx-statusbar-setup' activates: watched while `ui/face' is on, emptied when it is off.")
 
 (defun drgnx-statusbar--bump ()
   "Say that the state the bars show changed: the epoch `statusbar'."
@@ -129,7 +132,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -137,7 +140,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   "The segments on the right of the status bar, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs drgnx trust)
+(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust)
   "Segments dropped, first to last, when the bar is wider than its window.
 The branch is cut with an ellipsis instead, and only after these are gone.  `needs-you' is never dropped."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
@@ -146,7 +149,7 @@ The branch is cut with an ellipsis instead, and only after these are gone.  `nee
   "The segments the other editor groups show (the most recently used one shows the whole bar)."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-quiet '(folder branch agents jobs needs-you drgnx tests misc)
+(defcustom drgnx-statusbar-quiet '(folder branch agents jobs needs-you drgnx toasts tests misc)
   "The segments of the quiet bar (`drgnx-statusbar-quiet-modes': the start page), on the left, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -323,8 +326,7 @@ nil: columns on a terminal frame, `drgnx-look-pixel-width' on a graphical one.  
   "(HEIGHT TEXT BOX LEFTOVER) for window W's bar, in device pixels: the row's HEIGHT (`status-bar' at the frame's
 scale), the TEXT height of the bar's font, the BOX width above and below the text that makes up the difference, and
 the LEFTOVER pixel (0 or 1) an odd difference leaves."
-  (let* ((scale (drgnx-statusbar--scale (window-frame w)))
-         (height (round (* (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24) scale)))
+  (let* ((height (drgnx-statusbar--row-height (window-frame w)))
          (text (window-font-height w drgnx-statusbar--bar-face))
          (box (max 0 (/ (- height text) 2))))
     (list height text box (max 0 (- height text (* 2 box))))))
@@ -345,28 +347,69 @@ pixel: the text then sits a pixel lower, and the row is exactly `status-bar' hig
     (propertize
      " " 'face drgnx-statusbar--bar-face
      'display
-     (if (and (> leftover 0) (display-graphic-p (window-frame w)))
-         (let* ((frame (window-frame w))
-                (ascent (aref (font-info (face-font drgnx-statusbar--bar-face frame ?x) frame) 7))
-                (target (+ ascent box leftover)))
+     (if-let* (((> leftover 0))
+               (extent (drgnx-pixels-font-extent drgnx-statusbar--bar-face (window-frame w))))
+         (let ((target (+ (car extent) box leftover)))
            `(space :width (,pad) :height (,height) :ascent ,(min 100 (ceiling (* 100.0 target) height))))
        `(space :width (,pad))))))
 
-(defun drgnx-statusbar--measure-fn (&optional frame face)
-  "The function (STRING) → pixels the bars on FRAME use, measuring in FACE, or nil: the frame counts columns."
-  (cond (drgnx-look-bars-measure-function
-         (let ((f drgnx-look-bars-measure-function)) (lambda (s) (funcall f s face))))
-        ((display-graphic-p frame) (lambda (s) (drgnx-look-pixel-width s face)))))
+(defconst drgnx-statusbar-widths-cap 256 "How many measured widths `statusbar-widths' keeps.")
+
+(drgnx-cache-define 'statusbar-widths :key 'string :cap drgnx-statusbar-widths-cap
+                    :doc "(TEXT RUNS FACE LAYOUT) → the pixels the bar measured TEXT at: RUNS its face and display
+properties, FACE the face it was measured in, LAYOUT the bar's `drgnx-statusbar--layout-key'.  So a bar built again
+measures only the texts it has not met (a cursor move: the position's).  Bounded: past `drgnx-statusbar-widths-cap'
+entries the least recently used goes; a new layout (zoom, scale, fonts, density) leaves the old entries to age out.
+Emptied when the measure function changes (`drgnx-statusbar--widths-measure') and when `ui/face' is off.")
+
+(defvar drgnx-statusbar--widths-measure nil "The measure function the kept widths were measured with.")
+
+(defconst drgnx-statusbar--width-blind-properties
+  '(local-map keymap help-echo mouse-face drgnx-statusbar-segment pointer)
+  "Text properties that change no width: left out of a kept width's key.")
+
+(defun drgnx-statusbar--kept-width (measure s face layout)
+  "S's width by MEASURE in FACE, kept in `statusbar-widths' under LAYOUT (a measure asked for while one runs, an
+estimate, is not kept)."
+  (if (bound-and-true-p drgnx-pixels--measuring)
+      (funcall measure s face)
+    (unless (eq measure drgnx-statusbar--widths-measure)
+      (drgnx-cache--clear 'statusbar-widths)
+      (setq drgnx-statusbar--widths-measure measure))
+    (let ((key (let ((c (copy-sequence s)))
+                 (remove-list-of-text-properties 0 (length c) drgnx-statusbar--width-blind-properties c)
+                 (list (substring-no-properties c) (object-intervals c) face layout))))
+      (or (drgnx-cache-get 'statusbar-widths key)
+          (drgnx-cache-put 'statusbar-widths key (funcall measure s face))))))
+
+(defun drgnx-statusbar--measure-fn (&optional frame face layout)
+  "The function (STRING) → pixels the bars on FRAME use, measuring in FACE, or nil: the frame counts columns.
+With LAYOUT (the bar's `drgnx-statusbar--layout-key') the widths are kept (`drgnx-statusbar--kept-width')."
+  (let ((f (cond (drgnx-look-bars-measure-function) ((display-graphic-p frame) #'drgnx-look-pixel-width))))
+    (cond ((null f) nil)
+          (layout (lambda (s) (drgnx-statusbar--kept-width f s face layout)))
+          (t (lambda (s) (funcall f s face))))))
+
+(defun drgnx-statusbar--row-height (frame)
+  "The bar's row height on FRAME in its pixels: the density's `status-bar' at the frame's scale."
+  (round (* (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'status-bar) 24)
+            (drgnx-statusbar--scale frame))))
 
 (defun drgnx-statusbar--layout-key (window)
   "An integer that changes when the sizes the bar is measured at change: the frame's character size (a scale change
-and a change of the default face's height move it), the buffer's text scale, the font role generation.  Allocates
-nothing (a memo key)."
+and a change of the default face's height move it), the buffer's text scale, the font role generation and the
+density's row height (logical: the scale is in the character size; the scaled height would be a float, which a memo
+key must not allocate).  Allocates nothing (a memo key)."
   (let* ((frame (window-frame window))
          (cell (+ (frame-char-width frame) (* 100 (frame-char-height frame))))
          (text (if (bound-and-true-p text-scale-mode) (+ 50 (round (or text-scale-mode-amount 0))) 50)))
     (+ (mod cell 100000) (* 100000 (mod text 100))
-       (* 10000000 (mod drgnx-pixels-generation 100000)))))
+       (* 10000000 (mod drgnx-pixels-generation 100000))
+       (* 1000000000000 (if (fboundp 'drgnx-look-density-value) (mod (drgnx-look-density-value 'status-bar) 1000) 0)))))
+
+(defun drgnx-statusbar--density-changed ()
+  "On `drgnx-look-density-changed-hook': every bar is laid out again at the new height (its layout key moved)."
+  (force-mode-line-update t))
 
 (defvar drgnx-statusbar--measure #'string-width "The function the layout counts a string with.")
 (defvar drgnx-statusbar--space 1 "One space in the layout's units.")
@@ -404,15 +447,17 @@ nothing (a memo key)."
 (defun drgnx-statusbar--cut (s width)
   "S cut to WIDTH units, ending in Emacs's ellipsis when that fits in WIDTH.
 `truncate-string-to-width' gives back all of S, and the ellipsis, when the ellipsis is wider than WIDTH: \"...\" is,
-in 1 or 2 columns, on a terminal that cannot show \"…\".  In pixels the characters go one by one until it fits."
+in 1 or 2 columns, on a terminal that cannot show \"…\".  In pixels the longest start of S that fits with the
+ellipsis is found by halving (a start's width grows with its length): a few measures, not one per character."
   (if (eq drgnx-statusbar--measure #'string-width)
       (truncate-string-to-width s width nil nil (>= width (string-width (truncate-string-ellipsis))))
-    (let ((ellipsis (truncate-string-ellipsis)) (n (length s)))
+    (let ((ellipsis (truncate-string-ellipsis)) (lo 0) (hi (1- (length s))))
       (if (<= (drgnx-statusbar--w s) width)
           s
-        (while (and (> n 0) (> (drgnx-statusbar--w (concat (substring s 0 n) ellipsis)) width))
-          (setq n (1- n)))
-        (if (> n 0) (concat (substring s 0 n) ellipsis) "")))))
+        (while (< lo hi)                ; the longest N in [LO, HI] whose cut fits; LO fits (0: nothing)
+          (let ((mid (/ (+ lo hi 1) 2)))
+            (if (<= (drgnx-statusbar--w (concat (substring s 0 mid) ellipsis)) width) (setq lo mid) (setq hi (1- mid)))))
+        (if (> lo 0) (concat (substring s 0 lo) ellipsis) "")))))
 
 (defun drgnx-statusbar--fit (left right width)
   "LEFT and RIGHT (alists ID → text) reduced until the bar fits WIDTH: (LEFT . RIGHT).
@@ -453,7 +498,8 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
     (with-current-buffer (or buf (current-buffer))
       (let* ((drgnx-statusbar--window w)
              (frame (and (window-live-p w) (window-frame w)))
-             (measure (drgnx-statusbar--measure-fn frame drgnx-statusbar--bar-face))
+             (measure (drgnx-statusbar--measure-fn frame drgnx-statusbar--bar-face
+                                                   (and frame (drgnx-statusbar--layout-key w))))
              (drgnx-statusbar--measure (or measure #'string-width))
              (drgnx-statusbar--space (if measure (max 1 (funcall measure " ")) 1))
              (drgnx-statusbar--pad (if measure
@@ -474,7 +520,7 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
         (setq left (car fitted) right (cdr fitted))
         (let* ((l (drgnx-statusbar--join left drgnx-statusbar--left-sep))
                (r (drgnx-statusbar--join right drgnx-statusbar--right-sep))
-               (rw (drgnx-statusbar--w r))
+               (rw (drgnx-statusbar--run-width right drgnx-statusbar--right-sep))   ; the kept widths: no new measure
                (bar (if measure
                         ;; pixels: the padding and the gap before the right run are spaces of exact width
                         (let ((pad (propertize " " 'display `(space :width (,drgnx-statusbar--pad)))))
@@ -768,11 +814,34 @@ dir (the doctor's `statusbar-misc' check reads it).  Never prompts and never rai
 
 ;;;; The memo: a redisplay that changes nothing reuses the bar
 
+(defun drgnx-statusbar--toasts-waiting ()
+  "How many notices wait for a toast's place (a key of the bar: 0 without the toasts).  Allocates nothing."
+  (if (fboundp 'drgnx-notice-toast-more-count) (drgnx-notice-toast-more-count) 0))
+
+(drgnx-memo-define statusbar-position :on window
+                   :keys ((current-buffer)
+                          (if (eq (window-buffer object) (current-buffer)) (window-point object) (point))
+                          (buffer-chars-modified-tick) (point-min) (and mark-active (mark t))
+                          (drgnx-statusbar--selected-p object) drgnx-large-file)
+                   :doc "A window's position segment text (`drgnx-statusbar--position-text'), evaluated in its
+buffer: made again when the point it shows (the window's, or the buffer's when the window shows another), the text,
+the narrowing, the selection, whether you are in the window or the large-file flag (no line count) changed.")
+
+(defun drgnx-statusbar--position-text (w)
+  "The position segment's text for window W, in W's buffer (the memo `statusbar-position')."
+  (drgnx-memo statusbar-position w (drgnx-statusbar--position-compute w)))
+
+(defun drgnx-statusbar--position-key (w compact)
+  "The position W's bar shows (a key of the bar's memo), or nil for a bar that shows none (COMPACT `quiet' or
+`other'): the bar is built again when the shown position changes, never for a move it does not show."
+  (unless (memq compact '(quiet other)) (drgnx-statusbar--position-text w)))
+
 (drgnx-memo-define statusbar-bar :on window
                    :keys ((drgnx-epoch 'buffer-look (current-buffer)) (drgnx-epoch 'flymake (current-buffer))
                           (drgnx-epoch 'eglot (current-buffer)) (drgnx-epoch 'git) (drgnx-epoch 'misc-info)
-                          (drgnx-epoch 'statusbar) (drgnx-notice-tick)
-                          (window-point object) (buffer-chars-modified-tick) (point-min) (point-max) width compact
+                          (drgnx-epoch 'statusbar) (drgnx-notice-tick) (drgnx-statusbar--toasts-waiting)
+                          (drgnx-statusbar--position-key object compact)
+                          (buffer-chars-modified-tick) (point-min) (point-max) width compact
                           (drgnx-statusbar--layout-key object)
                           (drgnx-statusbar--selected-p object) (and mark-active (mark t))
                           (current-buffer) default-directory mode-line-process defining-kbd-macro
@@ -781,11 +850,13 @@ dir (the doctor's `statusbar-misc' check reads it).  Never prompts and never rai
                           (drgnx-statusbar--which-func object) (drgnx-statusbar--misc))
                    :doc "A window's escaped bar (`drgnx-statusbar--bar'), evaluated in its buffer with WIDTH its width and
 COMPACT whether it shows the compact bar.  Six epochs, the notice model's tick (`drgnx-notice-tick': the two counts
-the `needs-you' and `drgnx' segments show), then plain values compared with `eq': the window's point, the
+the `needs-you' and `drgnx' segments show) and the count of toasts that wait (the `toasts' segment), then plain values
+compared with `eq': the position the bar shows (its own
+memo's text, `drgnx-statusbar--position-key': not the point, so a move the bar does not show builds nothing), the
 text's change count, the narrowing, width and kind, whether you are in it, the mark of a selection; the buffer,
 `default-directory', `mode-line-process', a keyboard macro being recorded, keycast's keys, which-function's name and
 the text of other packages' entries this redisplay (`drgnx-statusbar--misc').  A segment of your own that shows
-something else is drawn again when point moves, the text changes or `(drgnx-statusbar-refresh t)' runs.")
+something else is drawn again when the shown position or the text changes or `(drgnx-statusbar-refresh t)' runs.")
 
 (defun drgnx-statusbar--bar (w width compact)
   "The escaped bar of window W (WIDTH columns, COMPACT or full), in W's buffer: the memo `statusbar-bar', built again
@@ -1010,6 +1081,7 @@ moves, so other packages' entries are formatted again, once per buffer the bars 
 (defconst drgnx-statusbar--hooks
   '((post-command-hook . drgnx-statusbar--post-command)
     (drgnx-look-fonts-applied-hook . drgnx-statusbar--fonts-applied)
+    (drgnx-look-density-changed-hook . drgnx-statusbar--density-changed)
     (drgnx-hub-event-functions . drgnx-statusbar--hub-tests)
     (drgnx-git-changed-functions . drgnx-statusbar--git-changed)
     (compilation-finish-functions . drgnx-statusbar--compilation-finished)
@@ -1094,6 +1166,11 @@ Reads the cache only (a remote buffer has no entry)."
     (cond ((and s (not (string-empty-p s))) s)
           (face (propertize (drgnx-statusbar--glyph glyph) 'face face))
           (t (drgnx-statusbar--glyph glyph)))))
+
+(defun drgnx-statusbar--seg-toasts ()
+  "`+N': the notices that wait for a toast's place while the most toasts show; nothing when none waits."
+  (when-let* (((fboundp 'drgnx-notice-toast-more-text)) (s (drgnx-notice-toast-more-text)))
+    (propertize s 'face 'drgnx-status-info)))
 
 (defun drgnx-statusbar--seg-mode ()
   "The buffer's `mode-name' (Magit, Help, … : the buffers that are not files)."
@@ -1324,9 +1401,13 @@ real one."
   (and (window-live-p w) (eq w (selected-window)) (mode-line-window-selected-p)))
 
 (defun drgnx-statusbar--seg-position ()
-  "`Ln N, Col M'; in a large file `Col M' alone (its line number would count the lines from the top)."
-  (let* ((w (drgnx-statusbar-source-window))
-         (pt (if (eq (window-buffer w) (current-buffer)) (window-point w) (point))))
+  "`Ln N, Col M'; in a large file `Col M' alone (its line number would count the lines from the top).  The text is
+the window's memo (`drgnx-statusbar--position-text')."
+  (drgnx-statusbar--position-text (drgnx-statusbar-source-window)))
+
+(defun drgnx-statusbar--position-compute (w)
+  "The position segment's text for window W, worked out (`drgnx-statusbar--seg-position')."
+  (let* ((pt (if (eq (window-buffer w) (current-buffer)) (window-point w) (point))))
     (save-excursion
       (goto-char pt)
       (let* ((bol (pos-bol))
@@ -1498,6 +1579,8 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
                                   :help "Waiting on you: click for the newest, or the Notices list")
   (drgnx-statusbar-define-segment 'drgnx :fn #'drgnx-notice-problems-text :click #'drgnx-notices-show
                                   :help "drgnx's problems: click for the Notices list")
+  (drgnx-statusbar-define-segment 'toasts :fn #'drgnx-statusbar--seg-toasts :click #'drgnx-notices-show
+                                  :help "Notices waiting for a toast's place: click for the Notices list")
   (drgnx-statusbar-define-segment 'modal :fn #'drgnx-statusbar--seg-modal :help "Modal editing state")
   (drgnx-statusbar-define-segment 'mode :fn #'drgnx-statusbar--seg-mode :help "The buffer's major mode")
   (drgnx-statusbar-define-segment 'misc :fn #'drgnx-statusbar--seg-misc

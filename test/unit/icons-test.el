@@ -89,5 +89,24 @@ anything else is a plain file."
   (should (eq 'folder (drgnx-look-file-icon-name "src/")))
   (should (eq 'folder-open (drgnx-look-file-icon-name "src/" t))))
 
+(ert-deftest drgnx-icons/file-kinds-are-kept-by-extension ()
+  "Pattern D: a file kind is worked out once per extension (per name for a name without one): asked again, neither
+the kind table nor `auto-mode-alist' is matched (an Explorer row asks on every fontification).  The kept kinds are
+bounded, and another `auto-mode-alist' works them out again."
+  (let ((calls 0) (orig (symbol-function 'drgnx-icons--mode-class)))
+    (cl-letf (((symbol-function 'drgnx-icons--mode-class) (lambda (f) (cl-incf calls) (funcall orig f))))
+      (drgnx-icons-clear)
+      (dolist (n '("Makefile" "LICENSE" "gen-0001" "a.md" "x.weird")) (drgnx-look-file-name-icon-name n))
+      (setq calls 0)
+      (let ((drgnx-icons--extensions nil))      ; not read again either
+        (should (eq 'file-text (drgnx-look-file-name-icon-name "other.md")))
+        (should (eq 'file-text (drgnx-look-file-name-icon-name "dir/OTHER.MD")))
+        (dolist (n '("Makefile" "LICENSE" "gen-0001" "y.weird")) (drgnx-look-file-name-icon-name n)))
+      (should (= 0 calls))
+      (let ((auto-mode-alist (cons '("\\.weird\\'" . text-mode) auto-mode-alist)))
+        (should (eq 'file-text (drgnx-look-file-name-icon-name "x.weird"))))
+      (dotimes (i 1000) (drgnx-look-file-name-icon-name (format "generated-%d" i)))
+      (should (<= (drgnx-cache-size 'icons-file-kinds) drgnx-icons-file-kinds-cap)))))
+
 (provide 'icons-test)
 ;;; icons-test.el ends here

@@ -39,7 +39,8 @@ Where Glitnir draws the frames, the same notices (the failures and the new thing
 appear as toasts instead of echo lines: a small card at the bottom right of the window, above the status bar. A toast
 has an icon in the severity's colour, the text in bold, the detail below it, and up to three buttons: the notice's own
 command first (with its key), then Show Notices, then Dismiss. At most three show at once, newest on top; more wait
-and the count (`+2`) is available to the status bar. A toast never takes focus or asks anything, and goes by itself
+and the status bar counts them (`+2`, the `toasts` segment, after drgnx's own problems; a click opens the Notices
+list). A toast never takes focus or asks anything, and goes by itself
 after about eight seconds. It fades in over 160 ms and out over 100 ms; with `drgnx-look-motion` `reduced` (or the
 desktop's reduced-motion preference) it just appears.
 

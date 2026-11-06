@@ -28,9 +28,9 @@
 (defvar drgnx-look-motion)
 
 (drgnx-defsetting drgnx-notice-style 'auto
-  "Where a notice that interrupts shows: `float' (a toast over the editor, while Glitnir draws the frames),
-`echo' (a line in the echo area) or `auto' (`float' while Glitnir draws, else `echo').  A change applies to the next
-notice."
+  "Where a notice that interrupts shows: `float' (a toast over the editor on any graphical frame, without Glitnir's
+corners and shadow where it does not draw), `echo' (a line in the echo area) or `auto' (`float' while Glitnir draws,
+else `echo').  A terminal frame always echoes.  A change applies to the next notice."
   :type '(choice (const auto) (const echo) (const float)) :group 'drgnx
   :scope 'global :workspace 'never :agents 'never
   :schema '(enum auto echo float))
@@ -213,8 +213,14 @@ thing waiting on you)."
   "The timer `notice-toast': the oldest toast goes."
   (when drgnx-notice-toast--visible (drgnx-notice-toast-expire (car drgnx-notice-toast--visible))))
 
+(defvar drgnx-notice-toast--counted 0 "The waiting count the status bars were last told of.")
+
 (defun drgnx-notice-toast--sync ()
-  "Draw the model: one pooled frame per visible notice, stacked upward from the corner; the rest out of sight."
+  "Draw the model: one pooled frame per visible notice, stacked upward from the corner; the rest out of sight.
+When the count of those waiting changed, the status bars are drawn again (their `toasts' segment)."
+  (unless (= drgnx-notice-toast--counted (length drgnx-notice-toast--waiting))
+    (setq drgnx-notice-toast--counted (length drgnx-notice-toast--waiting))
+    (force-mode-line-update t))
   (let ((parent (drgnx-notice-toast--parent)))
     (cond
      ((or (null drgnx-notice-toast--visible) (null parent))

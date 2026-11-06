@@ -69,24 +69,42 @@ a theme that does not leaves it dim but visible."
   "The `mouse-face' of a row with a hidden control: the hover colour and the body foreground, which shows the control."
   :group 'drgnx-look)
 
-(defun drgnx-look-hover-control (string &optional selected)
-  "STRING as a row's control: hidden in `drgnx-control-hidden' on a graphical frame, in its real face when SELECTED
-is non-nil or the frame is a terminal.  The caller puts `mouse-face' `drgnx-hover-row' on the whole row."
-  (propertize string 'face (if (or selected (not (memq (drgnx-state-frame-kind (selected-frame)) '(gui child))))
+(defun drgnx-look-hover-control (string &optional selected frame)
+  "STRING as a row's control: hidden in `drgnx-control-hidden' on a graphical FRAME (default: the selected one), in
+its real face when SELECTED is non-nil or FRAME is a terminal.  A caller that knows the row's frame passes it: a
+terminal frame's controls stay shown when a graphical frame is selected.  The caller puts `mouse-face'
+`drgnx-hover-row' on the whole row."
+  (propertize string 'face (if (or selected (not (memq (drgnx-state-frame-kind (or frame (selected-frame))) '(gui child))))
                                'drgnx-ui-close
                              'drgnx-control-hidden)))
 
 ;;;; Reading a face's colour without a frame
 
+(defvar drgnx-faces--reading-background nil
+  "Non-nil while `drgnx-faces--background-mode' reads `default's background (a clause of it is not judged by it).")
+
+(defun drgnx-faces--background-mode (kind)
+  "`dark' or `light' for a `(background …)' clause on a KIND display, from no frame: `frame-background-mode' when you
+set it, else how dark the enabled themes' `default' background is (as Emacs judges a frame's, `color-dark-p').  Only
+when neither tells (no theme names a colour Emacs can read here) the selected frame's mode, as before."
+  (or frame-background-mode
+      (unless drgnx-faces--reading-background
+        (let* ((drgnx-faces--reading-background t)
+               (bg (drgnx-faces--attribute 'default :background kind 0))
+               (v (and (stringp bg) (color-values-from-color-spec bg))))
+          (and v (if (color-dark-p (mapcar (lambda (c) (/ c 65535.0)) v)) 'dark 'light))))
+      (frame-parameter nil 'background-mode)))
+
 (defun drgnx-faces--condition-p (condition kind)
   "Non-nil when the display CONDITION, (KEY VALUE…), holds on a KIND display (`gui': true colour, graphic;
-`tty256': a 256-colour terminal)."
+`tty256': a 256-colour terminal).  A `(background …)' clause is judged by the themes, not the selected frame
+\(`drgnx-faces--background-mode')."
   (let ((vals (cdr condition)))
     (pcase (car condition)
       ('class (memq 'color vals))
       ('type (if (eq kind 'gui) (cl-some (lambda (v) (not (eq v 'tty))) vals) (memq 'tty vals)))
       ('min-colors (<= (car vals) (if (eq kind 'gui) 16777216 256)))
-      ('background (memq (frame-parameter nil 'background-mode) vals))
+      ('background (memq (drgnx-faces--background-mode kind) vals))
       (_ t))))
 
 (defun drgnx-faces--clause-plist (face kind)

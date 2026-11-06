@@ -75,6 +75,29 @@ row that is not its background, scanning the row from the window's right edge in
                         'line-spacing (buffer-local-value 'line-spacing (get-buffer drgnx-explorer-buffer-name))
                         'info (font-info (face-font 'drgnx-ui-text nil ?x)) 'cell (frame-char-height)))))))
 
+(ert-deftest drgnx-ui-look-explorer/row-height-follows-the-density ()
+  "Pattern D: after a density change, with no restart, a row of the Explorer is round (H x scale) device pixels high,
+H the density's `tree-row' (22 compact, 30 roomy)."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-explorer--with root
+    (let ((was drgnx-look-density) (got nil))
+      (drgnx-wb-rows-follow)                ; as the Explorer's setup does
+      (unwind-protect
+          (dolist (d '(compact roomy))
+            (setq drgnx-look-density d)
+            (run-hooks 'drgnx-look-density-changed-hook)
+            (drgnx-test-wait-presented)
+            (push (list d (round (* (drgnx-look-density-value 'tree-row) (drgnx-pixels-scale)))
+                        (- (drgnx-ui-look-explorer--row-y 3) (drgnx-ui-look-explorer--row-y 2)))
+                  got))
+        (setq drgnx-look-density was)
+        (run-hooks 'drgnx-look-density-changed-hook)
+        (remove-hook 'drgnx-look-density-changed-hook #'drgnx-wb-rows-refresh)
+        (drgnx-state-unsubscribe 'windows-changed #'drgnx-wb--rows-frame-changed)
+        (drgnx-state-unsubscribe 'frame-resized #'drgnx-wb--rows-frame-changed))
+      (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r))) got)
+                     (mapcar (lambda (r) (list (nth 0 r) (nth 2 r))) got))))))
+
 (ert-deftest drgnx-ui-look-explorer/marks-line-up ()
   "Pattern D: the right edges of the git marks of two rows agree within one device pixel."
   (skip-unless (display-graphic-p))

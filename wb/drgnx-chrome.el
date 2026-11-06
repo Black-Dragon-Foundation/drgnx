@@ -23,6 +23,7 @@
 (require 'drgnx-pixels)                 ; rows of an exact height, `drgnx-look-pixel-width'
 (require 'drgnx-icons)                  ; `drgnx-look-icon'
 (declare-function drgnx-face-glyph "drgnx-face")
+(declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-look-density-value "drgnx-look-density" (key &optional density))
 (declare-function drgnx-groups-split-right "drgnx-groups")
 
@@ -134,13 +135,15 @@ BOX the width of the flat box above and below a tab's text that makes the tab fo
   "The anonymous face of a tab's box: BOX pixels above and below, in the face's own background; its top corners
 rounded and its bottom open where the compositor draws such boxes."
   (list :box `(:line-width (0 . ,box) :style flat-button
-                           ,@(when (featurep 'glitnir) `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom))))))
+                           ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
+                               `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom))))))
 
 (defun drgnx-chrome--tab (w b shown active rows)
   "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;
 ROWS: `drgnx-chrome--tab-rows'.  The whole tab carries one `mouse-face' value of its own (a fresh list, not `eq' to
 another tab's: Emacs lights the run of text whose value is `eq') unless it is shown, and its close mark is drawn in
-the row's colour until the pointer is on the tab (`drgnx-look-hover-control')."
+the row's colour until the pointer is on the tab (`drgnx-look-hover-control', decided by W's frame: a terminal's
+tabs always show it, whichever frame is selected when the tab lines are made)."
   (let* ((face (cond ((not shown) 'drgnx-chrome-tab) (active 'drgnx-chrome-tab-active) (t 'drgnx-chrome-tab-current)))
          (face (if (string-match-p drgnx-chrome-transient-tabs (buffer-name b))
                    (list 'drgnx-chrome-tab-preview face)
@@ -157,7 +160,7 @@ the row's colour until the pointer is on the tab (`drgnx-look-hover-control')."
                (propertize " ●" 'face (cons 'drgnx-text-muted (ensure-list face))
                            'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map))
              (propertize " " 'face face 'help-echo "Show; middle-click closes" 'local-map drgnx-chrome--tab-map)
-             (propertize (drgnx-look-hover-control (drgnx-chrome--close-glyph w) shown)
+             (propertize (drgnx-look-hover-control (drgnx-chrome--close-glyph w) shown (window-frame w))
                          'help-echo "Close this tab" 'local-map drgnx-chrome--close-map)
              (propertize "  " 'face face 'help-echo "Close this tab" 'local-map drgnx-chrome--close-map))))
     (add-text-properties 0 (length s) (list 'drgnx-buffer b) s)
@@ -388,14 +391,22 @@ those are previews)."
     (dolist (f (frame-list)) (drgnx-chrome-apply f note))))
 
 (defvar drgnx-chrome--memo (make-hash-table :test 'eq :weakness 'key)
-  "Editor window -> [BUFFER TABS BREADCRUMB-PARAM TAB-LINE HEADER MODE-LINE NOTED]: what the store's subscribers last
-set on it (weak on the window).  They skip a window whose inputs and parameters are still those objects, so a
-change that touches no editor costs a few `eq' tests per window, not two strings built.  The bus's edges and
-`drgnx-chrome-apply' always rebuild.")
+  "Editor window -> [BUFFER TABS BREADCRUMB-PARAM TAB-LINE HEADER MODE-LINE NOTED ROWS]: what the store's subscribers
+last set on it (weak on the window), ROWS the frame's `drgnx-chrome--rows-key'.  They skip a window whose inputs and
+parameters are still those objects, so a change that touches no editor costs a few `eq' tests per window, not two
+strings built.  The bus's edges and `drgnx-chrome-apply' always rebuild.")
 
-(defun drgnx-chrome--memo-current-p (w note breadcrumb)
+(defun drgnx-chrome--rows-key (frame)
+  "An integer that moves when FRAME's rows change size: the tab row in its pixels (the density at its scale) and its
+line height.  0 on a terminal.  Allocates nothing."
+  (if (display-graphic-p frame)
+      (+ (round (* (drgnx-pixels-scale frame) (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tab-row) 34)))
+         (* 1000 (frame-char-height frame)))
+    0))
+
+(defun drgnx-chrome--memo-current-p (w note breadcrumb rows)
   "Non-nil when editor window W still shows what the store's subscribers last set on it (with its buffer noted
-as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb')."
+as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb', ROWS its `drgnx-chrome--rows-key')."
   (let ((m (gethash w drgnx-chrome--memo)))
     (and m
          (or (not note) (aref m 6))
@@ -405,12 +416,13 @@ as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb'
          (eq (aref m 3) (window-parameter w 'tab-line-format))
          (eq (aref m 4) (window-parameter w 'header-line-format))
          (eq (aref m 5) (window-parameter w 'mode-line-format))
-         (eq (aref m 5) drgnx-chrome-editor-mode-line))))
+         (eq (aref m 5) drgnx-chrome-editor-mode-line)
+         (eql (aref m 7) rows))))
 
-(defun drgnx-chrome--memo-set (w note breadcrumb)
+(defun drgnx-chrome--memo-set (w note breadcrumb rows)
   (puthash w (vector (window-buffer w) (window-parameter w 'drgnx-tabs) breadcrumb
                      (window-parameter w 'tab-line-format) (window-parameter w 'header-line-format)
-                     (window-parameter w 'mode-line-format) (and note t))
+                     (window-parameter w 'mode-line-format) (and note t) rows)
            drgnx-chrome--memo))
 
 (defun drgnx-chrome--apply-changed (frame note)
@@ -418,13 +430,24 @@ as a tab, if NOTE; BREADCRUMB is its frame's parameter `drgnx-chrome-breadcrumb'
 The store lists the editor windows; the other roles are set as `drgnx-chrome-apply' does."
   (unless (frame-parent frame)
     (let ((editors (drgnx-state-windows frame 'editor))
-          (breadcrumb (frame-parameter frame 'drgnx-chrome-breadcrumb)))
+          (breadcrumb (frame-parameter frame 'drgnx-chrome-breadcrumb))
+          (rows (drgnx-chrome--rows-key frame)))
       (dolist (w (window-list frame 'nomini))
         (if (not (memq w editors))
             (drgnx-chrome--apply-window w note)
-          (unless (drgnx-chrome--memo-current-p w note breadcrumb)
+          (unless (drgnx-chrome--memo-current-p w note breadcrumb rows)
             (drgnx-chrome--apply-window w note)
-            (drgnx-chrome--memo-set w note breadcrumb)))))))
+            (drgnx-chrome--memo-set w note breadcrumb rows)))))))
+
+(defun drgnx-chrome--rows-changed ()
+  "On `drgnx-look-density-changed-hook': every frame's tab rows at the new height, at once."
+  (dolist (f (frame-list)) (when (frame-live-p f) (drgnx-chrome--apply-changed f nil))))
+
+(defun drgnx-chrome--frame-resized (data)
+  "The store's `frame-resized': a scale change resizes the frame, so its tab rows are made again in its pixels (only
+the editors whose rows key moved)."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
+    (drgnx-chrome--apply-changed frame nil)))
 
 (defun drgnx-chrome--windows-changed (data)
   "The store's `windows-changed' (`now' lane: inside the observation, before the frame is drawn): set the
@@ -443,12 +466,16 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
       (progn
         (drgnx-state-subscribe 'windows-changed #'drgnx-chrome--windows-changed :lane 'now)
         (drgnx-state-subscribe 'editor-changed #'drgnx-chrome--editor-changed :lane 'now)
+        (drgnx-state-subscribe 'frame-resized #'drgnx-chrome--frame-resized)
+        (add-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
         (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
         (dolist (e '(buffer-set-changed modified-changed))
           (drgnx-signal-subscribe e #'drgnx-chrome--refresh))
         (drgnx-chrome--refresh))
     (drgnx-state-unsubscribe 'windows-changed #'drgnx-chrome--windows-changed)
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-chrome--editor-changed)
+    (drgnx-state-unsubscribe 'frame-resized #'drgnx-chrome--frame-resized)
+    (remove-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
     (clrhash drgnx-chrome--memo)
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
     (dolist (e '(buffer-set-changed modified-changed))

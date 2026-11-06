@@ -203,5 +203,131 @@ fields are the ones its docstring lists; the vector gives each field a value of 
       (should (equal (cons (funcall at 'ASCENT) (funcall at 'DESCENT))
                      (drgnx-pixels-font-extent 'default))))))
 
+(ert-deftest drgnx-look-bars/lead-takes-the-font-ascent ()
+  "Pattern D: when the row less the text is odd (compact: 22 pixels on a 17 pixel font), the bar's lead is a spacer
+whose ascent is the font's ASCENT (`drgnx-pixels-font-extent'), the box (2) and the leftover pixel (1), of the row:
+not the font's MAX-WIDTH, which put the spacer wholly above the baseline and grew the bar by the descent."
+  (drgnx-statusbar-test--with
+    (let* ((fields drgnx-look-bars-test--font-info-fields)
+           (info (apply #'vector (number-sequence 100 (+ 99 (length fields)))))
+           (drgnx-look-density 'compact))
+      (aset info (seq-position fields 'ASCENT) 13)
+      (aset info (seq-position fields 'DESCENT) 4)
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                ((symbol-function 'face-font) (lambda (&rest _) "a font"))
+                ((symbol-function 'font-info) (lambda (&rest _) info))
+                ((symbol-function 'window-font-height) (lambda (&rest _) 17))
+                ((symbol-function 'drgnx-statusbar--scale) (lambda (&optional _f) 1.0)))
+        (let ((spec (get-text-property 0 'display (drgnx-statusbar--lead (selected-window) 12))))
+          (should (equal '(22) (plist-get (cdr spec) :height)))
+          (should (equal (ceiling (* 100.0 (+ 13 2 1)) 22) (plist-get (cdr spec) :ascent))))))))
+
+(ert-deftest drgnx-look-bars/a-density-change-lays-the-bar-out-again ()
+  "Pattern D: the bar's layout key holds its row height, so a density change builds the bar again at the new
+height (the memo would keep the old box otherwise)."
+  (drgnx-statusbar-test--with
+    (let ((w (selected-window)) (drgnx-look-density 'comfortable))
+      (let ((k (drgnx-statusbar--layout-key w)))
+        (let ((drgnx-look-density 'roomy)) (should-not (eq k (drgnx-statusbar--layout-key w))))
+        (let ((drgnx-look-density 'compact)) (should-not (eq k (drgnx-statusbar--layout-key w))))
+        (should (eq k (drgnx-statusbar--layout-key w)))))))
+
+(defmacro drgnx-look-bars-test--counting (calls &rest body)
+  "BODY with the bars measuring one pixel a column through a measure that counts its calls in CALLS."
+  (declare (indent 1))
+  `(let* ((,calls 0)
+          (drgnx-look-bars-measure-function (lambda (s &optional _f) (cl-incf ,calls) (string-width s))))
+     ,@body))
+
+(ert-deftest drgnx-look-bars/a-cursor-move-measures-only-the-position ()
+  "Pattern D: a cursor move measures at most the position segment's new text: the bar's memo does not hold the
+window's point, and the widths it measured are kept per text, face and layout.  A bar that shows no position (a
+special-mode buffer's) is not built again at all.  The counts per move are printed."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-right '(position c)) (drgnx-statusbar-compact '(position c)))
+      (drgnx-statusbar-define-segment 'position :fn #'drgnx-statusbar--seg-position)
+      (drgnx-look-bars-test--counting calls
+        (drgnx-statusbar-test--in-buffer 'emacs-lisp-mode
+          (insert "(a)\n(bb)\n(ccc)\n")
+          (goto-char (point-min))
+          (drgnx-statusbar-mode-line)
+          (dolist (move (list #'forward-char #'forward-char (lambda () (forward-line 1)) #'backward-char))
+            (setq calls 0)
+            (funcall move)
+            (drgnx-statusbar-mode-line)
+            (message "drgnx-look-bars: measures for a cursor move: %d" calls)
+            (should (<= calls 1)))))
+      (drgnx-look-bars-test--counting calls
+        (let ((drgnx-statusbar-other '(a)))
+          (drgnx-statusbar-test--in-buffer 'special-mode
+            (let ((inhibit-read-only t)) (insert "one\ntwo\n"))
+            (goto-char (point-min))
+            (let ((bar (drgnx-statusbar-mode-line)))
+              (setq calls 0)
+              (forward-line 1)
+              (should (eq bar (drgnx-statusbar-mode-line)))
+              (should (= 0 calls)))))))))
+
+(ert-deftest drgnx-look-bars/the-branch-cut-measures-a-few-times ()
+  "Pattern D: cutting a long branch to fit measures a few candidate lengths (halving), not one per character, and
+nothing when the same bar is laid out again.  The counts are printed."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar-left '(branch)) (drgnx-statusbar-right '(c))
+          (branch (concat "⑂ " (make-string 120 ?x))))
+      (drgnx-statusbar-define-segment 'branch :fn (lambda () branch))
+      (drgnx-look-bars-test--counting calls
+        (let ((plain (substring-no-properties (drgnx-statusbar-render 60))))
+          (message "drgnx-look-bars: measures for a cut of a %d-character branch: %d" (length branch) calls)
+          (should (string-search (truncate-string-ellipsis) plain))
+          (should (<= calls 20)))
+        (setq calls 0)
+        (drgnx-statusbar-render 60)
+        (should (= 0 calls))))))
+
+(require 'drgnx-notice-toast)
+
+(ert-deftest drgnx-look-bars/waiting-toasts-are-counted ()
+  "Pattern D: the toasts that wait for a place are counted in the status bar (\"+N\", the `toasts' segment of the
+default bar), the bar is built again when the count changes, and with none waiting the segment says nothing."
+  (drgnx-statusbar-test--with
+    (drgnx-statusbar--define-defaults)
+    (should (memq 'toasts (eval (car (get 'drgnx-statusbar-left 'standard-value)) t)))
+    (let ((drgnx-statusbar-left '(toasts a)) (drgnx-notice-toast--waiting nil))
+      (should-not (string-match-p "\\+" (substring-no-properties (drgnx-statusbar-render 200))))
+      (setq drgnx-notice-toast--waiting (list '(:source a :id 1) '(:source a :id 2)))
+      (should (string-match-p "\\+2" (substring-no-properties (drgnx-statusbar-render 200))))
+      (drgnx-statusbar-test--in-buffer 'emacs-lisp-mode
+        (let ((two (drgnx-statusbar-mode-line)))
+          (push '(:source a :id 3) drgnx-notice-toast--waiting)
+          (let ((three (drgnx-statusbar-mode-line)))
+            (should-not (eq two three))
+            (should (string-match-p "\\+3" (substring-no-properties three)))))))))
+
+(ert-deftest drgnx-look-bars/title-bar-drawn-by-default-with-corners ()
+  "Pattern D: left at its default, the title bar is drawn by drgnx on a frame under GNOME's window manager whose
+shell keeps an undecorated frame's margins, and that frame gets `toplevel-chrome': radius 12 and the popups' shadow
+of the variant.  Under a tiling window manager the same default is the system's bar, with no `toplevel-chrome'."
+  (let ((frame (selected-frame)) (default (eval (car (get 'drgnx-face-title-bar 'standard-value)) t)))
+    (unwind-protect
+        (let ((drgnx-face-title-bar default))
+          (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+                    ((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk))
+                    ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
+            (drgnx-face--apply-title frame)
+            (should (drgnx-face-drawn-title-p frame))
+            (let ((chrome (frame-parameter frame 'toplevel-chrome)))
+              (should (equal 12 (alist-get 'corner-radius chrome)))
+              (should (equal (and (fboundp 'drgnx-look-chrome-current) (alist-get 'shadow (drgnx-look-chrome-current frame)))
+                             (alist-get 'shadow chrome)))))
+          (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+                    ((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk))
+                    ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'sway)))
+            (drgnx-face--apply-title frame)
+            (should-not (drgnx-face-drawn-title-p frame))
+            (should-not (frame-parameter frame 'toplevel-chrome))))
+      (cl-letf (((symbol-function 'drgnx-face--gui-system) (lambda (_f) 'pgtk)))
+        (let ((drgnx-face-title-bar 'system)) (drgnx-face--apply-title frame)))
+      (modify-frame-parameters frame '((toplevel-chrome) (undecorated))))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

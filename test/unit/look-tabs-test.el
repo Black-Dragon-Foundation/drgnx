@@ -84,5 +84,45 @@ included."
         (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs a)))
         (should (eq 'drgnx-ui-close (drgnx-look-tabs-test--close-face tabs b)))))))
 
+(load (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir) nil t)
+
+(defun drgnx-look-tabs-test--row-height (tabs)
+  "The height in pixels the tab line TABS asks for: its first character's spacer."
+  (car (plist-get (cdr (get-text-property 0 'display tabs)) :height)))
+
+(ert-deftest drgnx-look-tabs/the-tab-row-follows-a-density-change ()
+  "Pattern D: a density change reaches every editor's tab row at once: the row is the new `tab-row' (34 → 38 at
+roomy), although no tab and no buffer changed."
+  (drgnx-chrome-test--with dir
+    (drgnx-look-tabs-test--as 'gui
+      (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _d) t))
+                ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(13 . 4))))
+        (let ((drgnx-look-density 'comfortable) (s (drgnx-pixels-scale)))
+          (drgnx-chrome-test--open dir "a.txt")
+          (drgnx-chrome-apply nil t)
+          (should (equal (round (* 34 s))
+                         (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format))))
+          (setq drgnx-look-density 'roomy)
+          (run-hooks 'drgnx-look-density-changed-hook)
+          (should (equal (round (* 38 s))
+                         (drgnx-look-tabs-test--row-height (window-parameter (selected-window) 'tab-line-format)))))))))
+
+(ert-deftest drgnx-look-tabs/the-close-is-decided-by-the-tab-s-frame ()
+  "Pattern D: whether a tab's close mark is hidden is decided by the frame of the tab's window, never the selected
+frame: a terminal frame's tabs keep their × when a graphical frame refreshes every tab line."
+  (drgnx-chrome-test--with dir
+    (let ((asked nil) (orig (symbol-function 'drgnx-look-hover-control)))
+      (cl-letf (((symbol-function 'drgnx-look-hover-control)
+                 (lambda (s &optional selected frame) (push frame asked) (funcall orig s selected frame))))
+        (drgnx-chrome-test--open dir "a.txt")
+        (drgnx-chrome-test--open dir "b.txt")
+        (setq asked nil)
+        (drgnx-chrome-apply nil t)
+        (should asked)
+        (should (seq-every-p (lambda (f) (eq f (window-frame (selected-window)))) asked)))))
+  (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (&optional f) (if (eq f 'a-terminal) 'tty 'gui))))
+    (should (eq 'drgnx-ui-close (get-text-property 0 'face (drgnx-look-hover-control "×" nil 'a-terminal))))
+    (should (eq 'drgnx-control-hidden (get-text-property 0 'face (drgnx-look-hover-control "×"))))))
+
 (provide 'look-tabs-test)
 ;;; look-tabs-test.el ends here

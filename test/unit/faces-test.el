@@ -54,6 +54,24 @@
         (should-not (drgnx-face-color 'drgnx-selected :foreground 'gui)))
     (disable-theme 'drgnx-faces-test-fixture)))
 
+(ert-deftest drgnx-faces/background-clause-follows-the-theme-not-the-frame ()
+  "A `(background dark)' clause is judged by the theme's `default' background, not by the selected frame's mode: in a
+daemon, F1's mode is not the theme's."
+  (deftheme drgnx-faces-test-dark "Fixture: a dark default, and a face with a clause per background.")
+  (custom-theme-set-faces
+   'drgnx-faces-test-dark
+   '(default ((t :background "#101010" :foreground "#eeeeee")))
+   '(drgnx-agent-6 ((((background dark)) :foreground "#ddeeff") (t :foreground "#112233"))))
+  (provide-theme 'drgnx-faces-test-dark)
+  (let ((was (frame-parameter nil 'background-mode)) (frame-background-mode nil))
+    (unwind-protect
+        (progn
+          (enable-theme 'drgnx-faces-test-dark)
+          (set-frame-parameter nil 'background-mode 'light)
+          (should (equal "#ddeeff" (drgnx-face-color 'drgnx-agent-6 :foreground 'gui))))
+      (disable-theme 'drgnx-faces-test-dark)
+      (set-frame-parameter nil 'background-mode was))))
+
 (ert-deftest drgnx-faces/needs-you-inherits-attention ()
   (should (eq 'drgnx-status-attention (face-attribute 'drgnx-status-needs-you :inherit nil nil))))
 

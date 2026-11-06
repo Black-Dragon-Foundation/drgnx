@@ -332,7 +332,7 @@ call, no bus flush: the `windows-changed' `now' subscriber."
     (dolist (fn '(drgnx-chrome--windows-changed drgnx-chrome--editor-changed drgnx-chrome--apply-changed drgnx-chrome--memo-current-p drgnx-chrome--memo-set drgnx-chrome-apply drgnx-chrome--apply-window
                                                 drgnx-chrome--role drgnx-chrome--set drgnx-chrome--tab-line drgnx-chrome--note drgnx-chrome--note-history
                                                 drgnx-chrome-tabs drgnx-chrome-breadcrumb drgnx-chrome--project-root drgnx-chrome--text
-                                                drgnx-chrome--tab-buffer-p drgnx-chrome--close-glyph))
+                                                drgnx-chrome--tab-buffer-p drgnx-chrome--close-glyph drgnx-chrome--rows-key))
       (unless (compiled-function-p (symbol-function fn))      ; the tests load drgnx from source: measure what users run
         (let ((byte-compile-warnings nil)) (byte-compile fn))))
     (let ((window-min-width 2) (window-min-height 2))        ; a small batch frame
