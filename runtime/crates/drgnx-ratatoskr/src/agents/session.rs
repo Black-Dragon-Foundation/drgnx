@@ -9,11 +9,14 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
+#[cfg(test)]
+mod attach_tests;
 mod turn_core;
 
 use super::launch;
 use super::lock as plock;
 use super::queue::{Origin, Queued};
+use super::rewind::RestoreLevel;
 use super::transcript;
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -819,10 +822,31 @@ struct Ident {
     document: Option<PathBuf>,
 }
 
+/// How a launched agent gets its conversation: a new one, the recorded one again (`session/resume`, else
+/// `session/load`), or a fork of SOURCE at AT expected to restore LEVEL (`session/fork` in this new process).
+#[derive(Clone, Debug)]
+pub(crate) enum Attach {
+    New,
+    Resume(String),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "attached by the rewind and the fork")
+    )]
+    Fork {
+        source: String,
+        at: Option<hermod::ForkPoint>,
+        level: RestoreLevel,
+    },
+}
+
 /// A launched agent with its handshake done.
 struct Launched {
     conn: Conn,
     acp: SessionId,
+    /// The level an attach by fork really restored: its own, or `Summary` when the agent cannot fork or the fork failed
+    /// (a new conversation, LEVEL_WHY saying why).  None for a new or resumed conversation.
+    level: Option<RestoreLevel>,
+    level_why: Option<String>,
     caps: Option<Value>,
     enforced: bool,
     enforced_why: Option<String>,
@@ -1547,7 +1571,7 @@ pub(crate) async fn open_as(
         role,
         &sid,
         &cwd,
-        None,
+        &Attach::New,
         (
             p.task.as_ref().map(|t| t.as_str()),
             p.job.as_ref().map(|j| j.as_str()),
@@ -1654,16 +1678,17 @@ async fn bridge(
         .collect()
 }
 
-/// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
-/// `session/resume`, else `session/load` when the agent can only load) and its lock verified: a lock that does not
-/// hold kills the session.
+/// PROFILE's agent in CWD: started in its sandbox, initialized, on a conversation ATTACH names (a new one; the
+/// recorded one by `session/resume`, else `session/load` when the agent can only load; or a fork, which falls back to a
+/// new conversation at Summary level when the agent cannot fork or the fork fails) and its lock verified, after a fork
+/// as after `session/new`: a lock that does not hold kills the session.
 async fn launch(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
     sid: &str,
     cwd: &Path,
-    existing: Option<&str>,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
@@ -1738,9 +1763,36 @@ async fn launch(
                 .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
-        let acp = match existing {
-            None => conn.new_session(cwd, mcp.clone(), meta).await?,
-            Some(id) => {
+        let mut landed = (None, None);
+        let acp = match attach {
+            Attach::New => conn.new_session(cwd, mcp.clone(), meta).await?,
+            Attach::Fork { source, at, level } => {
+                let fork = if super::rewind::can_fork(caps.as_ref()) {
+                    conn.fork_into(hermod::ForkInto {
+                        source: SessionId::new(source.clone()),
+                        cwd: cwd.to_path_buf(),
+                        mcp: mcp.clone(),
+                        at: at.clone(),
+                        meta: meta.clone(),
+                    })
+                    .await
+                    .map_err(|e| format!("the fork failed: {e}"))
+                } else {
+                    Err("the agent cannot fork a session".to_string())
+                };
+                match fork {
+                    Ok(id) => {
+                        landed = (Some(*level), None);
+                        id
+                    }
+                    Err(why) => {
+                        tracing::warn!(sid, "{why}: a new conversation, restored by a summary");
+                        landed = (Some(RestoreLevel::Summary), Some(why));
+                        conn.new_session(cwd, mcp.clone(), meta).await?
+                    }
+                }
+            }
+            Attach::Resume(id) => {
                 let sid = SessionId::new(id.to_string());
                 let can = |p: &str| {
                     caps.as_ref()
@@ -1761,9 +1813,9 @@ async fn launch(
                 sid
             }
         };
-        Ok::<_, hermod::Error>((caps, acp))
+        Ok::<_, hermod::Error>((caps, acp, landed))
     };
-    let (capabilities, acp) = match init.await {
+    let (capabilities, acp, (level, level_why)) = match init.await {
         Ok(x) => x,
         Err(e) => {
             kill().await;
@@ -1788,6 +1840,8 @@ async fn launch(
         Launched {
             conn,
             acp,
+            level,
+            level_why,
             caps: capabilities,
             enforced: prep.enforced,
             enforced_why: prep.enforced_why,
@@ -1807,6 +1861,14 @@ fn assemble(
     front: &Front,
     bus: tokio::sync::broadcast::Sender<AgentStep>,
 ) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
+    if let Some(level) = l.level {
+        tracing::info!(
+            sid = i.id,
+            ?level,
+            why = l.level_why.as_deref(),
+            "attached by fork"
+        );
+    }
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
     let flow = Arc::new(StepFlow::default());
@@ -2129,7 +2191,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
     // what the editor's modules added at its start goes again
     let env = kept_env(front, &sid, &meta);
-    let again = |existing: Option<String>| {
+    let again = |attach: Attach| {
         let (front, profile, sid, cwd, task, job, env) = (
             front,
             profile.clone(),
@@ -2146,7 +2208,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 role_of,
                 &sid,
                 Path::new(&cwd),
-                existing.as_deref(),
+                &attach,
                 (task.as_deref(), job.as_deref(), &env),
             )
             .await
@@ -2157,10 +2219,10 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     let mut handoff: Option<String> = None;
     let tried = match first {
         Some(_) => None,
-        None => Some(again(Some(acp.clone())).await),
+        None => Some(again(Attach::Resume(acp.clone())).await),
     };
     let (l, rx, fresh) = match tried {
-        None => match again(None).await {
+        None => match again(Attach::New).await {
             Ok((l, rx)) => (l, rx, true),
             Err(e) => {
                 tracing::warn!(sid, "session not started afresh: {}", e.message);
@@ -2177,7 +2239,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             // the summary handoff (Task 26): a new session on the same hub id, told what the old one left
             handoff =
                 Some(super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref()).await);
-            match again(None).await {
+            match again(Attach::New).await {
                 Ok((l, rx)) => (l, rx, true),
                 Err(e) => {
                     tracing::warn!(sid, "session not resumed: {}", e.message);

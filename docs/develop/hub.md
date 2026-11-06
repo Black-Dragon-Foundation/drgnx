@@ -918,6 +918,27 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
+  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
+  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+
 ## The store
 
 The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,

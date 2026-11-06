@@ -11,6 +11,7 @@ pub mod coord;
 pub mod exec;
 pub mod gateway;
 pub mod graph;
+pub mod history;
 pub mod hub;
 pub mod jobs;
 pub mod matrix;
