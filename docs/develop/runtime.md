@@ -176,6 +176,9 @@ tail). There is no SDK role framework.
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
   `ext_request(method, params, deadline)` sends an extension request (`_drgnx/context/drop` …) and returns the
   agent's result as it is, for the caller to check.
+  `reported_mode(sid)` is the mode (`modes.currentModeId`) the answer that opened the session on this connection
+  reported (`session/new`, `load`, `resume` or `fork`), or `None` when it reported none: the mode a lock checks,
+  never the one it asked for.
 - **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
   mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
   caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
@@ -675,12 +678,25 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--panel FEATURES` (a comma list) adds
-  drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize` advertises the
-  features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
+  `_codex/rateLimits`; its answers that open a session report `modes` as codex-acp 2.5.0 picks them: one of its four
+  mode ids from `INITIAL_AGENT_MODE`, `agent` for an unset or unknown one, and `session/set_mode` to an unknown id is
+  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini
+  (`loadSession` only; the rest answers -32601; its log's `admin_policy` says whether an `--admin-policy` file passes
+  Gemini CLI 0.67's loader, `loaded`, or would be dropped, `dropped: WHY`; the session starts either way, as Gemini's
+  does; `--panel-policy engine|short` is drgnx's fork, which answers an `initialize` offering `_drgnx/panel` version 1
+  with `adminPolicy {loaded, rules}`, `short` one rule fewer, beside any `--panel` features), kimi (its answers that
+  open a session report its four modes, `default` current, or MODE with `--start-mode MODE`; `session/set_mode` to
+  another id is -32602, and a switch, or the prompt word `mode MODE`, sends a `current_mode_update`), dsh (an overlay
+  `--patch` names is read as DeepSeek Harness 0.2.2 reads it: one that is not a top-level list of loader patches stops
+  it before it speaks ACP, exit 1; its log has the policy, sandbox mode and asked kinds). `--panel FEATURES` (a comma
+  list) adds drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize`
+  advertises the features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
   (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
   `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
-  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
+  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the
+  `agent-locks` rows); other modes are accepted. `--log` is JSONL, each object's keys in the order the mock writes
+  them however it was built (domr turns on serde_json's `preserve_order`), so a row may match a logged object as text;
+  `--llm URL` POSTs
   to a `ratatoskr-mock llm` once per turn, so its log counts requests. `--state DIR` keeps each session's history in
   `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
   process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
@@ -889,6 +905,12 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 | `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
 | `agents-streaming-20` | 20 mock agents stream at once (25 chunks and 25 tool calls each) with an editor subscribed, 100 `ping` round trips meanwhile. **Budgets in the row** (`/proc`, Linux only): the hub's CPU (utime + stime) under 40 % of one core over the window, resident set under 400 MB. The ping samples are the keystroke-latency proxy (p95 < 16 ms, judged on the desktop lane) |
 | `agents-idle-20` | 20 idle mock agents for 10 s: the hub's CPU under 3 % of one core (budget in the row) |
+| `hook-overhead` | one permission request (an edit the matrix allows), `permission-bare` with no rule subscribed and `permission-hooked` with one annotating rule; the added cost is the difference of the p95s, bound 5 ms | 100 each |
+| `hook-overhead-parallel` | eight permission requests sent before the first answer is read (`ask:burst 8`, as Claude issues parallel tool calls), `burst-bare` and `burst-hooked`; none is refused as busy (the turn says `burst: 8/8 allowed`), same 5 ms bound on the difference | 50 each |
+| `ability-20-sessions` | 20 sessions started with a plugin ability (each holds a `drgnx-plugins` server): the `ping` round trip, `ping-no-sessions` before and `ping-20-ability-sessions` with them idle; bound 100 ms | 200 each |
+
+The three plugin rows only measure; their bounds are judged at the gate, from a run pinned with `DRGNX_PERF_CPUS=4`
+(`builder-run.sh perf-exclusive.sh …`), never from a whole-machine run.
 
 The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
@@ -1269,6 +1291,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `plugin_manifest` | bytes through `brokkr::manifest::parse`: no panic, and a manifest that is taken keeps its limits (at most 16 hosts, `kv_bytes` within 1 MiB, one hook per point, a deadline within the point's budget, an object schema, a qualified ability name that fits) |
+| `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
+| `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and

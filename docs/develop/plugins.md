@@ -2,8 +2,83 @@
 
 `runtime/crates/brokkr` is drgnx's plugin host. A plugin is a WebAssembly component that gives agents
 tools (abilities) and shapes what they do (hooks). This page covers the manifest, the approval hash, the install
-scan, the hook engine and the WASM host that runs plugins ("What a plugin can reach"). The hub does not call the
-host yet.
+scan, the hook engine, the WASM host that runs plugins ("What a plugin can reach") and the hub's side (install,
+approval, abilities, the hook points). To write a plugin read "Building a plugin" first; users read
+[the guide](../guide/plugins.md).
+
+## Building a plugin
+
+A plugin is a Rust crate that builds to a WebAssembly component with plain cargo: no `cargo component`.
+
+1. Add the target once: `rustup target add wasm32-wasip2` (drgnx's own toolchain pins it through mise).
+2. Start from `runtime/plugins/template` (copy it; its `Cargo.toml` has `crate-type = ["cdylib"]` and
+   `wit-bindgen =0.63.0`).
+3. `cargo build --target wasm32-wasip2 --release`.
+4. Make a folder named after the plugin, with `plugin.json` and the built `.wasm` copied to `plugin.wasm`
+   (`target/wasm32-wasip2/release/my_plugin.wasm`).
+5. `drgnx plugins install FOLDER`, then approve it on the Plugins page and put it on `drgnx-agents-plugins`
+   ([guide](../guide/plugins.md#installing-and-approving)).
+
+Rust is the supported language. Any language whose toolchain makes a component of the `drgnx:agent-tools/plugin` world
+and imports only the interfaces under "What a plugin can reach" works, but only Rust is tested. No `.wasm` file is
+ever committed to this repository: the fixtures are built at test time.
+
+## The template walk-through
+
+`template/plugin.json` declares one ability, `shout`, with an input schema (the schema keywords the host accepts are
+listed in the guide's "Abilities"), and one `before-tool` hook that may `deny` or `annotate` calls of kind `execute`
+within 500 ms. No hosts, a 64 KiB store.
+
+`template/src/lib.rs` does four things:
+
+- `wit_bindgen::generate!` with `path` pointing at the WIT directory (`../../crates/brokkr/wit` in the drgnx sources;
+  copy `runtime/crates/brokkr/wit` next to your plugin otherwise) and `world: "drgnx:agent-tools/plugin"`.
+- `impl ability::Guest`: `call(tool, args_json)` matches the ability's name, parses the JSON arguments and answers a
+  JSON string or an `Err` text. Arguments were already checked against `input_schema`.
+- `impl hook::Guest`: `run(point, input_json)` returns a `Verdict`. The template ignores every point but
+  `BeforeTool`, reads `tool.command` from the input and denies `rm -rf /`; everything else is `Allow`.
+- `export!(MyPlugin)`.
+
+A hook is called only for the points its manifest declares, and only a verdict the manifest lists is accepted: a
+verdict outside `verdicts` (`allow` always passes) counts as a failure of the hook, which refuses the step unless the
+hook is `advisory`.
+
+## The hook's input
+
+`input_json` is the point's `detail` object with `v`, `point`, `session`, `step` and `previous` set (see "The hook
+engine"). `before-tool` carries `tool` (`kind`, `name`, `title`, `input`, `paths`, `command`); `after-edit` carries
+`edit` (`path`, `diff`, and `content` when the hub writes the file). `before-commit` and `at-review` are in the engine
+and the manifest but the hub does not run them yet (they wait for the checkpoint and review work), so a hook at those
+points is never called today. A `change` returns the point's replacement object: `{"arguments": {…}}`, `{"content": "…"}`, `{"message": "…"}` or `{"notes":
+"…"}`, and is accepted only where the hub itself performs the action (the guide's "Before a tool call" and "After an
+edit" say where).
+
+## Point budgets
+
+| Point | Budget | `deadline_ms` up to |
+|---|---|---|
+| `before-tool` | 2 s | 2000 |
+| `after-edit` | 5 s | 5000 |
+| `before-commit` | 10 s | 10000 |
+| `at-review` | 30 s | 30000 |
+
+The budget is shared by every rule and hook at the point; each hook gets the smaller of its `deadline_ms` and what is
+left. An ability's deadline is 30 s. Hooks run on a runtime of their own: at most 2 calls per plugin and 4 in all, so a
+plugin that spins can neither starve the hub nor another plugin for longer than its deadline.
+
+## Testing a plugin
+
+- **By hand:** install it, approve it, enable it in a project, and look at the step's provenance in the agent view: it
+  names each rule and hook that looked, its verdict and its time.
+- **In the drgnx tree:** add the plugin to `runtime/plugins/fixtures` (a binary and `manifests/NAME.json`) and use
+  `brokkr::test_support::fixture("NAME")`, which builds every fixture with one cargo run and returns an install folder.
+  Drive it through `brokkr::Host` (`brokkr/tests/host.rs` is the model) on real time: the host's timeout runs on the
+  caller's runtime, so paused tokio time would end every wait at once. The template builds the same way through
+  `test_support::template()`.
+- Both need the `wasm32-wasip2` target of the toolchain that runs the tests, and run in a container like every build.
+
+Test a hostile case too: a hook that spins (`slow-hook`), traps (`trap-hook`) or allocates (`big-alloc`) must end in a
+refusal, not a hang.
 
 ## The manifest
 
@@ -78,6 +153,12 @@ configuration). Results come in folder-name order.
 one cargo run under a lock file, so parallel tests and test binaries build once, and returns an install folder
 (`plugin.json` and `plugin.wasm`) that `scan` reads. It needs the `wasm32-wasip2` target of the toolchain that runs
 the tests. `test_support::template()` builds the template the same way.
+
+CI builds them first, in their own step (`.github/ci/wasm-target.sh`, in the Linux and macOS jobs of `runtime.yml`): with
+rustup it adds the target; the Fedora 45 job's packaged Rust has no `wasm32-wasip2` standard library and cannot use an
+upstream one (its crates are tagged with its own rustc), so the script installs the same rustc version with rustup-init
+(checked against its published SHA-256) for the fixtures alone. `DRGNX_WASM_CARGO` names the cargo the test support
+builds them with, when it is not the one running the tests.
 
 ## The template
 
@@ -165,8 +246,9 @@ edit, before a commit and at review use its row.
   `timeline/get` puts them on each step as `hooks`.
 - **The lock** (`agents/lock.rs`): `subscribed_kinds(plugins, project)` at launch (a rule or hook naming no kind:
   every kind), `LaunchPlan::with_hook_asks(kinds)` (Claude: managed ask rules of `claude_ask_tools(kind)`, beside
-  the user's, never an allow rule) and `hooked(profile, kinds)`, the snapshot's `hooked {before_tool, by_adapter,
-  unhooked, why}`. Codex's and Gemini's locks are not changed here.
+  the user's, never an allow rule) and `hooked(profile, kinds, plan)`, the snapshot's `hooked {before_tool,
+  by_adapter, unhooked, why}`. The other providers' locks are in `docs/develop/hub.md` ("Session start: lock, sandbox
+  and matrix").
 
 ## What a plugin can reach
 

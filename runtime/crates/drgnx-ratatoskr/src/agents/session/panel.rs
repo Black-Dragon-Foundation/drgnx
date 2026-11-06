@@ -20,7 +20,7 @@ use crate::front::Front;
 use hermod::Responder;
 use runstav::jsonrpc;
 use runstav::methods::agents::{
-    ById, CompactPreview, Context, ContextDropParams, ContextPinParams, Hooked, Panel as Shown,
+    ById, CompactPreview, Context, ContextDropParams, ContextPinParams, Panel as Shown,
 };
 use runstav::wire::Error;
 use serde::Deserialize;
@@ -64,18 +64,6 @@ pub(crate) fn features(caps: Option<&Value>) -> Vec<String> {
         .filter(|f| said.contains(f))
         .map(|f| (*f).to_owned())
         .collect()
-}
-
-/// HOOKED (the lock's marks at launch) with the kinds the adapter's `_drgnx/before_tool` reaches when the agent offers
-/// `before-tool`: every subscribed kind the lock leaves unhooked moves to `by_adapter` (enforced on the agent's side;
-/// the lock's own kinds stay where they are).
-pub(crate) fn with_adapter(hooked: Option<Hooked>, features: &[String]) -> Option<Hooked> {
-    let mut h = hooked?;
-    if features.iter().any(|f| f == "before-tool") {
-        h.by_adapter = std::mem::take(&mut h.unhooked);
-        h.why = None;
-    }
-    Some(h)
 }
 
 /// What to do with a context breakdown that came now.
@@ -141,10 +129,6 @@ impl Panel {
             features: features(caps),
             state: Mutex::new(State::default()),
         }
-    }
-
-    pub(crate) fn features(&self) -> &[String] {
-        &self.features
     }
 
     fn offers(&self, feature: &str) -> bool {

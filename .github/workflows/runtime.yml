@@ -180,6 +180,14 @@ jobs:
           path: ../test-models
           key: ${{ steps.models.outputs.cache-primary-key }}
           enableCrossOsArchive: true
+      # the plugin tests load WASM components built for wasm32-wasip2 (Fedora's packaged Rust has no wasip2 standard
+      # library and cannot use an upstream one: wasm-target.sh installs the same rustc version with rustup-init, checked
+      # by its SHA-256, for the fixtures alone and sets DRGNX_WASM_CARGO): built first, so a missing target or a broken
+      # fixture is named here, before the tests
+      - name: wasm32-wasip2 and the plugin fixtures
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
       # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
@@ -964,6 +972,9 @@ jobs:
           path: ../test-models
           key: ${{ steps.models.outputs.cache-primary-key }}
           enableCrossOsArchive: true
+      # the plugin tests load WASM components built for wasm32-wasip2: the target, then the fixtures, before the tests
+      - name: wasm32-wasip2 and the plugin fixtures
+        run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks

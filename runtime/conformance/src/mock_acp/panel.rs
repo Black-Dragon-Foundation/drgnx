@@ -31,6 +31,22 @@ fn features(argv: &[String]) -> Option<Vec<String>> {
     )
 }
 
+/// Whether `--panel` advertises FEATURE.
+pub(super) fn offers(argv: &[String], feature: &str) -> bool {
+    features(argv).is_some_and(|f| f.iter().any(|x| x == feature))
+}
+
+/// The fork's own `_drgnx/before_tool` for TOOL_CALL (it carries its `toolCallId`, as the permission request will):
+/// whether the hub refused it. An answer that is not `deny`, or no answer, lets the step go on to its confirmation.
+pub(super) fn vetoed(a: &mut Agent, sid: &str, tool_call: Value) -> bool {
+    let rid = a.request(
+        "_drgnx/before_tool",
+        json!({"sessionId": sid, "toolCall": tool_call}),
+    );
+    let answer = a.response(rid).map(|r| r["result"].clone());
+    answer.is_some_and(|r| r["outcome"] == "deny")
+}
+
 /// The `agentCapabilities._meta` of `initialize` (none without `--panel`).
 pub(super) fn caps_meta(argv: &[String]) -> Option<Value> {
     features(argv).map(|f| json!({"_drgnx/panel": {"version": 1, "features": f}}))

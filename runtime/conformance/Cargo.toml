@@ -19,7 +19,9 @@ hmac.workspace = true
 sha2.workspace = true
 runstav = { path = "../crates/runstav", version = "0.1.0" }   # the paths rule (socket, data dir) the hub itself uses
 getrandom.workspace = true
-serde_json.workspace = true
+# preserve_order always: the hub's graph turns it on (hermod's ACP schema, tree-sitter's build), so without it here a
+# `-p domr` build wrote ratatoskr-mock's logs with sorted keys and a row matching a logged object as text missed it
+serde_json = { workspace = true, features = ["preserve_order"] }
 libc.workspace = true
 rustls.workspace = true      # ratatoskr-mock llm --tls (already in the lock file through bifrost)
 # ratatoskr-mock llm --tls: the CA and the leaf are made at start (no key file is ever committed or written). Already

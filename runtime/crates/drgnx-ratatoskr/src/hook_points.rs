@@ -507,6 +507,11 @@ pub async fn at_hub_server(
 /// A hub tool's step reached the seam: its hooks run at the hub's server, not here. When something there looks at
 /// it, the seam's row says so ("hooked at the hub's server"); the matrix still checks the step here.
 pub async fn hub_tool_at_the_seam(front: &Front, site: &Site, call: &ToolCallInfo) {
+    // the tool that runs the hooks for Codex's managed hook is hooked nowhere, so nothing is recorded of it
+    let own = format!("mcp__drgnx__{}", crate::agents::lock::BEFORE_TOOL);
+    if call.name.as_deref() == Some(own.as_str()) {
+        return;
+    }
     let at_server = Site {
         at: At::HubServer,
         ..site.clone()
@@ -857,10 +862,26 @@ pub fn provenance(c: &Tx, sid: &str, step: i64) -> Result<Vec<Value>, CoordError
             r.get::<_, Option<String>>(0)
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows
+    let all: Vec<Value> = rows
         .into_iter()
         .flatten()
         .filter_map(|t| serde_json::from_str(&t).ok())
+        .collect();
+    // a fork hooks its step through `_drgnx/before_tool` and then asks at the seam: one step (one call), two rows.
+    // The seam's row stays (it has the matrix's cell); a step only the adapter hooked keeps its own.
+    let seam_tools: Vec<&Value> = all
+        .iter()
+        .filter(|r| r["at"] == "seam" && r["point"] == "before-tool")
+        .map(|r| &r["tool"])
+        .collect();
+    Ok(all
+        .iter()
+        .filter(|r| {
+            !(r["at"] == "adapter"
+                && r["point"] == "before-tool"
+                && seam_tools.contains(&&r["tool"]))
+        })
+        .cloned()
         .collect())
 }
 

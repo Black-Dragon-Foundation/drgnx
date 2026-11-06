@@ -21,8 +21,8 @@
    ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
    (anthropic :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
               :auth x-api-key :caps () :messages t)
-   ;; Kimi and DeepSeek on their own Anthropic-compatible APIs (Claude Code agents only; Bearer through
-   ;; ANTHROPIC_AUTH_TOKEN, as both vendors' Claude Code guides have it)
+   ;; Kimi and DeepSeek on their own Anthropic-compatible APIs, for their own agents (Kimi Code, DeepSeek Harness)
+   ;; through the gateway; Bearer, as both vendors' guides have it
    (moonshot :name "Moonshot (Kimi)" :kind anthropic :url "https://api.moonshot.ai/anthropic" :key-env "MOONSHOT_API_KEY"
              :caps () :messages t)
    (deepseek :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
@@ -49,23 +49,27 @@
 
  ;; Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
  ;; (`drgnx-ai-agent-env'); :job-safe, that a job may run it (`drgnx-job-safe-p': Claude Code, whose job sessions
- ;; ignore a repository's own settings).
+ ;; ignore a repository's own settings).  A vendor with an agent of its own runs that agent (Kimi Code, DeepSeek
+ ;; Harness), never Claude Code on the vendor's endpoint; Claude Code on a model that is not Claude gets no tool search,
+ ;; which such models do not speak.
  (drgnx-agents-builtin-profiles
   (("claude" :command ("claude-agent-acp") :mode queue :job-safe t
     :doc "Claude through the unmodified agent (subscription or API key)")
    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
     :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-   ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-ollama
+   ("claude (Ollama)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue :job-safe t
+    :ai claude-ollama
     :doc "Claude Code on a local Ollama model")
-   ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-moonshot :model "kimi-k3"
-    :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
-   ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-deepseek :model "deepseek-v4-pro"
-    :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
-   ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-    :model "moonshotai/kimi-k3"
+   ("kimi" :command ("kimi" "acp") :mode queue :provider kimi :ai kimi-moonshot :model "kimi-k3"
+    :doc "Kimi Code, Moonshot's own agent, on Kimi through Moonshot's API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
+   ("deepseek" :command ("dsh" "--profile" "acp") :mode queue :provider deepseek :ai dsh-deepseek
+    :model "deepseek-v4-pro"
+    :doc "DeepSeek Harness, DeepSeek's own agent, on DeepSeek through its API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
+   ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
     :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
-   ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-    :model "deepseek/deepseek-v4-pro"
+   ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "deepseek/deepseek-v4-pro"
     :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")))
 
  ;; The strict defaults: every `:on-error strict' setting, the value the runtime uses when settings.el does not read.

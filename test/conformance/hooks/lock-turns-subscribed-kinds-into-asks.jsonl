@@ -9,7 +9,7 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
-{"do": "file", "path": "$ROOT/acp.log", "contains": "\"ask\":[\"Bash\"]", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"ask\":[\"Bash\",\"BashOutput\",\"KillShell\"]", "within_ms": 15000}
 {"do": "file_grep", "paths": ["$ROOT/acp.log"], "absent": "\"allow\":["}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "hooked": {"before_tool": ["execute"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}

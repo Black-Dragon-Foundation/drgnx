@@ -1177,6 +1177,60 @@ fn make_login_dir(p: &Path) -> Result<(), Refusal> {
     }
 }
 
+/// The lock's read-only files ([`crate::agents::lock::LaunchPlan::ro_files`]): one in the session dir RUN (the agent
+/// reads it and never writes it, on every target) is written there; one elsewhere is written to `lock/N-NAME` in
+/// SCRATCH and bound read-only at its path, which only the full tier can do: on another target the launch is refused,
+/// since the lock would not hold.
+fn lock_files(
+    plan: &crate::agents::lock::LaunchPlan,
+    run: &Path,
+    scratch: &Path,
+    target: gleipnir::Target,
+) -> Result<Vec<gleipnir::Bind>, Refusal> {
+    let setup = |path: &Path, message: String| Refusal {
+        rule: Rule::Setup,
+        path: Some(path.to_path_buf()),
+        message,
+    };
+    let write = |path: &Path, bytes: &[u8]| -> Result<(), Refusal> {
+        if let Some(parent) = path.parent() {
+            paths::private_dir(parent)
+                .map_err(|e| setup(parent, format!("{}: {e}", parent.display())))?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, bytes)
+            .and_then(|()| std::fs::rename(&tmp, path))
+            .map_err(|e| setup(path, format!("{}: {e}", path.display())))
+    };
+    let mut binds = Vec::new();
+    for (i, (dest, bytes)) in plan.ro_files.iter().enumerate() {
+        if dest.starts_with(run) {
+            write(dest, bytes)?;
+        } else if target == gleipnir::Target::LinuxBwrap {
+            let name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let source = scratch.join("lock").join(format!("{i}-{name}"));
+            write(&source, bytes)?;
+            binds.push(gleipnir::Bind {
+                mode: gleipnir::Mode::Ro,
+                source,
+                dest: dest.clone(),
+            });
+        } else {
+            return Err(setup(
+                dest,
+                format!(
+                    "the provider's lock binds {} read-only, which needs the sandbox's full tier",
+                    dest.display()
+                ),
+            ));
+        }
+    }
+    Ok(binds)
+}
+
 /// A session's spec ([`session_spec`]) and the program it runs ([`Toolchain::program`]).
 #[derive(Debug, Clone)]
 pub struct SessionSpec {
@@ -1267,6 +1321,7 @@ pub fn session_spec(
         })
         .collect();
     binds.extend(login_binds);
+    binds.extend(lock_files(plan, &run, scratch, target)?);
     let hub = run.join("hub.sock");
     // served by the session's provider proxy (`agents::net`), bound before the spawn
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);
@@ -1323,6 +1378,10 @@ pub fn session_spec(
                     "ANTHROPIC_BASE_URL".into(),
                     format!("http://127.0.0.1:{port}"),
                 ));
+                // and every other variable the CLI reads it from (Kimi Code's, DeepSeek Harness's)
+                for k in &plan.gateway_url_env {
+                    vars.push((k.clone(), format!("http://127.0.0.1:{port}")));
+                }
                 for k in ["NO_PROXY", "no_proxy"] {
                     vars.push((k.into(), "127.0.0.1,localhost".into()));
                 }
@@ -1358,7 +1417,7 @@ pub fn session_spec(
     // a gateway session's base URL is its relay's, whatever else set one; a browser session's endpoint is the hub's
     // alone, and it gets no display and no runtime dir of the user's
     let hubs_own = |k: &str| {
-        (plan.gateway && k == "ANTHROPIC_BASE_URL")
+        (plan.gateway && (k == "ANTHROPIC_BASE_URL" || plan.gateway_url_env.iter().any(|g| g == k)))
             || (browser.is_some()
                 && (crate::browser::ENDPOINT_ENV.contains(&k) || NO_DISPLAY_ENV.contains(&k)))
     };

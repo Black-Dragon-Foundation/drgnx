@@ -312,18 +312,22 @@ Agent profiles can take their provider from the registry; the key is resolved wh
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
-- **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
-  Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
-  `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
-  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token for an API key; Kimi's coding
-  membership is a subscription on a different endpoint, which these profiles do not use.
-- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
-  (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
+- **kimi** and **deepseek** — the vendors' own agents, Kimi Code and DeepSeek Harness, on the vendor's own
+  Anthropic-compatible API (`:ai kimi-moonshot`, `dsh-deepseek`), through the gateway: the agent gets the gateway's
+  address and its session token (Kimi Code's `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_API_KEY`, DeepSeek Harness's
+  `DEEPSEEK_BASE_URL` and `DEEPSEEK_API_KEY`), and the gateway holds your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or
+  auth-source for `api.moonshot.ai` or `api.deepseek.com`). The vendor bills you per token for an API key; Kimi's
+  coding membership is a subscription on a different endpoint, which these profiles do not use. The former `claude
+  (Kimi)` and `claude (DeepSeek)` (Claude Code on those APIs, `:ai claude-moonshot`, `claude-deepseek`) are retired:
+  a profile of yours that names one still starts, and says which built-in replaces it.
+- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models in Claude Code through
+  OpenRouter (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key; they set
+  `ENABLE_TOOL_SEARCH=false`, as does `claude (Ollama)`.
 
 A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
 `ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
-`claude-deepseek` profile without a `:model` does not start. The built-in names are data in
+(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `kimi-moonshot`,
+`dsh-deepseek`, `claude-moonshot` or `claude-deepseek` profile without a `:model` does not start. The built-in names are data in
 `drgnx-agents-builtin-profiles`: copy a profile into `drgnx-agents-profiles` to use another model (the data is `settings/runtime-defaults.el`). Nothing about the route is
 written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
 these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
@@ -342,7 +346,7 @@ Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` th
 DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
 `drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
 
-In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `kimi-moonshot` or `dsh-deepseek` gives any profile
 that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
