@@ -15,7 +15,7 @@
  (:file "core/drgnx-onboard.el" :fn drgnx-onboard--ask-test :what write-region :why "a temporary file: the greeting project of the ask test" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--module-specs :what read-site :why "Lisp source: module source read for its package specs" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--clear-stale-lock :what rename-file :why "its own lock protocol: the sync lock" :until never)
- (:file "core/drgnx-pkg.el" :fn drgnx-pkg--take-sync-lock :what write-region :why "its own lock protocol: the sync lock" :until never)
+ (:file "core/drgnx-pkg.el" :fn drgnx-pkg--try-sync-lock :what write-region :why "its own lock protocol: the sync lock" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--recover :what rename-file :why "a directory move: generations" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg--swap-in :what rename-file :why "a directory move: generations" :until never)
  (:file "core/drgnx-pkg.el" :fn drgnx-pkg-snapshot :what rename-file :why "a directory move: generations" :until never)

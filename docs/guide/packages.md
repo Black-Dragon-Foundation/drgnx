@@ -12,6 +12,9 @@ drgnx sync --offline        only the lock and the cache — no network
 drgnx sync --seed DIR       first copy the packages of another Emacs (e.g. ~/.config/emacs/elpa), then sync
 drgnx sync --prune          also remove the packages the manifest no longer needs (listed; rollback restores them)
 drgnx sync --prune --dry-run  only list what --prune would remove
+drgnx sync --add NAME[@V]…  install packages you ask for (marked as yours in the lock); all of them or nothing
+drgnx sync --remove NAME…   remove packages and what only they needed; refused while something else asks for them
+drgnx sync --pending        run the queue of the Extensions view's clicks as one sync (add --wait to queue behind a running one)
 drgnx upgrade               the newest versions; if they break, the previous generation comes back
 drgnx rollback [N]          the packages of generation N (default: the one before the current one)
 drgnx generations           the generations kept (five)
@@ -78,6 +81,41 @@ external module asked for count as named. It is never automatic, it lists what i
 nothing while a package is missing, and it first keeps a generation of the state before, so `drgnx rollback`
 brings them back. `drgnx sync --prune --dry-run` only prints `would prune: …` (from the packages installed now and
 the current manifest) and changes nothing.
+
+### What you asked for
+
+A package you install yourself — `drgnx sync --add magit`, or Install in the Extensions view, which runs it — is
+recorded as yours on its lock entry, `:wanted user`, in the same lock write as the install. Those entries are the
+manifest's fourth source, so the next sync keeps them, `--prune` never removes them, and a rollback brings the wish
+back together with the package (generations hold the lock). The mark survives every rewrite of the entry (an upgrade,
+a reinstall from the cache); `drgnx lock --ship` never copies it, so a new user starts with none of the maintainer's.
+`drgnx sync --add NAME@VERSION` installs that version when an archive or the cache still has it.
+
+`--add`, `--remove` and `--pending` runs are **all or nothing**: when anything the run asked for cannot be had — a
+name no archive has, a package it needs, a refused removal — the run stops before the swap and prints sync's own
+`MISSING …` lines and "nothing was changed": not the packages, not the lock, not its marks, and no generation. A package
+missing outside the request (a module's package an archive dropped) does not stop it: it is reported as `MISSING`,
+and the lock and the generation are written as usual (the missing package keeps its lock entry, if it had one).
+
+`drgnx sync --remove NAME` removes NAME and the packages only it needed (not those another installed package still
+needs), after a generation of the state before (`before remove NAME`), so `drgnx rollback` undoes it. It is refused,
+changing nothing, while something else asks for the package: "module extra/magit needs it" (turn the module off
+instead), "packages.eld lists it", "config.el asks for it (:ensure)" (it would come back while that line stays), or
+"needed by forge". A package installed by hand or seeded (its lock entry has no hash) stays unless you name it. The
+generation notes say what changed: `install magit`, `install magit, corfu`, `remove eat`, `before remove eat`.
+
+An older drgnx (after `drgnx update --back`) rewrites the lock without the marks; sync again with this one, or add
+`:wanted user` back by hand.
+
+### The queue
+
+The Extensions view never installs by itself: a click writes an entry to `~/.local/state/drgnx/extensions/pending.eld`
+(`(:next N :entries ((:ticket N :add NAME [:version V]) (:ticket N :remove NAME) …))`) and starts a job running `drgnx
+sync --pending --wait`. That run takes the sync lock — `--wait` waits while another sync, upgrade or rollback holds it,
+trying again every half second, instead of refusing — then takes the whole queue under it, prints `start tickets: 3 4`,
+and runs every entry as one sync (one generation). So clicks made while a sync runs batch into the next round, and the
+queue survives the editor closing. A ticket is never given twice; Cancel takes an entry out while it is still queued.
+`drgnx sync --pending` with an empty queue prints `nothing queued` and changes nothing.
 
 ### Packages from Git
 
@@ -206,6 +244,10 @@ was (a crash between the two renames is repaired by the next sync). Each success
 and the lock as a generation (`~/.local/share/drgnx/generations/N`, reflink copies where the file system has them —
 on a file system without them, every sync copies the packages twice; five kept).
 
+A run swaps the new directory in, writes its activation file, the lock and the generation, and only then compiles
+to native code: a run stopped during native compilation (Cancel, the job's time box) leaves a consistent generation
+whose files load byte-compiled, and the next sync compiles what is missing.
+
 `drgnx rollback` copies a generation back into the same path, so natively compiled files stay valid — nothing
 is recompiled. `drgnx upgrade` snapshots the packages first, takes every package to the archive's newest version,
 then runs a smoke test (a fresh Emacs that activates drgnx's packages and loads each package of the manifest that
@@ -215,8 +257,8 @@ NonGNU ELPA releases (magit, …) on their newest release rather than moving the
 priorities, or `:archive-priorities ()`, to take the newest version wherever it is.
 
 A running drgnx keeps the packages it loaded: **restart it** after a sync, upgrade or rollback (the command says
-so). One writer at a time: a sync, upgrade or rollback refuses while another runs; a lock left by one that died is
-taken over. The lock (`~/.local/share/drgnx/sync.lock`) names its process by pid and start time, so a pid reused
+so). One writer at a time: a sync, upgrade or rollback refuses while another runs (`drgnx sync --wait` waits for it
+instead); a lock left by one that died is taken over. The lock (`~/.local/share/drgnx/sync.lock`) names its process by pid and start time, so a pid reused
 after a reboot does not hold it, and of two commands taking over the same stale lock only one gets it.
 
 ## When something breaks
@@ -292,7 +334,11 @@ satisfies left out (each test has its own shipped lock in a temp dir, never the 
 Emacs itself (a 200 is saved byte for byte; a 404 saves nothing). `test/unit/pkg-melpa-pin-test.el`: the lock recording an archive's commit and URL, and a version gone from the archive rebuilt from its commit in a local Git repository (also from an empty directory, and before a package that needs it), reported missing and kept when the lock has no commit, the commit cannot be had or the URL is no repository, left alone while the archive serves it, soft for the shipped lock, not attempted offline. `test/unit/pkg-shipped-lock-test.el`: the shipped lock as soft pins for a module turned on later (its version, its dependencies, the user's lock winning, an unserved pin falling back, a package installed by hand left alone, no effect on upgrade, `--offline` or `--seed`, a Git package at the shipped commit) and the coverage test (every package a module names is in `etc/drgnx.lock.eld`). `test/unit/pkg-priorities-test.el`: the default archive priorities (an upgrade keeps a NonGNU release over a newer MELPA snapshot, still takes a newer release, a MELPA-only dependency still resolves, a priority of the user's own wins). `test/unit/pkg-git-test.el`: packages from local Git
 repositories — the commit and dependencies, the lock holding the commit until upgrade, offline from the cached clone,
 a missing `:rev`, no version header, a module's package with drgnx's Git source, an offline first sync naming the Git
-package it could not get and installing the rest.
+package it could not get and installing the rest. `test/unit/pkg-wants-test.el` runs the CLI itself as batch children
+(`test/fixtures/pkg-child-fixture.el` gives each its sandbox, HOME included, and parks it at a state the test waits
+for): `--add` marking only on success, a partly missing request changing nothing, removals refused or taking only what
+they alone needed, two `--pending --wait` runs never taking the same ticket, the shipped lock without wants, a rollback
+bringing its wants back, and a run killed during native compilation leaving a consistent generation.
 
 ## Settings of installed packages
 

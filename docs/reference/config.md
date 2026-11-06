@@ -111,11 +111,11 @@ Your own layouts; the built-in ones are not stored.
 
 Folder: config. Format: 1. Read: when it changes. On a mistake: drgnx sync stops until it is fixed; nothing is changed.
 
-Every installed package, pinned by drgnx sync.  A mistake in it stops the sync, and drgnx never replaces the file.
+Every installed package, pinned by drgnx sync, and `:wanted user' on the packages you asked for (drgnx sync --add).  A mistake in it stops the sync, and drgnx never replaces the file.
 
 | Key | Type | Required | What |
 | --- | --- | --- | --- |
-| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary) | yes | What is installed: one entry per package |
+| `:packages` | list of (NAME :version :archive :kind :file :sha256 :size :requires :summary [:wanted user]) | yes | What is installed: one entry per package |
 | `:from-shipped` | boolean | no | Copied from the lock drgnx ships; the first sync completes it |
 
 ## modules.eld
