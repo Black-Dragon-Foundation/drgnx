@@ -231,18 +231,20 @@ foreground and background are the same colour on this terminal, in the default t
       (should (nth 3 r)))
     (should-not (drgnx-tty-session-eval s '(and (get-buffer "*drgnx: browser*") (get-buffer-window "*drgnx: browser*") t)))))
 
-(ert-deftest drgnx-tty-colours/the-live-view-says-it-cannot-show-here ()
-  ;; the Live view is an image of the page: a text saying so, and the browser for agents is not started
+(ert-deftest drgnx-tty-colours/the-live-view-says-why-it-is-empty-here ()
+  ;; the Live view waits for a later update: in a terminal too it opens, says so, and connects to nothing
   (drgnx-tty-session-with (s :daemon t)
-    (drgnx-tty-session-client s)
-    (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
-    (let ((r (drgnx-tty-colours-test--in-client
-              s '(condition-case err (progn (call-interactively #'drgnx-live-view) 'shown)
-                   (user-error (cadr err))
-                   (error (list 'error err))))))
-      (should (stringp r))
-      (should (string-match-p "needs a graphical frame" r)))
-    (should-not (drgnx-tty-session-eval s '(or (and (drgnx-live-running) t) (and (get-buffer "*drgnx live*") t))))))
+    (let ((c (drgnx-tty-session-client s)))
+      (drgnx-tty-session-wait s '(fboundp 'drgnx-live-view) 20)
+      (let ((r (drgnx-tty-colours-test--in-client
+                s '(condition-case err
+                       (let ((buf (call-interactively #'drgnx-live-view)))
+                         (list (eq (window-frame (get-buffer-window buf t)) (selected-frame))
+                               (with-current-buffer buf (and (string-search drgnx-live--dormant-text (buffer-string)) t))
+                               (with-current-buffer buf drgnx-live--ws)))
+                     (error (list 'error err))))))
+        (should (equal r '(t t nil))))
+      (drgnx-tty-session-wait-screen c "arrives with a later drgnx update"))))
 
 (provide 'drgnx-tty-colours-test)
 ;;; colours-test.el ends here
