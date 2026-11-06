@@ -47,6 +47,7 @@
 (declare-function drgnx-git-cached-root "drgnx-git")
 (declare-function drgnx-git-branch "drgnx-git")
 (declare-function drgnx-git-roots-known "drgnx-git")
+(defvar drgnx-notice--needs-you)
 (declare-function drgnx-statusbar--measure-fn "drgnx-statusbar")
 (declare-function drgnx-statusbar--layout-key "drgnx-statusbar")
 (defvar drgnx-look-bars-measure-function)
@@ -151,15 +152,65 @@ and `equal' ignores text properties, so a new width would have left the old gap 
                        (and drag (fboundp 'mouse-drag-frame-move) 'mouse-drag-frame-move)
                        (and drag "Drag to move the window")))
 
+(defun drgnx-topline--limit (width)
+  "The columns (or units) the project and the branch may take together on a line WIDTH wide."
+  (max 8 (- width 4)))
+
 (defun drgnx-topline--mark (buffer width)
-  "The mark and the place: `◆ PROJECT · BRANCH' for BUFFER, cut to fit WIDTH columns."
+  "The mark and the project: `◆ PROJECT' for BUFFER, cut to fit WIDTH."
   (let* ((project (or (drgnx-topline--project buffer) "drgnx"))
-         (branch (drgnx-topline--branch buffer))
          (text (concat " " (drgnx-topline--text (drgnx-topline--glyph 'diamond "<>") 'drgnx-topline) " "
-                       (drgnx-topline--text project 'drgnx-topline-strong)
-                       (and branch (concat (drgnx-topline--text (drgnx-topline--glyph 'sep " | ") 'drgnx-topline)
-                                           (drgnx-topline--text branch 'drgnx-topline))))))
-    (drgnx-topline--item 'drgnx-topline-mark (truncate-string-to-width text (max 8 (- width 4)) nil nil t))))
+                       (drgnx-topline--text project 'drgnx-topline-strong))))
+    (drgnx-topline--item 'drgnx-topline-mark (truncate-string-to-width text (drgnx-topline--limit width) nil nil t))))
+
+(defun drgnx-topline--branch-item (buffer room &optional chip)
+  "The branch chip for BUFFER: ` · BRANCH' (a boxed chip in a pixel line, CHIP non-nil), cut to ROOM columns; nil
+when BUFFER has no branch or ROOM is too small to show a part of it."
+  (when-let* ((branch (drgnx-topline--branch buffer))
+              ((>= room 4)))
+    (drgnx-topline--item
+     'drgnx-topline-branch
+     (truncate-string-to-width
+      (if chip
+          (concat " " (propertize (concat " " (drgnx-topline--glyph 'branch "") " " branch " ") 'face 'drgnx-chip))
+        (concat (drgnx-topline--text (drgnx-topline--glyph 'sep " | ") 'drgnx-topline)
+                (drgnx-topline--text branch 'drgnx-topline)))
+      room nil nil t)
+     nil "The branch")))
+
+(defvar drgnx-topline-agents-function nil
+  "A function with no arguments that gives the number of agents at work, or nil: the title row's agents chip shows
+that number when it is positive.  The agents module sets it; the row reads it on redisplay, so it must be cheap.")
+
+(defun drgnx-topline--attention-count ()
+  "How many things wait on you (the notice model's count).  A memo key: reads a variable."
+  (if (boundp 'drgnx-notice--needs-you) drgnx-notice--needs-you 0))
+
+(defun drgnx-topline--agents-count ()
+  "How many agents work (`drgnx-topline-agents-function'), 0 without one.  A memo key."
+  (if drgnx-topline-agents-function (or (funcall drgnx-topline-agents-function) 0) 0))
+
+(defun drgnx-topline--chips ()
+  "The chips at the right of the row: `N needs you' (it opens what waits) and the agents at work, each only while its
+count is positive."
+  (let ((need (drgnx-topline--attention-count)) (agents (drgnx-topline--agents-count)))
+    (append
+     (when (> need 0)
+       (list (drgnx-topline--item 'drgnx-topline-attention
+                                  (propertize (format " %d needs you " need) 'face 'drgnx-status-needs-you)
+                                  (and (fboundp 'drgnx-notice-needs-you-click) 'drgnx-notice-needs-you-click)
+                                  "Waiting on you: click for the newest, or the Notices list")))
+     (when (> agents 0)
+       (list (drgnx-topline--item 'drgnx-topline-agents
+                                  (drgnx-topline--text (format " %d %s " agents (if (= agents 1) "agent" "agents"))
+                                                       'drgnx-topline-strong)
+                                  (and (fboundp 'drgnx-agents-ui-view) 'drgnx-agents-ui-view)
+                                  "Agents at work"))))))
+
+(defun drgnx-topline-toggle-maximized ()
+  "Maximise the selected frame, or restore it (a double click on the title row's empty space)."
+  (interactive)
+  (toggle-frame-maximized))
 
 (defun drgnx-topline--hint ()
   "The hint's items: the search glyph, then each of the three keys with its label (a command without a key is
@@ -180,7 +231,9 @@ left out), each one running its command.  nil when none has a key."
               items)))
     (when items
       (cons (drgnx-topline--item 'drgnx-topline-search
-                                 (drgnx-topline--text (concat (drgnx-topline--glyph 'search "/") " ") 'drgnx-topline))
+                                 (drgnx-topline--text (concat (drgnx-topline--glyph 'search "/") " ") 'drgnx-topline)
+                                 (when-let* ((cmd (drgnx-commands-get 'palette))) (drgnx-cmd-command cmd))
+                                 "Search: the command palette")
             (nreverse items)))))
 
 (defun drgnx-topline--controls ()
@@ -214,14 +267,16 @@ are not `equal', and `equal' ignores the text properties the width is in."
 The hint is centred on the frame, the controls sit at the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (space (max 1 (funcall measure " ")))
-         (controls (and drawn (drgnx-topline--controls)))
+         (controls (append (drgnx-topline--chips) (and drawn (drgnx-topline--controls))))   ; the right end
          (controls-px (drgnx-topline--width controls measure))
-         (mark (drgnx-topline--mark buffer (/ (- pixels controls-px) space)))   ; never under the controls
-         (mark-px (funcall measure (nth 2 mark)))
+         (cols (/ (- pixels controls-px) space))                ; never under the controls
+         (mark (drgnx-topline--mark buffer cols))
+         (branch (drgnx-topline--branch-item buffer (- (drgnx-topline--limit cols) (string-width (nth 2 mark))) t))
+         (mark-px (+ (funcall measure (nth 2 mark)) (if branch (funcall measure (nth 2 branch)) 0)))
          (hint (with-current-buffer buffer (drgnx-topline--hint)))
          (hint-px (drgnx-topline--width hint measure))
          (hint (and hint (<= (+ mark-px hint-px controls-px (* 4 space)) pixels) hint))
-         (items (list mark)) (column mark-px))
+         (items (if branch (list mark branch) (list mark))) (column mark-px))
     (when hint                                           ; centred
       (let ((gap (max (* 2 space) (- (/ (- pixels hint-px) 2) column))))
         (setq items (append items (cons (drgnx-topline--pixel-gap 'drgnx-topline-gap-1 gap drawn) hint))
@@ -238,22 +293,22 @@ PIXELS, the frame's width in pixels: lay out in pixels instead (`drgnx-topline--
 
 (defun drgnx-topline--build-columns (buffer width drawn)
   "The items for BUFFER on a frame WIDTH columns wide (a terminal); DRAWN as in `drgnx-topline--build'."
-  (let* ((controls (and drawn (drgnx-topline--controls)))
+  (let* ((controls (append (drgnx-topline--chips) (and drawn (drgnx-topline--controls))))   ; the right end
          (controls-w (drgnx-topline--width controls))
          (mark (drgnx-topline--mark buffer (- width controls-w)))   ; never under the controls
+         (branch (drgnx-topline--branch-item buffer (- (drgnx-topline--limit (- width controls-w))
+                                                       (string-width (nth 2 mark)))))
          (hint (with-current-buffer buffer (drgnx-topline--hint)))
          (hint-w (drgnx-topline--width hint))
-         (mark-w (string-width (nth 2 mark)))
+         (mark-w (+ (string-width (nth 2 mark)) (if branch (string-width (nth 2 branch)) 0)))
          (hint (and hint (<= (+ mark-w hint-w controls-w 4) width) hint)))
-    (let ((column mark-w) (items (list mark)))
+    (let ((column mark-w) (items (if branch (list mark branch) (list mark))))
       (when hint                                         ; centred
         (let ((gap (max 2 (- (/ (- width hint-w) 2) column))))   ; never touching the mark
           (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-1 gap drawn) hint))
                 column (+ column gap hint-w))))
-      (if drawn                                          ; at the right end
-          (setq items (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w column) t) controls)))
-        (setq items (append items (list (drgnx-topline--gap 'drgnx-topline-gap-2 (- width column) nil)))))   ; one background to the edge
-      items)))
+      ;; one background to the edge, the chips and the controls at the right end (the empty part drags a drawn title)
+      (append items (cons (drgnx-topline--gap 'drgnx-topline-gap-2 (- width controls-w column) drawn) controls)))))
 
 ;;;; The memo: a redisplay that changes nothing reuses the line
 
@@ -286,7 +341,9 @@ this file alone.")
                           (buffer-local-value 'default-directory buffer)
                           (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer))
                           (buffer-local-value 'buffer-file-name buffer)
-                          width drawn pixels drgnx-face-glyphs (and (framep object) (drgnx-statusbar--layout-key (frame-selected-window object)))
+                          width drawn pixels drgnx-face-glyphs
+                          (drgnx-topline--attention-count) (drgnx-topline--agents-count)
+                          (and (framep object) (drgnx-statusbar--layout-key (frame-selected-window object)))
                           (drgnx-epoch drgnx-topline--git-epoch)
                           (and (fboundp 'drgnx-git-roots-known) (drgnx-git-roots-known))
                           ;; one pair per entry of `drgnx-topline--hint-commands'
@@ -464,10 +521,13 @@ text frame, whose size and parameters (the top line's among them) the window's f
   (unless (drgnx-timer-active-p 'topline-first-note)     ; the project of the editor that is open now, once, when idle
     (drgnx-timer-start 'topline-first-note 0.5 #'drgnx-topline--first-note :idle t :owner 'ui/face))
   (tab-bar-mode 1)
+  (drgnx-module-define-key 'tab-bar-map [double-mouse-1] #'drgnx-topline-toggle-maximized)
   (drgnx-topline--fit-all))
 
 (defun drgnx-topline--off ()
   "Turn the line off (idempotent), putting back what it changed."
+  (when (eq (lookup-key tab-bar-map [double-mouse-1]) #'drgnx-topline-toggle-maximized)
+    (define-key tab-bar-map [double-mouse-1] nil))
   (drgnx-state-unsubscribe 'frame-resized #'drgnx-topline--resized)
   (drgnx-state-unsubscribe 'frame-added #'drgnx-topline--fit)
   (drgnx-state-unsubscribe 'frame-resized #'drgnx-topline--fit)
@@ -508,6 +568,9 @@ tab bar was already on before this module (then it is theirs)."
   "Turn the top line on (called by the module ui/face), with its epochs and memo active (`drgnx-topline--declared':
 their watchers go, and the memo empties, when `ui/face' is turned off)."
   (apply #'drgnx-memo-activate drgnx-topline--declared)
+  (drgnx-command-define 'title-row-maximize :category "Window" :title "Maximize or Restore Window"
+                        :command #'drgnx-topline-toggle-maximized
+                        :doc "Maximise the window, or restore it (also a double click on the empty part of the title row)")
   (setq drgnx-topline--active t)
   (drgnx-topline--apply))
 

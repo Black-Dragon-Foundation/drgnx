@@ -118,5 +118,70 @@ segment showing its `mode-name'; it does not show the stock mode line."
           (should (string-match-p "Special" (substring-no-properties bar)))
           (should (eq 'mode (get-text-property (string-match "Special" bar) 'drgnx-statusbar-segment bar))))))))
 
+(defvar drgnx-notice--needs-you)
+(defvar drgnx-topline-agents-function)
+
+(ert-deftest drgnx-look-bars/title-row-items ()
+  "Pattern D: the title row's items, in order: the project, the branch chip, the search box (it opens the palette),
+the attention chip (\"1 needs you\"), the agents chip, then the window controls when drgnx draws the title."
+  (drgnx-topline-test--with 'vscode
+    (setq-local vc-mode " Git-main")
+    (let ((drgnx-notice--needs-you 1) (drgnx-topline-agents-function (lambda () 2))
+          (order '(drgnx-topline-mark drgnx-topline-branch drgnx-topline-search drgnx-topline-attention
+                                      drgnx-topline-agents drgnx-topline-minimize drgnx-topline-maximize
+                                      drgnx-topline-close)))
+      (let* ((items (drgnx-topline--build (current-buffer) 160 t))
+             (keys (mapcar #'car items)))
+        (should (equal (seq-filter (lambda (k) (memq k order)) keys) order))
+        (should (string-match-p "1 needs you" (nth 2 (assq 'drgnx-topline-attention items))))
+        (should (string-match-p "2" (nth 2 (assq 'drgnx-topline-agents items))))
+        (should (string-match-p "main" (nth 2 (assq 'drgnx-topline-branch items))))
+        (should (eq 'drgnx-topline-test-palette (nth 3 (assq 'drgnx-topline-search items)))))
+      ;; nothing waits and no agent runs: no chips; no drawn title: no controls
+      (let* ((drgnx-notice--needs-you 0) (drgnx-topline-agents-function (lambda () 0))
+             (keys (mapcar #'car (drgnx-topline--build (current-buffer) 160 nil))))
+        (should-not (memq 'drgnx-topline-attention keys))
+        (should-not (memq 'drgnx-topline-agents keys))
+        (should-not (memq 'drgnx-topline-close keys))))))
+
+(ert-deftest drgnx-look-bars/double-click-maximises ()
+  "Pattern D: a double click on the title row's empty space is bound to the command Maximize or Restore Window
+\(`title-row-maximize' in the registry), which toggles the frame's maximised state."
+  (drgnx-topline-test--with 'vscode
+    (drgnx-topline--on)
+    ;; the tab bar's keymap (`tab-bar-map'); the global map's [tab-bar] entry is a menu item that builds a new keymap
+    ;; for each lookup, so a binding put there would not stay
+    (should (eq 'drgnx-topline-toggle-maximized (lookup-key tab-bar-map [double-mouse-1])))
+    (let (called)
+      (cl-letf (((symbol-function 'toggle-frame-maximized) (lambda (&optional _f) (setq called t))))
+        (drgnx-topline-toggle-maximized))
+      (should called))
+    (drgnx-topline--off)
+    (should-not (eq 'drgnx-topline-toggle-maximized (lookup-key tab-bar-map [double-mouse-1])))))
+
+(ert-deftest drgnx-look-bars/title-bar-default-needs-the-shell ()
+  "Pattern D: drgnx draws the title bar by default only on GNOME's window manager and only when the shell can keep an
+undecorated frame's margins and corners (`nhwl-toplevel-chrome-p'); with the predicate unbound, or under another
+window manager, the default is `dark'."
+  (should (eq 'dark (drgnx-face-title-bar-default)))
+  (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+            ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
+    (should (eq 'drgnx (drgnx-face-title-bar-default))))
+  (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) t))
+            ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'i3)))
+    (should (eq 'dark (drgnx-face-title-bar-default))))
+  (cl-letf (((symbol-function 'nhwl-toplevel-chrome-p) (lambda (&optional _f) nil))
+            ((symbol-function 'drgnx-platform-wm) (lambda (&optional _f) 'gnome)))
+    (should (eq 'dark (drgnx-face-title-bar-default)))))
+
+(ert-deftest drgnx-look-bars/start-page-in-the-type-faces ()
+  "Pattern D: the start page's name is in the title type face, its sentences in the UI text face, and its buttons
+are in sentence case."
+  (load (expand-file-name "modules/ui/drgnx-start" drgnx-dir) nil t)
+  (should (memq 'drgnx-ui-title (ensure-list (face-attribute 'drgnx-start-title :inherit nil nil))))
+  (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-start-quiet :inherit nil nil))))
+  (should (equal (mapcar #'cadr drgnx-start--buttons)
+                 '("Open a folder…" "Open the work graph" "All keys" "Don't show this again"))))
+
 (provide 'look-bars-layout-test)
 ;;; look-bars-layout-test.el ends here

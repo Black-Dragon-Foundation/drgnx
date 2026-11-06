@@ -45,6 +45,10 @@ the dark bar, a light theme for the light one, so changing the theme in Preferen
 | `drgnx-face-title-bar` | `dark` | `dark`: the system's title bar in the variant of your theme. `system`: drgnx leaves the title bar alone. `drgnx`: drgnx draws the title bar itself (see below). |
 | `drgnx-face-gtk-theme` | `"Adwaita"` | The GTK theme whose dark (or light) variant the bar uses: GTK is started with `GTK_THEME=Adwaita:dark`. Give the name of a GTK theme you have installed, without a variant: drgnx adds `:dark` or `:light`. Letters, digits and `. _ + -` only. |
 
+`drgnx-face-title-bar-default` answers what the setting should be on this desktop: `drgnx` under GNOME's window
+manager when Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+(`nhwl-toplevel-chrome-p`), else `dark`; never under a tiling window manager.
+
 What happens depends on where drgnx runs:
 
 - **Linux, X11:** the window gets the `_GTK_THEME_VARIANT` property, at once and again when the theme changes.
@@ -312,7 +316,13 @@ A quiet line along the top of the frame says where you are and where to start:
 
 On the left, the project and branch of the editor you used last (the folder of the project's root, and the same
 branch the status bar shows, so a new file git does not track yet has it too; with no project it says `drgnx`, with
-no git it leaves the branch out).
+no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
+opens the command palette. At the right end, before the window controls, two chips show while they have something to
+say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
+the agents module tells the row how many through `drgnx-topline-agents-function`).
+
+A double click on the row's empty part maximises the window or restores it (**Maximize or Restore Window**,
+`title-row-maximize`, in the palette too).
 In the middle, the three keys that open everything, as the profile you chose has them: **Quick Open** (files),
 the **Command Palette** (commands) and **Keyboard Shortcuts** (all keys). Each one is a button: click `C-S-p
 commands` and the palette opens. A command with no key of its own in your profile shows the key Emacs gives it
@@ -411,9 +421,10 @@ value; Open Help has the full story.
 
 An empty editor tells you nothing, so drgnx fills it. **`*drgnx start*`** says what drgnx is in two lines, shows the
 three keys that open everything (the files, the commands, all keys — the same ones the top line shows, from the
-active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a Folder…**, **Open the Work
-Graph**, **All Keys** and **Don't show this again**. `Tab` and `Shift-Tab` move between the buttons, `Return` presses
-one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
+active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a folder…**, **Open the work
+graph**, **All keys** and **Don't show this again**. The page is set in the look's type faces: the name in the title
+face (`drgnx-ui-title`), the keys in the heading face, the sentences in the UI text face, muted; the labels are in
+sentence case. `Tab` and `Shift-Tab` move between the buttons, `Return` presses one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
 edge), with plain bullets before the keys. In a graphical window that shows JPEG images, the Black Dragon logo (the
 dragon, wings spread) sits above the name, on the block's left edge like every line under it: nine lines of your
 default font tall (so it grows with the font and the display's scaling), lower when a narrow window would otherwise

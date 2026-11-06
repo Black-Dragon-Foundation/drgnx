@@ -136,6 +136,24 @@ token under each of the three themes."
                                                           px (drgnx-ui-look-bars--token-rgb 'gap variant))))))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
+(ert-deftest drgnx-ui-look-bars/double-click-on-the-title-row-is-bound ()
+  "Pattern D: with the top line on, a double click in the tab bar finds Maximize or Restore Window in the keymap Emacs
+builds for the bar (the harness's synthetic clicks do not reach the tab bar's own prefix, so the binding is read, not
+clicked)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-dbl*")))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (should (eq 'tab-bar (posn-area (drgnx-uitest-posn (/ (frame-pixel-width) 2) (/ (tab-bar-height nil t) 2)))))
+          (should (eq 'drgnx-topline-toggle-maximized (key-binding [tab-bar double-mouse-1])))
+          (should (eq 'drgnx-topline-toggle-maximized (lookup-key (tab-bar-make-keymap) [double-mouse-1]))))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
 (ert-deftest drgnx-ui-look-bars/hint-centred ()
   "Pattern D: the top line's hint (a block on the `region' face, as wide as a hint) is centred on the frame within
 1 device pixel."

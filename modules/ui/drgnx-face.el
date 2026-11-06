@@ -213,6 +213,17 @@ go back when the module is turned off (`drgnx-module-set', `drgnx-module-face-sp
 draws the title bar.  Tiling ones (sway, i3, Hyprland, niri) have none to replace, and `nil', `none', `tty', `x11',
 `other-wayland' or any name not listed are not known: the title bar stays the system's.")
 
+(declare-function nhwl-toplevel-chrome-p "nhwl-win" (&optional frame))
+
+(defun drgnx-face-title-bar-default (&optional frame)
+  "The value `drgnx-face-title-bar' should have by default on FRAME (default: the selected one): `drgnx' under GNOME's
+window manager when Nidhogg's shell can keep an undecorated frame's resize margins, rounded corners and shadow
+\(`nhwl-toplevel-chrome-p', absent from other Emacs builds), else `dark'.  Never under a tiling window manager."
+  (if (and (fboundp 'nhwl-toplevel-chrome-p) (nhwl-toplevel-chrome-p frame)
+           (fboundp 'drgnx-platform-wm) (eq (drgnx-platform-wm frame) 'gnome))
+      'drgnx
+    'dark))
+
 (defvar drgnx-face--wm-noted nil
   "Non-nil once the message that the window manager is unknown (so no drawn title bar) has been shown.")
 
