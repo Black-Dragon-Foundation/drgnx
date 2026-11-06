@@ -11,6 +11,12 @@
 //!   instead).  The log is JSONL: `{"request": {method, path, headers (lower-case names), body}}` per request, then
 //!   `{"closed": true}` when the client hangs up before it was answered to the end; with `--print-closed` it also
 //!   prints `MOCK-LLM-CLOSED` then.
+//! - `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and answers `/p/ID/REST`
+//!   from a recording's `llm.jsonl` (docs/develop/recordings.md): the request's match key picks the first unused
+//!   exchange with that key, answered with its status, stored headers and chunks (chunked, each after its recorded gap
+//!   times N, default 0), ended as live ended (`dropped` and a run that died drop the connection; `client-left` waits
+//!   for the client to go).  No such exchange: 500 `x-drgnx-replay: miss`, a `replay_miss` error naming the nearest
+//!   exchange's first differing path, and a line in FILE.
 //! - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
 //!   tunnelled, anything else gets 405 (logged as `{"refused": "METHOD TARGET"}`).
 //!
@@ -69,7 +75,7 @@ fn main() {
         Some("http-serve") => http_serve(&args[1..]),
         Some("cdp-drive") => cdp_drive(&args[1..]),
         _ => die(
-            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
+            "usage: ratatoskr-mock embed [--dims N] [--log FILE] [--parent PID] | llm --script FILE [--log FILE] [--tls CA_FILE] [--parent PID] | llm --replay DIR [--speed N] [--misses FILE] [--parent PID] | proxy [--log FILE] | acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] | cloud --listen ADDR --podman-remote SOCK|none --prefix P --run R [--hub ID] [--image IMG] [--network NET] [--podman PATH] [--log FILE] [--parent PID] | hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range] | http-serve PORT TEXT | cdp-drive URL...",
         ),
     }
 }
@@ -417,7 +423,298 @@ fn tls_config(ca_file: &str) -> Arc<rustls::ServerConfig> {
     Arc::new(cfg)
 }
 
+/// `--parent PID`: end when that process is gone.
+fn watch_parent(args: &[String]) {
+    if let Some(p) = flag(args, "--parent", 1) {
+        let pid: i32 = p[0].parse().unwrap_or_else(|_| die("--parent is a pid"));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if parent_gone(pid) {
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+}
+
+// ------------------------------------------------------------------------------------------ llm --replay
+
+/// One recorded exchange (an `llm.jsonl` line), with its key recomputed by the current normalizers.
+struct Recorded {
+    id: String,
+    route: String,
+    key: String,
+    /// The keyed object, normalized: what a miss is compared with.
+    keyed: Value,
+    status: u16,
+    headers: Vec<(String, String)>,
+    chunks: Vec<(u64, Vec<u8>)>,
+    /// `complete`, `dropped`, `client-left` (after `at_chunk` chunks), or none (the run died).
+    end: Option<String>,
+    at_chunk: usize,
+}
+
+struct Replay {
+    run: String,
+    exchanges: Vec<Recorded>,
+    used: Mutex<Vec<bool>>,
+    /// This run's roots (the hub's environment, inherited).
+    here: runstav::recording::Roots,
+    speed: f64,
+    misses: Option<std::path::PathBuf>,
+}
+
+fn load_replay(dir: &std::path::Path) -> Result<Vec<Recorded>, String> {
+    use runstav::recording as rec;
+    let manifest = rec::read_manifest(dir)?;
+    let live = rec::Roots::from_json(&manifest["roots"]);
+    let text = match std::fs::read_to_string(dir.join("llm.jsonl")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("llm.jsonl: {e}")),
+    };
+    let mut lines: Vec<Value> = Vec::new();
+    for (i, l) in text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+    {
+        lines.push(serde_json::from_str(l).map_err(|e| format!("llm.jsonl line {}: {e}", i + 1))?);
+    }
+    lines.sort_by_key(|l| l["seq"].as_u64().unwrap_or(0));
+    Ok(lines
+        .iter()
+        .map(|l| {
+            let provider = l["provider"].as_str().unwrap_or_default();
+            let path = l["path"].as_str().unwrap_or_default();
+            let body = rec::body_bytes(&l["request"]["body"]).unwrap_or_default();
+            let body = String::from_utf8_lossy(&body);
+            let r = &l["response"];
+            Recorded {
+                id: l["id"].as_str().unwrap_or("?").to_owned(),
+                route: format!("{provider} {path}"),
+                key: rec::key(provider, path, &body, &live),
+                keyed: rec::normalized_keyed(provider, path, &body, &live),
+                status: r["status"].as_u64().unwrap_or(0) as u16,
+                headers: r["headers"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                    .collect(),
+                chunks: r["chunks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c[0].as_u64()?, rec::body_bytes(&c[1])?)))
+                    .collect(),
+                end: r["end"].as_str().map(str::to_owned),
+                at_chunk: r["at_chunk"].as_u64().unwrap_or(0) as usize,
+            }
+        })
+        .collect())
+}
+
+/// `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]`: the recorded provider.  A request's key (the
+/// current normalizers, this run's roots) picks the first unused exchange recorded with that key; none is a miss.
+fn llm_replay(args: &[String], dir: &str) {
+    let dir = std::path::Path::new(dir);
+    let exchanges =
+        load_replay(dir).unwrap_or_else(|e| die(&format!("--replay {}: {e}", dir.display())));
+    let speed: f64 = flag(args, "--speed", 1).map_or(0.0, |s| {
+        s[0].parse()
+            .ok()
+            .filter(|v: &f64| *v >= 0.0)
+            .unwrap_or_else(|| die("--speed is 0 or more"))
+    });
+    watch_parent(args);
+    let replay = Arc::new(Replay {
+        run: dir.file_name().map_or_else(
+            || dir.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+        used: Mutex::new(vec![false; exchanges.len()]),
+        exchanges,
+        here: runstav::recording::Roots::of_env(&runstav::paths::Env::process()),
+        speed,
+        misses: flag(args, "--misses", 1).map(|m| m[0].clone().into()),
+    });
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| die(&format!("cannot listen: {e}")));
+    announce("MOCK-LLM-PORT", &listener);
+    for sock in listener.incoming().flatten() {
+        let replay = replay.clone();
+        std::thread::spawn(move || replay_serve(sock, &replay));
+    }
+}
+
+/// `/p/ID/REST` as `(ID, /REST)`.
+fn provider_path(target: &str) -> Option<(&str, &str)> {
+    let rest = target.strip_prefix("/p/")?;
+    let at = rest.find('/')?;
+    Some((&rest[..at], &rest[at..]))
+}
+
+fn replay_serve(mut sock: TcpStream, replay: &Replay) {
+    use runstav::recording as rec;
+    let Some(req) = read_request(&mut sock) else {
+        return;
+    };
+    let body = String::from_utf8_lossy(&req.body).into_owned();
+    let (provider, path) = provider_path(&req.path).unwrap_or(("", req.path.as_str()));
+    let key = rec::key(provider, path, &body, &replay.here);
+    let found = {
+        let mut used = replay.used.lock().unwrap();
+        let i = (0..replay.exchanges.len()).find(|i| !used[*i] && replay.exchanges[*i].key == key);
+        if let Some(i) = i {
+            used[i] = true;
+        }
+        i
+    };
+    match found {
+        Some(i) => replay_answer(&mut sock, replay, &replay.exchanges[i]),
+        None => {
+            let keyed = rec::normalized_keyed(provider, path, &body, &replay.here);
+            let route = format!("{provider} {path}");
+            let nearest = replay
+                .exchanges
+                .iter()
+                .filter(|x| x.route == route)
+                .min_by_key(|x| rec::distance(&x.keyed, &keyed));
+            let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
+            let model = parsed["model"].as_str().unwrap_or("?");
+            let n = parsed["messages"].as_array().map_or(0, Vec::len);
+            let (near, at) = match nearest {
+                Some(x) => (
+                    Some(x.id.as_str()),
+                    rec::first_diff(&x.keyed, &keyed)
+                        .unwrap_or_else(|| "nothing (it was answered already)".into()),
+                ),
+                None => (None, String::new()),
+            };
+            let what = match near {
+                Some(id) => format!("nearest {id} differs at {at}"),
+                None => format!("nothing was recorded on {route}"),
+            };
+            let why = format!(
+                "not in the recording {}: {model}, {n} messages; {what}; re-record",
+                replay.run
+            );
+            replay_miss(
+                replay,
+                &json!({
+                    "request": {"provider": provider, "path": path, "body": rec::Scrub::default().text(&body)},
+                    "nearest": near, "differs_at": at, "why": why,
+                }),
+            );
+            let text = json!({"type": "error", "error": {"type": "replay_miss", "message": why}})
+                .to_string();
+            let extra = [("x-drgnx-replay".to_string(), "miss".to_string())];
+            let _ = sock
+                .write_all(head(500, "application/json", Some(text.len()), &extra).as_bytes())
+                .and_then(|()| sock.write_all(text.as_bytes()))
+                .and_then(|()| sock.flush());
+            let _ = sock.shutdown(Shutdown::Write);
+        }
+    }
+}
+
+/// A line in the replay's misses file.
+fn replay_miss(replay: &Replay, line: &Value) {
+    let Some(path) = &replay.misses else {
+        eprintln!("ratatoskr-mock: replay miss: {}", line["why"]);
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(mut f) => {
+            let _ = f.write_all(format!("{line}\n").as_bytes());
+        }
+        Err(e) => eprintln!("ratatoskr-mock: cannot write {}: {e}", path.display()),
+    }
+}
+
+/// The recorded answer: its head, its chunks at the recorded gaps times `--speed` (chunked, so a drop shows), then its
+/// end.  No head recorded: the connection is dropped.
+fn replay_answer(sock: &mut TcpStream, replay: &Replay, x: &Recorded) {
+    if x.status == 0 {
+        let _ = sock.shutdown(Shutdown::Both);
+        return;
+    }
+    let content_type = x
+        .headers
+        .iter()
+        .find(|(k, _)| k == "content-type")
+        .map_or("application/json", |(_, v)| v.as_str());
+    let mut h = format!(
+        "HTTP/1.1 {} X\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n",
+        x.status
+    );
+    for (k, v) in x.headers.iter().filter(|(k, _)| k != "content-type") {
+        h.push_str(&format!("{k}: {v}\r\n"));
+    }
+    h.push_str("\r\n");
+    if sock
+        .write_all(h.as_bytes())
+        .and_then(|()| sock.flush())
+        .is_err()
+    {
+        return;
+    }
+    let fd = sock.as_raw_fd();
+    let upto = match x.end.as_deref() {
+        Some("client-left") => x.at_chunk.min(x.chunks.len()),
+        _ => x.chunks.len(),
+    };
+    for (dt, data) in &x.chunks[..upto] {
+        let wait = (*dt as f64 * replay.speed) as u64;
+        if wait > 0 && hung_up_within(fd, wait) {
+            return;
+        }
+        if data.is_empty() {
+            continue;
+        }
+        let size = format!("{:x}\r\n", data.len());
+        let framed = [size.as_bytes(), data.as_slice(), b"\r\n".as_slice()].concat();
+        if sock.write_all(&framed).and_then(|()| sock.flush()).is_err() {
+            return;
+        }
+    }
+    match x.end.as_deref() {
+        Some("complete") => {
+            let _ = sock.write_all(b"0\r\n\r\n").and_then(|()| sock.flush());
+            let _ = sock.shutdown(Shutdown::Write);
+        }
+        Some("client-left") => {
+            // live, the client left here: it must leave again
+            if !hung_up_within(fd, 30_000) {
+                replay_miss(
+                    replay,
+                    &json!({
+                        "nearest": x.id, "differs_at": "", "why": format!(
+                            "{}: the client stayed past where it left live (chunk {}); re-record", x.id, x.at_chunk),
+                    }),
+                );
+            }
+        }
+        // dropped, or the run died: the connection drops without the last chunk
+        _ => {
+            let _ = sock.shutdown(Shutdown::Both);
+        }
+    }
+}
+
 fn llm(args: &[String]) {
+    if let Some(dir) = flag(args, "--replay", 1) {
+        return llm_replay(args, &dir[0]);
+    }
     let script_path =
         flag(args, "--script", 1).map_or_else(|| die("llm needs --script FILE"), |s| &s[0]);
     let script: Vec<Entry> = std::fs::read_to_string(script_path)

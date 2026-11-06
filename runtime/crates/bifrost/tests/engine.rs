@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use bifrost::admit::{Registry, token_hash};
 use bifrost::budget::Price;
-use bifrost::engine::{BoxFuture, Gateway, GatewayEvent, Ledger, SpendRow};
+use bifrost::engine::{
+    BoxFuture, End, Exchange, Gateway, GatewayEvent, Ledger, Sent, SpendRow, Tap,
+};
 use bifrost::keys::Keys;
 use bifrost::listen;
 use bifrost::upstream::{Upstream, UpstreamOpts};
@@ -1173,6 +1175,213 @@ async fn the_editor_route_without_a_key_is_503_and_need_keys() {
         }]
     );
     assert!(mock.requests().is_empty());
+}
+
+// ------------------------------------------------------------------------------------------ the tap
+
+/// What a tap saw of one attempt.
+#[derive(Debug, Default, Clone)]
+struct Seen {
+    provider: String,
+    path: String,
+    attempt: usize,
+    of: usize,
+    headers: Vec<(String, String)>,
+    body: String,
+    client: Option<String>,
+    status: Option<u16>,
+    /// The instant of the begin, the head and each chunk, in that order.
+    at: Vec<std::time::Instant>,
+    chunks: Vec<String>,
+    end: Option<End>,
+}
+
+/// A tap that keeps every attempt in memory.
+#[derive(Default)]
+struct Taps(Arc<Mutex<Vec<Seen>>>);
+
+struct One(Arc<Mutex<Vec<Seen>>>, usize);
+
+impl Tap for Taps {
+    fn begin(&self, sent: Sent<'_>) -> Box<dyn Exchange> {
+        let mut all = self.0.lock().unwrap();
+        all.push(Seen {
+            provider: sent.provider.to_owned(),
+            path: sent.path.to_owned(),
+            attempt: sent.attempt,
+            of: sent.of,
+            headers: sent.headers.clone(),
+            body: String::from_utf8_lossy(sent.body).into_owned(),
+            client: sent.client.map(|c| String::from_utf8_lossy(c).into_owned()),
+            at: vec![sent.at],
+            ..Seen::default()
+        });
+        Box::new(One(self.0.clone(), all.len() - 1))
+    }
+}
+
+impl Exchange for One {
+    fn head(&mut self, at: std::time::Instant, status: u16, _headers: &HeaderMap) {
+        let mut all = self.0.lock().unwrap();
+        all[self.1].status = Some(status);
+        all[self.1].at.push(at);
+    }
+
+    fn chunk(&mut self, at: std::time::Instant, data: &[u8]) {
+        let mut all = self.0.lock().unwrap();
+        all[self.1]
+            .chunks
+            .push(String::from_utf8_lossy(data).into_owned());
+        all[self.1].at.push(at);
+    }
+
+    fn end(self: Box<Self>, _at: std::time::Instant, end: End) {
+        self.0.lock().unwrap()[self.1].end = Some(end);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_tap_sees_every_attempt_with_its_chunks() {
+    // Pattern C: the reply is read to its end, and the tap's line ends before the upstream body does, so both lines
+    // are complete when the reply is.
+    let mock = Mock::start(json!([
+        {"path": "/a/", "status": 429, "body": "{\"error\":\"slow down\"}", "headers": {"Retry-After": "3"}},
+        {"path": "/b/", "chunks": [[0, MESSAGE_START], [20, MESSAGE_DELTA], [20, MESSAGE_STOP]]}
+    ]));
+    let gw = Gw::start(
+        vec![
+            provider("a", Kind::Anthropic, &mock.url("/a"), Auth::XApiKey),
+            provider("b", Kind::Anthropic, &mock.url("/b"), Auth::Bearer),
+        ],
+        vec![(AGENT, agent(&["a", "b"], None))],
+        &[
+            ("a", "sk-tap-key-of-a-0123456789"),
+            ("b", "sk-tap-key-of-b-0123456789"),
+        ],
+        0.0,
+    )
+    .await;
+    let taps = Taps::default();
+    let seen = taps.0.clone();
+    gw.gw.set_tap(Arc::new(taps));
+    // the client's body carries b's key: the tap must never see it
+    let sent = "{\"model\":\"x\",\"stream\":true,\"note\":\"sk-tap-key-of-b-0123456789\"}";
+    let reply = gw.call(AGENT, "/v1/messages", sent).await;
+    assert_eq!(reply.status, 200);
+    assert_eq!(
+        reply.body,
+        format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
+    );
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    let (first, second) = (&seen[0], &seen[1]);
+    assert_eq!(
+        (
+            first.provider.as_str(),
+            first.attempt,
+            first.of,
+            first.status
+        ),
+        ("a", 1, 2, Some(429))
+    );
+    assert_eq!(first.end, Some(End::Complete));
+    assert!(
+        first.chunks.is_empty(),
+        "a head moved on from has no chunks"
+    );
+    assert_eq!(
+        (
+            second.provider.as_str(),
+            second.attempt,
+            second.of,
+            second.status
+        ),
+        ("b", 2, 2, Some(200))
+    );
+    assert_eq!(second.path, "/v1/messages");
+    assert_eq!(second.end, Some(End::Complete));
+    assert_eq!(
+        second.chunks.concat(),
+        format!("{MESSAGE_START}{MESSAGE_DELTA}{MESSAGE_STOP}")
+    );
+    for s in &seen {
+        let names: Vec<&str> = s.headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !names.contains(&"authorization") && !names.contains(&"x-api-key"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"content-type"), "{names:?}");
+        let all = format!("{:?}{}{:?}{:?}", s.headers, s.body, s.client, s.chunks);
+        assert!(!all.contains("sk-tap-key"), "a key reached the tap: {all}");
+        assert!(s.body.contains("$SECRET"), "{}", s.body);
+        // the begin, the head and the chunks in order
+        assert!(s.at.windows(2).all(|w| w[0] <= w[1]), "{:?}", s.at);
+    }
+    assert!(
+        second.body.contains("\"model\":\"b-model\""),
+        "{}",
+        second.body
+    );
+    let client = second
+        .client
+        .as_deref()
+        .expect("the client's own body, as it was rewritten");
+    assert!(client.contains("\"model\":\"x\""), "{client}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hang_up_is_recorded_as_client_left() {
+    // Pattern C: the mock says the upstream was hung up on; the gateway ends the tap's line before it drops the
+    // upstream body, so the line is ended by then.
+    let mut chunks = vec![json!([0, MESSAGE_START])];
+    chunks.extend((0..40).map(|_| json!([100, ": tick\n\n"])));
+    let mut mock = Mock::start(json!([{"path": "/p/or/", "chunks": chunks}]));
+    let gw = Gw::start(
+        editor_gw_providers(&mock.url("/p/or")),
+        vec![(EDITOR, Registration::editor())],
+        &[("or", "sk-or-editor")],
+        0.0,
+    )
+    .await;
+    let taps = Taps::default();
+    let seen = taps.0.clone();
+    gw.gw.set_tap(Arc::new(taps));
+    let (mut sender, conn) = open(TcpStream::connect(("127.0.0.1", gw.port)).await.unwrap()).await;
+    let response = sender
+        .send_request(gw.request(EDITOR, "/p/or/chat/completions", "{\"stream\":true}"))
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert!(text(&first).starts_with("event: message_start"));
+    drop(body);
+    drop(sender);
+    conn.abort();
+    mock.hang_up().await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let s = &seen[0];
+    assert_eq!(
+        (
+            s.provider.as_str(),
+            s.path.as_str(),
+            s.attempt,
+            s.of,
+            s.status
+        ),
+        ("or", "/chat/completions", 1, 1, Some(200))
+    );
+    assert!(s.client.is_none(), "the editor's body is sent as it came");
+    match s.end {
+        Some(End::ClientLeft { chunk }) => {
+            assert!(
+                chunk >= 1 && chunk == s.chunks.len(),
+                "{chunk} of {:?}",
+                s.chunks
+            );
+        }
+        ref other => panic!("{other:?}"),
+    }
 }
 
 // ------------------------------------------------------------------------------------------ in flight (test-hooks)

@@ -162,6 +162,13 @@ running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, wa
 {path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
 `keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
 
+**A recorded or replayed run.** `DRGNX_RECORD=DIR` or `DRGNX_REPLAY=DIR` in `serve`'s environment makes this run a
+recording or a replay ([recordings.md](recordings.md)); both at once, or a replay of what is not a recording this hub
+reads, exits 1 at start. `status` then has `recording: {mode: "record" | "replay", dir}`, and the log says it once.
+Recording, the gateway's tap writes each attempt and every gateway token is scrubbed from what is written; replaying,
+`ratatoskr-mock llm --replay DIR` is started beside the hub (`--parent` it) and every provider's base is `/p/ID` on it,
+keyless.
+
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
 its socket and cap and executes the binary again with the same arguments instead (the pid stays; the lock descriptor is
 close-on-exec, so the new image takes the lock at the exec).

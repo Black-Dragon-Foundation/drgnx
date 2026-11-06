@@ -114,6 +114,11 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // a recorded or replayed run: the recorder, or the replayer the providers are pointed at, before any setting is read
+    if let Err(e) = crate::recording::start(&env).await {
+        tracing::error!("cannot start: {e}");
+        return Exit::CannotStart;
+    }
     let (mut term, mut int) = match (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),

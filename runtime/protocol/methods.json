@@ -24314,6 +24314,31 @@
             ],
             "type": "object"
           },
+          "RecordingMode": {
+            "description": "Whether a hub records its run or replays one.",
+            "enum": [
+              "record",
+              "replay"
+            ],
+            "type": "string"
+          },
+          "RecordingStatus": {
+            "additionalProperties": false,
+            "description": "`status.recording`: the mode and the run's directory.",
+            "properties": {
+              "dir": {
+                "type": "string"
+              },
+              "mode": {
+                "$ref": "#/$defs/RecordingMode"
+              }
+            },
+            "required": [
+              "mode",
+              "dir"
+            ],
+            "type": "object"
+          },
           "Refusals": {
             "additionalProperties": false,
             "description": "The refusals the hub counted, and the last ones (method, code, class, path; never params).",
@@ -24582,6 +24607,17 @@
               "integer",
               "null"
             ]
+          },
+          "recording": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecordingStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run this hub records or replays (`DRGNX_RECORD`, `DRGNX_REPLAY`); absent for a hub that does neither."
           },
           "records": {
             "format": "uint64",

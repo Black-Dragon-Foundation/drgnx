@@ -340,6 +340,7 @@ impl Front {
             gateway_port: None,
             registrations: None,
             settings: Some(self.settings.current().status()),
+            recording: crate::recording::status(),
         }
     }
 

@@ -488,6 +488,13 @@ A `Refusal { status, kind, message }` answers with the Lisp's body, `{"type":"er
 A key is read per attempt and goes only into the upstream request's sensitive header; logs name providers, never keys
 or tokens.
 
+**The tap** (`engine::Tap`, `Gateway::set_tap`; a recording's, [recordings.md](recordings.md)): one `begin(Sent)` per
+attempt sent upstream (provider, session, the client's path, step N of M, the headers without the sensitive ones, the
+body sent and the client's own body when the rewrite changed it, both with every held key replaced by `$SECRET`
+through `Keys::scrub`), then `head`, each chunk as read from upstream (key-scrubbed too) and `end`: `Complete` (also a
+head the chain moved on from), `Dropped` (no head, or the provider broke off) or `ClientLeft { chunk }`. The exchange is
+ended before the upstream body is dropped.
+
 **Listeners** (`listen`): `serve_tcp(gw, listener, port)` for the loopback listener and `serve_unix(gw, listener,
 ListenerId::Session(SID))` for a session's socket; the caller binds them. hyper's HTTP/1.1 server with keep-alive
 (the token is checked on every request), a 30 s header-read timeout and a 64 KiB head (longer is 431). At most 64
@@ -498,7 +505,7 @@ classes, the proptest `admit_never_panics` over random targets and headers), `re
 `gateway-test.el` and `gateway-openrouter-test.el` cases by name), `keys::tests` and `tests/engine.rs`: a client over
 TCP or a session socket, the gateway on its listener and `ratatoskr-mock llm` as the provider (fallback, the literal
 last step, streaming first chunk first, spend once, the budget, a hang-up, need-keys, keep-alive, the drained
-refusal, the connection cap, the editor's pass-through). It finds the mock at `RATATOSKR_MOCK`, else beside its own
+refusal, the connection cap, the editor's pass-through, the tap's lines and a hang-up's `client-left`). It finds the mock at `RATATOSKR_MOCK`, else beside its own
 binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspace `cargo test` builds it anyway).
 
 ## Every order: skuld
@@ -728,6 +735,12 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `{"request": {method, path, headers (lower-case names), body}}` per request, then `{"closed": true}` when the client
   hangs up before the answer ended (with `--print-closed`, the mock also prints `MOCK-LLM-CLOSED` then, for a test to
   wait on). It ends when `--parent` is gone.
+- `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and answers `/p/ID/REST`
+  from a recording's `llm.jsonl` ([recordings.md](recordings.md)): the request's match key, recomputed with the
+  current normalizers, picks the first unused exchange recorded with it, answered chunked with its status, stored
+  headers and chunks (each after its recorded gap times N, default 0) and ended as live ended. None: 500
+  `x-drgnx-replay: miss`, a `replay_miss` error naming the nearest exchange and its first differing path, and a line in
+  FILE. A hub started with `DRGNX_REPLAY` starts it and points every provider at it.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
 - `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host. It prints

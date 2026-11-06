@@ -300,6 +300,9 @@ impl Gate {
             tx,
             upstream,
         );
+        if let Some(recorder) = crate::recording::tap() {
+            gw.set_tap(recorder);
+        }
         if self.engine.set((gw.clone(), port)).is_err() {
             return Err("the gateway listens already".into());
         }
@@ -372,6 +375,7 @@ impl Gate {
             Some(t) => t.clone(),
             None => {
                 let t = token().map_err(|e| internal(format!("no token: {e}")))?;
+                crate::recording::secret(&t);
                 write(&self.regs.0).insert(
                     token_hash(t.as_bytes()),
                     Kept {
@@ -527,6 +531,7 @@ impl Gate {
         };
         let owner = owner_of(owner, peer_pid)?;
         let token = token().map_err(|e| internal(format!("no token: {e}")))?;
+        crate::recording::secret(&token);
         let hash = token_hash(token.as_bytes());
         let db = self.db()?;
         let port = self.engine()?.1;
@@ -652,6 +657,7 @@ impl Gate {
             )
         })?;
         let token = token().map_err(|e| internal(format!("no token: {e}")))?;
+        crate::recording::secret(&token);
         let hash = token_hash(token.as_bytes());
         let db = self.db()?;
         let port = self.engine()?.1;
@@ -805,7 +811,7 @@ impl Gate {
         let mut next = BTreeMap::new();
         let mut warnings = Vec::new();
         for (i, c) in table.iter().enumerate() {
-            let p = provider(c).map_err(|e| invalid(&format!("providers[{i}].base"), e))?;
+            let mut p = provider(c).map_err(|e| invalid(&format!("providers[{i}].base"), e))?;
             let base = c.base.base();
             if p.needs_key() && base.clear_text {
                 let id = c.id.as_str();
@@ -816,6 +822,11 @@ impl Gate {
                         base.url.host
                     ),
                 });
+            }
+            // a replayed run: every provider is the recording's, on the replayer, keyless
+            if let Some((base, auth)) = crate::recording::replayed(&p.id) {
+                p.base = base;
+                p.auth = auth;
             }
             next.insert(p.id.clone(), p);
         }

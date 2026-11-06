@@ -392,6 +392,19 @@ that no allowed provider serves fails with OpenRouter's own error, which the age
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other entries of `settings.el` stay.
 
+## Recording a run and replaying it
+
+A run against real providers can be recorded once and replayed later without spending anything (for drgnx's own
+tests and demos). The hub records when it is started with `DRGNX_RECORD=DIR` and replays with `DRGNX_REPLAY=DIR`;
+it is never a setting, so your everyday hub records nothing. On replay the hub, the gateway and the editor run as
+usual, and every provider is answered from the recording; a request that differs from what was recorded is refused
+with a `replay_miss` error that says where it differs ("re-record"), never answered by a guess.
+
+What is written never holds a key or a token: the gateway's keys and the tokens it issues are replaced by `$SECRET`
+before anything reaches the disk, no authorization header is stored, and a lint checks every file of a run. Live
+recordings stay on your machine; drgnx's own repository holds only recordings made from its scripted mock providers.
+The details are in [the recordings page](../develop/recordings.md).
+
 ## Tests
 
 - `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,

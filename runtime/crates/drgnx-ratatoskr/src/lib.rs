@@ -40,6 +40,8 @@
 //!   table, spend from `work.db`, the engine's events.
 //! - [`bridge`]: `mcp-bridge`, an agent's stdio MCP server copied to a session's socket or, for an outside agent, to
 //!   the main socket as `service`; it redials after a hub restart.
+//! - [`recording`]: `DRGNX_RECORD` (the gateway's tap writes the run) and `DRGNX_REPLAY` (the providers answered by
+//!   `ratatoskr-mock llm --replay`).
 //! - [`log`]: tracing to `<state>/hub/log/hub-YYYY-MM-DD.jsonl` and warnings to stderr.
 //! - [`runtime_db`]: `<state>/hub/runtime.db`, the hub's own recovery state.
 //! - [`sandbox`]: Gleipnir as Ratatoskr uses it: the context of closed paths, the helper, the spawn, `sandbox run`.
@@ -104,6 +106,7 @@ pub mod matrix_gate;
 pub mod peer;
 pub mod plugins;
 pub mod plugins_cli;
+pub mod recording;
 pub mod records;
 pub mod runner;
 pub mod runner_cli;
