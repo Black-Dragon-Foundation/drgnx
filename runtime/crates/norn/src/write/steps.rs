@@ -83,6 +83,8 @@ pub struct StepEnd {
     /// Set when the step's end has a snapshot or decision log version the start did not.
     pub snapshot: Option<String>,
     pub log_version: Option<i64>,
+    /// The session's context size in tokens when the step closed (a turn's last step, a job wait).
+    pub context: Option<i64>,
 }
 
 /// Start a step; answers its id.  Its `seq` is the session's next.
@@ -124,8 +126,8 @@ pub fn open(tx: &WTx<'_>, new: StepNew) -> Result<i64, CoordError> {
 pub fn close(tx: &WTx<'_>, id: i64, end: StepEnd) -> Result<(), CoordError> {
     let changed = tx.sql().execute(
         "update step set end = ?2, tokens_in = ?3, tokens_out = ?4, cache_read = ?5, cache_write = ?6, \
-         cost = ?7, cost_unit = ?8, snapshot = coalesce(?9, snapshot), log_version = coalesce(?10, log_version) \
-         where id = ?1 and end is null",
+         cost = ?7, cost_unit = ?8, snapshot = coalesce(?9, snapshot), log_version = coalesce(?10, log_version), \
+         context = ?11 where id = ?1 and end is null",
         (
             id,
             end.end,
@@ -137,6 +139,7 @@ pub fn close(tx: &WTx<'_>, id: i64, end: StepEnd) -> Result<(), CoordError> {
             &end.cost_unit,
             &end.snapshot,
             end.log_version,
+            end.context,
         ),
     )?;
     if changed == 0 {
@@ -152,6 +155,46 @@ mod tests {
     use super::*;
     use crate::read::steps::{Rollup, Scope, for_session, rollup};
     use crate::store::tests::{db7, tx_of};
+
+    /// Pure (D): the gateway's charge is exact dollars beside the agents' estimates.
+    #[test]
+    fn a_gateway_tasks_rollup_shows_exact_dollars() {
+        use crate::write::spend::{SpendRow, add_spend};
+        let mut c = db7();
+        let tx = tx_of(&mut c);
+        for (id, plan) in [
+            ("J", Some("plan:ab-1")),
+            ("K", Some("/p/x.md")),
+            ("L", None),
+        ] {
+            tx.sql()
+                .execute(
+                    "insert into job (id, title, plan, status, created) values (?1, 't', ?2, 'running', 1.0)",
+                    (id, plan),
+                )
+                .unwrap();
+        }
+        let row = |job: &str, task: &str, cost: f64| SpendRow {
+            job: Some(job.into()),
+            task: Some(task.into()),
+            provider: "openrouter".into(),
+            cost,
+            status: 200,
+            ..SpendRow::default()
+        };
+        add_spend(&tx, &row("J", "J#1", 1.5), 1.0).unwrap();
+        add_spend(&tx, &row("J", "J#1", 0.5), 2.0).unwrap();
+        add_spend(&tx, &row("J", "J#2", 4.0), 3.0).unwrap();
+        add_spend(&tx, &row("K", "K#1", 8.0), 4.0).unwrap();
+        add_spend(&tx, &row("L", "L#1", 16.0), 5.0).unwrap();
+        let t = rollup(tx.sql(), Scope::Task, "J#1").unwrap();
+        assert_eq!(t.cost_by_unit["usd"], 2.0);
+        let plan = |s: &str| rollup(tx.sql(), Scope::Plan, s).unwrap().cost_by_unit;
+        assert_eq!(plan("plan:ab-1")["usd"], 6.0);
+        assert_eq!(plan("plan:/p/x.md")["usd"], 8.0);
+        assert_eq!(plan("plan:L")["usd"], 16.0);
+        assert!(!plan("plan:none").contains_key("usd"));
+    }
 
     pub(crate) fn new(session: &str, task: &str, class: StepClass, start: f64) -> StepNew {
         StepNew {

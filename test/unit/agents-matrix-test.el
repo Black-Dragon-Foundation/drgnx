@@ -17,7 +17,7 @@
   '(drgnx-agents-matrix drgnx-agents-away-after drgnx-agents-wait-refusals drgnx-agents-close-idle-after
                         drgnx-agents-checkpoint-cap drgnx-agents-job-memory drgnx-agents-job-cpus drgnx-agents-net-hosts
                         drgnx-agents-container-images drgnx-agents-silent-after drgnx-agents-repeat-limit
-                        drgnx-agents-no-progress-tokens drgnx-agents-manager-context
+                        drgnx-agents-no-progress-tokens drgnx-agents-manager-context drgnx-agents-model-prices
                         drgnx-agents-browser-program drgnx-agents-browser-local-ports
                         drgnx-agents-browser-deny-hosts drgnx-agents-browser-max-message drgnx-agents-browser-idle
                         drgnx-agents-browser-once-window drgnx-agents-session-memory

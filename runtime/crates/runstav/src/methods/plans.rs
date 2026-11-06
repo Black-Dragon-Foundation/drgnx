@@ -86,8 +86,17 @@ pub struct TaskWrite {
     pub title: Option<Bounded<String, 512>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Status>,
+    // a hint for the forecast when no profile is named: a named profile runs its own model
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<Bounded<String, 128>>,
+    // the job role (none: implement), the profile (none: the role's route) and the prose the brief starts with; plain
+    // comments, not doc comments, so the plan_write tool's schema carries no extra description
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Bounded<String, 32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<Bounded<String, 128>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Text>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interfaces: Option<Text>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

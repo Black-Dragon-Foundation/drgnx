@@ -93,15 +93,15 @@
 		 :summary "Extensible vi layer" :commit
 		 "6a3e1ddd04ac504a016590940d0af2a3361b9efd" :url
 		 "https://github.com/emacs-evil/evil")
-	   (evil-collection :version "20261014.225" :archive "melpa"
+	   (evil-collection :version "20261106.647" :archive "melpa"
 			    :kind tar :file
-			    "evil-collection-20261014.225.tar" :sha256
-			    "fab3c297864dfdefc83d804753366550bfd34e65f987271d9aa707acd84e1bca"
+			    "evil-collection-20261106.647.tar" :sha256
+			    "55f751dcca7dd3be571bd6f0f493a8ee276d4cd5841c09a747589f1087aa5a8b"
 			    :size 1638400 :requires ((evil "1.2.13"))
 			    :summary
 			    "A set of keybindings for Evil mode"
 			    :commit
-			    "3948a7890960d389dffa637203a6760df68b1c1c"
+			    "2c85a07409957627a6660c88407a21f3e4272db9"
 			    :url
 			    "https://github.com/emacs-evil/evil-collection")
 	   (forge :version "20261020.1944" :archive "melpa" :kind tar

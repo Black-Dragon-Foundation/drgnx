@@ -79,6 +79,7 @@ pub mod doctor;
 pub mod embed;
 pub mod eval_cli;
 pub mod exec;
+pub mod forecast;
 pub mod front;
 pub mod gateway;
 pub mod graph;
@@ -100,6 +101,7 @@ pub mod runners;
 pub mod runtime_db;
 pub mod sandbox;
 pub mod sandbox_settings;
+pub mod say;
 pub mod search;
 pub mod search_cli;
 #[cfg(feature = "test-hooks")]

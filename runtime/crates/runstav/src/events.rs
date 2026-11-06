@@ -292,6 +292,21 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             crate::methods::records::ViewProposal,
             "a hand edit to a view became a proposal (Records: Review Proposal)"
         ),
+        event!(
+            "say-proposal",
+            crate::methods::say::SayProposal,
+            "a planning session's proposal is a job, waiting for the user's OK or started by the Autonomous preset"
+        ),
+        event!(
+            "say-message",
+            crate::methods::say::SayMessage,
+            "a planning session asks the user something (agent-written text)"
+        ),
+        event!(
+            "say-failed",
+            crate::methods::say::SayFailed,
+            "a planning session gave up: its blocks did not hold, with the reasons"
+        ),
     ];
     v.sort_by_key(|e| e.name);
     v
@@ -356,6 +371,10 @@ mod tests {
                     "runners/need-keys",
                     "agent-presence",
                     "work-map",
+                    // agent system part 5
+                    "say-proposal",
+                    "say-message",
+                    "say-failed",
                 ]
                 .contains(&n.as_str())
             })
@@ -370,7 +389,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 25);
+        assert_eq!(events().len(), 28);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

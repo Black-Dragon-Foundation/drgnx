@@ -52,22 +52,25 @@ enum Api {
     Ollama(String),
 }
 
-/// The `tei` or `ollama` provider PROVIDER, reached through the gateway's loopback listener on PORT with TOKEN.
+/// The `tei` or `ollama` provider PROVIDER at BASE (its URL in the table), reached through the gateway's loopback
+/// listener on PORT with TOKEN.
 pub struct ProviderEmbedder {
     port: u16,
     token: String,
     provider: String,
+    base: String,
     api: Api,
     model: String,
 }
 
 impl ProviderEmbedder {
     /// A TEI provider; its model name is `tei:<provider>`.
-    pub(crate) fn tei(port: u16, token: String, provider: &str) -> ProviderEmbedder {
+    pub(crate) fn tei(port: u16, token: String, provider: &str, base: &str) -> ProviderEmbedder {
         ProviderEmbedder {
             port,
             token,
             provider: provider.to_owned(),
+            base: base.to_owned(),
             api: Api::Tei,
             model: format!("tei:{provider}"),
         }
@@ -78,12 +81,14 @@ impl ProviderEmbedder {
         port: u16,
         token: String,
         provider: &str,
+        base: &str,
         model: &str,
     ) -> ProviderEmbedder {
         ProviderEmbedder {
             port,
             token,
             provider: provider.to_owned(),
+            base: base.to_owned(),
             api: Api::Ollama(model.to_owned()),
             model: format!("ollama:{provider}:{model}"),
         }
@@ -217,6 +222,11 @@ impl crate::search::DocEmbedder for ProviderEmbedder {
         _overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>> {
         self.embed(texts)
+    }
+
+    /// The server's own address accepts a connection (the doctor's probe, [`answered_family`]).
+    fn answers(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async move { answered_family(&self.base).await.is_some() })
     }
 }
 

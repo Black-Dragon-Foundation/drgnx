@@ -1111,7 +1111,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
   sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
-  of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
+  of 8 missing keys to each embedder that answers: a server whose own address accepts no connection (the default TEI
+  at 127.0.0.1:8080 when it is not running) gets no request in that pass and does not make tier 2 `Failed`, so tier 2
+  ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
   each server that answers, every one filling its own model's `vec` rows.

@@ -19,6 +19,7 @@
 (declare-function drgnx-explorer-setup "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
+(declare-function drgnx-chrome-switch-tab "drgnx-chrome")
 (declare-function drgnx-buffers-save-row "drgnx-actions")
 (declare-function drgnx-buffers-copy-path-row "drgnx-actions")
 (declare-function drgnx-buffers-reveal-row "drgnx-actions")
@@ -102,6 +103,9 @@
                        ;; Chrome by role: tab lines and breadcrumbs in editor windows.
                        (require 'drgnx-chrome)
                        (drgnx-chrome-mode 1)
+                       (drgnx-command-define 'switch-tab :category "View" :title "Go to Tab…" :scope 'window
+                                             :command #'drgnx-chrome-switch-tab
+                                             :doc "Show one of this editor group's tabs, chosen by name (the overflow button of the tab row)")
                        ;; Editor groups (made only by these commands).
                        (require 'drgnx-groups)
                        (pcase-dolist (`(,id ,title ,fn ,doc)

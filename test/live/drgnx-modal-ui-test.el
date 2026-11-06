@@ -95,22 +95,22 @@
                                                    (drgnx-explorer-set-roots (list ,dir)) t))
             ;; SPC alone: which-key lists the leader, its prefixes once with which-key's "+"
             (drgnx-modal-session-act sess "SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (let ((popup (drgnx-modal-session-eval
                           sess '(with-current-buffer " *which-key*" (buffer-substring-no-properties (point-min) (point-max))))))
               (should (string-match-p "f : \\+File" popup))
               (should (string-match-p "SPC : Command Palette" popup))
               (should-not (string-search "++" popup)))
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             ;; M-SPC opens the same popup
             (drgnx-modal-session-act sess "M-SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (should (string-match-p "f : \\+File"
                                     (drgnx-modal-session-eval
                                      sess '(with-current-buffer " *which-key*" (buffer-substring-no-properties (point-min) (point-max))))))
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             ;; SPC SPC the palette, SPC f p Quick Open, SPC s p project search
             (pcase-dolist (`(,keys . ,prompt) '(("SPC SPC" . "Command") ("SPC f p" . "Find file in")
                                                 ("SPC s p" . "Search in project")))
@@ -163,10 +163,10 @@
               (should (string-suffix-p " three.txt" (cadr row))))
             ;; the leader from the Explorer, its popup on screen
             (drgnx-modal-session-act sess "SPC")
-            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*") t)))
+            (should (drgnx-modal-session-until sess '(and (get-buffer-window " *which-key*" 'visible) t)))
             (drgnx-modal-session-shot sess "modal-explorer-leader.png")
             (drgnx-modal-session-act sess "C-g")
-            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*"))))
+            (should (drgnx-modal-session-until sess '(not (get-buffer-window " *which-key*" 'visible))))
             (drgnx-modal-session-act sess "RET")
             (should (equal (drgnx-modal-session-eval sess '(list buffer-file-name evil-state))
                            (list (expand-file-name "b/three.txt" dir) 'normal)))
@@ -184,18 +184,14 @@
               (let ((shown (drgnx-modal-ui-test--where sess)))
                 (should (string-search (car shown) (cadr row)))
                 (should (eq (cadr shown) 'normal))))
-            ;; Work and the Agents list (two rows each) in the right dock: there and back with C-w l and C-w h (Escape is
-            ;; Dock Back in the sidebar's docks only, in every key profile)
+            ;; the Agents list (two rows) in the right dock: there and back with C-w l and C-w h (Escape is Dock Back in
+            ;; the sidebar's docks only, in every key profile).  The dock's Work tab retired: SPC a w opens the Work space
             (drgnx-modal-session-eval
-             sess '(progn (advice-add 'drgnx-work-ui--roots :override
-                                      (lambda () (list (list :id "r1" :kind 'ruling :title "First ruling")
-                                                       (list :id "r2" :kind 'ruling :title "Second ruling"))))
-                          (advice-add 'drgnx-work-ui-refresh :override #'ignore)
-                          (setq drgnx-agents--sessions
+             sess '(progn (setq drgnx-agents--sessions
                                 (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle :conn 'fake :cwd default-directory)
                                       (drgnx-agents--make :id "b1" :name "beta" :status 'idle :conn 'fake :cwd default-directory)))
                           t))
-            (pcase-dolist (`(,show . ,buffer) '(("SPC a w" . "*drgnx Work*") ("SPC a v" . "*drgnx Agents*")))
+            (pcase-dolist (`(,show . ,buffer) '(("SPC a v" . "*drgnx Agents*")))
               (let ((editor (drgnx-modal-ui-test--where sess)))
                 (drgnx-modal-session-act sess show "C-w l")
                 (should (equal (drgnx-modal-session-eval sess '(list (buffer-name) evil-state)) (list buffer 'emacs)))

@@ -135,6 +135,16 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 
+(defun drgnx-settings-runtime--price (p)
+  "A price row's plist P (:in :out :cache-read :write-5m :write-1h :as-of) as `ModelPrice' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :in (plist-get p :in))
+         (cons :out (plist-get p :out))
+         (cons :cache_read (plist-get p :cache-read))
+         (cons :write_5m (plist-get p :write-5m))
+         (cons :write_1h (plist-get p :write-1h))
+         (cons :as_of (plist-get p :as-of)))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -187,6 +197,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-agents-repeat-limit . identity)
     (drgnx-agents-no-progress-tokens . identity)
     (drgnx-agents-manager-context . identity)
+    (drgnx-agents-model-prices . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--price)))
     ;; the agent browser and its session's memory cap
     (drgnx-agents-browser-program . ,(lambda (v) (or v :null)))
     (drgnx-agents-browser-local-ports . vconcat)

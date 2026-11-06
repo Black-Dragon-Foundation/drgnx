@@ -40,17 +40,35 @@
 
 (defconst drgnx-lint--hex "\\`#\\([0-9a-fA-F]\\{3\\}\\)\\{1,2\\}\\'")
 
+(defun drgnx-lint--colour-literals (files)
+  "The colour literals in FILES: a hex string anywhere, or a string after :foreground, :background, :color (a face
+spec's `:box' colour too) or :distant-foreground."
+  (drgnx-lint--violations
+   files
+   (lambda (form)
+     (cond ((and (stringp form) (string-match-p drgnx-lint--hex form)) (format "hex colour %s" form))
+           ((and (consp form) (proper-list-p form))
+            (cl-loop for (k v) on form
+                     when (and (memq k '(:foreground :background :color :distant-foreground)) (stringp v))
+                     return (format "%s %S" k v)))))))
+
 (ert-deftest drgnx-lint/no-hard-coded-colours ()
-  ;; Faces inherit theme faces: a hex colour, or a colour name after :foreground/:background, is a bug.
-  (should-not
-   (drgnx-lint--violations
-    (drgnx-lint--files "core" "wb" "modules")
-    (lambda (form)
-      (cond ((and (stringp form) (string-match-p drgnx-lint--hex form)) (format "hex colour %s" form))
-            ((and (consp form) (proper-list-p form))
-             (cl-loop for (k v) on form
-                      when (and (memq k '(:foreground :background :color :distant-foreground)) (stringp v))
-                      return (format "%s %S" k v))))))))
+  ;; Colour literals live only in themes/drgnx-tokens.eld (not a .el file).  Faces inherit semantic or standard faces;
+  ;; what is derived from a theme goes through core/drgnx-color.el.
+  (should-not (drgnx-lint--colour-literals (drgnx-lint--files "core" "wb" "modules" "harness" "themes"))))
+
+(ert-deftest drgnx-lint/no-hard-coded-colours-sees-a-planted-literal ()
+  ;; The lint is red on a literal in a file outside themes/: a hex string, a name after :foreground, a box colour.
+  (let ((file (make-temp-file "drgnx-lint-planted-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(defface planted-a '((t :foreground \"#ff0000\")) \"A.\")\n"
+                    "(defface planted-b '((t :box (:line-width 1 :color \"red\"))) \"B.\")\n"))
+          (let ((found (drgnx-lint--colour-literals (list file))))
+            (should (cl-some (lambda (m) (string-match-p "#ff0000" m)) found))
+            (should (cl-some (lambda (m) (string-match-p ":color \"red\"" m)) found))))
+      (delete-file file))))
 
 (defun drgnx-lint--keyboard-key-p (key)
   "KEY (a string, `kbd' form or vector) is a keyboard key — not a mouse, header-line, tab-line or remap event."

@@ -39,11 +39,13 @@ use norn::write::jobs::{self as write_jobs, NewJob, NewTask};
 use norn::write::messages::{self as write_messages, Send, SendResult};
 use norn::write::tasks as write_tasks;
 use runstav::methods::agents::ById;
+use runstav::methods::forecast::Forecast;
 use runstav::methods::jobs::{
     BlockParams, ByMessage, ByTask, CardParams, JobStatusResult, JobSummary, MergeGate,
     OrderParams, PlanRef, ProposeParams, ReassignParams, ReplyParams, StartTaskParams,
     StatusParams, TaskNo, WithBudget,
 };
+use runstav::methods::matrix::{Limit, Unit};
 use runstav::registry::Class;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Map, Value, json};
@@ -56,18 +58,15 @@ use tokio::sync::Notify;
 
 /// Agents of one job working at once (`drgnx-job-max-agents`).
 pub const MAX_AGENTS: usize = 3;
+/// How many agents of one job work at once: the tick starts up to this many, and a forecast schedules on this many
+/// slots, so the two cannot disagree.
+pub(crate) fn agent_slots(_front: &Front) -> usize {
+    MAX_AGENTS
+}
 /// Agents that may end without finishing a task before the user decides (`drgnx-job-start-tries`).
 pub const START_TRIES: i64 = 3;
 /// The most characters of a blocked task's reason that are kept.
 pub const BLOCK_REASON_MAX: usize = 500;
-/// The tokens one task is estimated at: (input, output) (`drgnx-job-task-tokens`).
-pub const TASK_TOKENS: (u64, u64) = (150_000, 15_000);
-
-/// What one task costs at PRICE (US dollars per million tokens in, out): an estimate (`usd-est`).
-pub(crate) fn task_usd(price: (f64, f64)) -> f64 {
-    (TASK_TOKENS.0 as f64 * price.0 + TASK_TOKENS.1 as f64 * price.1) / 1_000_000.0
-}
-
 /// The price the user configured for PROFILE's gateway provider (`drgnx-ai-providers` `:price`); none for a profile
 /// without a gateway or a provider without a price (a subscription profile stays unpriced).
 pub(crate) fn profile_price(front: &Front, profile: &str) -> Option<(f64, f64)> {
@@ -83,6 +82,194 @@ pub(crate) fn profile_price(front: &Front, profile: &str) -> Option<(f64, f64)> 
         .find(|c| c.id.as_str() == provider)
         .and_then(|c| c.price)
         .map(|p| (p.input.get(), p.output.get()))
+}
+
+// ---- the forecast on a proposal ------------------------------------------------------------------------------------
+
+/// 40000000 as `40M`, 1200 as `1k`.
+fn tokens_text(n: f64) -> String {
+    if n >= 1e6 {
+        format!("{:.0}M", n / 1e6)
+    } else if n >= 1e3 {
+        format!("{:.0}k", n / 1e3)
+    } else {
+        format!("{n:.0}")
+    }
+}
+
+/// US dollars: whole from 10, else to the cent, and "<0.01" for what rounds to nothing (as the editor prints it).
+fn money_text(x: f64) -> String {
+    if x >= 10.0 {
+        format!("{x:.0}")
+    } else if x >= 0.005 {
+        format!("{x:.2}")
+    } else {
+        "<0.01".to_owned()
+    }
+}
+
+/// 7800 s as `2 h 10`, 14400 as `4 h`, 600 as `10 min`.
+fn duration_text(secs: f64) -> String {
+    let m = (secs / 60.0).round() as u64;
+    match (m / 60, m % 60) {
+        (0, m) => format!("{m} min"),
+        (h, 0) => format!("{h} h"),
+        (h, m) => format!("{h} h {m}"),
+    }
+}
+
+/// A..B in TEXT's words; one value when both read alike.
+fn range_text(r: &runstav::methods::forecast::Range, text: fn(f64) -> String) -> String {
+    let (a, b) = (text(r.p50), text(r.p90));
+    if a == b { a } else { format!("{a}–{b}") }
+}
+
+/// The proposal card's title: the tasks, the cost range (an estimate when it is one), the tokens and the time, or
+/// the word `unpriced` where there is no price.  Never `0.00`: a cost of nothing is left off, as the editor leaves it.
+pub(crate) fn card_title(n: usize, f: &Forecast) -> String {
+    let mut parts = vec![format!("{n} task{}", if n == 1 { "" } else { "s" })];
+    let costs: Vec<_> = f.cost.iter().filter(|c| c.p90 > 0.0).collect();
+    if !costs.is_empty() {
+        let mut notes: Vec<&str> = Vec::new();
+        if costs.iter().any(|c| c.estimate) {
+            notes.push("estimate");
+        }
+        if !f.unpriced.is_empty() {
+            notes.push("some unpriced");
+        }
+        let amounts: Vec<String> = costs
+            .iter()
+            .map(|c| {
+                range_text(
+                    &runstav::methods::forecast::Range {
+                        p50: c.p50,
+                        p90: c.p90,
+                    },
+                    money_text,
+                )
+            })
+            .collect();
+        parts.push(format!(
+            "about {} USD{}",
+            amounts.join(" + "),
+            if notes.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", notes.join(", "))
+            }
+        ));
+    }
+    parts.push(format!("{} tokens", range_text(&f.tokens, tokens_text)));
+    parts.push(range_text(&f.wall_secs, duration_text));
+    if costs.is_empty() && !f.unpriced.is_empty() {
+        parts.push("unpriced".to_owned());
+    }
+    format!("{}: approve to start", parts.join(", "))
+}
+
+/// A proposal's `estimate`: `usd` (the middle of the priced units), `unit`, `tokens` (the middle) and `unpriced` keep
+/// their keys and types; `forecast` holds the ranges.  With no forecast the tokens are the prior's, and `forecast`
+/// is null.
+pub(crate) fn estimate_of(f: Option<&Forecast>, tasks: usize) -> Value {
+    let Some(f) = f else {
+        let per_task = norn::forecast::model::prior()
+            .get(2)
+            .map_or(0, |o| o.usage.total());
+        return json!({"usd": 0.0, "unit": "usd-est", "tokens": per_task * tasks as u64,
+                      "unpriced": [], "forecast": null});
+    };
+    let mut basis: Vec<&str> = Vec::new();
+    for t in &f.tasks {
+        if !basis.contains(&t.basis.label.as_str()) {
+            basis.push(&t.basis.label);
+        }
+    }
+    json!({
+        "usd": f.cost.iter().map(|c| c.p50).sum::<f64>(),
+        "unit": if f.cost.iter().all(|c| !c.estimate) && !f.cost.is_empty() { "usd" } else { "usd-est" },
+        "tokens": f.tokens.p50.round() as u64,
+        "unpriced": f.unpriced,
+        "forecast": {
+            "tokens": f.tokens, "active_secs": f.active_secs, "wall_secs": f.wall_secs, "cost": f.cost,
+            "basis": basis, "wake": f.wake, "manager": f.manager, "prices_as_of": f.prices_as_of,
+            "made_at": f.made_at,
+        },
+    })
+}
+
+/// A warning when the plan's p90 in dollars, `usd` and `usd-est` summed as the budget binds them, is over BUDGET.
+/// The user decides; nothing is refused.
+pub(crate) fn budget_warnings(f: &Forecast, budget: Option<f64>) -> Vec<String> {
+    let Some(budget) = budget else {
+        return Vec::new();
+    };
+    let dollars: Vec<_> = f
+        .cost
+        .iter()
+        .filter(|c| matches!(c.unit, Unit::Usd | Unit::UsdEst))
+        .collect();
+    let p90: f64 = dollars.iter().map(|c| c.p90).sum();
+    if dollars.is_empty() || p90 <= budget {
+        return Vec::new();
+    }
+    vec![format!(
+        "the plan's p90 cost, {} USD{}, is over the budget of {} USD",
+        money_text(p90),
+        if dollars.iter().any(|c| c.estimate) {
+            " (estimate)"
+        } else {
+            ""
+        },
+        money_text(budget)
+    )]
+}
+
+/// The limits a dollar budget of USD sets: `usd` (what the gateway measures), and for a plan with a subscription
+/// profile `usd-est` too, because a subscription's spend lands there and a `usd` limit would never fire; the two then
+/// bind together ([`crate::budget::Budgets::set_joint`]), so the plan's dollars are capped once.
+pub(crate) fn budget_limits(usd: f64, subscription: bool) -> Vec<Limit> {
+    let mut limits = vec![Limit {
+        amount: usd,
+        unit: Unit::Usd,
+    }];
+    if subscription {
+        limits.push(Limit {
+            amount: usd,
+            unit: Unit::UsdEst,
+        });
+    }
+    limits
+}
+
+/// Whether any profile JOB may run a task on (a route, its fallbacks, a reassignment) is a subscription's.
+pub(crate) fn has_subscription_profile(front: &Front, job: &Job) -> bool {
+    let data = data_of(job);
+    let mut names: Vec<String> = Vec::new();
+    for key in ["routes", "profiles"] {
+        if let Some(m) = data.get(key).and_then(Value::as_object) {
+            names.extend(m.values().filter_map(Value::as_str).map(str::to_owned));
+            if key == "routes" {
+                for role in m.keys() {
+                    names.extend(route(front, role));
+                }
+            }
+        }
+    }
+    names
+        .iter()
+        .any(|n| crate::agents::session::find_profile(front, n).is_some_and(|p| p.ai.is_none()))
+}
+
+/// The job, its tasks and what was forecast for them, in one write: no approval can see one without the other.
+pub(crate) fn create_with_forecast(
+    tx: &mut norn::store::WTx<'_>,
+    job: NewJob,
+    made: &[norn::forecast::sample::Made],
+    at: f64,
+) -> Result<String, norn::store::CoordError> {
+    let id = write_jobs::job_create(tx, job, at)?;
+    norn::forecast::sample::record_made(tx, made)?;
+    Ok(id)
 }
 
 /// What Task 16b adds to the tick: reviews, the merge gate, fallback, the budget pause.  Set once by the server
@@ -388,6 +575,16 @@ pub(crate) fn user() -> Caller {
 /// The job's data key `job/stop` sets on a proposal (a rejected one): it never started, `job/resume` refuses it.
 pub(crate) const NEVER_APPROVED: &str = "never_approved";
 
+/// The plan scope JOB's steps and budget are filed under: a graph plan's id already carries `plan:`, a plan file's
+/// path does not, and a job with no plan has its own.
+pub(crate) fn plan_scope(job: &Job) -> String {
+    match job.plan.as_deref() {
+        Some(p) if p.starts_with("plan:") => p.to_string(),
+        Some(p) => format!("plan:{p}"),
+        None => format!("plan:{}", job.id),
+    }
+}
+
 fn data_of(job: &Job) -> Map<String, Value> {
     match &job.data {
         Some(Value::Object(m)) => m.clone(),
@@ -493,17 +690,23 @@ pub(crate) async fn load(
         .map_err(fail)
 }
 
-/// The profiles a role may use, in order (`drgnx-job-route`): the first runs it, the rest are its fallbacks.
+/// The profiles a role may use, in order (`drgnx-job-route`): the first runs it, the rest are its fallbacks.  `say`
+/// (the planning session of Say it) with no route of its own is `implement`'s, so nothing new needs configuring.
 pub(crate) fn route(front: &Front, role: &str) -> Vec<String> {
     let cur = front.settings.current();
-    cur.loaded
+    let found = cur
+        .loaded
         .values
         .agents_routes
         .iter()
         .find(|r| r.role == role)
         .map(|r| r.profiles.clone())
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| vec!["claude".to_owned()])
+        .filter(|p| !p.is_empty());
+    match found {
+        Some(p) => p,
+        None if role == "say" => route(front, "implement"),
+        None => vec!["claude".to_owned()],
+    }
 }
 
 /// The profile TASK gets an agent of: the one it was reassigned to, else its role's first.
@@ -973,12 +1176,14 @@ async fn new_id(front: &Front) -> Result<String, Error> {
 }
 
 /// A job from a plan, proposed (approved at once with `auto`).  ONLY: a task's number, the job is that task and the
-/// tasks it needs (Start as Job).
+/// tasks it needs (Start as Job).  ALONE: Say's proposal, which starts without the OK when the Autonomous rule holds
+/// (`say::may_start_alone`).
 struct Proposal<'a> {
     plan: &'a PlanRef,
     repo: Option<&'a str>,
     budget: Option<f64>,
     auto: bool,
+    alone: bool,
     gate: Option<MergeGate>,
     only: Option<i64>,
 }
@@ -989,6 +1194,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         repo,
         budget,
         auto,
+        alone,
         gate,
         only,
     } = p;
@@ -1017,6 +1223,15 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
         )));
     }
     plan::check(&tasks).map_err(invalid)?;
+    // a task's profile, which a plan an agent wrote may name, goes through the check `job/reassign` and Say make
+    for t in &tasks {
+        if let Some(p) = &t.profile
+            && let Some(why) =
+                review::profile_refusal(p, crate::agents::session::find_profile(front, p).as_ref())
+        {
+            return Err(invalid(format!("task {}: {why}", t.n)));
+        }
+    }
     let repo = read
         .repo
         .clone()
@@ -1049,35 +1264,105 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
             )
         })
         .collect();
-    // usd-est: tokens at the price the user configured for the profile's gateway provider; no price: unpriced
-    let mut unpriced: Vec<String> = Vec::new();
-    let mut usd = 0.0;
-    for t in &tasks {
-        let profile = routes
-            .get(&t.role)
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        match profile_price(front, profile) {
-            Some(price) => usd += task_usd(price),
-            None => {
-                if !unpriced.iter().any(|u| u == profile) {
-                    unpriced.push(profile.to_owned());
-                }
-            }
-        }
-    }
-    let per_task = TASK_TOKENS.0 + TASK_TOKENS.1;
-    let estimate = json!({"usd": usd, "unit": "usd-est", "tokens": per_task * tasks.len() as u64, "unpriced": unpriced});
     let gate = match gate.unwrap_or(MergeGate::Review) {
         MergeGate::Review => "review",
         MergeGate::ReviewAccept => "review+accept",
     };
-    let data = json!({
+    // a task that names its profile runs on it (the job's reassignment for it), and one that is not its role's
+    // route's is said, so the user sees it before the OK; its model is then only a hint, and one that differs from
+    // what the profile runs is said, never silently dropped
+    let mut profiles = Map::new();
+    let mut said: Vec<String> = Vec::new();
+    for t in &tasks {
+        let Some(p) = &t.profile else { continue };
+        profiles.insert(format!("{id}#{}", t.n), json!(p));
+        let default = routes.get(&t.role).and_then(Value::as_str).unwrap_or("");
+        if p != default {
+            said.push(format!(
+                "task {} runs on {p}, not the {} route's {default}",
+                t.n, t.role
+            ));
+        }
+        let runs = crate::agents::session::find_profile(front, p).and_then(|p| p.model);
+        if let Some(m) = t.model.as_ref().filter(|m| runs.as_ref() != Some(*m)) {
+            said.push(format!(
+                "task {}: model {m} ignored, profile {p} runs {}",
+                t.n,
+                runs.as_deref().unwrap_or("its own default model")
+            ));
+        }
+    }
+    let mut data = json!({
         "plan": file.to_string_lossy(), "hash": read.hash, "repo": repo, "title": read.title,
-        "tasks": tasks.iter().map(|t| json!({"n": t.n, "title": t.title, "role": t.role,
-                                              "deps": t.deps, "body": t.body})).collect::<Vec<_>>(),
-        "routes": routes, "estimate": estimate, "budget": budget, "gate": gate,
+        "tasks": tasks.iter().map(|t| {
+            let mut o = json!({"n": t.n, "title": t.title, "role": t.role, "deps": t.deps, "body": t.body});
+            if let Some(m) = &t.model {
+                o["model"] = json!(m);
+            }
+            o
+        }).collect::<Vec<_>>(),
+        "routes": routes, "budget": budget, "gate": gate,
     });
+    if !profiles.is_empty() {
+        data["profiles"] = Value::Object(profiles);
+    }
+    // the forecast: from the history of similar tasks, before the write; a forecast that fails never blocks a
+    // proposal (the estimate then has the prior's tokens and no range)
+    let project = {
+        let dir = PathBuf::from(&repo);
+        crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))
+            .await
+            .ok()
+            .flatten()
+    };
+    if let Some(p) = &project {
+        data["project"] = json!(p);
+    }
+    let wants = match &data {
+        Value::Object(m) => crate::forecast::wants_from(front, &id, m),
+        _ => Vec::new(),
+    };
+    let (forecast, made) = match crate::forecast::for_job(front, &id, wants).await {
+        Ok((f, made)) => (Some(f), made),
+        Err(e) => {
+            tracing::warn!("job {id}: no forecast: {}", e.message);
+            (None, Vec::new())
+        }
+    };
+    let mut warnings: Vec<String> = forecast
+        .as_ref()
+        .map_or_else(Vec::new, |f| f.warnings.clone());
+    if let Some(f) = &forecast {
+        warnings.extend(budget_warnings(f, budget));
+    }
+    warnings.extend(said);
+    data["estimate"] = estimate_of(forecast.as_ref(), tasks.len());
+    data["warnings"] = json!(warnings);
+    // Say's proposal starts alone only inside the Autonomous preset's cells; why it waits is the job's
+    let starts_alone = if alone {
+        let ctx = crate::matrix_gate::ActionCtx {
+            project: project.clone(),
+            plan: match plan {
+                PlanRef::Entity(id) => Some(id.as_str().to_owned()),
+                PlanRef::File(_) => None,
+            },
+            ..crate::matrix_gate::ActionCtx::default()
+        };
+        let verdict = match &forecast {
+            Some(f) => crate::say::may_start_alone(front, f, tasks.len(), ctx).await,
+            None => Err("no forecast".to_owned()),
+        };
+        if let Err(why) = &verdict {
+            data["waits"] = json!(why);
+        }
+        verdict.is_ok()
+    } else {
+        false
+    };
+    let title = match &forecast {
+        Some(f) => card_title(tasks.len(), f),
+        None => format!("{} tasks, no forecast: approve to start", tasks.len()),
+    };
     let job = NewJob {
         id: id.clone(),
         title: read.title.clone(),
@@ -1097,7 +1382,7 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     let created = front
         .writer
         .write(caller, "coord/job-create", move |tx| {
-            write_jobs::job_create(tx, job.clone(), now())
+            create_with_forecast(tx, job.clone(), &made, now())
         })
         .await
         .map_err(fail)?;
@@ -1123,26 +1408,29 @@ async fn propose_job(front: &Front, caller: &Caller, p: Proposal<'_>) -> Result<
     }
     if auto {
         approve_job(front, caller, &created, None).await?;
+    } else if starts_alone {
+        approve_job(front, caller, &created, None).await?;
+        // the timeline says who decided: the preset the user chose, not a word of the plan's
+        let d = Decide {
+            kind: "build".into(),
+            subject: "start the job".into(),
+            task: None,
+            paths: None,
+            reason: Some("started by the Autonomous preset within its cells".into()),
+            author: "user".into(),
+            seen: None,
+            replaces: None,
+            job: Some(created.clone()),
+        };
+        front
+            .writer
+            .write(caller, "coord/decide", move |tx| {
+                write_decisions::decide(tx, d.clone(), now())
+            })
+            .await
+            .map_err(fail)?;
     } else {
-        let usd = 0.0_f64;
-        raise_card(
-            front,
-            caller,
-            &created,
-            None,
-            "proposal",
-            &format!(
-                "{} tasks, about {usd:.2} USD{}: approve to start",
-                tasks.len(),
-                if unpriced.is_empty() {
-                    ""
-                } else {
-                    " (some unpriced)"
-                }
-            ),
-            json!({}),
-        )
-        .await?;
+        raise_card(front, caller, &created, None, "proposal", &title, json!({})).await?;
     }
     changed(front, &created).await;
     summary(front, &created, false).await
@@ -1158,7 +1446,30 @@ pub async fn propose(
         repo: p.repo.as_ref().map(|r| r.as_str()),
         budget: p.budget.map(|b| b.get()),
         auto: p.auto.unwrap_or(false),
+        alone: false,
         gate: p.gate,
+        only: None,
+    };
+    propose_job(front, caller, proposal).await
+}
+
+/// A graph plan PLAN proposed in REPO with a dollar BUDGET and GATE (Say it's proposal): the user's OK starts it, or
+/// the Autonomous preset's cells when they hold all of it.
+pub(crate) async fn propose_graph(
+    front: &Front,
+    caller: &Caller,
+    plan: &PlanRef,
+    repo: &str,
+    budget: Option<f64>,
+    gate: Option<MergeGate>,
+) -> Result<JobSummary, Error> {
+    let proposal = Proposal {
+        plan,
+        repo: Some(repo),
+        budget,
+        auto: false,
+        alone: true,
+        gate,
         only: None,
     };
     propose_job(front, caller, proposal).await
@@ -1178,6 +1489,7 @@ pub async fn start_task(
         repo: None,
         budget: None,
         auto: p.auto.unwrap_or(false),
+        alone: false,
         gate: p.gate,
         only: Some(n),
     };
@@ -1199,35 +1511,55 @@ async fn approve_job(
     if status != "proposed" {
         return Err(invalid(format!("Job {id} is {status}, not proposed")));
     }
-    settle_cards(front, caller, id, |c| {
-        (c.kind.as_deref() == Some("proposal")).then_some("approve")
-    })
-    .await?;
     let mut data = data_of(&l.job);
     if let Some(b) = budget {
         data.insert("budget".into(), json!(b));
     }
-    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
-    if let Some(b) = data.get("budget").and_then(Value::as_f64) {
-        fallback::set_budget(front, &l.job, b, true);
-    }
+    let budget = data.get("budget").and_then(Value::as_f64);
+    // only while it is still a proposal, in the write itself: a withdrawal that came first wins
     let jid = id.to_owned();
-    front
+    let approved = front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::job_set(
-                tx,
-                &jid,
-                Some("running"),
-                Some(&Value::Object(data.clone())),
-                now(),
-            )
+            write_jobs::approve_proposal(tx, &jid, &Value::Object(data.clone()), now())
         })
         .await
         .map_err(fail)?;
+    if !approved {
+        return Err(invalid(format!("Job {id} is no longer proposed")));
+    }
+    // the job's USD budget is its plan's limit: reaching it pauses the run (Task 16b)
+    if let Some(b) = budget {
+        fallback::set_budget(front, &l.job, b, true);
+    }
+    settle_cards(front, caller, id, |c| {
+        (c.kind.as_deref() == Some("proposal")).then_some("approve")
+    })
+    .await?;
     changed(front, id).await;
     front.core.runs.wake();
     Ok(())
+}
+
+/// Job ID's proposal withdrawn (a revision replaces it): stopped as a rejected proposal, its card settled reject, only
+/// while it is still proposed, decided in the write itself, so an approval that came first runs on.  Whether it was.
+pub(crate) async fn withdraw(front: &Front, caller: &Caller, id: &str) -> Result<bool, Error> {
+    let jid = id.to_owned();
+    let withdrawn = front
+        .writer
+        .write(caller, "coord/job-set", move |tx| {
+            write_jobs::withdraw_proposal(tx, &jid, NEVER_APPROVED, now())
+        })
+        .await
+        .map_err(fail)?;
+    if withdrawn {
+        settle_cards(front, caller, id, |c| {
+            (c.kind.as_deref() == Some("proposal")).then_some("reject")
+        })
+        .await?;
+        changed(front, id).await;
+    }
+    Ok(withdrawn)
 }
 
 pub async fn approve(front: &Front, caller: &Caller, p: WithBudget) -> Result<JobSummary, Error> {
@@ -1241,24 +1573,24 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
     let l = load(front, id, false)
         .await?
         .ok_or_else(|| invalid(format!("No job {id}")))?;
-    settle_cards(front, caller, id, |c| {
-        (c.kind.as_deref() == Some("proposal")).then_some("reject")
-    })
-    .await?;
-    // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it
-    let rejected = (l.job.status.as_deref() == Some("proposed")).then(|| {
-        let mut data = data_of(&l.job);
-        data.insert(NEVER_APPROVED.into(), json!(true));
-        Value::Object(data)
-    });
+    // a proposal that is stopped was rejected: the job's data says it was never approved, so `job/resume` refuses it.
+    // Whether it still is one is read in the write itself: an approval that landed first is stopped like any running
+    // job, never marked, so its work can be resumed
     let jid = id.to_owned();
-    front
+    let withdrawn = front
         .writer
         .write(caller, "coord/job-set", move |tx| {
-            write_jobs::job_set(tx, &jid, Some("stopped"), rejected.as_ref(), now())
+            write_jobs::stop_job(tx, &jid, NEVER_APPROVED, now())
         })
         .await
         .map_err(fail)?;
+    // the proposal card is settled by whichever won: the approval's own settle says `approve`
+    if withdrawn {
+        settle_cards(front, caller, id, |c| {
+            (c.kind.as_deref() == Some("proposal")).then_some("reject")
+        })
+        .await?;
+    }
     for t in &l.tasks {
         front.core.runs.set_busy(&t.row.id, None);
     }
@@ -1448,12 +1780,519 @@ pub async fn resume(front: &Front, caller: &Caller, p: WithBudget) -> Result<Job
 mod price_tests {
     use super::*;
 
+    /// Pure (D).
     #[test]
-    fn a_task_costs_its_tokens_at_the_configured_price() {
-        // 150k in at 3 $/M + 15k out at 15 $/M = 0.45 + 0.225
-        let usd = task_usd((3.0, 15.0));
-        assert!((usd - 0.675).abs() < 1e-9, "{usd}");
-        assert_eq!(task_usd((0.0, 0.0)), 0.0);
+    fn plan_scope_does_not_double_the_prefix() {
+        let job = |plan: Option<&str>| Job {
+            id: "JOB".into(),
+            title: None,
+            plan: plan.map(str::to_string),
+            repo: None,
+            status: None,
+            created: None,
+            data: None,
+        };
+        assert_eq!(plan_scope(&job(Some("plan:ab-1"))), "plan:ab-1");
+        assert_eq!(plan_scope(&job(Some("/p/x.md"))), "plan:/p/x.md");
+        assert_eq!(plan_scope(&job(None)), "plan:JOB");
+    }
+
+    use runstav::methods::forecast::{CostRange, Forecast, Range};
+    use runstav::methods::matrix::{Limit, Unit};
+
+    fn range(p50: f64, p90: f64) -> Range {
+        Range { p50, p90 }
+    }
+
+    /// A forecast of 40M to 130M tokens in 2 h 10 to 4 h, costing the amounts COST (unit, p50, p90).
+    fn forecast(cost: &[(Unit, f64, f64)], unpriced: &[&str]) -> Forecast {
+        Forecast {
+            tasks: Vec::new(),
+            tokens: range(40.0e6, 130.0e6),
+            active_secs: range(3600.0, 7200.0),
+            wall_secs: range(7800.0, 14400.0),
+            cost: cost
+                .iter()
+                .map(|&(unit, p50, p90)| CostRange {
+                    unit,
+                    p50,
+                    p90,
+                    estimate: unit == Unit::UsdEst,
+                })
+                .collect(),
+            unpriced: unpriced.iter().map(|s| (*s).to_owned()).collect(),
+            wake: None,
+            manager: None,
+            pace: Vec::new(),
+            warnings: Vec::new(),
+            prices_as_of: "2026-11-01".into(),
+            made_at: 0.0,
+        }
+    }
+
+    /// Pure (D).
+    #[test]
+    fn the_card_shows_the_range_not_zero() {
+        let f = forecast(&[(Unit::UsdEst, 12.4, 41.2)], &[]);
+        assert_eq!(
+            card_title(3, &f),
+            "3 tasks, about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h: approve to start"
+        );
+    }
+
+    /// Pure (D).
+    #[test]
+    fn an_unpriced_profile_shows_tokens_and_never_zero() {
+        let f = forecast(&[], &["local"]);
+        let title = card_title(3, &f);
+        assert_eq!(
+            title,
+            "3 tasks, 40M–130M tokens, 2 h 10–4 h, unpriced: approve to start"
+        );
+        assert!(!title.contains("0.00"));
+    }
+
+    /// Pure (D).
+    #[test]
+    fn some_unpriced_is_said() {
+        let f = forecast(&[(Unit::Usd, 1.5, 4.0)], &["local"]);
+        let title = card_title(1, &f);
+        assert!(
+            title.starts_with("1 task, about 1.50–4.00 USD (some unpriced), "),
+            "{title}"
+        );
+    }
+
+    /// Pure (D): `usd`, `unit`, `tokens` and `unpriced` keep their keys and types for the frozen reader.
+    #[test]
+    fn the_estimate_keeps_its_keys() {
+        let f = forecast(&[(Unit::UsdEst, 12.4, 41.2)], &["x"]);
+        let e = estimate_of(Some(&f), 3);
+        assert!(e["usd"].is_number());
+        assert_eq!(e["unit"], "usd-est");
+        assert_eq!(e["tokens"], 40_000_000);
+        assert_eq!(e["unpriced"], json!(["x"]));
+        assert_eq!(e["forecast"]["wall_secs"]["p50"], 7800.0);
+        // no forecast: the prior's tokens, a null forecast, never a zero price
+        let none = estimate_of(None, 2);
+        assert!(none["forecast"].is_null());
+        assert!(none["tokens"].as_u64().unwrap() > 0);
+    }
+
+    /// Pure (D): a dollar budget on a plan with a subscription profile binds the estimate too.
+    #[test]
+    fn a_dollar_budget_on_a_subscription_plan_adds_the_estimate_limit() {
+        assert_eq!(
+            budget_limits(20.0, true),
+            [
+                Limit {
+                    amount: 20.0,
+                    unit: Unit::Usd
+                },
+                Limit {
+                    amount: 20.0,
+                    unit: Unit::UsdEst
+                }
+            ]
+        );
+    }
+
+    /// Pure (D).
+    #[test]
+    fn a_gateway_only_plan_keeps_one_limit() {
+        assert_eq!(
+            budget_limits(20.0, false),
+            [Limit {
+                amount: 20.0,
+                unit: Unit::Usd
+            }]
+        );
+    }
+
+    /// Pure (D): a p90 over the budget is a warning, never a refusal.
+    #[test]
+    fn p90_over_budget_warns_and_does_not_block() {
+        let f = forecast(&[(Unit::UsdEst, 12.0, 41.0)], &[]);
+        let w = budget_warnings(&f, Some(20.0));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("41") && w[0].contains("20"), "{}", w[0]);
+        assert!(budget_warnings(&f, Some(50.0)).is_empty());
+        assert!(budget_warnings(&f, None).is_empty());
+    }
+
+    /// Pure (D): a mixed plan's budget binds the measured and the estimated dollars together, so its warning reads
+    /// their sum: $15 of each at p90 is over $20.
+    #[test]
+    fn a_mixed_plans_p90_is_warned_on_the_sum() {
+        let f = forecast(&[(Unit::Usd, 5.0, 15.0), (Unit::UsdEst, 5.0, 15.0)], &[]);
+        let w = budget_warnings(&f, Some(20.0));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("30") && w[0].contains("estimate") && w[0].contains("20"),
+            "{}",
+            w[0]
+        );
+        assert!(budget_warnings(&f, Some(31.0)).is_empty());
+    }
+
+    /// Pure (D): a cheap task's cost under a cent reads "<0.01", never "0.00", and a cost of nothing is left off.
+    #[test]
+    fn a_cost_under_a_cent_is_never_zero() {
+        let f = forecast(&[(Unit::Usd, 0.002, 0.004)], &[]);
+        let title = card_title(1, &f);
+        assert!(title.starts_with("1 task, about <0.01 USD, "), "{title}");
+        let f = forecast(&[(Unit::Usd, 0.002, 0.02)], &[]);
+        assert!(card_title(1, &f).contains("about <0.01–0.02 USD"));
+        let free = forecast(&[(Unit::Usd, 0.0, 0.0)], &[]);
+        assert!(
+            !card_title(1, &free).contains("0.00"),
+            "{}",
+            card_title(1, &free)
+        );
+        for title in [card_title(1, &f), card_title(2, &forecast(&[], &["x"]))] {
+            assert!(!title.contains("0.00"), "{title}");
+        }
+    }
+
+    fn made(job: &str, task: &str, p50: f64) -> norn::forecast::sample::Made {
+        norn::forecast::sample::Made {
+            job: job.into(),
+            task: task.into(),
+            made_at: 1.0,
+            role: Some("implement".into()),
+            profile: Some("claude".into()),
+            model: None,
+            tokens_p50: p50,
+            tokens_p90: p50 * 2.0,
+            secs_p50: 1.0,
+            secs_p90: 2.0,
+            cost_p50: None,
+            cost_p90: None,
+            cost_unit: None,
+            basis: "no history: prior".into(),
+            n: 0,
+        }
+    }
+
+    fn new_job(id: &str) -> NewJob {
+        NewJob {
+            id: id.into(),
+            title: "t".into(),
+            plan: None,
+            repo: None,
+            tasks: vec![],
+            data: None,
+        }
+    }
+
+    fn front(dir: &Path) -> Front {
+        Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// Pure (D): a temp store.  One forecast row per task and one for the plan are written with the job.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn every_forecast_made_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let rows = vec![
+            made("J", "J#1", 10.0),
+            made("J", "J#2", 20.0),
+            made("J", "J", 30.0),
+        ];
+        f.writer
+            .write(&user(), "coord/job-create", move |tx| {
+                create_with_forecast(tx, new_job("J"), &rows, 1.0)
+            })
+            .await
+            .unwrap();
+        let n = f
+            .writer
+            .db
+            .read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from forecast_made where job = 'J'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+    }
+
+    /// Pure (D): when the forecast rows do not write, the job is not made either.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_job_and_its_forecast_are_one_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        f.writer
+            .write(&user(), "coord/job-create", |tx| {
+                create_with_forecast(tx, new_job("K"), &[], 1.0)
+            })
+            .await
+            .unwrap();
+        // a NaN is stored as NULL, which the not-null column refuses
+        let bad = vec![made("J", "J#1", f64::NAN)];
+        let got = f
+            .writer
+            .write(&user(), "coord/job-create", move |tx| {
+                create_with_forecast(tx, new_job("J"), &bad, 1.0)
+            })
+            .await;
+        assert!(got.is_err());
+        assert!(load(&f, "J", false).await.unwrap().is_none());
+    }
+}
+
+/// What a graph plan's tasks name (their role, profile, model and body) reaching the proposal.
+#[cfg(test)]
+pub(crate) mod graph_plan_tests {
+    use super::*;
+    use crate::store::WorkDb;
+    use runstav::proof::Cap;
+
+    pub(crate) fn front(dir: &Path) -> Front {
+        Front::new(
+            Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            WorkDb::spawn(dir.join("work.db")).unwrap(),
+            norn::store::CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// The user's profiles: PROFILES, an object of name → plist as JSON.
+    pub(crate) async fn set_profiles(f: &Front, profiles: Value) {
+        f.settings
+            .set_overrides(
+                None,
+                vec![crate::settings::overrides::Override {
+                    name: "drgnx-agents-profiles".into(),
+                    value: profiles,
+                    source: "test".into(),
+                }],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A graph plan of TASKS proposed by the user for REPO: the job's id and data.
+    pub(crate) async fn proposed(
+        f: &Front,
+        repo: &Path,
+        tasks: Value,
+    ) -> (String, Map<String, Value>) {
+        let w = effects::plans_write(
+            f,
+            &user(),
+            serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let p: ProposeParams =
+            serde_json::from_value(json!({"plan": w.plan, "repo": repo.to_string_lossy()}))
+                .unwrap();
+        let s = propose(f, &user(), p).await.unwrap();
+        let l = load(f, &s.id, false).await.unwrap().unwrap();
+        (s.id, data_of(&l.job))
+    }
+
+    /// Pure (D): a temp store.  A task's named profile is the job's reassignment for it, which `profile_of` answers.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_proposed_task_runs_on_its_named_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "opus", "blocks": ["1"], "body": "y"}]),
+        )
+        .await;
+        assert_eq!(
+            data_for(&data, "profiles", &format!("{id}#2")),
+            Some(&json!("opus"))
+        );
+        assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        let t2 = l
+            .tasks
+            .iter()
+            .find(|t| t.row.id == format!("{id}#2"))
+            .unwrap();
+        assert_eq!(t2.row.role.as_deref(), Some("review"));
+        assert_eq!(profile_of(&f, &data, t2), "opus");
+    }
+
+    /// Pure (D): a temp store.  A model beside a profile is not what runs: the profile does, and the proposal says
+    /// the model was ignored.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_task_with_model_and_profile_runs_on_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(
+            &f,
+            json!({"opus": {"command": ["claude-agent-acp"], "model": "claude-opus-5-5"}}),
+        )
+        .await;
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "profile": "opus", "body": "x"}]),
+        )
+        .await;
+        assert_eq!(
+            data_for(&data, "profiles", &format!("{id}#1")),
+            Some(&json!("opus"))
+        );
+        let warnings: Vec<&str> = data
+            .get("warnings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            warnings.contains(
+                &"task 1: model claude-haiku-5-5 ignored, profile opus runs claude-opus-5-5"
+            ),
+            "{warnings:?}"
+        );
+        let wants = crate::forecast::wants_from(&f, &id, &data);
+        assert_eq!(wants[0].profile, "opus");
+        assert_eq!(wants[0].model.as_deref(), Some("claude-opus-5-5"));
+    }
+
+    /// A graph plan of TASKS proposed by the user for REPO: the job's summary, or why it was refused.
+    async fn try_propose(f: &Front, repo: &Path, tasks: Value) -> Result<JobSummary, Error> {
+        let w = effects::plans_write(
+            f,
+            &user(),
+            serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap(),
+        )
+        .await?;
+        let p: ProposeParams =
+            serde_json::from_value(json!({"plan": w.plan, "repo": repo.to_string_lossy()}))
+                .unwrap();
+        propose(f, &user(), p).await
+    }
+
+    /// Pure (D): a temp store.  A plan an agent wrote names the profile a task runs on: one a job may not run on
+    /// (Codex, whose lock is not proven) or one that is not there is refused at the proposal, as `job/reassign` and
+    /// Say refuse it, and no job is made.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plan_tasks_profile_goes_through_the_jobs_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(&f, json!({"codex": {"command": ["codex-acp"]}})).await;
+        for (profile, why) in [
+            ("codex", "lock is not proven"),
+            ("nope", "no agent profile"),
+        ] {
+            let e = try_propose(
+                &f,
+                dir.path(),
+                json!([{"number": "1", "title": "a", "body": "x"},
+                       {"number": "3", "title": "c", "profile": profile, "body": "z"}]),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                e.message.contains("task 3") && e.message.contains(why),
+                "{}",
+                e.message
+            );
+        }
+        let jobs = f
+            .writer
+            .db
+            .read(|c| read_jobs::jobs(c, None))
+            .await
+            .unwrap();
+        assert!(jobs.is_empty(), "{jobs:?}");
+    }
+
+    /// Pure (D): a temp store.  A task that runs on a profile other than its role's route says so on the proposal,
+    /// where the user reads it before the OK; a task on its route's profile adds nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tasks_own_profile_is_shown_beside_its_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        set_profiles(&f, json!({"opus": {"command": ["claude-agent-acp"]}})).await;
+        let (_, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "profile": "claude", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "opus", "body": "y"}]),
+        )
+        .await;
+        let warnings: Vec<&str> = data["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            warnings.contains(&"task 2 runs on opus, not the review route's claude"),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.starts_with("task 1 ")),
+            "{warnings:?}"
+        );
+    }
+
+    /// Pure (D): a temp store.  "$20" on a plan with a subscription profile and a gateway one: what the gateway
+    /// measured and what the subscription's agent estimated count together, so $19 of each reaches the limit (and the
+    /// gateway may spend nothing more); the limit reached says it is an estimate.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dollar_budget_on_a_mixed_plan_binds_the_sum() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, _) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "profile": "claude", "body": "x"},
+                   {"number": "2", "title": "b", "role": "review", "profile": "claude (OpenRouter)", "body": "y"}]),
+        )
+        .await;
+        let l = load(&f, &id, false).await.unwrap().unwrap();
+        fallback::set_budget(&f, &l.job, 20.0, true);
+        let scope = runstav::methods::timeline::BudgetScope::Plan(runstav::types::Bounded(
+            plan_scope(&l.job),
+        ));
+        let b = &f.core.budgets;
+        assert!(b.spend(&scope, Unit::UsdEst, 19.0).is_empty());
+        let hits = b.spend(&scope, Unit::Usd, 19.0);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].estimate() && (hits[0].spent - 38.0).abs() < 1e-9,
+            "{hits:?}"
+        );
+        assert_eq!(b.usd_left(&id), Some(0.0));
+        // one card for the plan, not one per unit
+        assert!(b.spend(&scope, Unit::UsdEst, 1.0).is_empty());
+    }
+
+    /// Pure (D): a temp store.  With no profile named, the task's model is what the forecast prices.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_model_without_a_profile_is_the_forecasts_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        let (id, data) = proposed(
+            &f,
+            dir.path(),
+            json!([{"number": "1", "title": "a", "model": "claude-haiku-5-5", "body": "x"}]),
+        )
+        .await;
+        assert_eq!(data_for(&data, "profiles", &format!("{id}#1")), None);
+        let wants = crate::forecast::wants_from(&f, &id, &data);
+        assert_eq!(wants[0].model.as_deref(), Some("claude-haiku-5-5"));
     }
 }
 

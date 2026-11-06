@@ -58,6 +58,13 @@ pub trait DocEmbedder: Send + Sync {
         texts: &'a [String],
         overriding: bool,
     ) -> BoxFuture<'a, Result<Vec<Vec<f32>>, EmbedError>>;
+
+    /// Whether it answers now. One that does not (a server that is not running) gets no request in a pass of tier 2
+    /// and does not mark tier 2 failed; it is asked again when the next change wakes tier 2. The built-in worker,
+    /// started on demand, always does.
+    fn answers(&self) -> BoxFuture<'_, bool> {
+        Box::pin(async { true })
+    }
 }
 
 /// The hub's Hrafn state that is not one project's: the built-in model's worker, shared by every project and by the
