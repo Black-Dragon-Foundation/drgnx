@@ -3,9 +3,8 @@
 
 ;; The Explorer (a dock) is a card while ui/look runs under Glitnir: its window carries the card parameters, the
 ;; frame's dividers are the gap, and the picture shows the rounded corner over the gap.  Both rows skip unless Glitnir
-;; draws the frames (the native shell); the rows that read a drawn card's corner or ring pixels also skip unless its
-;; Glitnir draws window cards (`drgnx-card-panels-ui-test--window-cards-p').  They are race-proof by pattern D: every
-;; picture is taken after `drgnx-test-wait-presented', and compared with another taken the same way.  Also writes the whole-window scene's
+;; draws the frames (the native shell), and are race-proof by pattern D: every picture is taken after
+;; `drgnx-test-wait-presented', and compared with another taken the same way.  Also writes the whole-window scene's
 ;; screenshot to the session's temp dir (`drgnx-card-panels-ui-test--scene').
 
 (require 'ert)
@@ -53,12 +52,6 @@
          (when (get-buffer "*card-panels*") (kill-buffer "*card-panels*"))
          (drgnx-test-wait-presented)))))
 
-(defun drgnx-card-panels-ui-test--window-cards-p ()
-  "Non-nil when Glitnir draws window cards: its Lisp resolves a window's card (`glitnir--recheck-cards', Nidhogg
-`.6' on).  Nidhogg `.5' draws only the frame's own corners, so a card's corner and ring pixels there are the window's
-background; the rows that read them skip.  Nidhogg names the feature no other way yet."
-  (fboundp 'glitnir--recheck-cards))
-
 (defun drgnx-card-panels-ui-test--rect (window)
   "WINDOW's pixel edges (L T R B) in the snapshot's device pixels."
   (let ((s (drgnx-uitest-device-scale (window-frame window))))
@@ -80,7 +73,6 @@ background; the rows that read them skip.  Nidhogg names the feature no other wa
   "The dock's window has the card parameters and the gap; its top-left corner pixel shows the gap, not the dock.
 With the corners as the card's only chrome (a shadow would darken the gap), that pixel is exactly the colour beneath
 the card: the frame's margin, painted in the dividers' colour."
-  (skip-unless (drgnx-card-panels-ui-test--window-cards-p))
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows))) (gap (drgnx-look-density-value 'gap)))
       (should dock)
@@ -199,7 +191,6 @@ two cards has their shadows in it, the margin none).  Pattern D."
   "A divider colour set on the frame outside a theme reaches the card's corners when the cards are applied again:
 the corner pixel and the frame's margin are the new colour, not the one the card was first resolved with (Glitnir
 reads a card's colours when it resolves the card).  Pattern D (read after `drgnx-test-wait-presented')."
-  (skip-unless (drgnx-card-panels-ui-test--window-cards-p))
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows))) (frame (selected-frame))
            (old (face-background 'drgnx-surface-gap frame t))
@@ -235,7 +226,6 @@ reads a card's colours when it resolves the card).  Pattern D (read after `drgnx
   "Under modus-operandi with the cards on, the pixels along a divider are the derived gap, never the theme's grey
 divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's are all `drgnx-surface-gap'.  Pattern D
 \(read after `drgnx-test-wait-presented')."
-  (skip-unless (drgnx-card-panels-ui-test--window-cards-p))
   (drgnx-card-panels-ui-test--with-explorer
     (unwind-protect
         (progn
@@ -258,7 +248,6 @@ divider (#9f9f9f stripes): the margin, the dock's cut corner and the editor's ar
 (ert-deftest drgnx-ui-card-panels/focused-tile-ring-is-accent ()
   "The selected window's card ring is the accent; another window's is the border blend.  A ring pixel just outside the
 card's left edge, halfway down.  Pattern D (read after `drgnx-test-wait-presented')."
-  (skip-unless (drgnx-card-panels-ui-test--window-cards-p))
   (drgnx-card-panels-ui-test--with-explorer
     (let* ((dock (car (drgnx-wb--dock-windows))) (editor (drgnx-card-panels-ui-test--editor))
            (ring-pixel (lambda (w)
@@ -275,7 +264,6 @@ card's left edge, halfway down.  Pattern D (read after `drgnx-test-wait-presente
 (ert-deftest drgnx-ui-card-panels/four-themes-cards ()
   "The corner pixel of a card is the gap under each of the four test themes.  Pattern D (read after
 `drgnx-test-wait-presented')."
-  (skip-unless (drgnx-card-panels-ui-test--window-cards-p))
   (drgnx-card-panels-ui-test--with-explorer
     (unwind-protect
         (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast modus-operandi))
