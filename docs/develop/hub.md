@@ -2629,8 +2629,14 @@ records it: kind `build`, author `user`, reason "started by the Autonomous prese
 
 The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
 is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
-waits for it and replaces what it would have done; a revision of a standing proposal stops it (`job/stop`, while it is
-still proposed) and prompts again. `agents/stop` or `agents/kill` of a planning session stops its planning: nothing
+waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first (`job/stop`,
+while it is still proposed) and prompts again only when it was withdrawn (or the user had rejected it). A say has at
+most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
+withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
+their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that
+was waiting is answered `say-failed` with that reason. A revision never stops a running job. The job's start is
+recorded before `say-proposal` goes out, so a revision the event prompts is refused at once. `agents/stop` or
+`agents/kill` of a planning session stops its planning: nothing
 more is prompted or proposed, and a proposal of it still proposed is stopped. `say/end {id}` stops the session and
 forgets it; its proposal is a job and stays. Say's state is memory only: after a restart `say/revise` answers "the
 planning stopped: say it again", and a proposal it made stays a job with its card.
@@ -2638,7 +2644,7 @@ planning stopped: say it again", and a proposal it made stays a job with its car
 | Method | Class | Answer |
 |---|---|---|
 | `say/start` | user | the planning session's id |
-| `say/revise` | user | true (refused for a planning session the hub no longer holds) |
+| `say/revise` | user | true (refused for a planning session the hub no longer holds, or whose job has started) |
 | `say/end` | user | true, or false for a session that is not a planning session |
 
 Events: `say-proposal {id, job}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.

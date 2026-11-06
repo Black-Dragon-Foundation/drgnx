@@ -293,8 +293,8 @@ skuld::events!(Ev {
     End
 });
 
-/// The core, and what the shell saw of it: the prompts in flight, the jobs proposed and not stopped, the forgets, and
-/// anything done after a stop or a forget.
+/// The core, and what the shell saw of it: the prompts in flight, the jobs proposed and not stopped (and those the
+/// user approved, which a stop of a proposal leaves running), the forgets, and anything done after a stop or a forget.
 #[derive(Default)]
 struct Shell {
     core: SayCore,
@@ -302,6 +302,7 @@ struct Shell {
     two_in_flight: bool,
     proposing: u32,
     jobs: BTreeSet<&'static str>,
+    started: BTreeSet<&'static str>,
     stopped: bool,
     after_stop: Vec<String>,
     forgets: u32,
@@ -340,6 +341,7 @@ impl skuld::Core for Shell {
                 }
                 SayEvent::Proposed {
                     job: Ok(job.into()),
+                    started: false,
                 }
             }
             Ev::Revise => SayEvent::Revise {
@@ -351,7 +353,9 @@ impl skuld::Core for Shell {
             }
             Ev::End => SayEvent::End,
         };
-        for fx in self.core.step(ev) {
+        // a withdrawal is answered at once, as `perform` does
+        let mut todo: std::collections::VecDeque<SayEffect> = self.core.step(ev).into();
+        while let Some(fx) = todo.pop_front() {
             if self.forgets > 0 {
                 self.after_forget.push(format!("{fx:?}"));
             }
@@ -361,14 +365,60 @@ impl skuld::Core for Shell {
                     self.flight += 1;
                 }
                 SayEffect::Propose => self.proposing += 1,
-                SayEffect::StopJob(j) => {
+                // a stop of a proposal: an approved job runs on
+                SayEffect::StopJob(j) if !self.started.contains(j.as_str()) => {
                     self.jobs.retain(|k| *k != j.as_str());
+                }
+                SayEffect::Withdraw(j) => {
+                    let started = self.started.contains(j.as_str());
+                    if !started {
+                        self.jobs.retain(|k| *k != j.as_str());
+                    }
+                    todo.extend(self.core.step(SayEvent::Withdrawn { started }));
                 }
                 SayEffect::Forget => self.forgets += 1,
                 _ => {}
             }
             if self.stopped && matches!(fx, SayEffect::Prompt(_) | SayEffect::Propose) {
                 self.after_stop.push(format!("{fx:?}"));
+            }
+        }
+        Vec::new()
+    }
+}
+
+/// The shell's events and the user's approval of a proposal (`job/approve`), for the orders that have one.
+#[derive(Clone, Debug)]
+enum WithOk {
+    Ev(Ev),
+    Approve(&'static str),
+}
+
+impl skuld::Events for WithOk {
+    const KINDS: &'static [&'static str] =
+        &["TurnEnded", "Checked", "Proposed", "Revise", "Approve"];
+    fn kind(&self) -> &'static str {
+        match self {
+            WithOk::Ev(e) => skuld::Events::kind(e),
+            WithOk::Approve(_) => "Approve",
+        }
+    }
+}
+
+/// [`Shell`] where the user may approve a standing proposal.
+struct Approving(Shell);
+
+impl skuld::Core for Approving {
+    type Event = WithOk;
+    fn step(&mut self, ev: WithOk) -> Vec<WithOk> {
+        match ev {
+            WithOk::Ev(e) => {
+                skuld::Core::step(&mut self.0, e);
+            }
+            WithOk::Approve(job) => {
+                if self.0.jobs.contains(job) {
+                    self.0.started.insert(job);
+                }
             }
         }
         Vec::new()
@@ -421,6 +471,40 @@ fn every_order_a_stop_leaves_no_prompt_and_no_job() {
         }
         Ok(())
     });
+    assert!(r.orders > 1, "{r:?}");
+}
+
+/// A (every order): the user approves the first proposal while a revision comes, before or after it: one say never
+/// has two live jobs (a proposal standing beside the job that started).
+#[test]
+fn every_order_an_approved_job_and_a_revision_give_one_live_job() {
+    let mut p = Partial::new();
+    p.source(
+        "agent",
+        [
+            Ev::TurnEnded,
+            Ev::Checked(true),
+            Ev::Proposed("J1"),
+            Ev::TurnEnded,
+            Ev::Checked(true),
+            Ev::Proposed("J2"),
+        ]
+        .into_iter()
+        .map(WithOk::Ev)
+        .collect(),
+    );
+    p.source("user", vec![WithOk::Approve("J1"), WithOk::Ev(Ev::Revise)]);
+    let r = every_order(
+        &p,
+        Bound::default(),
+        || Approving(Shell::new()),
+        |s, order| {
+            if s.0.jobs.len() > 1 {
+                return Err(format!("two live jobs {:?} in {order:?}", s.0.jobs));
+            }
+            Ok(())
+        },
+    );
     assert!(r.orders > 1, "{r:?}");
 }
 
@@ -656,9 +740,12 @@ fn planning(repo: &std::path::Path) -> BTreeMap<String, Planning> {
     )])
 }
 
-/// EV through S1's core and its effects, as `run` does.
+/// EV through S1's core and its effects, as `run` does (nothing once S1 is forgotten).
 async fn feed(f: &Arc<Front>, live: &mut BTreeMap<String, Planning>, ev: SayEvent) {
-    let fx = live.get_mut("s1").unwrap().core.step(ev);
+    let Some(p) = live.get_mut("s1") else {
+        return;
+    };
+    let fx = p.core.step(ev);
     perform(f, live, "s1", fx).await;
 }
 
@@ -807,6 +894,62 @@ async fn a_revision_replaces_the_proposal() {
             json!([first, "stopped", "settled", "reject"]),
             json!([second, "proposed", "open", null])
         ]
+    );
+}
+
+/// Pure (D): a temp store.  The user approves the proposal, then revises it: the running job is not a proposal to
+/// replace, so the revision is refused, the planning ends, and the next block (had the agent been asked) makes no
+/// second job; `say/revise` then names the job that started.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revision_after_the_job_started_makes_no_second_job() {
+    let dir = tempfile::tempdir().unwrap();
+    let f = say_front(dir.path()).await;
+    let mut live = planning(dir.path());
+    f.core.say.begin(Input::Start {
+        sid: "s1".into(),
+        repo: String::new(),
+        project: None,
+        prompt: String::new(),
+    });
+    feed(
+        &f,
+        &mut live,
+        SayEvent::TurnEnded {
+            message: block(GOOD),
+        },
+    )
+    .await;
+    let job = job_of(&live);
+    let user = crate::runner::user();
+    let approve: runstav::methods::jobs::WithBudget =
+        serde_json::from_value(json!({ "id": job })).unwrap();
+    crate::runner::approve(&f, &user, approve).await.unwrap();
+    feed(
+        &f,
+        &mut live,
+        SayEvent::Revise {
+            text: "also the docs".into(),
+        },
+    )
+    .await;
+    let mut v = good();
+    v["title"] = json!("Settings review, and the docs");
+    feed(
+        &f,
+        &mut live,
+        SayEvent::TurnEnded {
+            message: block(&v.to_string()),
+        },
+    )
+    .await;
+    let rows = sql_rows(&f, "select json_array(id, status) from job".into()).await;
+    assert_eq!(rows, [json!([job, "running"])]);
+    assert!(live.is_empty() && !f.core.say.has("s1"));
+    let again: SayRevise = serde_json::from_value(json!({"id": "s1", "text": "more"})).unwrap();
+    let e = revise(&f, &user, again).await.unwrap_err();
+    assert_eq!(
+        e.message,
+        format!("{job} has started: stop it, then say it again")
     );
 }
 

@@ -420,10 +420,22 @@ pub(crate) enum Checked {
 /// revision, a stop (the planning session stopped by the user) and an end (`say/end`).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum SayEvent {
-    TurnEnded { message: String },
+    TurnEnded {
+        message: String,
+    },
     Checked(Checked),
-    Proposed { job: Result<String, String> },
-    Revise { text: String },
+    /// The proposal made, and whether it started at once (the Autonomous preset's cells held it).
+    Proposed {
+        job: Result<String, String>,
+        started: bool,
+    },
+    /// The answer to [`SayEffect::Withdraw`]: the job had started (the user approved it), so it was not withdrawn.
+    Withdrawn {
+        started: bool,
+    },
+    Revise {
+        text: String,
+    },
     Stop,
     End,
 }
@@ -439,6 +451,10 @@ pub(crate) enum SayEffect {
     Ask(String),
     /// Stop that proposal, if it is still one.
     StopJob(String),
+    /// Stop that proposal for a revision, if it is still one (answered by [`SayEvent::Withdrawn`]).
+    Withdraw(String),
+    /// That job started: the planning is done, and a revision is refused with its id.
+    Started(String),
     /// Write the plan and propose the job (answered by [`SayEvent::Proposed`]).
     Propose,
     /// The planning failed (`say-failed`).
@@ -449,13 +465,17 @@ pub(crate) enum SayEffect {
 
 /// One planning session's order: at most one prompt in flight; a revision that comes while a prompt, a check or a
 /// proposal is under way waits for it and replaces what it would have done; after a stop nothing is prompted or
-/// proposed and no proposal of it stands; the session is forgotten once.
+/// proposed and no proposal of it stands; the session is forgotten once.  A say has at most one live job: once its
+/// proposal has started (approved by the user, or by the Autonomous preset), the planning is done, and a revision is
+/// refused rather than proposing a second job beside it (a revision never stops running work).
 #[derive(Debug, Default)]
 pub(crate) struct SayCore {
     /// A prompt sent whose turn has not ended.
     in_flight: bool,
     checking: bool,
     proposing: bool,
+    /// The standing proposal is being withdrawn for the pending revision.
+    withdrawing: bool,
     /// The user's revision, waiting for what is under way.
     pending: Option<String>,
     /// The proposal standing now.
@@ -482,12 +502,24 @@ impl SayCore {
     }
 
     fn busy(&self) -> bool {
-        self.in_flight || self.checking || self.proposing
+        self.in_flight || self.checking || self.proposing || self.withdrawing
     }
 
     fn prompt(&mut self, text: String) -> SayEffect {
         self.in_flight = true;
         SayEffect::Prompt(text)
+    }
+
+    /// Job J started: the planning is done; a revision waiting for it is refused.
+    fn started(&mut self, j: String) -> Vec<SayEffect> {
+        self.ended = true;
+        let mut fx = vec![SayEffect::Started(j.clone())];
+        if self.pending.take().is_some() {
+            fx.push(SayEffect::Fail(vec![started_why(&j)]));
+        }
+        self.job = Some(j);
+        fx.push(SayEffect::Forget);
+        fx
     }
 
     pub(crate) fn step(&mut self, ev: SayEvent) -> Vec<SayEffect> {
@@ -537,7 +569,7 @@ impl SayCore {
                     }
                 }
             }
-            SayEvent::Proposed { job } => {
+            SayEvent::Proposed { job, started } => {
                 if !self.proposing {
                     return Vec::new();
                 }
@@ -553,12 +585,31 @@ impl SayCore {
                         self.job = Some(j);
                         Vec::new()
                     }
-                    Ok(j) => match self.pending.take() {
-                        Some(t) => vec![F::StopJob(j), self.prompt(t)],
-                        None => {
-                            self.job = Some(j);
+                    Ok(j) if started => self.started(j),
+                    Ok(j) => {
+                        self.job = Some(j.clone());
+                        if self.pending.is_some() {
+                            self.withdrawing = true;
+                            vec![F::Withdraw(j)]
+                        } else {
                             Vec::new()
                         }
+                    }
+                }
+            }
+            SayEvent::Withdrawn { started } => {
+                if !self.withdrawing {
+                    return Vec::new();
+                }
+                self.withdrawing = false;
+                if self.ended() {
+                    return Vec::new();
+                }
+                match self.job.take() {
+                    Some(j) if started => self.started(j),
+                    _ => match self.pending.take() {
+                        Some(t) => vec![self.prompt(t)],
+                        None => Vec::new(),
                     },
                 }
             }
@@ -570,9 +621,15 @@ impl SayCore {
                     self.pending = Some(text);
                     return Vec::new();
                 }
-                let mut fx: Vec<SayEffect> = self.job.take().map(F::StopJob).into_iter().collect();
-                fx.push(self.prompt(text));
-                fx
+                match self.job.clone() {
+                    // the standing proposal goes first; the user may have approved it since
+                    Some(j) => {
+                        self.pending = Some(text);
+                        self.withdrawing = true;
+                        vec![F::Withdraw(j)]
+                    }
+                    None => vec![self.prompt(text)],
+                }
             }
             SayEvent::Stop => {
                 if self.ended() {
@@ -623,10 +680,19 @@ pub(crate) enum Input {
     },
 }
 
-/// The planning sessions the hub holds (their ids, so a chat that is not Say's pays one lookup at its turn's end) and
-/// the channel to [`run`].
+/// How many planning sessions whose job started are remembered, so `say/revise` names the job.
+const STARTED_KEPT: usize = 64;
+
+/// Why a revision of a planning session whose job JOB started is refused.
+fn started_why(job: &str) -> String {
+    format!("{job} has started: stop it, then say it again")
+}
+
+/// The planning sessions the hub holds (their ids, so a chat that is not Say's pays one lookup at its turn's end), the
+/// latest ones whose job started (session, job), and the channel to [`run`].
 pub struct Say {
     live: Arc<Mutex<BTreeSet<String>>>,
+    started: Mutex<VecDeque<(String, String)>>,
     tx: mpsc::UnboundedSender<Input>,
     rx: Mutex<Option<mpsc::UnboundedReceiver<Input>>>,
 }
@@ -636,6 +702,7 @@ impl Default for Say {
         let (tx, rx) = mpsc::unbounded_channel();
         Say {
             live: Arc::default(),
+            started: Mutex::default(),
             tx,
             rx: Mutex::new(Some(rx)),
         }
@@ -700,6 +767,24 @@ impl Say {
 
     fn forget(&self, sid: &str) {
         lock(&self.live).remove(sid);
+    }
+
+    /// Session SID's job JOB started (the latest [`STARTED_KEPT`] are kept).
+    fn mark_started(&self, sid: &str, job: &str) {
+        let mut s = lock(&self.started);
+        s.retain(|(k, _)| k != sid);
+        s.push_back((sid.to_owned(), job.to_owned()));
+        while s.len() > STARTED_KEPT {
+            s.pop_front();
+        }
+    }
+
+    /// The job session SID made that started, if it is remembered.
+    fn started_job(&self, sid: &str) -> Option<String> {
+        lock(&self.started)
+            .iter()
+            .find(|(k, _)| k == sid)
+            .map(|(_, j)| j.clone())
     }
 }
 
@@ -803,14 +888,28 @@ async fn perform(
                 Vec::new()
             }
             SayEffect::Propose => {
-                let job = propose(front, sid, p).await;
+                let made = propose(front, sid, p).await;
+                let started = matches!(made, Ok((_, true)));
+                let job = made.map(|(j, _)| j);
                 if let Ok(j) = &job {
+                    // before the event: a revision the event prompts is refused with the job's id
+                    if started {
+                        front.core.say.mark_started(sid, j);
+                    }
                     front.broadcast("say-proposal", json!({"id": sid, "job": j}));
                 }
-                p.core.step(SayEvent::Proposed { job })
+                p.core.step(SayEvent::Proposed { job, started })
             }
             SayEffect::StopJob(job) => {
                 stop_proposal(front, &job).await;
+                Vec::new()
+            }
+            SayEffect::Withdraw(job) => {
+                let started = !stop_proposal(front, &job).await;
+                p.core.step(SayEvent::Withdrawn { started })
+            }
+            SayEffect::Started(job) => {
+                front.core.say.mark_started(sid, &job);
                 Vec::new()
             }
             SayEffect::Fail(why) => {
@@ -830,25 +929,33 @@ async fn perform(
     }
 }
 
-/// Job JOB stopped while it is still a proposal (a job the user approved since runs on).
-async fn stop_proposal(front: &Front, job: &str) {
-    let proposed = crate::runner::load(front, job, false)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|l| l.job.status.as_deref() == Some("proposed"));
-    if proposed {
-        let by_id: ById = serde_json::from_value(json!({ "id": job })).expect("a job id is an id");
-        if let Err(e) = crate::runner::stop(front, &crate::runner::user(), by_id).await {
-            tracing::warn!(job, "say: the proposal was not stopped: {}", e.message);
+/// Job JOB stopped while it is still a proposal (a job the user approved since runs on): whether it never started
+/// (it was a proposal, or one the user rejected, or it is gone).
+async fn stop_proposal(front: &Front, job: &str) -> bool {
+    let Some(l) = crate::runner::load(front, job, false).await.ok().flatten() else {
+        return true;
+    };
+    match l.job.status.as_deref() {
+        Some("proposed") => {
+            let by_id: ById =
+                serde_json::from_value(json!({ "id": job })).expect("a job id is an id");
+            if let Err(e) = crate::runner::stop(front, &crate::runner::user(), by_id).await {
+                tracing::warn!(job, "say: the proposal was not stopped: {}", e.message);
+            }
+            true
         }
+        _ => l
+            .job
+            .data
+            .as_ref()
+            .is_some_and(|d| d.get(crate::runner::NEVER_APPROVED).is_some()),
     }
 }
 
 /// The plan P's last block drew, written and proposed as the user would, in the repository `say/start` named: the
-/// job's id.  The dollar budget is the smallest of the block's (`usd` or `usd-est`); the planning session's own use
-/// goes in `data.planning`, as numbers.
-async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<String, String> {
+/// job's id, and whether it started at once (the Autonomous preset).  The dollar budget is the smallest of the block's
+/// (`usd` or `usd-est`); the planning session's own use goes in `data.planning`, as numbers.
+async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<(String, bool), String> {
     let d = p.drawn.as_ref().ok_or("no proposal to make")?;
     let tasks: Vec<Value> = d
         .tasks
@@ -884,7 +991,8 @@ async fn propose(front: &Front, sid: &str, p: &Planning) -> Result<String, Strin
         })
         .await;
     }
-    Ok(s.id)
+    let started = s.status.as_deref() != Some("proposed");
+    Ok((s.id, started))
 }
 
 // ---- the methods --------------------------------------------------------------------------------------------------
@@ -916,9 +1024,13 @@ pub async fn start(front: &Front, _caller: &Caller, p: SayStart) -> Result<SaySt
     Ok(SayStarted { id: started.id })
 }
 
-/// `say/revise`: the user's change, to a planning session the hub still holds.
+/// `say/revise`: the user's change, to a planning session the hub still holds; refused once its job has started
+/// (the revision would be a second job beside it).
 pub async fn revise(front: &Front, _caller: &Caller, p: SayRevise) -> Result<bool, Error> {
     let sid = p.id.as_str();
+    if let Some(job) = front.core.say.started_job(sid) {
+        return Err(crate::runner::invalid(started_why(&job)));
+    }
     if !front.core.say.has(sid) {
         return Err(crate::runner::invalid("the planning stopped: say it again"));
     }

@@ -644,6 +644,11 @@ The job then waits for your OK, like any proposal: the proposal card's title is 
 nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
 is rejected and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
 
+One prompt makes at most one running job. Once its job has started (you approved it, or the Autonomous preset
+started it), the planning is done and the chat closes: `say/revise` is refused with "JOB has started: stop it, then
+say it again", and a revision already on its way when the job started comes back as `say-failed` with the same
+reason. A revision never stops work that is running; stop the job yourself, then say what you want again.
+
 **Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
 the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,
 is within its spend cell ($150), every task has a price, and no subscription's week would run out at the plan's p90
