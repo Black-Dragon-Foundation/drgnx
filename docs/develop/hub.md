@@ -1076,6 +1076,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
+| `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
+| `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
@@ -2296,6 +2299,46 @@ global value and the project's own set from `config/settings` (`Settings::projec
 `norn::hooks::parse_rules` refuses refuses the whole set at `overrides[N].value[I].KEY`. `plugins::io` holds the
 decisions a plugin's imports need (the store's quota, `judge_http`); `docs/develop/plugins.md` ("Plugins in the hub")
 has the whole account.
+
+## The _drgnx/panel extension
+
+An ACP extension between the hub and an agent's adapter, for what standard ACP does not give: the context breakdown,
+dropping and pinning what is in it, a compaction preview, and the `before-tool` hooks on steps the agent allows itself.
+The org's adapter forks speak it; any other agent simply does not advertise it, and the panel then shows none of it
+(hidden, never faked). The hub's side is `agents/session/panel.rs`.
+
+- **Handshake.** `initialize` sends `clientCapabilities._meta["_drgnx/panel"] = {"version": 1}`. The agent answers
+  in `agentCapabilities._meta["_drgnx/panel"] = {version, features}`, features among `context`, `drop`, `pin`,
+  `compact-preview` and `before-tool`. Only version 1 counts, and only those names: they become the snapshot's
+  `panel.features` (in that order). An agent that advertises none has no `panel` in its snapshot.
+- **`_drgnx/context`** (agent → hub notification) `{sessionId, used, size, parts: [{kind, tokens, items?: [{id, label,
+  tokens}]}], compact_frees?}`, `kind` one of `system`, `tools`, `files`, `tool-output`, `conversation`: the
+  snapshot's `panel.context`, at most 4 times a second (the first at once, then the latest after the quarter second;
+  the last one is never lost). At most 8 parts, 200 items a part and 256 characters a label.
+- **User actions.** `agents/context-drop {id, item}`, `agents/context-pin {id, item, pinned}` and
+  `agents/compact-preview {id}` (user class) go to the agent as `_drgnx/context/drop {sessionId, item}`,
+  `_drgnx/context/pin {sessionId, item, pinned}` and `_drgnx/compact/preview {sessionId}`, each with a 10 s deadline.
+  The preview's answer is `{frees?, kept?, summarised?, note?}` (items as in the breakdown); nothing is compacted. A
+  session whose agent does not offer the feature gets `invalid-params` "this agent does not offer it" (the editor hides
+  the action instead). An agent's error is `not-allowed` with its message quoted; no answer in time, or an answer that
+  does not fit its schema, is `internal`.
+- **`_drgnx/before_tool`** (agent → hub request) `{sessionId, toolCall}`, `toolCall` as in
+  `session/request_permission`: the session's `before-tool` rules and hooks run at the adapter site
+  (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with
+  one hook row as at the seam. The answer is `{outcome: "allow"}`, or `{outcome: "deny", reason}` with the hub's words
+  and the hook's quoted, and a deny is also steered into the turn. A hub tool's step answers `allow`: it is hooked at its
+  server. The adapter runs inside the agent's sandbox, so these kinds are enforced by the agent's side: the snapshot
+  lists them under `hooked.by_adapter` (the kinds the lock leaves unhooked), apart from the lock's `before_tool`.
+- **What the agent sends is untrusted.** Every params object is checked against its schema with unknown fields
+  refused, so an `outcome` or a verdict of the agent's own in a `_drgnx/before_tool` is refused (`-32602`, the field
+  named) and runs nothing: the answer is the hooks' outcome, never the agent's say. A `sessionId` that is not the
+  agent's own session, and a message over 256 KiB, are refused. A request the hub does not take from an agent (one it
+  sends, such as `_drgnx/context/drop`, or one it does not know) gets `-32601` "drgnx refuses it: it takes no METHOD
+  from an agent"; a feature the agent did not advertise is refused too. A notification that does not fit is dropped
+  with a warning in the hub's log. Nothing in the extension changes a session's matrix, grants or lock.
+- **Tests.** `agents::session::panel::tests` (the checks and the context gate, pure), hermod's
+  `an_extension_request_comes_with_a_responder` and `ext_request_returns_the_answer_or_ends_at_its_deadline`, and the
+  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`.
 
 ## The timeline
 

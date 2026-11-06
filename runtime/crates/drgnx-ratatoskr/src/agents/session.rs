@@ -11,6 +11,7 @@
 
 #[cfg(test)]
 pub(crate) mod attach_tests;
+pub(crate) mod panel;
 mod turn_core;
 
 use super::launch;
@@ -785,8 +786,11 @@ pub struct Session {
     tool_hub: Arc<crate::coord::ToolHub>,
     /// Its Urdr project, resolved from its folder at the first hook run (`None` inside: no project).
     project: std::sync::OnceLock<Option<String>>,
-    /// Which tool kinds its `before-tool` hooks see, as its lock made them at launch.
+    /// Which tool kinds its `before-tool` hooks see, as its lock made them at launch (and its adapter, when it offers
+    /// `before-tool`).
     hooked: Option<runstav::methods::agents::Hooked>,
+    /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
+    panel: panel::Panel,
 }
 
 /// What `Conn::prompt` answered for a turn.
@@ -1813,8 +1817,9 @@ async fn launch(
     let meta = prep.plan.session_meta.clone();
     let init = async {
         let caps =
-            serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true}}))
-                .map_err(|e| hermod::Error::Decode(e.to_string()))?;
+            serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true},
+                                                 "_meta": panel::client_meta()}))
+            .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
         let mut landed = (None, None);
@@ -1971,6 +1976,8 @@ fn assemble(
         front.core.budgets.link(&scope, &scope_of(Role::Manager, m));
     }
     let plugins_changed = front.mcp.plugins_flag(&i.id);
+    let panel = panel::Panel::new(l.caps.as_ref());
+    let hooked = panel::with_adapter(l.hooked, panel.features());
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -2024,7 +2031,8 @@ fn assemble(
         stamps: front.core.stamps.clone(),
         tool_hub: front.tool_hub.clone(),
         project: std::sync::OnceLock::new(),
-        hooked: l.hooked,
+        hooked,
+        panel,
     });
     (s, done_rx)
 }
@@ -3190,6 +3198,7 @@ impl Session {
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
             hooked: self.hooked.clone(),
+            panel: self.panel.snapshot(),
         }
     }
 
@@ -3239,6 +3248,14 @@ impl Session {
     async fn handle(self: &Arc<Self>, ev: Event) {
         {
             match ev {
+                Event::Ext { method, params } if method.starts_with("_drgnx/") => {
+                    panel::notification(self, &method, params);
+                }
+                Event::Request(Incoming::Ext {
+                    method,
+                    params,
+                    resp,
+                }) => panel::request(self.clone(), method, params, resp),
                 Event::Ext { method, params } => {
                     if let Some((provider, share, resets)) =
                         crate::budget::meter_of(&method, &params)

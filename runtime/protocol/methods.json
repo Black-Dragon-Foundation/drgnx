@@ -3,6 +3,107 @@
     {
       "data": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
           "Hooked": {
             "additionalProperties": false,
             "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
@@ -46,6 +147,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -238,6 +363,17 @@
                   "string",
                   "null"
                 ]
+              },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
               },
               "parent": {
                 "description": "The manager session that started it.",
@@ -2236,6 +2372,190 @@
       "classes": [
         "user"
       ],
+      "doc": "what a compaction would free, keep and summarise now, as the agent says (`_drgnx/compact/preview`, 10 s; nothing is compacted); an agent without the `compact-preview` feature: invalid-params",
+      "name": "agents/compact-preview",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "What a compaction would do now, as the agent says (nothing is compacted): the tokens it would free, the items it\nkeeps and the ones it summarises, and a note (e.g. \"costs one model call\").",
+        "properties": {
+          "frees": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kept": {
+            "items": {
+              "$ref": "#/$defs/ContextItem"
+            },
+            "maxItems": 200,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "note": {
+            "maxLength": 1024,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summarised": {
+            "items": {
+              "$ref": "#/$defs/ContextItem"
+            },
+            "maxItems": 200,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "CompactPreview",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
+      "name": "agents/context-drop",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "description": "The item's `id` in the session's context breakdown.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "ContextDropParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+      "name": "agents/context-pin",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "pinned": {
+            "description": "True pins it (a compaction keeps it), false unpins it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "item",
+          "pinned"
+        ],
+        "title": "ContextPinParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the user's other actions on a session: deliver-queue, unqueue, requeue, review",
       "name": "agents/do",
       "params": {
@@ -2442,6 +2762,107 @@
       },
       "result": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
           "Entry": {
             "additionalProperties": true,
             "description": "One transcript entry: its `type`, and the rest as the backend sent it (ACP's fields; phase 5 types them).",
@@ -2515,6 +2936,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -2707,6 +3152,17 @@
                   "string",
                   "null"
                 ]
+              },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
               },
               "parent": {
                 "description": "The manager session that started it.",
@@ -2942,6 +3398,107 @@
       },
       "result": {
         "$defs": {
+          "Context": {
+            "additionalProperties": false,
+            "description": "The agent's context breakdown (`_drgnx/context`, as the agent counts it): tokens used of the window's size, by\npart, and what a compaction would free.",
+            "properties": {
+              "compact_frees": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "parts": {
+                "items": {
+                  "$ref": "#/$defs/ContextPart"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "size": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "size",
+              "parts"
+            ],
+            "type": "object"
+          },
+          "ContextItem": {
+            "additionalProperties": false,
+            "description": "One thing in a part (a file, a tool output) that the agent can drop or pin by its `id`.",
+            "properties": {
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "label": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "tokens"
+            ],
+            "type": "object"
+          },
+          "ContextKind": {
+            "description": "What a part of the context window holds.",
+            "enum": [
+              "system",
+              "tools",
+              "files",
+              "tool-output",
+              "conversation"
+            ],
+            "type": "string"
+          },
+          "ContextPart": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/$defs/ContextItem"
+                },
+                "maxItems": 200,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ContextKind"
+              },
+              "tokens": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "tokens"
+            ],
+            "type": "object"
+          },
           "Hooked": {
             "additionalProperties": false,
             "description": "The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the\npermission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the\nagent runs them without asking). Fixed at the session's start; never faked.",
@@ -2985,6 +3542,30 @@
               "interrupt"
             ],
             "type": "string"
+          },
+          "Panel": {
+            "additionalProperties": false,
+            "description": "The agent's `_drgnx/panel` extension: the features it advertised in `initialize` (`context`, `drop`, `pin`,\n`compact-preview`, `before-tool`) and its last `_drgnx/context`.",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Context"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "features": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "Permission": {
             "additionalProperties": false,
@@ -3177,6 +3758,17 @@
                   "string",
                   "null"
                 ]
+              },
+              "panel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Panel"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "What its agent's `_drgnx/panel` extension offers, and the context breakdown it sent last (none: the agent\noffers nothing; an editor hides the actions)."
               },
               "parent": {
                 "description": "The manager session that started it.",

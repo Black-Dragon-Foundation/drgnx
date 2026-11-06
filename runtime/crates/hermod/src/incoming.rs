@@ -1,4 +1,6 @@
-//! The agent's requests to us, and the handle that answers one.  There is no `terminal/*`: we do not offer it.
+//! The agent's requests to us, and the handle that answers one.  There is no `terminal/*`: we do not offer it.  A
+//! request outside the schema whose method starts with `_` (an extension, e.g. `_drgnx/before_tool`) comes as
+//! [`Incoming::Ext`], its params as the agent sent them: the owner checks them, and answers or refuses.
 
 use crate::conn::Shared;
 use crate::schema::v1::{
@@ -8,7 +10,7 @@ use crate::schema::v1::{
 use crate::types::Error;
 use runstav::jsonrpc::Id;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tokio::sync::mpsc::WeakUnboundedSender;
@@ -22,6 +24,12 @@ pub enum Incoming {
     ),
     ReadFile(ReadTextFileRequest, Responder<ReadTextFileResponse>),
     WriteFile(WriteTextFileRequest, Responder<WriteTextFileResponse>),
+    /// An extension request: its method, its params (`null` when absent) and the answer.
+    Ext {
+        method: String,
+        params: Value,
+        resp: Responder<Value>,
+    },
 }
 
 /// The answer to one request.  Dropped unanswered while the child lives, it answers "cancelled" (-32800); once

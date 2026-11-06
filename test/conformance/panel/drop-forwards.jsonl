@@ -1,0 +1,25 @@
+{"scenario": "panel/drop-forwards", "requires": ["v1", "test-hooks"], "doc": "[C] The user's agents/context-drop, agents/context-pin and agents/compact-preview reach the agent as _drgnx/context/drop, _drgnx/context/pin and _drgnx/compact/preview with its session id; the preview comes back checked against its schema, and an answer with a field of the agent's own is an error, not a result."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-panel\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--panel\" \"context,drop,pin,compact-preview\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-panel", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/context-drop", "params": {"id": "$sid", "item": "t1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/context/drop\",\"params\":{\"item\":\"t1\",\"sessionId\":\"s1\"}", "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/context-pin", "params": {"id": "$sid", "item": "f1", "pinned": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/context/pin\",\"params\":{\"item\":\"f1\",\"pinned\":true,\"sessionId\":\"s1\"}", "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/compact-preview", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"frees": 1200, "kept": [{"id": "f1", "label": "src/a.rs", "tokens": 300}], "summarised": [{"id": "t3", "label": "Bash ls", "tokens": 1200}], "note": "no model call"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "panel:preview {\"frees\": 1, \"grants\": {\"execute\": \"allow\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"status": "idle", "turns": 1}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/compact-preview", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "internal", "message": "$string"}}, "within_ms": 15000}
