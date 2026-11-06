@@ -245,7 +245,9 @@ A change applies to the icons drawn from then on.
 For code, `(drgnx-look-icon 'folder 'shadow)` is the string for the icon `folder` in the face `shadow` (the optional
 third argument is the size), and `(drgnx-look-file-icon "main.rs")` is the icon of a file's kind: code, text, config,
 image, archive, or a plain file, and a folder (open or closed) for a directory. The kind comes from the file name,
-then from the major mode in `auto-mode-alist`; there are no per-language logos.
+then from the major mode in `auto-mode-alist`; there are no per-language logos. It is worked out once per extension
+(once per name for a name without one: `Makefile`, `LICENSE`) and kept, at most 256 of them, the least recently used
+going first; a change of `auto-mode-alist` works them out again.
 
 The icons are from Lucide (ISC licence) and a few from Feather (MIT licence); both notices are in `etc/icons/`
 (`LICENSE-lucide`, `LICENSE-feather`) and must stay with the icons in any copy.
