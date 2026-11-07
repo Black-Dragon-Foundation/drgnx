@@ -1084,6 +1084,14 @@ impl Queue {
         }
     }
 
+    /// Whether runner NAME is out of reach (its link is lost or never came up), not waiting on a login or on its user.
+    pub fn is_unreachable(&self, name: &str) -> bool {
+        self.lock()
+            .runners
+            .get(name)
+            .is_some_and(|r| matches!(r.state, RunnerState::Unreachable { .. }))
+    }
+
     /// How many runners are known.
     pub fn runners(&self) -> usize {
         self.lock().runners.len()
