@@ -47,7 +47,7 @@ env:
   DRGNX_NIDHOGG_STRICT: ${{ (inputs.nidhogg == 'line' || inputs.nidhogg == 'artifact') && '1' || '' }}
 
 jobs:
-  # nidhogg: line: Nidhogg's integration branch head (.github/ci/nidhogg-line), its newest green build run with the
+  # nidhogg: line: Nidhogg's integration branch head (.github/ci/nidhogg-line), its newest build run whose tarball jobs passed, with the
   # tarballs the asked tiers need, and those tarballs copied into this run under their own names, so every job
   # installs them as `nidhogg: artifact` does. Reading another repository's artifacts needs a token even when it is
   # public: an App token with Actions: read on nidhogg (docs/develop/ci.md, "Nidhogg's integration line")
