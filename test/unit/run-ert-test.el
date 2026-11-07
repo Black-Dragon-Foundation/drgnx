@@ -802,6 +802,30 @@ runner gave it: DRGNX_TEST_ELN_DIR and the first effective directory of `native-
           (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=\"^nothing/\"" "DRGNX_TEST_ONE_PROCESS=1") 1)))
       (delete-directory tmp t))))
 
+(ert-deftest drgnx-run-ert/a-test-name-selector-naming-no-test-fails-with-a-summary ()
+  ;; UI-RUN-NO-DEADLINE-1: a bare symbol is ERT's selector for one test; one no file defines signalled
+  ;; `ert-test-unbound' in every Emacs that ran it, so no summary was written (a GUI session then waited out its limit)
+  (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))
+         (suite (expand-file-name "suite" tmp)) (results (expand-file-name "r.json" tmp)))
+    (unwind-protect
+        (progn
+          (drgnx-run-ert-test--suite suite '(("one-test.el" . "(ert-deftest iso-one/a () (should t))")))
+          (dolist (extra '(nil ("DRGNX_TEST_ONE_PROCESS=1")))
+            (ignore-errors (delete-file results))
+            (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a" extra) 1))
+            (should (string-match-p "DRGNX_TEST_SELECTOR iso-none/a matched 0 tests"
+                                    (plist-get (aref (plist-get (drgnx-run-ert-test--json results) :failures) 0)
+                                               :condition)))
+            ;; the ui tier's halves: nothing run, no failure (the tier checks both halves)
+            (should (equal (apply #'drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-none/a"
+                                  "DRGNX_TEST_EMPTY_OK=1" extra)
+                           0))
+            (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 0)))
+          ;; the test it names still runs
+          (should (equal (drgnx-run-ert-test--batch suite results "DRGNX_TEST_SELECTOR=iso-one/a") 0))
+          (should (equal (plist-get (drgnx-run-ert-test--json results) :total) 1)))
+      (delete-directory tmp t))))
+
 (ert-deftest drgnx-run-ert/an-empty-batch-is-not-a-failure-when-the-ui-tier-says-so ()
   ;; DX-UI-TIER-EMPTY-BATCH-1: a narrow `test --ui' selector names tests of one half only
   (let* ((tmp (file-name-as-directory (make-temp-file "drgnx-iso" t)))

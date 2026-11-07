@@ -751,13 +751,13 @@ summary to RESULTS-FILE.  Return t if every test passed."
          (_ (when (and seed (not drgnx-run-ert--leaks-quiet)) (drgnx-run-ert--say-seed seed)))
          ;; ERT's own report prints the conditions: unibyte bytes and control characters as escapes, never raw
          (stats (let ((print-escape-nonascii t) (print-escape-control-characters t))
-                  (ert-run-tests-batch (drgnx-run-ert--selector))))
+                  (ert-run-tests-batch (if (drgnx-run-ert--unbound-name-p selector) '(member) (drgnx-run-ert--selector)))))
          ;; a test the prefilter could not see (a full run), a name selector that picked nothing (not in a file's own
          ;; Emacs: its parent counts)
          (load-failures
           (append load-failures
                   (and (null selector) (not drgnx-run-ert--order-in) (drgnx-run-ert--unindexed stats dir))
-                  (and (stringp selector) (not drgnx-run-ert--file-child) (not (drgnx-run-ert--empty-ok-p))
+                  (and (drgnx-run-ert--name-selector-p selector) (not drgnx-run-ert--file-child) (not (drgnx-run-ert--empty-ok-p))
                        (zerop (+ (ert-stats-total stats) (length load-failures)))
                        (list (drgnx-run-ert--matched-nothing selector)))))
          (leaks (and census (drgnx-run-ert--census-finish)))
@@ -1120,9 +1120,20 @@ sets it, for one of its two batches may hold none of the tests a narrow selector
   (equal (getenv "DRGNX_TEST_EMPTY_OK") "1"))
 
 (defun drgnx-run-ert--matched-nothing (selector)
-  "The failure (:name :condition) of a run whose string SELECTOR matched no test."
+  "The failure (:name :condition) of a run whose name SELECTOR (`drgnx-run-ert--name-selector-p') matched no test."
   (list :name "selector"
-        :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (an Emacs regexp: \\| for alternation, not |)" selector)))
+        :condition (format "DRGNX_TEST_SELECTOR %S matched 0 tests (%s)" selector
+                           (if (stringp selector) "an Emacs regexp: \\| for alternation, not |"
+                             "a symbol names one test, and no file loaded defines it"))))
+
+(defun drgnx-run-ert--name-selector-p (selector)
+  "Whether SELECTOR picks tests by name: a string (a regexp) or a symbol other than t, nil and keywords (one test)."
+  (or (stringp selector) (and selector (symbolp selector) (not (eq selector t)) (not (keywordp selector)))))
+
+(defun drgnx-run-ert--unbound-name-p (selector)
+  "Whether SELECTOR is a symbol naming a test that is not defined: ERT signals `ert-test-unbound' for it, so the run
+selects nothing instead (`(member)': ERT reads a nil selector as t) and says so like a regexp that matched nothing."
+  (and (drgnx-run-ert--name-selector-p selector) (symbolp selector) (not (ert-test-boundp selector))))
 
 (defun drgnx-run-ert--awake (awake last now)
   "AWAKE seconds plus the time from LAST to NOW, at most 5 s of it: the loop ticks every 0.05 s, so a longer gap is the
@@ -1196,7 +1207,7 @@ file passed."
     (let ((summary (drgnx-run-ert--merge (sort done (lambda (a b) (< (cl-position (plist-get a :file) files :test #'equal)
                                                                      (cl-position (plist-get b :file) files :test #'equal))))
                                          timeout)))
-      (when (and (stringp selector) (not (drgnx-run-ert--empty-ok-p)) (zerop (plist-get summary :total)))
+      (when (and (drgnx-run-ert--name-selector-p selector) (not (drgnx-run-ert--empty-ok-p)) (zerop (plist-get summary :total)))
         (let ((f (drgnx-run-ert--matched-nothing selector)))
           (setq summary (plist-put (plist-put (plist-put (plist-put summary :total 1) :failed 1)
                                               :failures (vector f))
