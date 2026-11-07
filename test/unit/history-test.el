@@ -1,7 +1,7 @@
 ;;; history-test.el --- batch tests: the editor's side of the edit history, without a hub -*- lexical-binding: t -*-
 ;; Pure: batch splitting, the origin macro, the event-path lints.  The buffers, Nidhogg's change hook and the drain's
 ;; own timer run for real; no hub is involved (test/unit/history-hub-test.el has the hub).  The rows that need the
-;; hook skip on a Nidhogg built without `--with-nidhogg-history'.
+;; hook skip on a Nidhogg built without `--with-nidhogg-history' (and fail under DRGNX_NIDHOGG_STRICT=1).
 ;; test-class: det
 (require 'ert)
 (require 'cl-lib)
@@ -46,7 +46,7 @@
 
 (ert-deftest drgnx-history/undo-after-revert-is-the-users ()
   ;; D: Emacs's undo of a revert's edit runs outside `drgnx-history-with-origin': it is the user's change
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (let ((b (generate-new-buffer "history-undo")))
     (unwind-protect
         (with-current-buffer b
@@ -65,7 +65,7 @@
 (ert-deftest drgnx-history/indirect-buffer-changes-once ()
   ;; D: an indirect buffer shares its base's text: one document, a change made through the clone is drained once, and
   ;; the clone's death leaves the base tracked
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (let ((base (generate-new-buffer "history-base")) clone)
     (unwind-protect
         (progn
@@ -86,7 +86,7 @@
 (ert-deftest drgnx-history/mode-off-stops-timer-and-untracks ()
   ;; D under the virtual clock: the drain timer runs only while a buffer is tracked; turning the mode off cancels it
   ;; and stops Nidhogg's recording
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (drgnx-test-with-clock ()
     (let ((b (generate-new-buffer "history-mode")) (was (plist-get (nidhogg-history-stats) :tracked)))
       (unwind-protect
@@ -128,7 +128,7 @@
 
 (ert-deftest drgnx-history/work-space-module-owns-the-mode ()
   ;; D: the module tools/work-space turns the mode on in its setup and off in its teardown, and leaves nothing behind
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
   (drgnx-test-with-modules '(tools/work-space) :strict t
                            (should drgnx-history-mode)
@@ -188,7 +188,7 @@ answered ok."
 (ert-deftest drgnx-history/drain-tells-the-listeners-what-it-sent ()
   ;; D: after each drain `drgnx-history-drained-functions' runs with the buffer, the buffer's count of drains and the
   ;; changes sent (the hub's shape, in order); a drain that finds nothing tells nobody
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (let ((b (generate-new-buffer "history-drained")) (sent nil) (told nil)
         (drgnx-history-drained-functions nil))
     (unwind-protect
@@ -213,7 +213,7 @@ answered ok."
 (ert-deftest drgnx-history/drain-without-a-listener-is-quiet ()
   ;; D: with nothing on the hook the drain sends as before and the hook costs nothing; a listener that signals does
   ;; not stop the buffer being tracked
-  (skip-unless (drgnx-history-test--hooked-p))
+  (drgnx-test-require-nidhogg (drgnx-history-test--hooked-p) "nidhogg-history-track")
   (let ((b (generate-new-buffer "history-quiet")) (sent nil) (drgnx-history-drained-functions nil))
     (unwind-protect
         (drgnx-history-test--draining sent

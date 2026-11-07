@@ -36,10 +36,10 @@
 
 (defmacro drgnx-history-hub-test--with (&rest body)
   "BODY inside the gate with a hub serving ROOT, the project made (DIR), this Emacs connected; the mode and the buffers
-BODY made are gone at the end.  Skipped without the hub or the hook."
+BODY made are gone at the end.  Skipped without the hub or the hook (without the hook it fails under DRGNX_NIDHOGG_STRICT=1)."
   (declare (indent 0))
   `(drgnx-hub-client-test--with-hub
-     (skip-unless (fboundp 'nidhogg-history-track))
+     (drgnx-test-require-nidhogg (fboundp 'nidhogg-history-track) "nidhogg-history-track")
      (let ((dir (drgnx-history-hub-test--project)))
        (drgnx-test-gated '((:answers t))
          (drgnx-hub-call-sync "ping" nil 10)

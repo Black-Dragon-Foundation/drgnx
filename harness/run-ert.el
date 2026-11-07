@@ -317,6 +317,15 @@ this `system-type'.  The list is `((PLATFORM NAME…)…)'; a file that is missi
                   failures)))))
     (nreverse failures)))
 
+(defun drgnx-test-require-nidhogg (present what)
+  "Skip the current test unless PRESENT (non-nil when this Emacs has the Nidhogg feature WHAT, a string naming it).
+With DRGNX_NIDHOGG_STRICT=1 (a run on Nidhogg's integration line) a missing feature fails the test instead: there a
+skip would hide a stale or wrong Nidhogg build.  A function, not a macro: test files may be compiled without the runner."
+  (unless present
+    (if (equal (getenv "DRGNX_NIDHOGG_STRICT") "1")
+        (ert-fail (format "DRGNX_NIDHOGG_STRICT=1: this Emacs has no %s (is it Nidhogg's integration line?)" what))
+      (ert-skip (format "this Emacs has no Nidhogg %s" what)))))
+
 (defun drgnx-run-ert--flaky-file ()
   "The listed flakes: DRGNX_TEST_FLAKY (a file), else test/flaky.eld of this checkout."
   (let ((given (drgnx-run-ert--env "DRGNX_TEST_FLAKY")))
