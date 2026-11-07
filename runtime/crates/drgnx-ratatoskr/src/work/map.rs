@@ -1216,11 +1216,48 @@ impl Map {
                 .views
                 .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now));
         }
+        Self::publish_detail(&f, m, v, key, None);
+    }
+
+    /// The Detail panel beside rows view V (KEY): its rows for V's selection, to each class its editor sent an env
+    /// for (CLASS: only that one). Nothing while no editor shows it.
+    fn publish_detail(
+        f: &Front,
+        m: &vegvisir::Model,
+        v: &View,
+        key: &ViewKey,
+        class: Option<&str>,
+    ) {
+        let view = detail::view_of(&key.view);
+        let lines = detail::lines(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        for c in f.core.views.classes(key.conn, &view) {
+            if class.is_some_and(|only| only != c) {
+                continue;
+            }
+            let k3 = (key.conn, view.clone(), c);
+            f.core
+                .views
+                .publish_built(f, &k3, |_env, _fonts| (detail::rows(&lines), Vec::new()));
+        }
     }
 
     /// An env of (connection, view, class) K3 arrived: a rows map view of that name lays out again at its classes'
     /// width when it changed (as the user's own change, at once), else draws again for it.
     pub fn view_env(self: &Arc<Self>, f: &Front, k3: &crate::view::Key) {
+        if let Some(map_view) = detail::map_of(&k3.1) {
+            // a Detail panel's class: its rows for the map's selection now
+            let key = ViewKey {
+                conn: k3.0,
+                view: map_view.to_owned(),
+            };
+            let g = lock(&self.inner);
+            if let Some(v) = g.views.get(&key).filter(|v| v.rows && v.shown)
+                && let Some(sp) = g.spaces.get(&v.space)
+            {
+                Self::publish_detail(f, sp.core.model(), v, &key, Some(&k3.2));
+            }
+            return;
+        }
         let key = ViewKey {
             conn: k3.0,
             view: k3.1.clone(),
@@ -1688,6 +1725,7 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+mod detail;
 mod model;
 #[cfg(test)]
 mod tests;

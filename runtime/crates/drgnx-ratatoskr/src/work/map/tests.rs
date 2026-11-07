@@ -643,6 +643,62 @@ fn selected_still_holds_a_quiet_reflow() {
     assert_eq!(log(&map), ["model", "rows"]);
 }
 
+/// [D] The Detail panel's rows say the selection's edges in words, both ways, and its why-chain from the ask down;
+/// nothing selected is one line.
+#[test]
+fn detail_rows_say_the_edges() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    assert_eq!(
+        detail::lines(m, None, 0),
+        vec![("head", "Nothing is selected.".to_string(), None)]
+    );
+    // an agent with a branch below it and an ask, spec or plan above it
+    let edges = m.edges();
+    let came = |e: &vegvisir::Edge| serde_json::to_value(e.kind).ok() == Some(json!("came-from"));
+    let agent = m
+        .items()
+        .into_values()
+        .find(|it| {
+            serde_json::to_value(it.kind).ok() == Some(json!("agent"))
+                && edges.iter().any(|e| came(e) && e.from == it.id)
+                && edges.iter().any(|e| came(e) && e.to == it.id)
+        })
+        .expect("an agent with a why and a branch");
+    let lines = detail::lines(m, Some(&agent.id), 0);
+    let text: Vec<&str> = lines.iter().map(|(_, t, _)| t.as_str()).collect();
+    assert!(
+        text[0].starts_with(&format!("{} · agent", agent.label)),
+        "{text:?}"
+    );
+    for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
+        let to = m.item(&e.to).expect("its target").label;
+        assert!(
+            text.contains(&format!("  {to} — came from this").as_str()),
+            "{to} in {text:?}"
+        );
+    }
+    let parent = edges
+        .iter()
+        .filter(|e| came(e) && e.to == agent.id)
+        .map(|e| e.from.clone())
+        .min()
+        .expect("a parent");
+    let pl = m.item(&parent).expect("the parent").label;
+    assert!(
+        text.iter()
+            .any(|t| t.starts_with("  › ") && t.contains(&pl)),
+        "{pl} in {text:?}"
+    );
+    let rows = detail::rows(&lines);
+    assert_eq!(rows.len(), lines.len());
+    assert_eq!(rows[0].key, "head/0");
+    assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
+}
+
 /// [D] The golden the editor's replica is checked against (`test/unit/view-model-chain-test.el`, in the Nidhogg
 /// image; no cargo path between the repos): the map's model of the 30-agent fixture at 1600 px, as the hub sends it,
 /// and `vegvisir::Model::chain` of every item it shows. `UPDATE_VEGVISIR_GOLDEN=1` writes it; otherwise a model or

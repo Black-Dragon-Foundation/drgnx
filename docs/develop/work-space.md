@@ -592,6 +592,13 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
+  - On the rows path (Sjá) the panel is the hub's: `drgnx-work-detail-buffer` attaches it as the hub-fed view
+    `VIEW/detail` in the map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from
+    the map's model and the view's selection (head, why, touches, conclusions, a machine's queue, actions; one row
+    per line, keyed `SECTION/N`, a job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and
+    when the panel's env arrives. `drgnx-work-detail-update` draws nothing here for such a panel: the selection
+    reaches the hub as the map's `work/map/set`. Tests: `detail_rows_say_the_edges` (Rust),
+    `drgnx-work-detail/rows-follow-the-selection`.
 
 ### The strip, the lens, the filters, search and Esc
 
