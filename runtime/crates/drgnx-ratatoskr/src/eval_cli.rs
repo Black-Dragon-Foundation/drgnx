@@ -281,7 +281,8 @@ async fn sample_names(
             // ran for minutes on a 16,000-chunk project)
             let mut q = c.prepare(
                 "select s.name, s.path, f.class, coalesce(c.symbol, '') from symbol s
-                 join file f on f.path = s.path join chunk c on c.id = s.chunk",
+                 join file f on f.tree = 0 and f.path = s.path and f.blob = s.blob
+                 join chunk c on c.id = s.chunk",
             )?;
             let rows = q
                 .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
@@ -432,7 +433,10 @@ fn run_set(
     eprintln!("coverage check");
     let per_file: HashMap<String, u32> = rt
         .block_on(store.handle().read(|c| {
-            let mut q = c.prepare("select path, count(*) from chunk group by path")?;
+            let mut q = c.prepare(
+                "select c.path, count(*) from chunk c
+                 join file f on f.tree = 0 and f.path = c.path and f.blob = c.blob group by c.path",
+            )?;
             let rows = q
                 .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u32>(1)?)))?
                 .collect::<Result<HashMap<_, _>, _>>()?;

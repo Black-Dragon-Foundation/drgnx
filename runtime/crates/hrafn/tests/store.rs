@@ -39,8 +39,9 @@ fn file(path: &str) -> FileRow {
 async fn open_creates_v1() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("2"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("3"));
     for t in [
+        "tree",
         "file",
         "chunk",
         "chunk_fts",
@@ -82,7 +83,7 @@ async fn reopen_is_idempotent() {
         .unwrap();
     let s = CodeStore::open(&p).unwrap();
     assert_eq!(count(&s, "select count(*) from file").await, 1);
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("2"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("3"));
     assert_eq!(
         s.meta_get("chunker_version").await.unwrap().as_deref(),
         Some("1")
@@ -104,7 +105,9 @@ async fn two_models_share_a_key() {
     s.put_file(file("a.el")).await.unwrap();
     let c = chunk("(defun a ())", "a", "defun a");
     let key = c.key;
-    s.replace_chunks("a.el", vec![c], vec![]).await.unwrap();
+    s.replace_chunks("a.el", "b", vec![c], vec![])
+        .await
+        .unwrap();
     for model in ["m1", "m2"] {
         s.put_vec(VecRow {
             model: model.into(),
@@ -132,7 +135,9 @@ async fn symbols_column_keeps_whole_names_and_body_splits_them() {
         "drgnx-timer--fire",
         "defun drgnx-timer--fire",
     );
-    s.replace_chunks("a.el", vec![c], vec![]).await.unwrap();
+    s.replace_chunks("a.el", "b", vec![c], vec![])
+        .await
+        .unwrap();
     let whole = format!(
         "select count(*) from chunk_fts where chunk_fts match 'symbols:\"{}\"'",
         encode_symbol("drgnx-timer--fire")
@@ -171,7 +176,7 @@ async fn fts_row_deleted_with_chunk() {
         definer: "defun".into(),
         doc1: None,
     };
-    s.replace_chunks("a.el", vec![chunk("x", "foo-bar", "alpha")], vec![sym])
+    s.replace_chunks("a.el", "b", vec![chunk("x", "foo-bar", "alpha")], vec![sym])
         .await
         .unwrap();
     let match_alpha = "select count(*) from chunk_fts where chunk_fts match 'body:alpha'";
@@ -196,10 +201,10 @@ async fn fts_row_deleted_with_chunk() {
         0
     );
     // The replace path removes the old rows too.
-    s.replace_chunks("b.el", vec![chunk("y", "", "beta")], vec![])
+    s.replace_chunks("b.el", "b", vec![chunk("y", "", "beta")], vec![])
         .await
         .unwrap();
-    s.replace_chunks("b.el", vec![chunk("z", "", "gamma")], vec![])
+    s.replace_chunks("b.el", "b", vec![chunk("z", "", "gamma")], vec![])
         .await
         .unwrap();
     assert_eq!(
@@ -220,6 +225,7 @@ async fn vacuum_keeps_chunk_ids() {
     let ids = s
         .replace_chunks(
             "a.el",
+            "b",
             vec![
                 chunk("1", "", "one"),
                 chunk("2", "", "two"),

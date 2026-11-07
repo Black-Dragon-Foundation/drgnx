@@ -13,6 +13,7 @@ pub mod index;
 pub mod query;
 pub mod schema;
 pub mod store;
+pub mod tree;
 pub mod watch;
 
 pub use coverage::{CoverageError, coverage};
@@ -27,3 +28,4 @@ pub use watch::{Watch, WatchEvent};
 
 pub use schema::{MIGRATIONS, encode_symbol};
 pub use store::{ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, VecRow, vec_key};
+pub use tree::{Door, TreeId, TreeRow, TreeState, View};

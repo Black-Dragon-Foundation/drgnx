@@ -499,8 +499,9 @@ impl Hub {
             .read(|c| {
                 let mut st = c.prepare(
                     "select f.class, count(*), coalesce(sum(n.n), 0) from file f
-                     left join (select path, count(*) as n from chunk group by path) n on n.path = f.path
-                     group by f.class order by f.class",
+                     left join (select path, blob, count(*) as n from chunk group by path, blob) n
+                       on n.path = f.path and n.blob = f.blob
+                     where f.tree = 0 group by f.class order by f.class",
                 )?;
                 let classes = st
                     .query_map([], |r| {

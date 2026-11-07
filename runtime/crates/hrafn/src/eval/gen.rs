@@ -41,7 +41,8 @@ async fn head_of(store: &CodeStore) -> Result<Head, String> {
         .read(|c| {
             let mut by_name: HashMap<String, Vec<(String, String)>> = HashMap::new();
             let mut q = c.prepare(
-                "select s.name, s.path, coalesce(c.symbol, '') from symbol s join chunk c on c.id = s.chunk",
+                "select s.name, s.path, coalesce(c.symbol, '') from symbol s join chunk c on c.id = s.chunk
+                 join file f on f.tree = 0 and f.path = s.path and f.blob = s.blob",
             )?;
             for r in q.query_map([], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
@@ -53,7 +54,7 @@ async fn head_of(store: &CodeStore) -> Result<Head, String> {
                 }
             }
             let mut files = HashMap::new();
-            let mut q = c.prepare("select path, class, lang from file")?;
+            let mut q = c.prepare("select path, class, lang from file where tree = 0")?;
             for r in q.query_map([], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
             })? {

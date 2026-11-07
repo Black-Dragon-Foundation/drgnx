@@ -436,7 +436,11 @@ impl Project {
             .store
             .handle()
             .read(|c| {
-                let mut st = c.prepare("select path, count(*) from chunk group by path")?;
+                // the base's chunks: the store holds worktrees' content too
+                let mut st = c.prepare(
+                    "select c.path, count(*) from chunk c
+                     join file f on f.tree = 0 and f.path = c.path and f.blob = c.blob group by c.path",
+                )?;
                 let rows = st
                     .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                     .collect::<Result<_, _>>()?;

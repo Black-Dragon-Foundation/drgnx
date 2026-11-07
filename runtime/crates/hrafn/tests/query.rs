@@ -368,7 +368,11 @@ async fn path_and_name_routes_do_not_scan_chunks_or_symbols() {
     let (_dir, store, _texts) = indexed().await;
     for sql in [hrafn::query::PATH_ANY_SQL, hrafn::query::PATH_NAME_SQL] {
         let plan = plan_of(&store, sql, if sql.contains("?2") { 2 } else { 1 }).await;
-        assert!(plan.contains("SCAN f"), "{plan}");
+        // the base's rows of `file`, by its primary key's first column (the view's tree)
+        assert!(
+            plan.contains("SEARCH f USING PRIMARY KEY (tree=?)"),
+            "{plan}"
+        );
         assert!(!plan.contains("SCAN c"), "{plan}");
     }
     let plan = plan_of(&store, hrafn::query::NAME_PREFIX_SQL, 1).await;

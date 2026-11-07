@@ -9,7 +9,8 @@
 use crate::chunk::{BUDGET, CHUNKER_VERSION, chunk_file};
 use crate::files::Listed;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, vec_key, write_chunks, write_file_row,
+    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, sweep_all, vec_key,
+    write_version,
 };
 use rusqlite::{Connection, params};
 use std::collections::{HashMap, HashSet};
@@ -45,9 +46,9 @@ pub struct Lag {
     pub built_from: String,
 }
 
-/// Each indexed file's blob.
+/// Each indexed file's blob in the base.
 pub(crate) fn known_blobs(c: &Connection) -> urdr::Result<HashMap<String, String>> {
-    let mut q = c.prepare("select path, blob from file")?;
+    let mut q = c.prepare("select path, blob from file where tree = 0")?;
     let rows = q
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<HashMap<String, String>, _>>()?;
@@ -132,6 +133,10 @@ fn build(l: &Listed, bytes: &[u8]) -> Built {
 /// dropped for the files no longer listed; one transaction per batch of files. `read` gives a listed file's bytes
 /// (the hub's reads go through `eitri`); a file that cannot be read any more is dropped like a gone one. `models` are
 /// the `(model, dims)` that tier 2 fills, for `keys_missing`.
+///
+/// Every write is by content: a file's base row is replaced, its `(path, blob)` is chunked only when no row (a
+/// worktree's) has its content already, and the pair the row named before is swept only when no worktree still names
+/// it. A chunker change clears every worktree's rows first (they re-seed), so all content is written by the new one.
 pub async fn refresh(
     store: &CodeStore,
     listed: &[Listed],
@@ -154,6 +159,9 @@ pub async fn refresh(
         .filter(|l| rebuild || known.get(&l.path) != Some(&l.blob))
         .collect();
     let mut out = Refresh::default();
+    if rebuild {
+        store.handle().write(clear_trees).await?;
+    }
     for batch in changed.chunks(FILE_BATCH) {
         let mut built = Vec::with_capacity(batch.len());
         for l in batch {
@@ -170,8 +178,7 @@ pub async fn refresh(
             .write(move |c| {
                 let used = next_used(c)?;
                 for b in &built {
-                    write_file_row(c, &b.row)?;
-                    write_chunks(c, &b.row.path, &b.chunks, &b.symbols)?;
+                    write_version(c, 0, &b.row, &b.chunks, &b.symbols, rebuild)?;
                     for ch in &b.chunks {
                         c.execute(
                             "update vec set last_used = ?1 where key = ?2",
@@ -189,8 +196,7 @@ pub async fn refresh(
             .handle()
             .write(move |c| {
                 for p in &gone {
-                    c.execute("delete from chunk where path = ?1", [p])?;
-                    c.execute("delete from file where path = ?1", [p])?;
+                    remove_file_row(c, 0, p)?;
                 }
                 Ok(())
             })
@@ -301,14 +307,25 @@ pub async fn collect(store: &CodeStore, model: &str) -> Result<u32, StoreError> 
         .await?)
 }
 
-/// Drops every file row and chunk (with their FTS rows and symbols), so the next [`refresh`] builds everything again.
-/// The vectors stay: their keys are content, so the new chunks find them.
+/// Every worktree's rows dropped and the content only they named swept; the trees are marked `stale`, so they
+/// re-seed on their next use (H16 overlay design §6.4).
+fn clear_trees(c: &Connection) -> urdr::Result<()> {
+    c.execute("delete from file where tree > 0", [])?;
+    sweep_all(c)?;
+    c.execute("update tree set state = 'stale'", [])?;
+    Ok(())
+}
+
+/// Drops every file row and chunk (with their FTS rows and symbols), the worktrees' too, so the next [`refresh`]
+/// builds everything again and the trees re-seed. The vectors stay: their keys are content, so the new chunks find
+/// them.
 pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
     Ok(store
         .handle()
         .write(|c| {
             c.execute("delete from chunk", [])?;
             c.execute("delete from file", [])?;
+            c.execute("update tree set state = 'stale'", [])?;
             c.execute(
                 "delete from meta where key in (?1, ?2)",
                 [META_CHUNKER, META_BUILT_FROM],

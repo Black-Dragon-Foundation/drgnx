@@ -1021,16 +1021,28 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v1:
+0600, migrations as data). Schema v3:
 
 | Table | Holds |
 |---|---|
-| `file` | path, git blob, class, language, generated flag, size, indexed time |
-| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `tree` | the worktrees with an overlay: `key` (history's worktree id), root, git dir, branch, head, `seeded_from`, git `door` (`cli`/`gix`), `state` (`seeding`, `live`, `stale`, `unwatched`), `last_used` |
+| `file` | one row per `(tree, path)`: git blob, class, language, generated flag, size, indexed time. `tree = 0` is the base checkout; a worktree has rows only where its blob differs from the base's, a NULL blob marking a path it does not have. The only per-tree table |
+| `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
-| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `symbol`, `symbol_fts` | defined names with kind, span, `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+**Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
+the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
+a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept (its
+chunks, FTS rows and symbols deleted) when no `file` row names it any more. There is no reference counter; the
+`file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
+its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
+`(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
+with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `vec` are untouched, so nothing is
+re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
+`stale`.
 
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
@@ -1204,7 +1216,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
   tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes.
+  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
