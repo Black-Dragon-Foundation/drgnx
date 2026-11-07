@@ -2234,6 +2234,12 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
     job_keys(f, c, &p, &cwd).await?;
+    // a confined user_u login can't run rootless podman: refused here, with the cause and an admin's fix
+    if kind == CheckKind::Container
+        && let Some(why) = sleipnir::linux::confined::refusal()
+    {
+        return Err(error(ErrorCode::NotAllowed, why));
+    }
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
     // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.

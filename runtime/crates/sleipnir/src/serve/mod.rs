@@ -1120,6 +1120,9 @@ impl<W: Write> Serve<W> {
             return Err("variables for the container aren't carried yet".into());
         }
         let image = image.ok_or("a runner job is a container job: it needs an image")?;
+        if let Some(why) = crate::linux::confined::refusal() {
+            return Err(why);
+        }
         // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`)
         let own_copy = |name: &str| -> Result<PathBuf, String> {
             let from = self.exe.with_file_name(name);

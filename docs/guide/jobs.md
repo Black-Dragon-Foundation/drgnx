@@ -107,6 +107,11 @@ before anything of yours. Those limits are enforced or the job does not
 run: before each container job the hub asks `podman info`, and unless podman uses cgroup v2 with the systemd cgroup
 manager and the memory, pids and cpu controllers, the job is refused with the reason. Rootless podman needs a systemd
 user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
+A login confined as the SELinux user `user_u` (domain `user_t`) can't run rootless podman at all: it needs
+`newuidmap`, which the stock policy denies `user_t`. There every container job is refused at its start, saying so and
+what an admin would change (map the login to another SELinux user, `semanage login -m -s staff_u LOGIN`; or give it a
+subuid range and a local policy module that lets `user_t` run `newuidmap`); jobs without an image run as usual, and
+`drgnx doctor` says it on its `networked container jobs` line.
 It has **no network of its own**
 (`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
 job gets the one route there is: a relay sidecar (`drgnx-px`, a tiny image the hub makes from the binary next to it)

@@ -169,6 +169,7 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
     }
     store_files(env, &mut v, now_secs());
     v["container_net"] = json!(container_net_verdict(
+        sleipnir::linux::confined::refusal(),
         crate::exec::unit::find_on_path("podman").map(|podman| {
             sleipnir::linux::podman::check_limits(
                 &podman,
@@ -193,9 +194,16 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
     v
 }
 
-/// Whether a networked container job can run here (design §6's checks under Q8): INFO is `podman info`'s answer (or why
-/// it failed), none when podman isn't on the PATH.
-pub fn container_net_verdict(info: Option<Result<Value, String>>) -> String {
+/// Whether a networked container job can run here (design §6's checks under Q8): CONFINED is why this login can't run
+/// containers at all (a `user_u` login, `sleipnir::linux::confined`), INFO `podman info`'s answer (or why it failed),
+/// none when podman isn't on the PATH.
+pub fn container_net_verdict(
+    confined: Option<String>,
+    info: Option<Result<Value, String>>,
+) -> String {
+    if let Some(why) = confined {
+        return why;
+    }
     match info {
         None => "no podman on the PATH: container jobs are refused".into(),
         Some(Err(e)) => e,
@@ -803,10 +811,16 @@ mod tests {
     fn doctor_names_the_networked_jobs_check() {
         let old =
             json!({"version": {"Version": "4.9.3"}, "host": {"security": {"rootless": true}}});
-        assert!(container_net_verdict(Some(Ok(old))).contains("podman 5.0 or newer"));
+        assert!(container_net_verdict(None, Some(Ok(old))).contains("podman 5.0 or newer"));
         let ok = json!({"version": {"Version": "5.4.2"}, "host": {"security": {"rootless": true}}});
-        assert!(container_net_verdict(Some(Ok(ok))).starts_with("ok"));
-        assert!(container_net_verdict(None).contains("no podman"));
+        assert!(container_net_verdict(None, Some(Ok(ok.clone()))).starts_with("ok"));
+        assert!(container_net_verdict(None, None).contains("no podman"));
+        // a user_u login is refused first, whatever podman says
+        let why = sleipnir::linux::confined::refusal_for("user_u:user_r:user_t:s0");
+        assert_eq!(
+            container_net_verdict(why.clone(), Some(Ok(ok))),
+            why.unwrap()
+        );
     }
 
     #[test]

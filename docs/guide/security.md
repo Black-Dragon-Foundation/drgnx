@@ -502,7 +502,11 @@ project).
   the hub's own ports never, whatever you allow. On SELinux hosts nothing is to be set up: the job's network and its
   keys need no socket, file or policy rule, for an unconfined user and a confined `staff_u` one alike (a keyed job
   reads its keys through its own sidecar, on a name that exists only in the job's network namespace). A confined
-  `user_u` can't run rootless containers at all (no user namespaces), so it can't be a runner yet. The shape was checked on Fedora 45 with SELinux
+  `user_u` login (domain `user_t`) can't run rootless podman (it needs `newuidmap`, which the stock policy denies
+  `user_t`), so drgnx refuses its container jobs, at the job's start and in `drgnx doctor`, with that reason and what
+  an admin would change: another SELinux user for the login (`semanage login -m -s staff_u LOGIN`), or a subuid range
+  plus a local policy module letting `user_t` run `newuidmap`. Such a login can't be a runner either: the runner's
+  check refuses it with the same reason. The shape was checked on Fedora 45 with SELinux
   enforcing; Ubuntu (AppArmor) is CI's lane; RHEL and openSUSE are expected to work, unverified. **macOS** (podman machine) is expected to work, unverified: the relay crosses the
   machine over podman's SSH connection (about 170 MB/s into the job and 87 MB/s back on the test VM, before gvproxy),
   a machine restart ends running networked jobs, the machine's SSH and REST ports are never opened by a grant, and

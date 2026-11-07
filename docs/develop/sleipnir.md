@@ -52,6 +52,7 @@ that lacks any item is refused with the whole list, each with its fix:
 
 | Item | Fix shown |
 |---|---|
+| a login not confined as SELinux `user_u` (`user_t`, read from `/proc/self/attr/current`: `linux::confined`) | map the login to another SELinux user (`semanage login -m -s staff_u LOGIN`), or a subuid range plus a local policy module letting `user_t` run `newuidmap` |
 | a systemd user manager | log in, or `loginctl enable-linger` |
 | rootless podman ≥ 5 | install or upgrade podman; connect as an ordinary user |
 | cgroup v2 | the unified hierarchy (the default on current distributions) |
@@ -59,7 +60,8 @@ that lacks any item is refused with the whole list, each with its fix:
 | `memory pids cpu` delegated to the user | a `user@.service.d/delegate.conf` drop-in, then log in again |
 | git | install git |
 
-There is no reduced mode. Linger is a fact, not a refusal: without it, jobs end when the link drops, and the runner
+There is no reduced mode. A `user_u` runner that passed once (its login remapped later) is refused at each job's start
+too: the attempt ends `infra: setup` with the same reason. Linger is a fact, not a refusal: without it, jobs end when the link drops, and the runner
 list says so. The facts: architecture, OS (`ID VERSION_ID`), cores, memory, disk free, podman's version, linger, the
 Landlock ABI, a graphical session, a battery, whether `memory.swap.max` can be set, whether systemd writes cpusets,
 and the other schedulers present.

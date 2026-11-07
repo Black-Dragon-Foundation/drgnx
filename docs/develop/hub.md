@@ -159,7 +159,9 @@ editor keeps its keys for the next hand-over; start the hub outside the debugger
 `ratatoskr status [--json]` is `status` as a user client (with `"running": true` added with `--json`); with no hub it
 prints `{"running": false}` and exits 1. `ratatoskr doctor --json` prints `{binary: {path, commit, test_hooks},
 running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, warnings, keys_refused?}?, socket_dir:
-{path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
+{path, mode, ok}, sqlite, job_agents, container_net}` (`container_net`, the text's `networked container jobs:` line,
+says whether container jobs can run here: refused first for a confined `user_u` login, `sleipnir::linux::confined`,
+then without podman, then by `podman info`'s checks; `gateway` is the running hub's: the providers named in `keys_held`, never a key;
 `keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
 
 **A recorded or replayed run.** `DRGNX_RECORD=DIR` or `DRGNX_REPLAY=DIR` in `serve`'s environment makes this run a

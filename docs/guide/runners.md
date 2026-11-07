@@ -57,7 +57,8 @@ What `add` does, in order, and stops at the first thing that is wrong:
    says so and names the command: `drgnx build runner-bundle --arch aarch64`.
 3. Asks the runner about the host. It **refuses the machine drgnx itself runs on** (it already runs jobs as `local`),
    and a host that lacks something a runner needs: a systemd user manager, cgroup v2 with the memory, pids and cpu
-   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, and git. The refusal
+   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, and git; and a login not confined as the SELinux user `user_u`, which can't run rootless
+   podman (it needs `newuidmap`, which the stock policy denies `user_t`). The refusal
    lists **everything** that is missing, each with what to run there to fix it.
 4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
    caps.
