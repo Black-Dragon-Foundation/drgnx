@@ -48,7 +48,8 @@ pub const STDERR_EVERY: Duration = Duration::from_secs(1);
 pub const STDERR_TAIL_FILE: &str = "stderr.tail";
 /// A longer stderr line is cut into pieces of this size.
 const LINE_MAX: usize = 4096;
-/// After Chromium's main process ends, how long its pipe's last messages may take to come through.
+/// After Chromium's main process ends, how long its pipe's last messages may take to come through (a browser that leads
+/// no group of its own; with a group, what the pipe held when the group died is read, with no wait for its end).
 const DRAIN: Duration = Duration::from_secs(1);
 /// Exit: the hub's end closed (the usual way the host ends).
 pub const EXIT_OK: i32 = 0;
@@ -470,18 +471,22 @@ impl Browser {
         });
         let (drained_tx, drained) = mpsc::channel::<()>();
         let (mut from, max) = (File::from(s.from_chrome), cfg.max_message);
+        let from_fd = from.as_raw_fd();
+        // the waiter's word, once the browser's group is dead, of how many bytes the pipe held then: all the browser
+        // wrote. The reader takes that many and stops, so a copy of the pipe's write end outside the group (a fork
+        // beside the host holds one until its exec) neither holds the end back nor is read as the browser
+        let (mut gone_r, gone_w) = match pipe() {
+            Ok((r, w)) => (Some(File::from(r)), Some(File::from(w))),
+            Err(e) => {
+                eprintln!("ratatoskr browser-host: the reader's stop pipe: {e}");
+                (None, None)
+            }
+        };
         let (o, l) = (out.clone(), live.clone());
         std::thread::spawn(move || {
             let mut nul = Nul::new(max);
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                let n = match from.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => break,
-                };
-                for m in nul.push(&buf[..n]) {
+            let mut take = |bytes: &[u8]| {
+                for m in nul.push(bytes) {
                     match m {
                         Ok(m) if l.load(Ordering::Acquire) => {
                             let _ = o.frame(KIND_CDP, &m);
@@ -492,6 +497,42 @@ impl Browser {
                         }
                     }
                 }
+            };
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                if let Some(g) = gone_r.as_mut()
+                    && gone_first(&from, g)
+                {
+                    let mut held = [0u8; 8];
+                    // no word, only the waiter's end closed: it had no group to clear, so the pipe's end decides
+                    if g.read_exact(&mut held).is_err() {
+                        gone_r = None;
+                        continue;
+                    }
+                    {
+                        let mut left = u64::from_ne_bytes(held);
+                        while left > 0 {
+                            let cap = buf.len().min(usize::try_from(left).unwrap_or(usize::MAX));
+                            match from.read(&mut buf[..cap]) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    take(&buf[..n]);
+                                    left -= n as u64;
+                                }
+                                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                    break;
+                }
+                let n = match from.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                };
+                take(&buf[..n]);
             }
             let _ = drained_tx.send(());
         });
@@ -521,7 +562,16 @@ impl Browser {
         let (done_tx, done) = mpsc::channel::<()>();
         let o = out.clone();
         std::thread::spawn(move || {
-            let (code, signal) = wait_and_clear(pid, group);
+            let (code, signal) = wait_and_clear(pid, group, || {
+                let Some(mut g) = gone_w else { return };
+                let mut held: libc::c_int = 0;
+                // SAFETY: FIONREAD writes one c_int to the pointer, which lives across the call; the reader holds the
+                // fd open until it has read what this says (a reader gone already never reads the word)
+                if unsafe { libc::ioctl(from_fd, libc::FIONREAD, &mut held) } == 0 {
+                    let held = u64::try_from(held).unwrap_or(0);
+                    let _ = g.write_all(&held.to_ne_bytes());
+                }
+            });
             let _ = drained.recv_timeout(DRAIN);
             live.store(false, Ordering::Release);
             eprintln!(
@@ -577,8 +627,13 @@ impl Browser {
 }
 
 /// Wait for Chromium's main process to end, kill what is left of its group while the group's id is still held (the
-/// main process is not reaped until then), then reap it. Its exit code or signal.
-fn wait_and_clear(pid: libc::pid_t, group: bool) -> (Option<i32>, Option<i32>) {
+/// main process is not reaped until then) and call CLEARED (nothing of the group can write any more), then reap it.
+/// Its exit code or signal.
+fn wait_and_clear(
+    pid: libc::pid_t,
+    group: bool,
+    cleared: impl FnOnce(),
+) -> (Option<i32>, Option<i32>) {
     loop {
         // SAFETY: a zeroed siginfo_t is a valid out-parameter for waitid.
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
@@ -598,6 +653,7 @@ fn wait_and_clear(pid: libc::pid_t, group: bool) -> (Option<i32>, Option<i32>) {
     if group {
         // SAFETY: the group's leader is a zombie we have not reaped, so its id names only this group.
         unsafe { libc::kill(-pid, libc::SIGKILL) };
+        cleared();
     }
     let mut status = 0;
     loop {
@@ -616,6 +672,26 @@ fn wait_and_clear(pid: libc::pid_t, group: bool) -> (Option<i32>, Option<i32>) {
         (None, Some(libc::WTERMSIG(status)))
     } else {
         (None, None)
+    }
+}
+
+/// Whether GONE (the waiter's word that the browser's group is dead) is there to read before FROM (the browser's
+/// pipe), waiting for either; a poll that fails reads FROM.
+fn gone_first(from: &File, gone: &File) -> bool {
+    let mut fds = [gone.as_raw_fd(), from.as_raw_fd()].map(|fd| libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    });
+    loop {
+        // SAFETY: two pollfds in a live array, its length given
+        let r = unsafe { libc::poll(fds.as_mut_ptr(), 2, -1) };
+        if r >= 0 {
+            return fds[0].revents != 0;
+        }
+        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return false;
+        }
     }
 }
 
@@ -973,6 +1049,46 @@ mod tests {
         assert_ne!(again, pid);
         fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
         fx.reply(2);
+    }
+
+    /// A copy of the pipe's write end in a process outside the browser's group (in a test run, any fork beside the host
+    /// thread holds one until its exec) neither holds back `exited` nor speaks for the browser: once the group is dead,
+    /// what it wrote is read and the end is told, with no wait for the pipe's EOF, and what the copy writes after is
+    /// never passed on.
+    #[test]
+    fn a_stray_copy_of_the_pipe_is_never_read_after_the_end() {
+        let mut fx = Fx::new();
+        let pid = fx.start();
+        fx.cdp(r#"{"id":1,"method":"Fake.stray"}"#);
+        fx.reply(1);
+        let stray = skuld::wait_until("the stray's pid", 5, || {
+            std::fs::read_to_string(fx.bdir().join("stray"))
+                .ok()
+                .and_then(|p| p.trim().parse::<libc::pid_t>().ok())
+        });
+        struct Kill(libc::pid_t);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                // SAFETY: SIGKILL to the stray this test made (not our child: init reaps it)
+                unsafe { libc::kill(self.0, libc::SIGKILL) };
+            }
+        }
+        let _stray = Kill(stray);
+        fx.control(json!({"op": "stop", "why": "idle"}));
+        let e = fx.event("exited", Duration::from_secs(3));
+        assert_eq!(e["signal"], libc::SIGTERM, "{e}");
+        assert!(group_gone(pid), "nothing of its group is left");
+        // the stray wrote once the browser was reaped: nothing of it came before `exited`, nor comes after
+        skuld::wait_until("the stray's write", 5, || {
+            fx.bdir().join("stray-wrote").exists().then_some(())
+        });
+        let stray_said =
+            |f: &Frame| f.kind == KIND_CDP && f.payload.windows(9).any(|w| w == b"fromStray");
+        // a frame through the host after the write: the stream goes on, and holds nothing of the stray
+        fx.start();
+        fx.cdp(r#"{"id":2,"method":"Page.enable"}"#);
+        fx.reply(2);
+        assert!(!fx.backlog.iter().any(stray_said), "{:?}", fx.backlog);
     }
 
     #[test]

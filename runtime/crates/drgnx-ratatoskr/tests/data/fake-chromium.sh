@@ -13,6 +13,9 @@
 #   session "child-N", waiting for the debugger.
 # - Fake.crash: it dies by SIGKILL, as a crash ends it (no core dump).
 # - Fake.stubborn: from then on it ignores SIGTERM and outlives the pipe's end, so only SIGKILL stops it.
+# - Fake.stray: a process outside its group (its own session) keeps a copy of fd 4, as a fork beside the host would:
+#   its pid goes to $HOME/stray; once this process is reaped it writes {"method":"Fake.fromStray"} there (a pipe no one
+#   reads any more refuses it), touches $HOME/stray-wrote, and holds the copy for 30 s.
 # - Page.navigate {"url":"http://HOST[:PORT]/PATH"} fetches the URL as Chromium would: straight to a loopback host
 #   (127.0.0.1, localhost: Chromium does not proxy them), through --proxy-server's HTTP proxy otherwise (absolute-form).
 #   A connect that fails is tried again for 5 s. The result is {"frameId":"F1","status":CODE,"body":BODY}, BODY the
@@ -57,6 +60,8 @@ while IFS= read -r -d '' msg <&3; do
   case $method in
     Fake.crash) kill -KILL $$ ;;
     Fake.stubborn) trap '' TERM; stubborn=1 ;;
+    Fake.stray) setsid -f sh -c 'trap "" PIPE; echo $$ > "$HOME/stray"; while [ -e /proc/'"$$"' ]; do sleep 0.01; done
+      printf "{\"method\":\"Fake.fromStray\"}\0" >&4; touch "$HOME/stray-wrote"; exec sleep 30' ;;
     Target.attachToBrowserTarget) attaches=$((attaches + 1)); result="{\"sessionId\":\"browser-$attaches\"}" ;;
     Target.detachFromTarget) result='{}' ;;
     Page.navigate)
