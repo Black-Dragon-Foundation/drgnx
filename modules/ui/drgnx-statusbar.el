@@ -17,7 +17,7 @@
 ;; allocates nothing.  Other packages' entries of the mode line stay real time: they are formatted once per buffer per
 ;; redisplay, in that buffer (`drgnx-statusbar--misc'), and one too slow for that once a second.  drgnx's own segments (tests,
 ;; the folder) are worked out when their hooks say something changed (`drgnx-statusbar-refresh', debounced), never on
-;; redisplay.  A module that has state of its own to show (agents) defines its segment in its setup and calls
+;; redisplay.  A module that has state of its own to show (jobs, agents) defines its segment in its setup and calls
 ;; `(drgnx-statusbar-refresh t)' when that state changes: the bar reads no other module's internals.  See docs/guide/face.md ("The status bar").
 
 ;;; Code:
@@ -134,7 +134,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch trust problems tests agents needs-you drgnx toasts modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -142,7 +142,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   "The segments on the right of the status bar, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests toasts drgnx trust)
+(defcustom drgnx-statusbar-drop-order '(eol indent encoding lsp language misc tests jobs toasts drgnx trust)
   "Segments dropped, first to last, when the bar is wider than its window.
 The branch is cut with an ellipsis instead, and only after these are gone.  `needs-you' is never dropped."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
@@ -151,7 +151,7 @@ The branch is cut with an ellipsis instead, and only after these are gone.  `nee
   "The segments the other editor groups show (the most recently used one shows the whole bar)."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
-(defcustom drgnx-statusbar-quiet '(folder branch agents needs-you drgnx toasts tests misc)
+(defcustom drgnx-statusbar-quiet '(folder branch agents jobs needs-you drgnx toasts tests misc)
   "The segments of the quiet bar (`drgnx-statusbar-quiet-modes': the start page), on the left, in order."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -1057,7 +1057,7 @@ window is another one now, so the full bar and the compact one trade places in e
 
 (defun drgnx-statusbar-refresh (&optional changed)
   "Redraw the bars once what a segment shows has changed.
-CHANGED non-nil: something a segment shows changed (a segment a module defines: agents, your own): every bar is
+CHANGED non-nil: something a segment shows changed (a segment a module defines: jobs, agents, your own): every bar is
 drawn again.
 Debounced: the refresh runs once, `drgnx-statusbar-refresh-delay' seconds after the first call, however many calls
 came in between.  Never blocks; safe in a hook, a timer or a process filter."

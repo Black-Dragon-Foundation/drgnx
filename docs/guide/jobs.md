@@ -211,7 +211,14 @@ Open the [Work space](work-space.md): the job's agents are on the map (what need
 you is the strip along its top, `n` and `g 1` to `g 9` select the chips), its tasks are on the Board (`b`), an agent's
 decisions and edits are in its review (`v`), and its steps are in the research trail (`r`). No window of its own opens.
 
-Nothing here ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
+paused jobs are the **Jobs** source of [Notices](notices.md) (module `tools/jobs`), so they count in the one "needs you"
+number (the status bar's, What needs you's first line, the Notices list) and each new card is a desktop notification
+(D-Bus on Linux; `osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the
+backends are [Notices](notices.md#on-the-desktop)). The status bar's `jobs` segment counts the running jobs. An
+`overlap` card is advice: it counts but never interrupts. When the hub cannot be asked or goes away the count is not
+shown as a number: Notices says "Jobs: not known" and why, rather than showing the last count. Turning `tools/jobs`
+off (Preferences: Modules) removes the source and its items. Nothing here ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
@@ -328,7 +335,7 @@ The job is **done** when every task is done (or dropped). Review the job's branc
 
 ## The merge gate
 
-The `gate` of the hub's `job/propose` (the default is `review`; no Emacs option sets it) says what a finished task
+The `gate` of the hub's `job/propose` (the default is `review`; the planning agent's proposal block can set it, there is no Emacs option) says what a finished task
 needs before it is merged into the job's branch:
 
 - `review` (the default): its reviewer's pass, as above.

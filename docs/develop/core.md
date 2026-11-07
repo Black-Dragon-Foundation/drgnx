@@ -1294,12 +1294,13 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   forgets the last runs of its `:min-interval` keys. `:core` lives as long as Emacs (the hub tick, the idle GC under
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
   Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
-  one-shot `agents-ui-mirror-first`, 3 s into the first pause), so a second setup replaces the timer instead of stacking another, and
+  one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
+  `jobs-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
   `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look`, `-away` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal` the per-frame
-  `(tty-fallback-hint . FRAME)`, `tools/ai` the `ai-probe` one-shot; the
+  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `jobs-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
   owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`

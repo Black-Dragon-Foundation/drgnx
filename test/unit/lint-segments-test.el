@@ -59,6 +59,7 @@ function of the family (`drgnx-FAMILY-x') the bar asks `fboundp' about or declar
 (ert-deftest drgnx-lint/segments-lint-sees-a-producer-symbol ()
   ;; the lint's own check: a producer's symbol is found, the bar's own is not
   (should (drgnx-lint-segments--other-p 'drgnx-hub--events))
+  (should (drgnx-lint-segments--other-p 'drgnx-jobs--running))
   (should (drgnx-lint-segments--other-p 'drgnx-agents-sessions))
   (should-not (drgnx-lint-segments--other-p 'drgnx-statusbar--now))
   (should-not (drgnx-lint-segments--other-p 'drgnx-hubris)))
