@@ -336,5 +336,35 @@ fixture settings; the buffers it opened are killed after."
         (should (= tab-width 4))
         (should-not (local-variable-p 'fill-column))))))
 
+(ert-deftest drgnx-settings-workspace/a-repeat-open-lists-and-resolves-nothing ()
+  ;; W2's private files are listed once per change of their folder, and a file's roots resolved once per read of it
+  (drgnx-swt--with
+    (drgnx-swt--private " (fill-column 91)")
+    (let ((lists 0) (roots 0) (root drgnx-swt--root)
+          (dir-files (symbol-function 'directory-files)) (norm (symbol-function 'drgnx-settings-workspace--norm)))
+      (cl-letf (((symbol-function 'directory-files)
+                 (lambda (dir &rest args)
+                   (when (equal (expand-file-name dir) (expand-file-name (drgnx-settings-workspace-private-dir)))
+                     (cl-incf lists))
+                   (apply dir-files dir args)))
+                ((symbol-function 'drgnx-settings-workspace--norm)
+                 (lambda (dir) (when (equal dir root) (cl-incf roots)) (funcall norm dir))))
+        ;; a folder changed within the last second is listed again (a same-tick change would keep its stamp)
+        (set-file-times (drgnx-settings-workspace-private-dir) (time-subtract nil 10))
+        (drgnx-swt--in "src/a.txt" (should (= fill-column 91)))
+        (setq lists 0 roots 0)
+        (drgnx-swt--in "src/b.txt" (should (= fill-column 91)))
+        (drgnx-swt--in "src/c.txt" (should (= fill-column 91)))
+        (should (= lists 0))
+        (should (= roots 0))
+        ;; the file changes: read and resolved again
+        (drgnx-swt--private " (fill-column 92)")
+        (drgnx-swt--in "src/d.txt" (should (= fill-column 92)))
+        (should (> roots 0))
+        ;; a private file goes away: the folder is listed again and its entries stop
+        (delete-file (drgnx-swt--private-file))
+        (drgnx-swt--in "src/e.txt" (should-not (local-variable-p 'fill-column)))
+        (should (> lists 0))))))
+
 (provide 'settings-workspace-test)
 ;;; settings-workspace-test.el ends here
