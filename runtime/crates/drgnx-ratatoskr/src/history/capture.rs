@@ -502,6 +502,54 @@ impl Hub {
         Ok(v)
     }
 
+    /// The hub is applying a runner's returned changes in TREE (WRITES: each file's new bytes; none: removed), for the
+    /// agent SESSION that started the job, or for RUNNER when the user did: one version, recorded before the files are
+    /// written (as [`Self::on_agent_write`]).
+    pub fn on_returned_writes(
+        &self,
+        tree: &Tree,
+        writes: &[(String, Option<Vec<u8>>)],
+        session: Option<&str>,
+        runner: &str,
+        now: f64,
+    ) -> Result<Vec<FileVersion>> {
+        let (key, author) = match session {
+            Some(s) => agent(s),
+            None => external(&format!("runner {runner}")),
+        };
+        let mut g = self.lock();
+        let mut staged = Vec::new();
+        for (rel, bytes) in writes {
+            let seen = bytes.clone().map_or(Seen::Gone, Seen::Bytes);
+            staged.extend(g.stage(tree, rel, seen, Src::Hub, &key, &author)?);
+        }
+        let summary = match writes {
+            [(one, _)] => format!("runner {runner}'s changes wrote {one}"),
+            _ => format!("runner {runner}'s changes wrote {} files", writes.len()),
+        };
+        let cause = Cause {
+            session: session.map(String::from),
+            ..Cause::default()
+        };
+        let v = g.finish(
+            tree,
+            if session.is_some() {
+                Kind::AgentStep
+            } else {
+                Kind::External
+            },
+            &key,
+            &author,
+            cause,
+            summary,
+            staged,
+            now,
+        )?;
+        drop(g);
+        self.publish(&v);
+        Ok(v)
+    }
+
     /// The watcher saw REL change.  While a session working in TREE has a tool call running (or a closed step not
     /// claimed yet), the event is held for the step to claim ([`Self::claim`]); [`Self::release_held`] records what no
     /// step claimed once none is busy.

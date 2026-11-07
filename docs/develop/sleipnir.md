@@ -547,7 +547,7 @@ the same format. `PROTO_VERSION` is checked at `hello`: a runner of another vers
 hub copies its bundle before it sends work.
 
 **The wire** (`FrameReader`, `FrameWriter`). One JSON line per frame, tagged by `t`. A frame with bytes (`log`,
-`blob`, `bundle`) adds `"len": N` to its line, and the bytes follow the line as one chunk: a 4-byte big-endian length,
+`returned`, `blob`, `bundle`) adds `"len": N` to its line, and the bytes follow the line as one chunk: a 4-byte big-endian length,
 then the bytes, at most 1 MiB (`MAX_CHUNK`). A writer refuses a bigger chunk before it sends anything, and a reader
 refuses one before it reads it. Any frame may carry a chunk, so a side skips the bytes of a frame it doesn't know and
 stays in step. A line is at most 16 MiB (`MAX_LINE`, a `finished` frame's `result.json`). An error ends the channel.
@@ -571,6 +571,7 @@ does not parse.
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
+| `returned` | runner → hub | what the attempt gives back (`what`: `patch` or `outputs`), a chunk at its offset of its total, with the whole's sha256; the first chunk lists what was left out (`left`, `[[path, why]]`); `kept`: over its limit, no bytes, it stays on the runner |
 | `row` | runner → hub | a test row's name and verdict |
 | `key` | hub → runner | a key's name and value (below) |
 | `key-use` | runner → hub | the key a job asked for, and when |
@@ -609,6 +610,7 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 | `drgnx-key`, `net-allow`, `key-use.sent` | the job's own copy of the bundle's `drgnx-key`, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
 | `tree/` | a synced job that writes its tree: its private copy of the slot |
+| `base/`, `returned.patch`, `returned.tar` | a job that declares `writes`: the slot as it started from, which its changes are read against; what was sent back (below) |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
 
 **`hello`** must come first; a hub id other than `--hub-id` gets `bye`. Each `hello` re-probes the runner contract
@@ -658,8 +660,17 @@ frames. The pins go into the job's caps (`Caps.pins`, as a local container job's
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
-`result.json` and its log is all sent, `serve` sends its rows (`row`) and `finished` with `result.json`, drops the
-reservation, cleans up and sends `ready`. A unit that ended without job-exec's result was killed from outside: its
+`result.json` and its log is all sent, `serve` sends what comes back (below), its rows (`row`) and `finished` with
+`result.json`, drops the reservation, cleans up and sends `ready`.
+
+**What comes back** (`sync::returned`, `Serve::give_back`), for a job whose spec has `writes_tree` (the hub sets it
+when the job declares `writes` or `outputs`): `changes` reads the private copy against `base/` and writes a git patch
+(`--full-index` form: an `index` line with both blob ids and the mode, then the hunks) of the text files the `writes`
+globs match that differ, were added or were removed; a binary file, a link and a name git would quote are left out,
+each with its reason, and the copy's `.git` is never read. `outputs` makes a ustar archive of the regular files the
+`outputs` globs match and of `reports/`, folders first. Each goes back in `returned` frames before `finished`; one
+over its limit (16 MiB for the patch, 256 MiB for the outputs) is sent `kept`, without its bytes. Glob matching is
+`returned::glob_ok`, which the hub's `patch_ok` calls too, so both sides pick the same files. A unit that ended without job-exec's result was killed from outside: its
 result is written as `infra: killed`. `cancel` writes `cancelled` and the kill reason, then kills the container, so
 job-exec writes the verdict, which `serve` reports as `Cancelled`.
 

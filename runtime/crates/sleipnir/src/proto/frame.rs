@@ -444,6 +444,23 @@ pub enum Frame {
         #[serde(skip)]
         bytes: Vec<u8>,
     },
+    /// runner → hub, before `finished`: a piece of what the attempt gives back (`what`: `patch` or `outputs`, see
+    /// `sync::returned`) at OFFSET of TOTAL bytes (its bytes follow), each with the whole's hash; the first piece also
+    /// lists what was left out of it (path, why). TOTAL 0: nothing of that kind. `kept`: the whole is over its limit
+    /// and stays on the runner, for a `fetch`.
+    Returned {
+        r: JobRef,
+        what: String,
+        offset: u64,
+        total: u64,
+        sha256: Sha256,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left: Vec<(String, String)>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        kept: bool,
+        #[serde(skip)]
+        bytes: Vec<u8>,
+    },
     /// runner → hub: a parsed test row.
     Row {
         r: JobRef,
@@ -539,6 +556,7 @@ impl Frame {
             | Frame::Start { r, .. }
             | Frame::Started { r, .. }
             | Frame::Log { r, .. }
+            | Frame::Returned { r, .. }
             | Frame::Row { r, .. }
             | Frame::Key(Key { r, .. })
             | Frame::KeyUse { r, .. }
@@ -551,21 +569,23 @@ impl Frame {
         }
     }
 
-    /// The bytes that follow the frame on the wire (`log`, `blob`, `bundle`).
+    /// The bytes that follow the frame on the wire (`log`, `returned`, `blob`, `bundle`).
     pub fn payload(&self) -> Option<&[u8]> {
         match self {
-            Frame::Log { bytes, .. } | Frame::Blob { bytes, .. } | Frame::Bundle { bytes, .. } => {
-                Some(bytes)
-            }
+            Frame::Log { bytes, .. }
+            | Frame::Returned { bytes, .. }
+            | Frame::Blob { bytes, .. }
+            | Frame::Bundle { bytes, .. } => Some(bytes),
             _ => None,
         }
     }
 
     pub(super) fn payload_mut(&mut self) -> Option<&mut Vec<u8>> {
         match self {
-            Frame::Log { bytes, .. } | Frame::Blob { bytes, .. } | Frame::Bundle { bytes, .. } => {
-                Some(bytes)
-            }
+            Frame::Log { bytes, .. }
+            | Frame::Returned { bytes, .. }
+            | Frame::Blob { bytes, .. }
+            | Frame::Bundle { bytes, .. } => Some(bytes),
             _ => None,
         }
     }

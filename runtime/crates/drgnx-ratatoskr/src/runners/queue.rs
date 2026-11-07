@@ -14,6 +14,7 @@ use super::keys::{self, Keys};
 use super::link::{LinkEvent, Route, Session};
 use super::local::LocalRunner;
 use super::redact::{self, Redactor};
+use super::returned;
 use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
@@ -282,6 +283,8 @@ pub enum Outcome {
         shared: Option<String>,
         /// The runner it ran on, kept in the job's row once the queue has forgotten it.
         machine: Option<String>,
+        /// What it returned to put back (a job that declared `writes` or `outputs`, on a runner).
+        back: Option<returned::Back>,
     },
     /// The job's runner is gone and the job isn't restartable.
     Lost { id: String },
@@ -786,6 +789,24 @@ impl Route for QRoute {
         }
         Some(Ok(rd.consumed))
     }
+}
+
+/// A `returned` frame's piece of what an attempt gave back.
+struct Piece<'a> {
+    what: &'a str,
+    offset: u64,
+    total: u64,
+    sha256: &'a Sha256,
+    left: &'a [(String, String)],
+    kept: bool,
+    bytes: &'a [u8],
+}
+
+/// The file of the job folder DIR that holds what its attempt returned of WHAT (`patch`, `outputs`), with EXT
+/// (`""`: the whole, checked; `.part`: while it comes; `.left`: what the runner left out, a `path: why` a line;
+/// `.kept`: its size, when it stayed on the runner for a fetch).
+pub fn returned_file(dir: &std::path::Path, what: &str, ext: &str) -> PathBuf {
+    dir.join(format!("returned.{what}{ext}"))
 }
 
 /// Appends BYTES at the end of the file at PATH.
@@ -1697,6 +1718,8 @@ impl Queue {
         }
         spec.keys = j.s.place.keys.clone();
         spec.writes = j.s.place.writes.clone();
+        // a job that declares what it writes or makes runs in a private copy, whose changes and outputs come back
+        spec.writes_tree = !spec.writes.is_empty() || !spec.outputs.is_empty();
         Job {
             id: JobId(j.s.id.clone()),
             spec,
@@ -2556,6 +2579,36 @@ impl Queue {
                 self.apply(st, effects, now, out);
                 return;
             }
+            Frame::Returned {
+                r,
+                what,
+                offset,
+                total,
+                sha256,
+                left,
+                kept,
+                bytes,
+            } => {
+                // what the current attempt returned only: a late one's is never applied
+                if st.attempts.frame_ok(runner, &r) == Some(false) {
+                    let piece = Piece {
+                        what: &what,
+                        offset,
+                        total,
+                        sha256: &sha256,
+                        left: &left,
+                        kept,
+                        bytes: &bytes,
+                    };
+                    if let Err(e) = self.returned_piece(&r, piece) {
+                        tracing::warn!("runners: {runner}: {} returned {what}: {e}", r.job);
+                    }
+                }
+                AEvent::FrameFrom {
+                    runner: runner.into(),
+                    r,
+                }
+            }
             Frame::Row { r, name, verdict } => {
                 // a row counts for an attempt the hub placed there with that nonce, its job's current one or a late
                 // one, until the job's verdict is recorded
@@ -2595,6 +2648,90 @@ impl Queue {
         for j in jobs {
             self.put_attempts(st, &j);
         }
+    }
+
+    /// What JOB's ATTEMPT on RUNNER returned to put back, when it declared `writes` or `outputs`.
+    fn back_of(
+        &self,
+        st: &St,
+        job: &str,
+        attempt: u32,
+        runner: Option<&str>,
+    ) -> Option<returned::Back> {
+        let (j, runner) = (st.jobs.get(job)?, runner?);
+        if j.s.place.writes.is_empty() && j.s.spec.outputs.is_empty() {
+            return None;
+        }
+        let a = st.attempts.attempt(job, attempt)?;
+        Some(returned::Back {
+            writes: j.s.place.writes.clone(),
+            worktree: j.s.inputs.as_ref().map(|f| f.worktree.clone()),
+            from: JobRef {
+                job: job.into(),
+                attempt,
+                nonce: a.nonce,
+            },
+            runner: runner.into(),
+            trust: st.runners.get(runner)?.r.trust,
+        })
+    }
+
+    /// A piece of what attempt R returned, written at its offset into the job's [`returned_file`]: the first piece
+    /// starts it afresh (and writes what was left out, or that it was kept on the runner), the last is checked against
+    /// its size and sha256 before it becomes the whole. A piece that doesn't follow on is refused.
+    fn returned_piece(&self, r: &JobRef, p: Piece<'_>) -> std::io::Result<()> {
+        use sha2::Digest;
+        use std::io::{Error, ErrorKind};
+        if !matches!(p.what, "patch" | "outputs") {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "not a kind the hub takes",
+            ));
+        }
+        let dir = self.exec_root.join(&r.job);
+        let file = |ext: &str| returned_file(&dir, p.what, ext);
+        if p.offset == 0 {
+            // the job's folder holds its log once a line came; a job that printed nothing has none yet
+            std::fs::create_dir_all(&dir)?;
+            for ext in ["", ".part", ".left", ".kept"] {
+                let _ = std::fs::remove_file(file(ext));
+            }
+            if !p.left.is_empty() {
+                let lines: String = p
+                    .left
+                    .iter()
+                    .map(|(path, why)| format!("{path}: {why}\n"))
+                    .collect();
+                std::fs::write(file(".left"), lines)?;
+            }
+            if p.kept {
+                return std::fs::write(file(".kept"), format!("{}\n", p.total));
+            }
+        }
+        let part = file(".part");
+        let have = std::fs::metadata(&part).map_or(0, |m| m.len());
+        if have != p.offset {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "a piece at byte {}, where the copy ends at {have}",
+                    p.offset
+                ),
+            ));
+        }
+        append_end(&part, p.bytes)?;
+        if p.offset + (p.bytes.len() as u64) < p.total {
+            return Ok(());
+        }
+        let whole = std::fs::read(&part)?;
+        if whole.len() as u64 != p.total || sha2::Sha256::digest(&whole)[..] != p.sha256.0[..] {
+            let _ = std::fs::remove_file(&part);
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "its size or sha256 isn't what the runner announced",
+            ));
+        }
+        std::fs::rename(&part, file(""))
     }
 
     /// Attempt R on RUNNER sent its result: its log's redactor gives back what it held, and the heuristic's notices
@@ -2937,6 +3074,7 @@ impl Queue {
                         }
                         result = merged(&result, &rows, &spec, suite.as_ref());
                     }
+                    let back = self.back_of(st, &job, attempt, runner.as_deref());
                     st.jobs.remove(&job);
                     st.attempts.forget(&job);
                     self.drop_job(&job);
@@ -2946,6 +3084,7 @@ impl Queue {
                         result,
                         shared,
                         machine: runner,
+                        back,
                     });
                 }
                 Effect::Requeue { job, reason } => {
@@ -2998,6 +3137,7 @@ impl Queue {
                             result,
                             shared,
                             machine,
+                            back: None,
                         });
                     }
                 }

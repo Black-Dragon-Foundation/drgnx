@@ -1074,6 +1074,11 @@ impl<W: Write> Serve<W> {
         let src = if meta.spec.writes_tree {
             let copy = dir.join("tree");
             slot::private_copy(&p, &copy).map_err(sync_err)?;
+            // what the job's changes are read against at its end: the slot as it is now, which another attempt may
+            // move meanwhile (a reflink where the file system has them)
+            if !meta.spec.writes.is_empty() {
+                slot::private_copy(&p, &dir.join(BASE)).map_err(sync_err)?;
+            }
             copy
         } else {
             p.slot
@@ -1906,6 +1911,9 @@ impl<W: Write> Serve<W> {
                 serde_json::to_vec_pretty(&result).unwrap_or_default(),
             );
         }
+        if self.give_back(&meta.r, dir, &meta.spec) == Next::Stop {
+            return Err(());
+        }
         let rows = result["rows"].as_array().cloned().unwrap_or_default();
         for row in rows {
             let frame = Frame::Row {
@@ -1927,6 +1935,80 @@ impl<W: Write> Serve<W> {
             return Err(());
         }
         Ok(())
+    }
+}
+
+/// The pristine copy of the slot a job that writes the tree is compared with at its end, in the attempt's folder.
+const BASE: &str = "base";
+/// A returned patch larger than this stays on the runner, for a `fetch` (the hub's limit too).
+pub const PATCH_MAX: u64 = 16 << 20;
+/// Returned outputs larger than this stay on the runner, for a `fetch`.
+pub const OUTPUTS_MAX: u64 = 256 << 20;
+
+impl<W: Write> Serve<W> {
+    /// What attempt R of a job that wrote its private copy gives back, before its `finished`: its changes to SPEC's
+    /// `writes` as a patch, and its `outputs` and `reports/` as an archive (`sync::returned`), each written beside
+    /// the attempt (`returned.patch`, `returned.tar`, for a `fetch`) and sent in `returned` pieces; one over its limit
+    /// is only named (`kept`). Nothing for a job that writes nothing.
+    fn give_back(&mut self, r: &JobRef, dir: &Path, spec: &forseti::JobSpec) -> Next {
+        use crate::sync::returned;
+        if !spec.writes_tree {
+            return Next::Go;
+        }
+        let copy = dir.join("tree");
+        let unread = |e: io::Error| {
+            (
+                Vec::new(),
+                vec![(String::new(), format!("could not be read: {e}"))],
+            )
+        };
+        let mut parts = Vec::new();
+        if !spec.writes.is_empty() {
+            let c = returned::changes(&dir.join(BASE), &copy, &spec.writes)
+                .map_or_else(unread, |c| (c.patch, c.left));
+            parts.push(("patch", "returned.patch", PATCH_MAX, c));
+        }
+        let o = returned::outputs(&copy, &spec.outputs).map_or_else(unread, |o| (o.tar, o.left));
+        parts.push(("outputs", "returned.tar", OUTPUTS_MAX, o));
+        for (what, file, max, (bytes, left)) in parts {
+            if let Err(e) = fs::write(dir.join(file), &bytes) {
+                eprintln!("sleipnir serve: {}: {e}", dir.join(file).display());
+            }
+            let total = bytes.len() as u64;
+            let kept = total > max;
+            let sha256 = Sha256(crate::sync::sha256(&bytes));
+            let mut offset = 0usize;
+            let mut left = Some(left);
+            loop {
+                let end = if kept {
+                    0
+                } else {
+                    (offset + MAX_CHUNK).min(bytes.len())
+                };
+                let frame = Frame::Returned {
+                    r: r.clone(),
+                    what: what.into(),
+                    offset: offset as u64,
+                    total,
+                    sha256,
+                    left: left.take().unwrap_or_default(),
+                    kept,
+                    bytes: if kept {
+                        Vec::new()
+                    } else {
+                        bytes[offset..end].to_vec()
+                    },
+                };
+                if self.send(&frame) == Next::Stop {
+                    return Next::Stop;
+                }
+                if kept || end >= bytes.len() {
+                    break;
+                }
+                offset = end;
+            }
+        }
+        Next::Go
     }
 }
 

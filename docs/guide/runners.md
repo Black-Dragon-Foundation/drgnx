@@ -249,10 +249,19 @@ alpha is private; the only free runner is shared".
 ## What comes back
 
 A job on a runner returns its log, its result and what it declared into its folder here (`<state>/hub/exec/<id>/`),
-so `exec/get`, `exec/log` and the summary work as for a job on this machine. For now a runner sends back its log and
-its result only; its reports, declared outputs and `changes.patch` (and `drgnx job fetch` for the larger ones) are
-still to come, and go through these checks when they do. Nothing a runner returns touches your tree until the hub has
-checked it:
+so `exec/get`, `exec/log` and the summary work as for a job on this machine. A job that declares `writes` or `outputs`
+runs in a private copy of its checkout on the runner, and at its end the runner sends back, before its result:
+
+- **its changes** to the files its `writes` globs match, as a patch against the checkout it started from
+  (`returned.patch`). Text files only: a binary file, a link or a name git would quote is left out, and the summary
+  names each one ("the runner left out of its patch: logo.png: a binary file");
+- **its outputs**, the files its `outputs` globs match and its `reports/` folder, as an archive (`returned.outputs`),
+  unpacked into the job's `outputs/` folder here.
+
+At the job's verdict the patch is applied to your worktree when every check below holds, as one version of the
+project's edit history (the starting agent session's, or `runner NAME`'s for a job you started); the summary says
+"runner desk's changes were applied to 2 files". A patch over its limit stays on the runner, and the summary says so
+(`drgnx job fetch` is still to come). Nothing a runner returns touches your tree until the hub has checked it:
 
 - **Paths.** Every returned path is relative and normalised: one with `..`, an absolute name or a NUL byte is refused.
   Files are written beneath the job's folder without following a link (a link planted there is replaced or refused,
@@ -267,8 +276,9 @@ checked it:
   protected file (`.envrc`, `.claude`, `.codex`, `.gemini`, `mise.toml`, at any depth) and nothing under a `.git`
   folder; it adds no symbolic link or submodule and changes no executable bit (a new executable file counts); each
   file it changes is still the one the job was submitted with; it comes from the job's current attempt (its number
-  and nonce); and its runner isn't `shared`. Otherwise it is kept, with the card "desktop returned changes to 3 files;
-  review them".
+  and nonce); and its runner isn't `shared`. "Still the one" means the file in your worktree is, at the verdict,
+  the file the runner changed: edit it meanwhile and the patch is kept. A patch that is kept stays in the job's folder,
+  with the card "desktop returned changes to 3 files; review them" and each reason in the summary.
 - **A `shared` runner's results** never count for a gate or a job's `needs`, and are never promoted. Their summary, and
   so the wake of the agent that started the job, begins "output from runner NAME (shared)".
 

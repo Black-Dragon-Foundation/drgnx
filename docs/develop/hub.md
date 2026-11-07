@@ -3371,8 +3371,27 @@ only and `memory.swap.max` 0).
 ## Runners: returned data
 
 `runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
-returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
-wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+returns is checked before it reaches anyone. The runner's side is docs/develop/sleipnir.md, "What comes back"; the
+hub's:
+
+- **Arriving.** The queue sets `spec.writes_tree` for a job that declares `writes` or `outputs`. A `returned` frame of
+  the job's current attempt (`frame_ok` is `Some(false)`; a late attempt's is dropped) is written by
+  `Queue::returned_piece` at its offset into the job folder's `returned.WHAT.part` (`queue::returned_file`); the first
+  piece starts afresh, makes the folder (a job that printed nothing has no log there yet) and writes what was left out
+  to `returned.WHAT.left` (or the size to `returned.WHAT.kept`); the last is checked against its total and sha256 and
+  renamed `returned.WHAT`. A piece that doesn't follow on, or a whole that doesn't check, is refused and logged.
+- **At the verdict.** `Queue::apply` gives `Outcome::Done` a `Back` (the job's `writes`, the frozen inputs' worktree,
+  the attempt's `JobRef` with its nonce, the runner and its trust) when the job declared `writes` or `outputs`. The
+  job layer (`exec::Inner::take_back`, off the runtime's threads) asks `history::revert::patch_returned` first (a
+  patch for a session whose revert runs is kept and listed), then calls `returned::take_back(dir, back, held,
+  record)`: the outputs archive through `archive_ok` and unpacked by `write` into `outputs/` (made afresh); the patch
+  through `Patch::parse` and `patch_ok` against the worktree as it is now (each file's blob id, read through `eitri`
+  with no link followed: a file edited since is no longer what the runner changed), applied by `git apply` to copies
+  in the folder's `apply/` (no repository looked for above it), the new contents handed to RECORD
+  (`history::Hub::on_returned_writes`: one version, the session's `AgentStep` or `runner NAME`'s `External`) before
+  any file is written through `eitri` (a removed file through `remove_beneath`). Its lines (what was left out or kept,
+  where the outputs went, "runner NAME's changes were applied to N files" or the `review_card` with each reason) go to
+  the job's `returned` file, which `finish` adds to the summary.
 
 - `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
   or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
@@ -3398,7 +3417,11 @@ wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `s
   (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
 
 Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
-`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
+`.git`, exec bits, an old attempt, `shared`, `target/`; a patch applied and told once, one against a file changed since
+kept, the outputs unpacked, an applied patch as one history version); `sleipnir::sync::returned::` [D] (the runner's
+patch and archive); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D]; the fleet row
+`fleet_sync::sync_rows::a_runners_changes_and_outputs_come_back` [C] (a real `sleipnir serve`: the change applied,
+the output unpacked).
 
 ## Runners: health
 

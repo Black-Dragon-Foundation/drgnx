@@ -1103,6 +1103,7 @@ async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
         result: json!({"verdict": "Pass"}),
         shared: shared.map(String::from),
         machine: Some(shared.unwrap_or("desk").into()),
+        back: None,
     };
     r.inner
         .get()

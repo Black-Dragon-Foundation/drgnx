@@ -212,6 +212,9 @@ pub struct Hooks {
     pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The projects' edit histories and the state folder they live in: a runner's applied changes are one version
+    /// there. None: they are applied unrecorded (tests).
+    pub history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
     #[cfg(test)]
     pub plain_sessions: bool,
@@ -239,6 +242,7 @@ impl Default for Hooks {
             nevers: None,
             cards: None,
             key_envs: Arc::new(Vec::new),
+            history: None,
             #[cfg(test)]
             plain_sessions: false,
         }
@@ -418,6 +422,8 @@ const STOP_WAIT: Duration = Duration::from_secs(5);
 const SHARED: &str = "shared";
 /// The job folder's file with the line saying how the job's rows split over its attempts (`summary::split_line`).
 const SPLIT: &str = "split";
+/// The job folder's file with what a runner returned and where it went (applied, kept for review, the outputs' folder).
+const RETURNED: &str = "returned";
 
 /// The jobs the hub runs.
 pub struct Runner {
@@ -997,18 +1003,19 @@ impl Inner {
     /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict, shared, split, machine) = match o {
+            let (id, verdict, shared, split, machine, back) = match o {
                 Outcome::Done {
                     id,
                     result,
                     shared,
                     machine,
+                    back,
                     ..
                 } => {
                     let split = result["split"].as_str().map(String::from);
-                    (id, queue::verdict_of(&result), shared, split, machine)
+                    (id, queue::verdict_of(&result), shared, split, machine, back)
                 }
-                Outcome::Lost { id } => (id, None, None, None, None),
+                Outcome::Lost { id } => (id, None, None, None, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -1053,8 +1060,50 @@ impl Inner {
                 }
             }
             let me = self.clone();
-            crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });
+            crate::clock::spawn("exec:remote-end", async move {
+                if let Some(back) = back {
+                    me.take_back(&id, back).await;
+                }
+                me.finish(&id).await
+            });
         }
+    }
+
+    /// What job ID's runner returned, put back ([`crate::runners::returned::take_back`]) off the runtime's threads:
+    /// its lines go to the job's [`RETURNED`] file, which its summary reads. An applied patch is one history version,
+    /// the starting session's (or the runner's, for the user's job).
+    async fn take_back(&self, id: &str, back: crate::runners::returned::Back) {
+        let dir = self.dir(id);
+        let session = self.meta(id).and_then(|m| m.session);
+        let history = self.hooks.history.clone();
+        let (runner, id) = (back.runner.clone(), id.to_owned());
+        let _ = crate::clock::blocking(move || {
+            let record = |tree: &Path, writes: &crate::runners::returned::Writes| {
+                let Some((hubs, state)) = &history else {
+                    return Ok(());
+                };
+                let (hub, tree) = hubs.of_tree(state, tree).map_err(|e| e.message)?;
+                hub.on_returned_writes(&tree, writes, session.as_deref(), &runner, now())
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            };
+            // a patch that comes while its session's revert runs is kept, and the revert lists it
+            let patch = crate::runners::queue::returned_file(&dir, "patch", "");
+            let held = match (&history, &session) {
+                (Some((hubs, _)), Some(sid)) if patch.metadata().is_ok_and(|m| m.len() > 0) => {
+                    crate::history::revert::patch_returned(hubs, sid, &id)
+                }
+                _ => false,
+            };
+            let lines = crate::runners::returned::take_back(&dir, &back, held, &record);
+            if !lines.is_empty() {
+                let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+                if let Err(e) = std::fs::write(dir.join(RETURNED), text) {
+                    tracing::warn!("{}: {e}", dir.join(RETURNED).display());
+                }
+            }
+        })
+        .await;
     }
 
     /// A queued job was admitted here: start it, or end it when it cannot start (stopped while it waited, its spec
@@ -1493,6 +1542,10 @@ impl Inner {
         if let Ok(line) = std::fs::read_to_string(dir.join(SPLIT)) {
             summary.lines.insert(0, line);
         }
+        // what a runner returned, and where it went
+        if let Ok(text) = std::fs::read_to_string(dir.join(RETURNED)) {
+            summary.lines.extend(text.lines().map(String::from));
+        }
         // a shared runner's output reaches the summary, and so the starter's wake, labelled untrusted
         if let Ok(runner) = std::fs::read_to_string(dir.join(SHARED)) {
             summary
@@ -1914,6 +1967,7 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             hooks.memory = m;
         }
         hooks.runtime = f.core.agents.db().cloned();
+        hooks.history = Some((f.core.history.clone(), dirs.hub.clone()));
         // test-hooks: admission by this many slots (the fixed-slot path a macOS hub takes; 0: nothing is admitted)
         #[cfg(feature = "test-hooks")]
         if let Some(n) = std::env::var("DRGNX_TEST_JOB_SLOTS")
