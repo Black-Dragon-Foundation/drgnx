@@ -569,6 +569,11 @@ skuld::every_order(&p, skuld::Bound::default(), Conn::new, |conn, order| conn.ch
 `skuld::wait_until(what, secs, f)` is the one real-time wait Rust tests may use: it polls `f` every 10 ms and panics
 naming `what` after `secs`. The deadline only bounds a failure, so a test never widens it to pass.
 
+`skuld::while_running(what, &mut task, fut)` is how a test waits beside a spawned call: a panic in a spawned task only
+ends the task, so a test waiting for what the call would have done (a card, a watch, a channel whose sender it also
+holds) would wait forever. It returns `fut`'s output, and fails naming `what` and the task's panic when the task ends
+first (`abilities/tests.rs`'s ask rows wait for their card this way).
+
 `cargo test -p skuld` checks the helper against answers known exactly: the closed forms (12,870 for 2×8, 1,680 for
 3×3, 63,063,000 for 4×4, binomials up to 7×7, the cap), and brute force over every interleaving for the orders an
 exhaustive or a delay-bounded run visits (with and without edges, two and three sources), each once; the re-entry
@@ -632,6 +637,9 @@ domr connect-as --socket PATH
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.
 - `connect-as` connects to the socket and relays stdin and stdout over it: the other-uid connection runs it as
   uid 65534 (`setpriv` as root where util-linux has it, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
+- Started straight under PID 1 (a container's init, `exec`ed by a shell), domr runs as its own child: the harness
+  plays an outside agent's bridge, whose identity is its parent process, and the hub refuses an orphan's
+  (`mcp/an-outside-bridge-is-ext-and-unverified`).
 
 ### The scenario format
 
@@ -918,7 +926,9 @@ Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each 
 `data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
 refused, that a download lands in the browser's own `downloads/` with its `Browser.downloadProgress` event and the
 broker's `Download`, and that a page the agent left paused (`waitForDebuggerOnStart`) loads once the agent's websocket
-closes. It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
+closes, and that a worker which attached paused under a session runs once that session is detached without being told
+to (what the broker relies on for a target that attaches under a session the agent already left: it records it as
+closing and sends it nothing). It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
 
 It runs only with `DRGNX_TEST_REAL_BROWSER=1`, in the browser test image (`test/container/browser/Containerfile`: the
 image the Rust tests run in, plus Chromium, Node and Playwright MCP pinned in `/opt/pw-mcp`), with `ratatoskr-mock`
@@ -1317,7 +1327,10 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
   tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
+  200. Each is a plan test in `hrafn/tests/query.rs`. The lag's counts and the vectors' sign bits are kept between two
+  changes of the store (`hrafn/src/memo.rs`: the store thread's own changes and SQLite's `data_version` for another
+  connection's commits), so a query between two index writes reads neither again: at 100,000 chunks they were 38 and
+  28 ms of each query. `what_a_query_keeps_ends_at_the_next_write` pins that a write ends them. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question

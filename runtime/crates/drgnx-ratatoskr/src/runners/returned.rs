@@ -1,5 +1,6 @@
 //! What a runner returns is checked before it touches your tree (docs/guide/runners.md, "What comes back"; design
-//! §6.3). Pure, but for [`write`], which writes beneath a job's folder through `eitri` and never follows a link.
+//! §6.3). Pure, but for [`write`], which writes beneath a job's folder through `eitri` and never follows a link, and
+//! [`take_back`], which puts what came back where it goes once the job's verdict is in.
 //!
 //! - [`path_ok`]: a returned path is relative and normalised, with no `..`, no absolute name and no NUL.
 //! - [`never_returned`]: a cargo `target/`, a build tree or an image never comes back, whatever the job declared.
@@ -17,7 +18,7 @@ use sleipnir::proto::JobRef;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fmt;
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -100,6 +101,16 @@ pub fn never_returned(rel: &Path) -> Option<&'static str> {
 /// Writes BYTES to REL beneath the job's folder JOB_DIR (mode 0644, folders on the way 0755), never through a link;
 /// the path written, or why not.
 pub fn write(job_dir: BorrowedFd<'_>, rel: &[u8], bytes: &[u8]) -> Result<PathBuf, Refusal> {
+    write_mode(job_dir, rel, bytes, 0o644)
+}
+
+/// [`write`] with the file's MODE.
+fn write_mode(
+    job_dir: BorrowedFd<'_>,
+    rel: &[u8],
+    bytes: &[u8],
+    mode: u32,
+) -> Result<PathBuf, Refusal> {
     let path = path_ok(rel)?;
     if let Some(what) = never_returned(&path) {
         return Err(Refusal(format!(
@@ -133,7 +144,7 @@ pub fn write(job_dir: BorrowedFd<'_>, rel: &[u8], bytes: &[u8]) -> Result<PathBu
         }
         at = next;
     }
-    eitri::write_regular(job_dir, &path, bytes, 0o644).map_err(fail)?;
+    eitri::write_regular(job_dir, &path, bytes, mode).map_err(fail)?;
     Ok(path)
 }
 
@@ -195,6 +206,11 @@ fn pax_value<'a>(body: &'a [u8], key: &[u8]) -> Result<Option<&'a [u8]>, String>
 
 /// The entries of the tar archive TAR if it holds only regular files and folders at paths that pass, or why not.
 pub fn archive_ok(tar: &[u8]) -> Result<Vec<Entry>, Refusal> {
+    Ok(entries(tar)?.into_iter().map(|(e, _)| e).collect())
+}
+
+/// [`archive_ok`]'s entries, each with where its bytes are in TAR.
+fn entries(tar: &[u8]) -> Result<Vec<(Entry, std::ops::Range<usize>)>, Refusal> {
     let bad = |why: String| Refusal(format!("the archive: {why}"));
     let (mut out, mut at) = (Vec::new(), 0usize);
     let (mut long, mut pax): (Option<Vec<u8>>, Option<Vec<u8>>) = (None, None);
@@ -252,11 +268,14 @@ pub fn archive_ok(tar: &[u8]) -> Result<Vec<Entry>, Refusal> {
                 if let Some(what) = never_returned(&path) {
                     return Err(bad(format!("{}: {what}, never returned", path.display())));
                 }
-                out.push(Entry {
-                    path,
-                    size,
-                    dir: typ == b'5',
-                });
+                out.push((
+                    Entry {
+                        path,
+                        size,
+                        dir: typ == b'5',
+                    },
+                    start..end,
+                ));
             }
             t => {
                 let raw = pax
@@ -436,55 +455,10 @@ pub(crate) fn protected(rel: &Path) -> Option<String> {
         .map(|c| c.to_string_lossy().into_owned())
 }
 
-/// Whether PATH matches the `writes` glob PATTERN: `*` and `?` within one name, `**` as a whole segment any number of
-/// folders, a trailing `/` the folder and all in it.
+/// Whether PATH matches the `writes` glob PATTERN: the runner's own match ([`sleipnir::sync::returned::glob_ok`]), so
+/// both sides pick the same files.
 pub(crate) fn glob_ok(pattern: &str, path: &str) -> bool {
-    let whole;
-    let pattern = match pattern.strip_suffix('/') {
-        Some(dir) => {
-            whole = format!("{dir}/**");
-            whole.as_str()
-        }
-        None => pattern,
-    };
-    let p: Vec<&str> = pattern
-        .split('/')
-        .filter(|s| !s.is_empty() && *s != ".")
-        .collect();
-    let s: Vec<&str> = path.split('/').collect();
-    segments(&p, &s)
-}
-
-fn segments(p: &[&str], s: &[&str]) -> bool {
-    match p.split_first() {
-        None => s.is_empty(),
-        Some((&"**", rest)) => (0..=s.len()).any(|i| segments(rest, &s[i..])),
-        Some((first, rest)) => s
-            .split_first()
-            .is_some_and(|(h, t)| segment(first.as_bytes(), h.as_bytes()) && segments(rest, t)),
-    }
-}
-
-/// One name against one pattern segment (`*` any run, `?` one byte), with one point to come back to.
-fn segment(p: &[u8], s: &[u8]) -> bool {
-    let (mut pi, mut si) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while si < s.len() {
-        if pi < p.len() && (p[pi] == b'?' || p[pi] == s[si]) {
-            pi += 1;
-            si += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
-            star = Some((pi, si));
-            pi += 1;
-        } else if let Some((sp, ss)) = star {
-            pi = sp + 1;
-            si = ss + 1;
-            star = Some((sp, ss + 1));
-        } else {
-            return false;
-        }
-    }
-    p[pi..].iter().all(|b| *b == b'*')
+    sleipnir::sync::returned::glob_ok(pattern, path)
 }
 
 /// Whether PATCH may be applied to the caller's tree: every path is one of JOB's `writes` globs, none is protected,
@@ -613,6 +587,231 @@ pub fn counts_for_gates(runner: RunnerTrust) -> bool {
 /// The line a summary from the `shared` runner RUNNER starts with, so a woken agent reads it as untrusted.
 pub fn shared_label(runner: &str) -> String {
     format!("output from runner {runner} (shared)")
+}
+
+/// What a job's verdict brings to put back: the globs it may write, the worktree its inputs were frozen from (none:
+/// it had none), and the attempt and runner it came from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Back {
+    pub writes: Vec<String>,
+    pub worktree: Option<PathBuf>,
+    pub from: JobRef,
+    pub runner: String,
+    pub trust: RunnerTrust,
+}
+
+/// The files an applied patch writes, each with its new bytes (none: removed), told to the history first.
+pub type Writes = [(String, Option<Vec<u8>>)];
+
+/// What the attempt BACK names returned, put where it goes once its verdict is in, from the job's folder DIR (the
+/// queue wrote `returned.patch` and `returned.outputs` there, [`super::queue::returned_file`]): the outputs unpacked
+/// into `DIR/outputs/`; the changes applied to the worktree when [`patch_ok`] passes against the tree as it is now,
+/// the files' new contents given to RECORD (one history version) before any is written, else kept with the
+/// [`review_card`]. HELD: the starting session's revert runs, so the patch is kept whatever it is. The lines the job's
+/// summary gets.
+pub fn take_back(
+    dir: &Path,
+    back: &Back,
+    held: bool,
+    record: &dyn Fn(&Path, &Writes) -> Result<(), String>,
+) -> Vec<String> {
+    use super::queue::returned_file;
+    let mut lines = Vec::new();
+    for what in ["patch", "outputs"] {
+        if let Ok(left) = std::fs::read_to_string(returned_file(dir, what, ".left")) {
+            lines.extend(
+                left.lines()
+                    .map(|l| format!("the runner left out of its {what}: {l}")),
+            );
+        }
+        if let Ok(size) = std::fs::read_to_string(returned_file(dir, what, ".kept")) {
+            lines.push(format!(
+                "its {what} ({} bytes) is over the limit and stayed on runner {}",
+                size.trim(),
+                back.runner
+            ));
+        }
+    }
+    if let Ok(tar) = std::fs::read(returned_file(dir, "outputs", "")) {
+        match unpack(&dir.join("outputs"), &tar) {
+            Ok(0) => {}
+            Ok(n) => lines.push(format!(
+                "its outputs: {n} file{} in {}",
+                if n == 1 { "" } else { "s" },
+                dir.join("outputs").display()
+            )),
+            Err(r) => lines.push(format!("its outputs were refused: {r}")),
+        }
+    }
+    if let Ok(bytes) = std::fs::read(returned_file(dir, "patch", ""))
+        && !bytes.is_empty()
+    {
+        let applied = if held {
+            Err((0, vec!["its session's revert was running".to_string()]))
+        } else {
+            apply(back, &bytes, &dir.join("apply"), record)
+        };
+        match applied {
+            Ok(n) => lines.push(format!(
+                "runner {}'s changes were applied to {n} file{}",
+                back.runner,
+                if n == 1 { "" } else { "s" }
+            )),
+            Err((files, why)) => {
+                lines.push(format!(
+                    "{} (kept in {})",
+                    review_card(&back.runner, files),
+                    returned_file(dir, "patch", "").display()
+                ));
+                lines.extend(why.into_iter().map(|w| format!("  not applied: {w}")));
+            }
+        }
+    }
+    lines
+}
+
+/// The returned archive TAR, checked by [`archive_ok`] and its files written beneath OUT (made afresh); how many.
+fn unpack(out: &Path, tar: &[u8]) -> Result<usize, Refusal> {
+    let found = entries(tar)?;
+    let fail = |e: std::io::Error| Refusal(format!("{}: {e}", out.display()));
+    match std::fs::remove_dir_all(out) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(fail(e)),
+    }
+    std::fs::create_dir(out).map_err(fail)?;
+    let fd = open_dir(out).map_err(fail)?;
+    let mut n = 0;
+    for (e, at) in found.iter().filter(|(e, _)| !e.dir) {
+        write(fd.as_fd(), e.path.as_os_str().as_bytes(), &tar[at.clone()])?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// The folder PATH, opened (a link refused).
+fn open_dir(path: &Path) -> std::io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::OFlags;
+    Ok(rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
+}
+
+/// The patch BYTES of BACK applied to its worktree, by `git apply` in the scratch folder SCRATCH (the files it
+/// changes copied in; never in the worktree, so a refused hunk changes nothing there), then written through eitri:
+/// how many files, or how many it names and why it is kept.
+fn apply(
+    back: &Back,
+    bytes: &[u8],
+    scratch: &Path,
+    record: &dyn Fn(&Path, &Writes) -> Result<(), String>,
+) -> Result<usize, (usize, Vec<String>)> {
+    let patch = Patch::parse(back.from.clone(), bytes).map_err(|r| (0, vec![r.0]))?;
+    let files = patch.files.len();
+    let kept = |why: String| (files, vec![why]);
+    let tree = back
+        .worktree
+        .as_deref()
+        .ok_or_else(|| kept("the job has no worktree here".into()))?;
+    let root = open_dir(tree).map_err(|e| kept(format!("{}: {e}", tree.display())))?;
+    // the tree as it is now must be what the runner changed: each file's blob id, read with no link followed
+    let mut now: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut held: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for f in &patch.files {
+        for p in [f.old.as_deref(), f.new.as_deref()].into_iter().flatten() {
+            let Ok(rel) = path_ok(p) else { continue };
+            if now.contains_key(&rel) {
+                continue;
+            }
+            match eitri::read_regular(root.as_fd(), &rel, OUTPUTS_MAX) {
+                Ok(b) => {
+                    now.insert(rel.clone(), sleipnir::sync::returned::blob_id(&b));
+                    held.push((rel, b));
+                }
+                Err(FsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(kept(format!("{}: {e}", rel.display()))),
+            }
+        }
+    }
+    let mut job = super::queue::blank_spec("returned");
+    job.writes = back.writes.clone();
+    patch_ok(&patch, &job, &back.from, &now, back.trust).map_err(|why| (files, why))?;
+    // the patch, applied to copies
+    let io = |e: std::io::Error| kept(format!("{}: {e}", scratch.display()));
+    match std::fs::remove_dir_all(scratch) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(io(e)),
+    }
+    for (rel, b) in &held {
+        let at = scratch.join(rel);
+        if let Some(parent) = at.parent() {
+            std::fs::create_dir_all(parent).map_err(io)?;
+        }
+        std::fs::write(&at, b).map_err(io)?;
+    }
+    std::fs::create_dir_all(scratch).map_err(io)?;
+    let file = scratch.with_extension("patch");
+    std::fs::write(&file, bytes).map_err(io)?;
+    // no repository is looked for above the scratch folder: the patch applies to its files alone
+    let out = std::process::Command::new("git")
+        .args(["apply", "--whitespace=nowarn", "-p1"])
+        .arg(&file)
+        .current_dir(scratch)
+        .env(
+            "GIT_CEILING_DIRECTORIES",
+            scratch.parent().unwrap_or(scratch),
+        )
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| kept(format!("git apply: {e}")))?;
+    let _ = std::fs::remove_file(&file);
+    if !out.status.success() {
+        return Err(kept(format!(
+            "it doesn't apply: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let mut writes: Vec<(String, Option<Vec<u8>>, u32)> = Vec::new();
+    for f in &patch.files {
+        let new = f.new.as_deref().and_then(|p| path_ok(p).ok());
+        let old = f.old.as_deref().and_then(|p| path_ok(p).ok());
+        if let Some(rel) = &new {
+            let b = std::fs::read(scratch.join(rel)).map_err(io)?;
+            let mode = f.new_mode.map_or(0o644, |m| m & 0o777);
+            writes.push((rel.to_string_lossy().into_owned(), Some(b), mode));
+        }
+        if let Some(rel) = old.filter(|o| Some(o) != new.as_ref()) {
+            writes.push((rel.to_string_lossy().into_owned(), None, 0));
+        }
+    }
+    let _ = std::fs::remove_dir_all(scratch);
+    let told: Vec<(String, Option<Vec<u8>>)> = writes
+        .iter()
+        .map(|(p, b, _)| (p.clone(), b.clone()))
+        .collect();
+    if let Err(e) = record(tree, &told) {
+        tracing::info!(
+            "{}: the returned changes are not in the history: {e}",
+            tree.display()
+        );
+    }
+    for (rel, b, mode) in &writes {
+        let done = match b {
+            Some(b) => write_mode(root.as_fd(), rel.as_bytes(), b, *mode).map(|_| ()),
+            None => eitri::remove_beneath(root.as_fd(), Path::new(rel))
+                .map_err(|e| Refusal(format!("{rel}: {e}"))),
+        };
+        // a write that fails halfway leaves the others: said, never undone behind the user's back
+        done.map_err(|r| kept(format!("written in part: {r}")))?;
+    }
+    Ok(writes.len())
 }
 
 #[cfg(test)]
@@ -1079,5 +1278,199 @@ mod tests {
         ]));
         assert!(r.is_err(), "{r:?}");
         assert!(archive_ok(&tar(&[file("oci-layout", b"{}")])).is_err());
+    }
+
+    /// A job folder, the user's tree (README and src/a.rs) and the runner's copy changed as CHANGE did, its returned
+    /// patch (sleipnir's own) in the folder.
+    fn returned(change: impl Fn(&Path)) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let (tree, base, copy, job) = (
+            t.path().join("tree"),
+            t.path().join("base"),
+            t.path().join("copy"),
+            t.path().join("job"),
+        );
+        for d in [&tree, &base, &copy] {
+            fs::create_dir_all(d.join("src")).unwrap();
+            fs::write(d.join("README"), "one\n").unwrap();
+            fs::write(d.join("src/a.rs"), "fn a() {}\n").unwrap();
+        }
+        fs::create_dir(&job).unwrap();
+        change(&copy);
+        let c = sleipnir::sync::returned::changes(&base, &copy, &["**".to_string()]).unwrap();
+        fs::write(
+            super::super::queue::returned_file(&job, "patch", ""),
+            c.patch,
+        )
+        .unwrap();
+        (t, tree, job)
+    }
+
+    fn back(tree: &Path) -> Back {
+        Back {
+            writes: vec!["**".into()],
+            worktree: Some(tree.to_path_buf()),
+            from: jref(1, 1),
+            runner: "desk".into(),
+            trust: RunnerTrust::Mine,
+        }
+    }
+
+    /// [D]A runner's changes to a tree as it was are applied, told to the history first, in one call.
+    #[test]
+    fn a_returned_patch_is_applied_and_told_once() {
+        let (_t, tree, job) = returned(|c| {
+            fs::write(c.join("README"), "one\ntwo\n").unwrap();
+            fs::write(c.join("src/b.rs"), "fn b() {}\n").unwrap();
+            fs::remove_file(c.join("src/a.rs")).unwrap();
+        });
+        let told = std::cell::RefCell::new(Vec::new());
+        let record = |at: &Path, w: &Writes| {
+            assert_eq!(at, tree.as_path());
+            // told before any file is written
+            assert_eq!(fs::read_to_string(at.join("README")).unwrap(), "one\n");
+            told.borrow_mut().push(w.to_vec());
+            Ok(())
+        };
+        let lines = take_back(&job, &back(&tree), false, &record);
+        assert_eq!(lines, vec!["runner desk's changes were applied to 3 files"]);
+        assert_eq!(
+            fs::read_to_string(tree.join("README")).unwrap(),
+            "one\ntwo\n"
+        );
+        assert_eq!(
+            fs::read_to_string(tree.join("src/b.rs")).unwrap(),
+            "fn b() {}\n"
+        );
+        assert!(!tree.join("src/a.rs").exists());
+        let mut told = told.into_inner();
+        assert_eq!(told.len(), 1);
+        told[0].sort();
+        assert_eq!(
+            told[0],
+            vec![
+                ("README".to_string(), Some(b"one\ntwo\n".to_vec())),
+                ("src/a.rs".to_string(), None),
+                ("src/b.rs".to_string(), Some(b"fn b() {}\n".to_vec())),
+            ]
+        );
+        assert!(!job.join("apply").exists(), "the scratch copy goes");
+    }
+
+    /// [D]A file the user changed since the job's inputs were frozen keeps the patch back, the tree untouched.
+    #[test]
+    fn a_patch_against_a_file_changed_since_is_kept_for_review() {
+        let (_t, tree, job) = returned(|c| fs::write(c.join("README"), "one\ntwo\n").unwrap());
+        fs::write(tree.join("README"), "mine\n").unwrap();
+        let record = |_: &Path, _: &Writes| -> Result<(), String> { panic!("nothing is applied") };
+        let lines = take_back(&job, &back(&tree), false, &record);
+        assert!(
+            lines[0].starts_with("desk returned changes to 1 file; review it (kept in "),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines[1],
+            "  not applied: README: changed since the job was submitted"
+        );
+        assert_eq!(fs::read_to_string(tree.join("README")).unwrap(), "mine\n");
+        // a shared runner's changes are never applied, whatever they are
+        fs::write(tree.join("README"), "one\n").unwrap();
+        let shared = Back {
+            trust: RunnerTrust::Shared,
+            ..back(&tree)
+        };
+        let lines = take_back(&job, &shared, false, &record);
+        assert!(
+            lines.iter().any(|l| l.contains("shared runner")),
+            "{lines:?}"
+        );
+        assert_eq!(fs::read_to_string(tree.join("README")).unwrap(), "one\n");
+    }
+
+    /// [D]The outputs come back into the job's `outputs/`; what the runner left out and kept is said.
+    #[test]
+    fn the_outputs_are_unpacked_and_whats_left_is_said() {
+        let (_t, tree, job) = returned(|_| {});
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir_all(t.path().join("dist")).unwrap();
+        fs::write(t.path().join("dist/app.txt"), "built\n").unwrap();
+        let o = sleipnir::sync::returned::outputs(t.path(), &["dist/**".to_string()]).unwrap();
+        fs::write(
+            super::super::queue::returned_file(&job, "outputs", ""),
+            o.tar,
+        )
+        .unwrap();
+        fs::write(
+            super::super::queue::returned_file(&job, "patch", ".left"),
+            "logo.png: a binary file\n",
+        )
+        .unwrap();
+        let record = |_: &Path, _: &Writes| Ok(());
+        let lines = take_back(&job, &back(&tree), false, &record);
+        assert_eq!(
+            lines,
+            vec![
+                "the runner left out of its patch: logo.png: a binary file".to_string(),
+                format!("its outputs: 1 file in {}", job.join("outputs").display()),
+            ]
+        );
+        assert_eq!(
+            fs::read_to_string(job.join("outputs/dist/app.txt")).unwrap(),
+            "built\n"
+        );
+    }
+
+    /// [D]22b: an applied patch is one version of the project's history, the starting session's, with every file it
+    /// wrote, recorded before the files change.
+    #[tokio::test]
+    async fn an_applied_patch_is_one_history_version() {
+        let (t, tree, job) = returned(|c| {
+            fs::write(c.join("README"), "one\ntwo\n").unwrap();
+            fs::write(c.join("src/b.rs"), "fn b() {}\n").unwrap();
+        });
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&tree)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        let hubs = crate::history::wire::Hubs::default();
+        let state = t.path().join("state");
+        fs::create_dir_all(&state).unwrap();
+        let made = std::cell::RefCell::new(Vec::new());
+        let record = |at: &Path, w: &Writes| {
+            let (hub, tree) = hubs.of_tree(&state, at).map_err(|e| e.message)?;
+            let v = hub
+                .on_returned_writes(&tree, w, Some("s1"), "desk", 10.0)
+                .map_err(|e| e.to_string())?;
+            made.borrow_mut().extend(v);
+            Ok(())
+        };
+        let lines = take_back(&job, &back(&tree), false, &record);
+        assert_eq!(lines, vec!["runner desk's changes were applied to 2 files"]);
+        let made = made.into_inner();
+        let mut paths: Vec<&str> = made.iter().map(|v| v.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, ["README", "src/b.rs"]);
+        assert!(
+            made.iter().all(|v| v.op == made[0].op),
+            "one version: {made:?}"
+        );
     }
 }

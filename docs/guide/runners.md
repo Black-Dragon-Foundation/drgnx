@@ -43,7 +43,7 @@ drgnx runner add desktop --trust mine            # a host as your ssh knows it
 drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
 drgnx runner check desktop | bench desktop | unbench desktop
 drgnx runner trust desktop shared                # mine, my-cloud or shared
-drgnx runner remove desktop --yes                # stops our units and containers there, deletes its folder
+drgnx runner remove desktop --yes                # stops our units and containers there, untags its image, deletes its folder
 ```
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
@@ -61,8 +61,8 @@ What `add` does, in order, and stops at the first thing that is wrong:
    SELinux host, a policy that lets a keyed job's key socket be created as a container's (`container_t`; the stock
    container-selinux allows it). The refusal
    lists **everything** that is missing, each with what to run there to fix it.
-4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
-   caps.
+4. Pulls the image in `drgnx-runners-image` (pinned by digest), tags it `localhost/<prefix>-runner:<digest start>` so a
+   `podman image prune` there never removes it, and times a reference workload in it under the runner's caps.
 5. Records the runner and connects it.
 
 The runner list is yours alone: an agent can't add, bench, change or remove a machine. A runner that can't be reached
@@ -146,7 +146,8 @@ keys it needs (names only); drgnx gets them to the job on the runner without wri
   keyed job never runs on this machine for now: it waits for a runner and says so.
 - **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
   each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
-  them (by job or by key); the values are never in them.
+  them (by job or by key), and so does `drgnx runner audit [--key K] [--job J]` from a terminal (JSON, oldest first);
+  the values are never in them.
 - **The returned log has them masked.** The hub knows the values it sent a job, so its copy of the job's log has every
   one masked (`*`, the same length): raw, in base64 and percent-encoded, even split across two pieces of the log.
   drgnx also tells you when a line looks like some other secret ("this log may hold a secret at line N"), but never
@@ -191,7 +192,12 @@ settings:
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
 - `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
 - `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.
-  Your own settings only: a repository's files can never turn it on.
+  Your own settings only: a repository's files can never turn it on. For one project, set it in your private workspace
+  file for that project (the Settings page's Workspace tab, `docs/guide/settings.md`); that project's jobs take it,
+  other projects' don't.
+
+A project's value of each of these, from a workspace, is the one its jobs take; without one, they take your global
+value.
 
 A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
 runner.
@@ -243,10 +249,19 @@ alpha is private; the only free runner is shared".
 ## What comes back
 
 A job on a runner returns its log, its result and what it declared into its folder here (`<state>/hub/exec/<id>/`),
-so `exec/get`, `exec/log` and the summary work as for a job on this machine. For now a runner sends back its log and
-its result only; its reports, declared outputs and `changes.patch` (and `drgnx job fetch` for the larger ones) are
-still to come, and go through these checks when they do. Nothing a runner returns touches your tree until the hub has
-checked it:
+so `exec/get`, `exec/log` and the summary work as for a job on this machine. A job that declares `writes` or `outputs`
+runs in a private copy of its checkout on the runner, and at its end the runner sends back, before its result:
+
+- **its changes** to the files its `writes` globs match, as a patch against the checkout it started from
+  (`returned.patch`). Text files only: a binary file, a link or a name git would quote is left out, and the summary
+  names each one ("the runner left out of its patch: logo.png: a binary file");
+- **its outputs**, the files its `outputs` globs match and its `reports/` folder, as an archive (`returned.outputs`),
+  unpacked into the job's `outputs/` folder here.
+
+At the job's verdict the patch is applied to your worktree when every check below holds, as one version of the
+project's edit history (the starting agent session's, or `runner NAME`'s for a job you started); the summary says
+"runner desk's changes were applied to 2 files". A patch over its limit stays on the runner, and the summary says so
+(`drgnx job fetch` is still to come). Nothing a runner returns touches your tree until the hub has checked it:
 
 - **Paths.** Every returned path is relative and normalised: one with `..`, an absolute name or a NUL byte is refused.
   Files are written beneath the job's folder without following a link (a link planted there is replaced or refused,
@@ -261,8 +276,9 @@ checked it:
   protected file (`.envrc`, `.claude`, `.codex`, `.gemini`, `mise.toml`, at any depth) and nothing under a `.git`
   folder; it adds no symbolic link or submodule and changes no executable bit (a new executable file counts); each
   file it changes is still the one the job was submitted with; it comes from the job's current attempt (its number
-  and nonce); and its runner isn't `shared`. Otherwise it is kept, with the card "desktop returned changes to 3 files;
-  review them".
+  and nonce); and its runner isn't `shared`. "Still the one" means the file in your worktree is, at the verdict,
+  the file the runner changed: edit it meanwhile and the patch is kept. A patch that is kept stays in the job's folder,
+  with the card "desktop returned changes to 3 files; review them" and each reason in the summary.
 - **A `shared` runner's results** never count for a gate or a job's `needs`, and are never promoted. Their summary, and
   so the wake of the agent that started the job, begins "output from runner NAME (shared)".
 

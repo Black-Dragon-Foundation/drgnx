@@ -10,6 +10,8 @@
 //!   (`git_receive`); `cred`: the origin's token or deploy key, served to git from memory only.
 //! - `bundle`: a resumable bundle's receiver; `blobs`: the overlay's content-addressed store.
 //! - `cache`: caches partitioned by trust; `guard`: the disk guard's prune plan and its link-proof removal.
+//! - `returned`: what a job that wrote its private copy gives back: its changes as a patch, its outputs as a
+//!   ustar archive, read from the copy as data.
 
 use std::error::Error;
 use std::fmt;
@@ -24,6 +26,7 @@ pub mod cred;
 pub mod git;
 pub mod guard;
 pub mod mirror;
+pub mod returned;
 pub mod slot;
 
 #[cfg(test)]

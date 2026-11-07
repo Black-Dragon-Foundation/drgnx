@@ -459,13 +459,21 @@ async fn a_runners_patch_after_the_revert_is_kept_not_applied() {
     let l = Live::new().await;
     let a = l
         .apply_parked(RevertStep::Record, true, || async {
-            assert!(patch_returned(&l.fx.front, &l.sid, "job-remote-1"));
+            assert!(patch_returned(
+                &l.fx.front.core.history,
+                &l.sid,
+                "job-remote-1"
+            ));
         })
         .await
         .unwrap();
     assert_eq!(a.kept_patches, ["job-remote-1"]);
     assert_eq!(l.fx.read("a.txt"), FIVE);
-    assert!(!patch_returned(&l.fx.front, &l.sid, "job-remote-2"));
+    assert!(!patch_returned(
+        &l.fx.front.core.history,
+        &l.sid,
+        "job-remote-2"
+    ));
 }
 
 /// A manager's worker reverted: the manager is told, in its own conversation.

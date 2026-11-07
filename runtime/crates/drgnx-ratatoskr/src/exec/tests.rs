@@ -1102,6 +1102,8 @@ async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
         attempt: 1,
         result: json!({"verdict": "Pass"}),
         shared: shared.map(String::from),
+        machine: Some(shared.unwrap_or("desk").into()),
+        back: None,
     };
     r.inner
         .get()
@@ -1126,6 +1128,9 @@ async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
     );
     assert!(r.counts_for_gates(&mine));
     assert!(!r.counts_for_gates("xunknown"));
+    // a done row still names the runner it ran on, once the queue has forgotten the job
+    assert_eq!(r.get(&mine).unwrap().machine.as_deref(), Some("desk"));
+    assert_eq!(r.get(&shared).unwrap().machine.as_deref(), Some("uni-box"));
 }
 
 /// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file
@@ -1531,4 +1536,53 @@ fn meta_without_relay_still_reads() {
     v.as_object_mut().unwrap().remove("relay");
     let m: Meta = serde_json::from_value(v).unwrap();
     assert_eq!(m.relay, None);
+}
+
+/// [D] A project's own runner settings (the set the editor sends for it: your W2 file's `drgnx-runners-shared-overlay`)
+/// reach its jobs' placement, under the project's slug or id; another project's job keeps the global value.
+#[tokio::test]
+async fn a_projects_own_runner_settings_reach_its_jobs_only() {
+    let d = tempfile::tempdir().unwrap();
+    let f = crate::front::Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        d.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(d.path().join("work.db")),
+    );
+    for p in ["alpha", "beta"] {
+        let at = d.path().join(p);
+        std::fs::create_dir(&at).unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&at)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
+    f.settings
+        .set_overrides(
+            Some("alpha"),
+            vec![crate::settings::overrides::Override {
+                name: "drgnx-runners-shared-overlay".into(),
+                value: json!(true),
+                source: "workspace".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    let c = Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let overlay = async |p: &str| {
+        let cwd = d.path().join(p).join("");
+        let p = params(json!({"cwd": cwd.to_str().unwrap()}));
+        placement(&f, &c, &p, Machine::Auto, false)
+            .await
+            .shared_overlay
+    };
+    assert!(overlay("alpha").await);
+    assert!(!overlay("beta").await);
 }

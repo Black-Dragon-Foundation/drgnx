@@ -165,10 +165,9 @@ async fn until_waiting<T: std::fmt::Debug>(
     waiting: &mut tokio::sync::watch::Receiver<usize>,
     call: &mut tokio::task::JoinHandle<T>,
 ) {
-    tokio::select! {
-        w = waiting.wait_for(|n| *n == 1) => { w.unwrap(); }
-        ended = call => panic!("the call ended before it waited: {ended:?}"),
-    }
+    skuld::while_running("the call's card", call, waiting.wait_for(|n| *n == 1))
+        .await
+        .unwrap();
 }
 
 fn worker(agent: &str, provider: Option<&str>) -> Who {

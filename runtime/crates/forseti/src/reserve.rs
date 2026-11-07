@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::model::RunningJob;
+
 use serde::{Deserialize, Serialize};
 
 /// One running job's claim on a machine, written by its scheduler (`sleipnir::linux::reserve` keeps them as files).
@@ -53,6 +55,24 @@ pub fn ladder_actor(own: &str, own_slice_mib: u64, others: &[(String, u64)]) -> 
         .iter()
         .filter(|(name, _)| name != own)
         .all(|(name, mib)| own_slice_mib > *mib || (own_slice_mib == *mib && own < name.as_str()))
+}
+
+/// Whether scheduler OWN, running OURS, is the [`ladder_actor`] beside the live reservations OTHERS: every scheduler
+/// counted by the same rule, Σ `max(reserve, current)` with a job written twice counted once, ours included. (Ours
+/// counted by use alone lost to any young job of another's, counted by its reservation: two hubs on one runner each
+/// stood down for the other, and nobody acted at danger.)
+pub fn ladder_acts(own: &str, ours: &[RunningJob], others: &[Reservation]) -> bool {
+    let mut once: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+    for r in others.iter().filter(|r| r.scheduler != own) {
+        let e = once.entry((&r.scheduler, &r.job)).or_default();
+        *e = (*e).max(r.reserve_mib.max(r.current_mib));
+    }
+    let mut by: BTreeMap<String, u64> = BTreeMap::new();
+    for ((s, _), mib) in once {
+        *by.entry(s.to_string()).or_default() += mib;
+    }
+    let own_mib = ours.iter().map(|j| j.reserve_mib.max(j.current_mib)).sum();
+    ladder_actor(own, own_mib, &by.into_iter().collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -127,5 +147,25 @@ mod tests {
         assert!(ladder_actor("hub", 0, &[]), "alone, it acts");
         let both = [("hub".to_string(), 4000), ("jobq".to_string(), 1000)];
         assert!(!ladder_actor("hub-2", 3999, &both));
+    }
+
+    #[test]
+    fn two_hubs_with_young_jobs_one_acts() {
+        // [D] pure: each hub's job uses little yet and reserves 256 MiB; the other hub sees its reservation
+        use crate::Priority;
+        use crate::testkit::running;
+        let a = [running("xa", Priority::P3, 0, 256, 3)];
+        let b = [running("xb", Priority::P3, 0, 300, 2)];
+        let ra = [r("drgnx-hub-a", "xa.1", 256, 0)];
+        let rb = [r("drgnx-hub-b", "xb.1", 300, 0)];
+        assert!(!ladder_acts("drgnx-hub-a", &a, &rb), "b holds more");
+        assert!(ladder_acts("drgnx-hub-b", &b, &ra), "one of the two acts");
+        // a job written twice counts once; our own reservations among OTHERS are not another's
+        let twice = [
+            r("jobq", "j", 200, 0),
+            r("jobq", "j", 250, 0),
+            ra[0].clone(),
+        ];
+        assert!(ladder_acts("drgnx-hub-a", &a, &twice));
     }
 }

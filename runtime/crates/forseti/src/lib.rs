@@ -42,7 +42,7 @@ pub use place::{
     filter, finish, finish_with, pick, pick_with, trust_ok, why_here,
 };
 pub use priority::{check_no_cycle, effective_priorities, promote, queue_order};
-pub use reserve::{count_others, ladder_actor};
+pub use reserve::{count_others, ladder_actor, ladder_acts};
 pub use safety::{
     Action, CapOrder, CapWrite, Level, cap_step, cap_target, ladder_actions, ladder_level,
     static_ceiling, throttle_actions,

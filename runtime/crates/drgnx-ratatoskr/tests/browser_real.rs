@@ -542,6 +542,76 @@ fn run(kind: &Kind) {
         assert!(nav["error"].is_null(), "{nav}");
         c.event("Page.loadEventFired", |v| v["sessionId"] == s.as_str())
             .await;
+
+        // a worker that attaches paused under a session which then detaches, never told to run: the case of a target
+        // attaching under a session the agent already left (the broker records it as closing and sends it nothing).
+        // Chromium runs it once its parent session is gone.
+        let made = c
+            .call(None, "Target.createTarget", json!({"url": "about:blank"}))
+            .await;
+        let page = made["result"]["targetId"].as_str().unwrap().to_owned();
+        let a = c
+            .call(
+                None,
+                "Target.attachToTarget",
+                json!({"targetId": page, "flatten": true}),
+            )
+            .await;
+        let parent = a["result"]["sessionId"].as_str().unwrap().to_owned();
+        let enabled = c.call(Some(&parent), "Page.enable", json!({})).await;
+        assert!(enabled["error"].is_null(), "{enabled}");
+        let nav = c
+            .call(Some(&parent), "Page.navigate", json!({"url": site_url}))
+            .await;
+        assert!(nav["error"].is_null(), "{nav}");
+        c.event("Page.loadEventFired", |v| v["sessionId"] == parent.as_str())
+            .await;
+        let auto = c
+            .call(
+                Some(&parent),
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
+            )
+            .await;
+        assert!(auto["error"].is_null(), "{auto}");
+        let made = c
+            .call(
+                Some(&parent),
+                "Runtime.evaluate",
+                json!({"expression": "window.up = new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob([\"postMessage('up')\"]))); w.onmessage = e => r(e.data); }); 1"}),
+            )
+            .await;
+        assert!(made["result"]["exceptionDetails"].is_null(), "{made}");
+        let worker = c
+            .event("Target.attachedToTarget", |v| {
+                v["sessionId"] == parent.as_str()
+            })
+            .await;
+        assert_eq!(worker["params"]["waitingForDebugger"], true, "{worker}");
+        let gone = c
+            .call(
+                None,
+                "Target.detachFromTarget",
+                json!({"sessionId": parent}),
+            )
+            .await;
+        assert!(gone["error"].is_null(), "{gone}");
+        let a = c
+            .call(
+                None,
+                "Target.attachToTarget",
+                json!({"targetId": page, "flatten": true}),
+            )
+            .await;
+        let again = a["result"]["sessionId"].as_str().unwrap().to_owned();
+        let ran = c
+            .call(
+                Some(&again),
+                "Runtime.evaluate",
+                json!({"expression": "window.up", "awaitPromise": true}),
+            )
+            .await;
+        assert_eq!(ran["result"]["result"]["value"], "up", "{ran}");
         c.close().await;
 
         // the hub's own attach worked on this build, or the broker fell back (recorded, not a failure)

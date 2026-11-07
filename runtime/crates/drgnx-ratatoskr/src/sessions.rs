@@ -1086,6 +1086,7 @@ impl Sessions {
     async fn end(&self, store: &Store, sid: &str, why: &str) -> bool {
         let live = self.live.lock().expect("sessions").remove(sid);
         self.before_tool.lock().expect("sessions").remove(sid);
+        self.project_chats.lock().expect("sessions").remove(sid);
         let Some(live) = live else {
             return false;
         };
@@ -1554,6 +1555,23 @@ mod tests {
             ),
             0
         );
+    }
+
+    // [D] LINE-P3-P9-INTERPLAY-1: a project chat's mark goes with its session, as the before-tool mark does
+    #[tokio::test]
+    async fn a_closed_sessions_marks_go_with_it() {
+        let h = hub();
+        let a = h
+            .front
+            .mcp
+            .open(params(json!({"agent": "s-1", "owner": me()})))
+            .await
+            .unwrap();
+        h.front.mcp.mark_project_chat(&a.sid);
+        h.front.mcp.mark_before_tool(&a.sid);
+        assert!(h.front.mcp.close(&a.sid).await.unwrap());
+        assert!(!h.front.mcp.project_chats.lock().unwrap().contains(&a.sid));
+        assert!(!h.front.mcp.before_tool.lock().unwrap().contains(&a.sid));
     }
 
     #[tokio::test]

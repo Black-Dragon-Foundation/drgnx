@@ -214,7 +214,11 @@ The moves on a running job that never throttle it (the job scheduler's "grow and
 In `serve`, a grow is judged under the admission lock (`admit::grow`) against the machine as it is, the others'
 reservations counted; once applied, the job's reservation holds what it added, so no scheduler admits into it, and the
 grown grant is written to the attempt's `attempt.json`. A grow that can't be applied leaves the reservation as it was.
-The hub's head reservation doesn't reach runners yet, so on a runner only the machine's room holds a grow. CPU weights
+The hub's head reservation reaches the runner it is on as a `head` frame (the head's start and need; `at` 0 once it
+holds there no more; the queue sends it after a tick when it changed, and again after a hello,
+`runners::queue::tests::the_heads_runner_hears_its_reservation`): a grow there also leaves what the machine will have
+at the head's start (`forseti::budget_at`, from the running jobs' expected ends) minus the head's need
+(`admit::HeadHere`, `a_grow_leaves_the_hubs_head_its_room`). CPU weights
 follow the offers: a P1–P2 offer refused for CPU since the last `ready` makes the P4–P5 jobs yield at the next one.
 Builds count as long builds for the ladder.
 
@@ -543,7 +547,7 @@ the same format. `PROTO_VERSION` is checked at `hello`: a runner of another vers
 hub copies its bundle before it sends work.
 
 **The wire** (`FrameReader`, `FrameWriter`). One JSON line per frame, tagged by `t`. A frame with bytes (`log`,
-`blob`, `bundle`) adds `"len": N` to its line, and the bytes follow the line as one chunk: a 4-byte big-endian length,
+`returned`, `blob`, `bundle`) adds `"len": N` to its line, and the bytes follow the line as one chunk: a 4-byte big-endian length,
 then the bytes, at most 1 MiB (`MAX_CHUNK`). A writer refuses a bigger chunk before it sends anything, and a reader
 refuses one before it reads it. Any frame may carry a chunk, so a side skips the bytes of a frame it doesn't know and
 stays in step. A line is at most 16 MiB (`MAX_LINE`, a `finished` frame's `result.json`). An error ends the channel.
@@ -563,9 +567,11 @@ does not parse.
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), why a keyed job would be refused (`key_socket`, k1), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
+| `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |
+| `returned` | runner → hub | what the attempt gives back (`what`: `patch` or `outputs`), a chunk at its offset of its total, with the whole's sha256; the first chunk lists what was left out (`left`, `[[path, why]]`); `kept`: over its limit, no bytes, it stays on the runner |
 | `row` | runner → hub | a test row's name and verdict |
 | `key` | hub → runner | a key's name and value (below) |
 | `key-use` | runner → hub | the key a job asked for, and when |
@@ -604,6 +610,7 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 | `drgnx-key`, `net-allow`, `key-use.sent` | the job's own copy of the bundle's `drgnx-key`, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
 | `tree/` | a synced job that writes its tree: its private copy of the slot |
+| `base/`, `returned.patch`, `returned.tar` | a job that declares `writes`: the slot as it started from, which its changes are read against; what was sent back (below) |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
 
 **`hello`** must come first; a hub id other than `--hub-id` gets `bye`. Each `hello` re-probes the runner contract
@@ -653,14 +660,23 @@ frames. The pins go into the job's caps (`Caps.pins`, as a local container job's
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
-`result.json` and its log is all sent, `serve` sends its rows (`row`) and `finished` with `result.json`, drops the
-reservation, cleans up and sends `ready`. A unit that ended without job-exec's result was killed from outside: its
+`result.json` and its log is all sent, `serve` sends what comes back (below), its rows (`row`) and `finished` with
+`result.json`, drops the reservation, cleans up and sends `ready`.
+
+**What comes back** (`sync::returned`, `Serve::give_back`), for a job whose spec has `writes_tree` (the hub sets it
+when the job declares `writes` or `outputs`): `changes` reads the private copy against `base/` and writes a git patch
+(`--full-index` form: an `index` line with both blob ids and the mode, then the hunks) of the text files the `writes`
+globs match that differ, were added or were removed; a binary file, a link and a name git would quote are left out,
+each with its reason, and the copy's `.git` is never read. `outputs` makes a ustar archive of the regular files the
+`outputs` globs match and of `reports/`, folders first. Each goes back in `returned` frames before `finished`; one
+over its limit (16 MiB for the patch, 256 MiB for the outputs) is sent `kept`, without its bytes. Glob matching is
+`returned::glob_ok`, which the hub's `patch_ok` calls too, so both sides pick the same files. A unit that ended without job-exec's result was killed from outside: its
 result is written as `infra: killed`. `cancel` writes `cancelled` and the kill reason, then kills the container, so
 job-exec writes the verdict, which `serve` reports as `Cancelled`.
 
 **The ladder** runs at every `ready` on the runner's slice tree: `tight` stops admissions; at `pressure` and
-`danger` the scheduler holding the most memory (`forseti::ladder_actor`, over the reservations) evicts (dedicated) or
-kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
+`danger` the scheduler holding the most memory (`forseti::ladder_acts`: every scheduler, ours included, counted by
+Σ `max(reserve, current)`) evicts (dedicated) or kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
 runner it pauses the lowest-priority long builds at `pressure` and lets them go on below it; a paused or evicted job
 is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
 resizing, above).

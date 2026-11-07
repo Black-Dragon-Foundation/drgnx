@@ -113,6 +113,35 @@ logging to PATHLOG), CONFIG (a DRGNX_CONFIG_DIR) and ENV (the environment lists 
         (should (eql 1 (car r)))
         (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
 
+(ert-deftest drgnx-bin/plugins-execs-ratatoskr-with-the-extensions-jobs-arguments ()
+  ;; EXT-PLUGIN-JOBS-NEED-P9-CLI-1: the Extensions view's plugin jobs run bin/drgnx with these argument lists, and
+  ;; docs/guide/plugins.md names `drgnx plugins install|list|remove': each is `ratatoskr plugins …' unchanged, its exit
+  ;; status coming back; anything else is a usage error; with no binary the message says how to build
+  (require 'drgnx-exec)
+  (load (expand-file-name "modules/tools/drgnx-extensions-jobs" drgnx-bin-test--root) nil t)
+  (drgnx-bin-test--with-setup ()
+    (let* ((log (expand-file-name "rtsk.log" dir)) (fake (expand-file-name "ratatoskr" dir))
+           (env (append (list (concat "DRGNX_RATATOSKR_BIN=" fake) "DRGNX_EMACS=/an/emacs") env))
+           (job (lambda (kind &rest args) (nth 1 (drgnx-extensions-jobs--command kind args))))
+           (install (funcall job 'plugin-install "/a plugin/dir" :replace t))
+           (remove (funcall job 'plugin-remove "lint-hook")))
+      (write-region (format "#!/bin/sh\nprintf '%%s|' \"$@\" >> '%s'\necho >> '%s'\nexit ${FAKE_EXIT:-0}\n" log log) nil fake)
+      (set-file-modes fake #o755)
+      (should (equal install '("plugins" "install" "/a plugin/dir" "--replace")))
+      (should (equal remove '("plugins" "remove" "lint-hook")))
+      (dolist (args (list install remove '("plugins" "list") '("plugins" "install" "/p")))
+        (should (eql 0 (car (apply #'drgnx-bin-test--call drgnx-bin-test--bin env args)))))
+      (should (equal (split-string (drgnx-bin-test--slurp log) "\n" t)
+                     '("plugins|install|/a plugin/dir|--replace|" "plugins|remove|lint-hook|" "plugins|list|"
+                       "plugins|install|/p|")))
+      (should (string-empty-p (drgnx-bin-test--slurp pathlog)))
+      (should (eql 3 (car (drgnx-bin-test--call drgnx-bin-test--bin (cons "FAKE_EXIT=3" env) "plugins" "list"))))
+      (should (eql 2 (car (drgnx-bin-test--call drgnx-bin-test--bin env "plugins" "bogus"))))
+      (let ((r (drgnx-bin-test--call drgnx-bin-test--bin (cons "DRGNX_RATATOSKR_BIN=/nonexistent/ratatoskr" env)
+                                     "plugins" "list")))
+        (should (eql 1 (car r)))
+        (should (string-search "Ratatoskr is not built: run `drgnx runtime build'" (cdr r)))))))
+
 (ert-deftest drgnx-bin/no-nidhogg-is-an-error-never-a-bare-emacs ()
   ;; drgnx runs only on Nidhogg: with no $DRGNX_EMACS, no record and no nidhogg on PATH, a bare `emacs' there is
   ;; not run; the error names the installer

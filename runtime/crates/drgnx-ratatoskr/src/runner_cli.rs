@@ -8,7 +8,7 @@
 //! runner check NAME | bench NAME | unbench NAME
 //! runner trust NAME mine|my-cloud|shared
 //! runner remove NAME [--yes]
-//! runner audit [--key K] [--since T]
+//! runner audit [--key K] [--job J]          (the keys sent to jobs and read by them, oldest first)
 //! runner cloud setup aws --regions R[,R…] --sizes S[,S…] [--hub ID]     (prints the role's policy; no hub call)
 //! runner cloud setup gcp --project P [--member user:EMAIL] [--hub ID]   (prints the role and its binding; no hub call)
 //! runner cloud cost | rotate-ca | off [--yes]
@@ -52,10 +52,6 @@ pub enum RunnerCommand {
     Remove {
         name: String,
         yes: bool,
-    },
-    Audit {
-        key: Option<String>,
-        since: Option<String>,
     },
     /// `cloud setup aws`: the IAM policy the user creates for drgnx's role, printed (no hub call; drgnx never creates
     /// IAM itself).
@@ -126,7 +122,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
         "list" => &["json"],
         "add" => &["trust", "name", "profile", "accept", "root", "prefix"],
         "remove" => &["yes"],
-        "audit" => &["key", "since"],
+        "audit" => &["key", "job"],
         "cloud" => &["hub", "regions", "sizes", "project", "member", "yes"],
         "check" | "bench" | "trust" | "unbench" => &[],
         other => return Err(format!("unknown runner subcommand {other:?}")),
@@ -216,10 +212,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<RunnerCommand, 
             })
         }
         "audit" => {
-            want(0, "audit [--key K] [--since T]")?;
-            Ok(RunnerCommand::Audit {
-                key: opt("key"),
-                since: opt("since"),
+            want(0, "audit [--key K] [--job J]")?;
+            let mut params = serde_json::Map::new();
+            for k in ["key", "job"] {
+                if let Some(v) = opt(k) {
+                    params.insert(k.into(), json!(v));
+                }
+            }
+            Ok(RunnerCommand::Call {
+                method: "runners/audit",
+                params: Value::Object(params),
             })
         }
         "cloud" => {
@@ -402,12 +404,6 @@ pub fn run(env: &Env, cmd: RunnerCommand) -> i32 {
             }
             ("runners/cloud/off", json!({}), ADD, true)
         }
-        RunnerCommand::Audit { .. } => {
-            eprintln!(
-                "ratatoskr runner: the key audit comes with the key handover, which isn't built yet: no key was ever sent"
-            );
-            return 1;
-        }
         RunnerCommand::CloudSetupAws {
             hub,
             regions,
@@ -527,6 +523,21 @@ mod tests {
                 yes: false
             })
         );
+        // the key audit: every row, or one key's, or one job's
+        assert_eq!(
+            p(&["audit"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/audit",
+                params: json!({}),
+            })
+        );
+        assert_eq!(
+            p(&["audit", "--key", "CRATES_IO_TOKEN", "--job", "x1"]),
+            Ok(RunnerCommand::Call {
+                method: "runners/audit",
+                params: json!({"key": "CRATES_IO_TOKEN", "job": "x1"}),
+            })
+        );
         for bad in [
             &[][..],
             &["frobnicate"],
@@ -537,6 +548,8 @@ mod tests {
             &["check"],
             &["list", "extra"],
             &["remove", "desk", "--json"],
+            &["audit", "x1"],
+            &["audit", "--since", "1d"],
         ] {
             assert!(p(bad).is_err(), "{bad:?} should not parse");
         }

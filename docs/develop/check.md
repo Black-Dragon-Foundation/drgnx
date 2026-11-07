@@ -237,6 +237,8 @@ file's top-level forms, and the first argument of every form whose head ends in 
 form with its full name spelt out: a macro that builds the name, or a `dolist` around `ert-deftest`, hides the test from
 a name selector. A full run (no selector) fails on each test its file's index lacks (`unindexed test NAME in FILE: the
 selector prefilter cannot see it`), and a string selector that matches no test fails the run (`DRGNX_TEST_SELECTOR … matched 0 tests`).
+So does a bare symbol (ERT's selector for one test) that no loaded file defines: the run selects nothing and writes
+its summary, where ERT alone signals `ert-test-unbound` and a GUI session would wait out its limit.
 A tag selector, `(tag :timing)`, keeps the files whose plain `ert-deftest` forms name the tag in a quoted `:tags`
 list, and every file that may hold it otherwise (its own `…--deftest` macro, an `ert-deftest` inside another form, a
 computed `:tags`); any other selector keeps every file.

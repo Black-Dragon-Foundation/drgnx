@@ -3371,8 +3371,27 @@ only and `memory.swap.max` 0).
 ## Runners: returned data
 
 `runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
-returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
-wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+returns is checked before it reaches anyone. The runner's side is docs/develop/sleipnir.md, "What comes back"; the
+hub's:
+
+- **Arriving.** The queue sets `spec.writes_tree` for a job that declares `writes` or `outputs`. A `returned` frame of
+  the job's current attempt (`frame_ok` is `Some(false)`; a late attempt's is dropped) is written by
+  `Queue::returned_piece` at its offset into the job folder's `returned.WHAT.part` (`queue::returned_file`); the first
+  piece starts afresh, makes the folder (a job that printed nothing has no log there yet) and writes what was left out
+  to `returned.WHAT.left` (or the size to `returned.WHAT.kept`); the last is checked against its total and sha256 and
+  renamed `returned.WHAT`. A piece that doesn't follow on, or a whole that doesn't check, is refused and logged.
+- **At the verdict.** `Queue::apply` gives `Outcome::Done` a `Back` (the job's `writes`, the frozen inputs' worktree,
+  the attempt's `JobRef` with its nonce, the runner and its trust) when the job declared `writes` or `outputs`. The
+  job layer (`exec::Inner::take_back`, off the runtime's threads) asks `history::revert::patch_returned` first (a
+  patch for a session whose revert runs is kept and listed), then calls `returned::take_back(dir, back, held,
+  record)`: the outputs archive through `archive_ok` and unpacked by `write` into `outputs/` (made afresh); the patch
+  through `Patch::parse` and `patch_ok` against the worktree as it is now (each file's blob id, read through `eitri`
+  with no link followed: a file edited since is no longer what the runner changed), applied by `git apply` to copies
+  in the folder's `apply/` (no repository looked for above it), the new contents handed to RECORD
+  (`history::Hub::on_returned_writes`: one version, the session's `AgentStep` or `runner NAME`'s `External`) before
+  any file is written through `eitri` (a removed file through `remove_beneath`). Its lines (what was left out or kept,
+  where the outputs went, "runner NAME's changes were applied to N files" or the `review_card` with each reason) go to
+  the job's `returned` file, which `finish` adds to the summary.
 
 - `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
   or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
@@ -3398,7 +3417,11 @@ wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `s
   (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
 
 Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
-`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
+`.git`, exec bits, an old attempt, `shared`, `target/`; a patch applied and told once, one against a file changed since
+kept, the outputs unpacked, an applied patch as one history version); `sleipnir::sync::returned::` [D] (the runner's
+patch and archive); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D]; the fleet row
+`fleet_sync::sync_rows::a_runners_changes_and_outputs_come_back` [C] (a real `sleipnir serve`: the change applied,
+the output unpacked).
 
 ## Runners: health
 
@@ -3844,8 +3867,13 @@ one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no
 
 **Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
 2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
-kills what is left of its group (the group's id is still held by the unreaped leader), reaps it, lets the pipe's last
-messages through for up to 1 s, and sends `{"ev":"exited","code":N|null,"signal":N|null}`. The next `start` is a fresh
+kills what is left of its group (the group's id is still held by the unreaped leader), tells the pipe's reader how many
+bytes the pipe holds then (`FIONREAD`: all the group wrote), reaps it, and sends `{"ev":"exited","code":N|null,
+"signal":N|null}` once the reader has passed those bytes on and stopped. The reader never waits for the pipe's EOF
+there: a copy of its write end outside the group (any fork beside the host holds one until its exec; in the unit
+tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
+browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
+1 s. The next `start` is a fresh
 Chromium through the same host.
 
 **The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
@@ -3861,8 +3889,9 @@ waiter thread. The main thread is the one that forks, so Chromium's death signal
 Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
 speaks the pipe and echoes every command as its reply. It records its argv, its environment and every call in its
 dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as Chromium would. On `Fake.attach` it
-sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
-pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
+sends a paused child target, on `Fake.crash` it dies by SIGKILL, on `Fake.stubborn` it ignores SIGTERM and the
+pipe's end, and on `Fake.stray` a process in its own session keeps a copy of the pipe and writes to it once the
+browser is reaped (`a_stray_copy_of_the_pipe_is_never_read_after_the_end`). `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.
 
 ## Forecasts

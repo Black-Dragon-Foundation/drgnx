@@ -109,6 +109,9 @@ Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be ro
 linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
 `loginctl enable-linger runner`. A row that turns it off writes `disable-linger` (`fleet-nolinger.path`), and removes
 the file once `loginctl` says so. The share is every runner's, so either file turns linger on or off on all of them.
+Each service stays active once it ran (`RemainAfterExit`), and the other one stops it (`Conflicts`): a oneshot that
+ended would be started again and again while its file is there, until systemd's start limit fails the path unit and
+the next request is never heard.
 
 ## The link drills
 

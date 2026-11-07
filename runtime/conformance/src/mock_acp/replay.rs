@@ -20,7 +20,8 @@
 //!   ends the process with it and its stderr (a clean end waits for stdin to close).
 //! - **A miss** never improvises: the unmatched request is answered with JSON-RPC error -32099 (`replay miss: …;
 //!   re-record`), the expected and received lines and their first differing path go to the misses file, and the
-//!   process exits 3.  With `--strict`, recorded lines left unused when stdin closes are a miss too.
+//!   process exits 3.  With `--strict`, recorded lines left unused when stdin closes are a miss too.  A SIGTERM (the
+//!   hub ending the session's process group) ends the replay as stdin's close does.
 
 use runstav::recording::{self as rec, Normalizer, Roots, Scrub};
 use serde_json::{Map, Value, json};
@@ -136,23 +137,48 @@ pub fn run(args: &[String]) -> ! {
         exit: None,
         dir,
     };
+    // the hub ends a session with a SIGTERM to its process group (`draugr::kill_group`), stdin still open: that ends
+    // the replay as stdin's close does, so `--strict` still checks what was left. Blocked here, before any thread is
+    // spawned (each inherits the mask), and taken by one thread with `sigwait`.
+    let term = block_sigterm();
     let (tx, rx) = std::sync::mpsc::channel();
+    let on_term = tx.clone();
+    std::thread::spawn(move || {
+        let mut sig = 0;
+        // SAFETY: TERM is an initialised signal set, SIG a valid out-pointer
+        if unsafe { libc::sigwait(&term, &mut sig) } == 0 {
+            let _ = on_term.send(None);
+        }
+    });
     std::thread::spawn(move || {
         for line in std::io::stdin().lock().lines() {
             let Ok(line) = line else { break };
             if let Ok(v) = serde_json::from_str::<Value>(&line)
-                && tx.send(v).is_err()
+                && tx.send(Some(v)).is_err()
             {
-                break;
+                return;
             }
         }
+        let _ = tx.send(None);
     });
     loop {
         r.act();
         match rx.recv() {
-            Ok(m) => r.receive(&m),
-            Err(_) => r.finish(),
+            Ok(Some(m)) => r.receive(&m),
+            Ok(None) | Err(_) => r.finish(),
         }
+    }
+}
+
+/// Blocks SIGTERM in this thread (and so in the threads it spawns after): the set, for `sigwait`.
+fn block_sigterm() -> libc::sigset_t {
+    // SAFETY: the set is initialised by sigemptyset before any other use
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
     }
 }
 

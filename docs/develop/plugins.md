@@ -181,7 +181,10 @@ no store. The hub's points (before a tool call, after an edit, before a commit, 
   per level; `runner/clash.rs`'s glob is not reused (there `*` crosses `/`, and it recurses).
 - `acp_kind(raw, tool_name)` normalises an agent's kind: an ACP kind stays, anything else (`drgnx` included) is
   `other`, and an `other` whose tool name is in `KIND_BY_NAME` takes that kind (Claude's `NotebookEdit`, Kimi Code's
-  `FetchURL`, DeepSeek Harness's snake-case tools). It never returns `drgnx`; only the hub's servers set it. The
+  `FetchURL`, DeepSeek Harness's snake-case tools). It never returns `drgnx`; only the hub's servers set it
+  (`hook_points::hub_kind`: `drgnx`, but the pair tools `read_file` → `read`, `edit_file` and `write_file` → `edit`).
+  `Session::pair_write` runs the after-edit point before the pair door, as `write_file` does for
+  `fs/write_text_file` (`pair/after-edit-rules-see-a-pair-write`). The
   table only sharpens what a filter sees: the seam's `classify` reads the agent's own kind, unchanged.
 - `subscribed(input, rules, plugins)` is the points' fast path: does any rule, or any plugin's hook at the point
   whose `filter` matches, look at this step.

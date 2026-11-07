@@ -5334,7 +5334,7 @@ impl Session {
 
     /// The chat's write W through the pair door (`edit_file`, `write_file`, `fs/write_text_file` in the project).
     pub(crate) async fn pair_write(
-        &self,
+        self: &Arc<Self>,
         w: norn::tools::pair::PairWrite,
     ) -> Result<String, String> {
         use crate::pair::door::WriteKind;
@@ -5345,10 +5345,11 @@ impl Session {
         let eff = self.cells_now().await?;
         // the step the write is made in: the editor's change, and the disk's record, carry it into the history
         let step = self.current_step().unwrap_or(0);
-        let (path, kind) = match w {
+        let (path, mut kind) = match w {
             PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
             PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
         };
+        self.pair_after_edit(&path, &mut kind).await?;
         self.pair
             .write_with(
                 &self.id,
@@ -5361,6 +5362,60 @@ impl Session {
             )
             .await
             .map_err(|r| r.0)
+    }
+
+    /// The after-edit point on a pair write of KIND to PATH, before the door: as for `fs/write_text_file`
+    /// ([`Self::write_file`]), a deny refuses the write, a note goes under the step, and a whole write's content may be
+    /// changed (the agent is told). An edit's hunk is shown as its diff; its result is the editor's text, so a change
+    /// there is a failure of that hook. A path the session may not read is left to the door's own refusal.
+    async fn pair_after_edit(
+        self: &Arc<Self>,
+        path: &str,
+        kind: &mut crate::pair::door::WriteKind,
+    ) -> Result<(), String> {
+        use crate::pair::door::WriteKind;
+        // the read gate (a chat's fence is read-only, and the door decides the write itself), on the path as the door
+        // reads it: relative to the checkout
+        let abs = self.cwd.join(path);
+        let (Some(front), Some(Ok(real))) = (
+            self.front(),
+            abs.to_str().map(|a| self.fence().check(a, false)),
+        ) else {
+            return Ok(());
+        };
+        let (diff, content) = match &*kind {
+            WriteKind::Edit { old, new } => (
+                similar::TextDiff::from_lines(old.as_str(), new.as_str())
+                    .unified_diff()
+                    .to_string(),
+                None,
+            ),
+            WriteKind::Whole { content } => {
+                let old = tokio::fs::read_to_string(&real).await.unwrap_or_default();
+                let diff = similar::TextDiff::from_lines(old.as_str(), content.as_str())
+                    .unified_diff()
+                    .to_string();
+                (diff, Some(content.clone()))
+            }
+        };
+        let edit = crate::hook_points::EditInfo {
+            path: real,
+            diff: Some(diff),
+            content,
+            step: self.current_step(),
+        };
+        let out = crate::hook_points::after_edit(&front, self, &edit).await;
+        self.note_all(&out.annotations);
+        if let Some((_, reason)) = crate::hook_points::refusal_of(&out) {
+            return Err(crate::hook_points::refusal_message(&reason));
+        }
+        if let (WriteKind::Whole { content }, Some((new, hook))) =
+            (kind, crate::hook_points::changed_content(&out))
+        {
+            *content = new;
+            self.steer_in(crate::hook_points::change_notice(&hook, path));
+        }
+        Ok(())
     }
 
     /// The record of a pair write to a file open nowhere, before it lands on disk: the agent's operations in its

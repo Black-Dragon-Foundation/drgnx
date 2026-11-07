@@ -351,6 +351,60 @@ async fn vector_route_and_lag_line() {
     let _ = collect(&store, MODEL).await;
 }
 
+/// Pattern D. The lag and the vectors a query reads are kept between two changes of the store, never past one: a
+/// vector written after a query is the next query's nearest and leaves one file fewer behind, and a commit by another
+/// connection (`data_version`) is seen too.
+#[tokio::test]
+async fn what_a_query_keeps_ends_at_the_next_write() {
+    let (dir, store, texts) = indexed().await;
+    let want = hrafn::missing(&store, MODEL, 100).await.unwrap();
+    let key = |name: &str| want.iter().find(|(_, t)| t.contains(name)).unwrap().0;
+    put_vectors(
+        &store,
+        MODEL,
+        &[(key("drgnx-hub-call"), vec![1.0, 0.0, 0.0, 0.0])],
+    )
+    .await
+    .unwrap();
+    let (query, same) = (
+        q("completely unrelated words", Scope::All),
+        unchanged(texts),
+    );
+    let ask = || {
+        search(
+            &store,
+            &query,
+            hrafn::View::Base,
+            Some((MODEL, &[0.0, 1.0, 0.0, 0.0])),
+            &same,
+        )
+    };
+    let first = ask().await.unwrap();
+    assert_eq!(first.hits[0].path, "core/drgnx-hub.el", "{:?}", first.hits);
+    let again = ask().await.unwrap();
+    assert_eq!(again.lag, first.lag);
+    put_vectors(
+        &store,
+        MODEL,
+        &[(key("drgnx-ai-embed"), vec![0.0, 1.0, 0.0, 0.0])],
+    )
+    .await
+    .unwrap();
+    let after = ask().await.unwrap();
+    assert_eq!(after.hits[0].path, "core/drgnx-ai.el", "{:?}", after.hits);
+    assert_eq!(after.lag.files_behind + 1, first.lag.files_behind);
+    // another connection takes every vector away
+    let other = rusqlite::Connection::open(dir.path().join("code.db")).unwrap();
+    other.execute("delete from vec", []).unwrap();
+    let gone = ask().await.unwrap();
+    assert!(
+        gone.hits.iter().all(|h| !h.routes.contains(&"vector")),
+        "{:?}",
+        gone.hits
+    );
+    assert_eq!(gone.lag.files_behind, first.lag.files_behind + 1);
+}
+
 /// Pattern D. The vector scan reads each vector once and looks its chunk up by key: its plan has no scan of `chunk` and
 /// no list built from a subquery (that plan took 37 s on a 16,000-chunk project, 55 ms the other way).
 #[tokio::test]

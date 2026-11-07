@@ -306,6 +306,8 @@ pub struct Serve<W: Write> {
     last_kill: Option<Instant>,
     /// The jobs the ladder paused, until the pressure is gone.
     paused: BTreeSet<String>,
+    /// The hub's head reserved here (its last `head` frame), which a grow leaves its room.
+    head: Option<admit::HeadHere>,
     /// The CPU weights set on job slices (the others are at systemd's default).
     weights: BTreeMap<String, u32>,
     /// A P1–P2 offer was refused for CPU since the last `ready`.
@@ -415,6 +417,7 @@ impl<W: Write> Serve<W> {
             level2_since: None,
             last_kill: None,
             paused: BTreeSet::new(),
+            head: None,
             weights: BTreeMap::new(),
             p12_waiting: false,
             last_ready: now,
@@ -523,6 +526,13 @@ impl<W: Write> Serve<W> {
             } => self.start(&r, image, env, (net_hosts, pins), &parser),
             Frame::Attach { r, log_offset } => self.attach(&r, log_offset),
             Frame::Cancel { r } => self.cancel(&r),
+            Frame::Head { at, mem_mib, cpu } => {
+                self.head = (at > 0).then_some(admit::HeadHere {
+                    need: forseti::Need { mem_mib, cpu },
+                    at,
+                });
+                Next::Go
+            }
             Frame::Done { r } => self.done(&r),
             Frame::Key(k) => self.key(k),
             other => {
@@ -682,13 +692,7 @@ impl<W: Write> Serve<W> {
             return;
         }
         let since = *self.level2_since.get_or_insert_with(Instant::now);
-        let own_mib: u64 = m.running.iter().map(|r| r.current_mib).sum();
-        let mut others: BTreeMap<String, u64> = BTreeMap::new();
-        for r in &m.others {
-            *others.entry(r.scheduler.clone()).or_default() += r.reserve_mib.max(r.current_mib);
-        }
-        let others: Vec<(String, u64)> = others.into_iter().collect();
-        if !forseti::ladder_actor(&self.scheduler, own_mib, &others) {
+        if !forseti::ladder_acts(&self.scheduler, &m.running, &m.others) {
             return;
         }
         let acts = forseti::ladder_actions(
@@ -772,7 +776,6 @@ impl<W: Write> Serve<W> {
             else {
                 continue;
             };
-            // the hub's head reservation doesn't reach runners: only the machine's room holds a grow here
             let g = admit::Grow {
                 job: resize::Sized {
                     job: JobId(id.clone()),
@@ -783,7 +786,7 @@ impl<W: Write> Serve<W> {
                     max_mib: l.meta.spec.mem_mib.max,
                 },
                 reservation: admit::reservation_job(&id, l.meta.r.attempt),
-                head: None,
+                head: self.head,
             };
             match admit::grow(
                 &self.probe,
@@ -1071,6 +1074,11 @@ impl<W: Write> Serve<W> {
         let src = if meta.spec.writes_tree {
             let copy = dir.join("tree");
             slot::private_copy(&p, &copy).map_err(sync_err)?;
+            // what the job's changes are read against at its end: the slot as it is now, which another attempt may
+            // move meanwhile (a reflink where the file system has them)
+            if !meta.spec.writes.is_empty() {
+                slot::private_copy(&p, &dir.join(BASE)).map_err(sync_err)?;
+            }
             copy
         } else {
             p.slot
@@ -1903,6 +1911,9 @@ impl<W: Write> Serve<W> {
                 serde_json::to_vec_pretty(&result).unwrap_or_default(),
             );
         }
+        if self.give_back(&meta.r, dir, &meta.spec) == Next::Stop {
+            return Err(());
+        }
         let rows = result["rows"].as_array().cloned().unwrap_or_default();
         for row in rows {
             let frame = Frame::Row {
@@ -1924,6 +1935,80 @@ impl<W: Write> Serve<W> {
             return Err(());
         }
         Ok(())
+    }
+}
+
+/// The pristine copy of the slot a job that writes the tree is compared with at its end, in the attempt's folder.
+const BASE: &str = "base";
+/// A returned patch larger than this stays on the runner, for a `fetch` (the hub's limit too).
+pub const PATCH_MAX: u64 = 16 << 20;
+/// Returned outputs larger than this stay on the runner, for a `fetch`.
+pub const OUTPUTS_MAX: u64 = 256 << 20;
+
+impl<W: Write> Serve<W> {
+    /// What attempt R of a job that wrote its private copy gives back, before its `finished`: its changes to SPEC's
+    /// `writes` as a patch, and its `outputs` and `reports/` as an archive (`sync::returned`), each written beside
+    /// the attempt (`returned.patch`, `returned.tar`, for a `fetch`) and sent in `returned` pieces; one over its limit
+    /// is only named (`kept`). Nothing for a job that writes nothing.
+    fn give_back(&mut self, r: &JobRef, dir: &Path, spec: &forseti::JobSpec) -> Next {
+        use crate::sync::returned;
+        if !spec.writes_tree {
+            return Next::Go;
+        }
+        let copy = dir.join("tree");
+        let unread = |e: io::Error| {
+            (
+                Vec::new(),
+                vec![(String::new(), format!("could not be read: {e}"))],
+            )
+        };
+        let mut parts = Vec::new();
+        if !spec.writes.is_empty() {
+            let c = returned::changes(&dir.join(BASE), &copy, &spec.writes)
+                .map_or_else(unread, |c| (c.patch, c.left));
+            parts.push(("patch", "returned.patch", PATCH_MAX, c));
+        }
+        let o = returned::outputs(&copy, &spec.outputs).map_or_else(unread, |o| (o.tar, o.left));
+        parts.push(("outputs", "returned.tar", OUTPUTS_MAX, o));
+        for (what, file, max, (bytes, left)) in parts {
+            if let Err(e) = fs::write(dir.join(file), &bytes) {
+                eprintln!("sleipnir serve: {}: {e}", dir.join(file).display());
+            }
+            let total = bytes.len() as u64;
+            let kept = total > max;
+            let sha256 = Sha256(crate::sync::sha256(&bytes));
+            let mut offset = 0usize;
+            let mut left = Some(left);
+            loop {
+                let end = if kept {
+                    0
+                } else {
+                    (offset + MAX_CHUNK).min(bytes.len())
+                };
+                let frame = Frame::Returned {
+                    r: r.clone(),
+                    what: what.into(),
+                    offset: offset as u64,
+                    total,
+                    sha256,
+                    left: left.take().unwrap_or_default(),
+                    kept,
+                    bytes: if kept {
+                        Vec::new()
+                    } else {
+                        bytes[offset..end].to_vec()
+                    },
+                };
+                if self.send(&frame) == Next::Stop {
+                    return Next::Stop;
+                }
+                if kept || end >= bytes.len() {
+                    break;
+                }
+                offset = end;
+            }
+        }
+        Next::Go
     }
 }
 

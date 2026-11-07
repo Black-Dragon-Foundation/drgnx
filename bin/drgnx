@@ -2182,6 +2182,8 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                run, pause and inspect jobs in the hub (docs/guide/jobs.md)
        drgnx runner list [--json] | add HOST --trust mine|my-cloud|shared [--name N] [--profile P] [--accept A]
                                the machines that run jobs: list, add, check, bench, trust, unbench, remove (docs/guide/runners.md)
+       drgnx plugins install PATH [--replace] | list [--json] | remove NAME
+                               the plugins drgnx runs (installing never approves one) (docs/guide/plugins.md)
        drgnx browser install [--version V] [--json] | list [--json]
                                the browser sandboxed agents get: a sha256-pinned download, only when you run it
                                (docs/guide/agent-browser.md)
@@ -2273,6 +2275,16 @@ case "${1:-help}" in
         if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
         if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
         DRGNX_DIR="$here" exec "$rtsk" runner "$@" ;;
+  plugins) shift   # the plugins (install, list, remove; docs/guide/plugins.md): Ratatoskr's; list asks the hub, starting one
+        case "${1:-}" in
+          install|list|remove) ;;
+          *) echo "usage: drgnx plugins install PATH [--replace] | list [--json] | remove NAME" >&2; exit 2 ;;
+        esac
+        rtsk="${DRGNX_RATATOSKR_BIN:-}"
+        if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi
+        if [[ ! -f "$rtsk" || ! -x "$rtsk" ]]; then echo "drgnx: Ratatoskr is not built: run \`drgnx runtime build'" >&2; exit 1; fi
+        if [[ -z "${DRGNX_EMACS:-}" ]] && DRGNX_EMACS="$(emacs_bin 2>/dev/null)"; then export DRGNX_EMACS; fi
+        DRGNX_DIR="$here" exec "$rtsk" plugins "$@" ;;
   browser) shift   # the agent browser: install a pinned headless shell, or list what sessions get (Ratatoskr's)
         rtsk="${DRGNX_RATATOSKR_BIN:-}"
         if [[ "$rtsk" != /* || ! -f "$rtsk" || ! -x "$rtsk" ]]; then rtsk="$(drgnx_dir data)/bin/ratatoskr"; fi

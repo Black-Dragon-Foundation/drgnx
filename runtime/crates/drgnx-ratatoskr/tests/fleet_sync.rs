@@ -21,6 +21,7 @@ use drgnx_ratatoskr::runners::local::{Admission, LocalRunner};
 use drgnx_ratatoskr::runners::queue::{
     Outcome, Placement, Queue, QueueCfg, RemoteRunner, SendMode, Submit,
 };
+use drgnx_ratatoskr::runners::returned;
 use drgnx_ratatoskr::runners::sync::{self, Frozen, Visibility};
 use drgnx_ratatoskr::runners::transport::{Channel, Channels};
 use forseti::{Expect, JobSpec, Kind, Lane, Priority, Range, RunnerTrust, Weight};
@@ -353,6 +354,22 @@ fn queue_shared(
     UnboundedReceiver<LinkEvent>,
     tokio::process::Child,
 ) {
+    queue_on(dir, root, prefix, hub, img, RunnerTrust::Shared)
+}
+
+/// [`queue_shared`] with r1 of TRUST.
+fn queue_on(
+    dir: &Path,
+    root: &str,
+    prefix: &str,
+    hub: &str,
+    img: &str,
+    trust: RunnerTrust,
+) -> (
+    Arc<Queue>,
+    UnboundedReceiver<LinkEvent>,
+    tokio::process::Child,
+) {
     let (q, events) = Queue::new(QueueCfg {
         hub_id: hub.into(),
         exec_root: dir.join("exec"),
@@ -365,7 +382,7 @@ fn queue_shared(
     q.add_runner(
         RemoteRunner {
             name: "r1".into(),
-            trust: RunnerTrust::Shared,
+            trust,
             accept: forseti::Accept::All,
             grace_s: 600,
             image: Some(img.into()),
@@ -531,7 +548,7 @@ mod sync_rows {
 
     /// [C] An uncommitted file keeps a public job off the shared runner while the project's
     /// `drgnx-runners-shared-overlay` is off; on, a file that looks like a secret still does, naming it; a clean
-    /// overlay goes, and the job reads it.
+    /// overlay goes, the job reads it, and its result comes back as the shared runner's.
     #[tokio::test]
     #[ignore = "fleet"]
     async fn shared_overlay_off_by_default_and_scanned_when_on() {
@@ -559,8 +576,73 @@ mod sync_rows {
         q.submit(job("xon", "cat note.txt", p.freeze(true), &img), now());
         let r = result(&q, &mut events, &mut outcomes, "xon").await;
         assert_eq!(r["verdict"], "Pass", "{r}");
+        // a shared runner's result comes back named as the shared runner's, so it is labelled and never counts for a
+        // gate
+        let shared = outcomes.iter().find_map(|o| match o {
+            Outcome::Done { id, shared, .. } if id == "xon" => Some(shared.clone()),
+            _ => None,
+        });
+        assert_eq!(shared, Some(Some("r1".to_string())), "{outcomes:?}");
         let log = std::fs::read_to_string(dir.path().join("exec/xon/log")).unwrap_or_default();
         assert!(log.contains("overlay!"), "{log}");
         stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
+    }
+
+    /// [C] A job that declares `writes` and `outputs`, on a `mine` runner, runs in a private copy: its change comes
+    /// back as a patch and its output as an archive, both in the job's folder before its verdict; at the verdict the
+    /// change is applied to the worktree (it is as the job's inputs were frozen) and the output unpacked.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_runners_changes_and_outputs_come_back() {
+        let (prefix, hub) = ("flret", "hubret");
+        let root = root("r1", "fl-ret");
+        let img = image("r1");
+        let dir = tempfile::tempdir().unwrap();
+        let p = Project::new(dir.path(), "r1");
+        let (q, mut events, _child) =
+            queue_on(dir.path(), &root, prefix, hub, &img, RunnerTrust::Mine);
+        let mut outcomes = vec![];
+        ready(&q, &mut events, &mut outcomes).await;
+        let script =
+            "echo 'from the runner' >> hello.txt && mkdir -p dist && echo built > dist/out.txt";
+        let mut s = job("xret", script, p.freeze(false), &img);
+        s.place.writes = vec!["hello.txt".into()];
+        s.spec.outputs = vec!["dist/**".into()];
+        q.submit(s, now());
+        let done = drive(&q, &mut events, &mut outcomes, "xret's result", |_, o| {
+            o.iter().find_map(|o| match o {
+                Outcome::Done { id, .. } if id == "xret" => Some(o.clone()),
+                _ => None,
+            })
+        })
+        .await;
+        let Outcome::Done { result, back, .. } = done else {
+            unreachable!()
+        };
+        assert_eq!(result["verdict"], "Pass", "{result}");
+        let job_dir = dir.path().join("exec/xret");
+        let patch = std::fs::read_to_string(job_dir.join("returned.patch")).unwrap_or_default();
+        assert!(patch.contains("+from the runner"), "{patch:?}");
+        assert!(job_dir.join("returned.outputs").exists());
+        let back = back.expect("what came back");
+        let lines = returned::take_back(&job_dir, &back, false, &|_, _| Ok(()));
+        assert_eq!(
+            lines,
+            vec![
+                format!(
+                    "its outputs: 1 file in {}",
+                    job_dir.join("outputs").display()
+                ),
+                "runner r1's changes were applied to 1 file".to_string(),
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(p.work.join("hello.txt")).unwrap(),
+            "hello from origin\nfrom the runner\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(job_dir.join("outputs/dist/out.txt")).unwrap(),
+            "built\n"
+        );
     }
 }

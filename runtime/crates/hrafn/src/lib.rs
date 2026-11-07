@@ -12,6 +12,7 @@ pub mod files;
 pub mod fresh;
 pub mod grep;
 pub mod index;
+mod memo;
 pub mod overlay;
 pub mod query;
 pub mod rank;

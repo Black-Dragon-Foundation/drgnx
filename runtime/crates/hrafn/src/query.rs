@@ -14,6 +14,7 @@
 //!   its symbol, and the hit moves with it.
 
 use crate::index::{Lag, lag};
+use crate::memo::{self, Memo, Signs};
 use crate::schema::encode_symbol;
 use crate::store::{CodeStore, StoreError};
 use crate::tree::View;
@@ -365,21 +366,31 @@ pub const FIRST_CHUNK_SQL: &str = concat!(
     " where c.key = ?1 and c.embed = 1 and f.blob = c.blob"
 );
 
-/// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product.
-fn nearest(c: &Connection, model: &str, v: &[f32], view: View) -> rusqlite::Result<Vec<i64>> {
+/// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product. The sign
+/// bits are read from the store once per change of it (`memo.rs`).
+fn nearest(
+    c: &Connection,
+    memo: &mut Memo,
+    model: &str,
+    v: &[f32],
+    view: View,
+) -> rusqlite::Result<Vec<i64>> {
     let (qbits, qints, _) = urdr::graph::search::vec::quantize(v);
     let mut heap: BinaryHeap<(u32, i64)> = BinaryHeap::with_capacity(SCAN + 1);
     {
-        let mut st = c.prepare(NEAREST_SQL)?;
+        let memo = memo.at(c)?;
+        if !memo
+            .signs
+            .as_ref()
+            .is_some_and(|s| s.model == model && s.dims == v.len() && s.bytes == qbits.len())
+        {
+            memo.signs = Some(signs(c, model, v.len(), qbits.len())?);
+        }
+        let signs = memo.signs.as_ref().expect("filled above");
         let mut first = c.prepare(FIRST_CHUNK_SQL)?;
-        let mut rows = st.query([model])?;
-        while let Some(r) = rows.next()? {
-            let dims: i64 = r.get(1)?;
-            let blob = r.get_ref(2)?.as_blob()?;
-            if usize::try_from(dims).ok() != Some(v.len()) || blob.len() < qbits.len() {
-                continue;
-            }
-            let d: u32 = blob[..qbits.len()]
+        for (i, key) in signs.keys.iter().enumerate() {
+            let d: u32 = signs
+                .get(i)
                 .iter()
                 .zip(&qbits)
                 .map(|(a, b)| (a ^ b).count_ones())
@@ -388,9 +399,9 @@ fn nearest(c: &Connection, model: &str, v: &[f32], view: View) -> rusqlite::Resu
             if full && heap.peek().is_some_and(|w| d > w.0) {
                 continue;
             }
-            let key = r.get_ref(0)?.as_blob()?;
-            let Some(id) =
-                first.query_row(params![key, view.tree()], |r| r.get::<_, Option<i64>>(0))?
+            let Some(id) = first.query_row(params![&key[..], view.tree()], |r| {
+                r.get::<_, Option<i64>>(0)
+            })?
             else {
                 continue;
             };
@@ -422,6 +433,32 @@ fn nearest(c: &Connection, model: &str, v: &[f32], view: View) -> rusqlite::Resu
     Ok(scored.into_iter().map(|s| s.0).collect())
 }
 
+/// MODEL's vectors of DIMS dimensions, in the store's order: each key and its sign bits (BYTES of them).
+fn signs(c: &Connection, model: &str, dims: usize, bytes: usize) -> rusqlite::Result<Signs> {
+    let mut out = Signs {
+        model: model.to_string(),
+        dims,
+        bytes,
+        keys: Vec::new(),
+        bits: Vec::new(),
+    };
+    let mut st = c.prepare(NEAREST_SQL)?;
+    let mut rows = st.query([model])?;
+    while let Some(r) = rows.next()? {
+        let n: i64 = r.get(1)?;
+        let blob = r.get_ref(2)?.as_blob()?;
+        if usize::try_from(n).ok() != Some(dims) || blob.len() < bytes {
+            continue;
+        }
+        let Ok(key) = <[u8; 32]>::try_from(r.get_ref(0)?.as_blob()?) else {
+            continue;
+        };
+        out.keys.push(key);
+        out.bits.extend_from_slice(&blob[..bytes]);
+    }
+    Ok(out)
+}
+
 /// The keyword list (?1 the MATCH, ?2 its length). FTS5 gives no top-N guarantee, so the whole match set is scored;
 /// with shared content that set is about the distinct content, not trees times content.
 pub const KEYWORD_SQL: &str = concat!(
@@ -432,6 +469,7 @@ pub const KEYWORD_SQL: &str = concat!(
 
 fn lists(
     c: &Connection,
+    memo: &mut Memo,
     text: &str,
     qvec: Option<(&str, &[f32])>,
     view: View,
@@ -466,7 +504,8 @@ fn lists(
         }
     }
     if let Some((model, v)) = qvec {
-        out.ranked.push(("vector", nearest(c, model, v, view)?));
+        out.ranked
+            .push(("vector", nearest(c, memo, model, v, view)?));
     }
     Ok(out)
 }
@@ -569,11 +608,13 @@ pub async fn search(
 ) -> Result<Answer, StoreError> {
     let (text, scope, k) = (q.text.clone(), q.scope, q.k.max(1) as usize);
     let owned = qvec.map(|(m, v)| (m.to_string(), v.to_vec()));
+    let memo = store.memo();
     let (mut hits, texts) = store
         .handle()
         .read(move |c| {
             let l = lists(
                 c,
+                &mut memo::lock(&memo),
                 &text,
                 owned.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
                 view,

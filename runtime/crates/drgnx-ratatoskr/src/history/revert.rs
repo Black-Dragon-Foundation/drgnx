@@ -169,17 +169,11 @@ pub(crate) async fn take(f: &Front, id: i64) -> Option<Plan> {
 }
 
 /// A runner returned job JOB's patch for session SID: true when a revert of the session runs, and then the patch is
-/// kept on its job and listed in the revert's `kept_patches`, never applied.  The returned-patch path asks this before
-/// it applies anything (a patch after the revert is refused anyway: its files are not at their submit hash).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the hub applies no returned patch yet: the runners' returned-patch path calls it"
-    )
-)]
-pub(crate) fn patch_returned(f: &Front, sid: &str, job: &str) -> bool {
-    match lock(&f.core.history.reverts.returned).get_mut(sid) {
+/// kept on its job and listed in the revert's `kept_patches`, never applied.  The returned-patch path (the job layer's
+/// `take_back`) asks this before it applies anything (a patch after the revert is refused anyway: its files are not
+/// what the runner changed).
+pub(crate) fn patch_returned(hubs: &super::wire::Hubs, sid: &str, job: &str) -> bool {
+    match lock(&hubs.reverts.returned).get_mut(sid) {
         Some(kept) => {
             kept.push(job.to_owned());
             true

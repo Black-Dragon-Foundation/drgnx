@@ -292,6 +292,7 @@ pub(crate) fn write_version(
 pub struct CodeStore {
     store: Option<Store>,
     handle: Handle,
+    memo: crate::memo::Shared,
 }
 
 impl CodeStore {
@@ -309,12 +310,18 @@ impl CodeStore {
         Ok(CodeStore {
             store: Some(store),
             handle,
+            memo: Default::default(),
         })
     }
 
     /// The `urdr` handle, for reads and writes this API does not cover yet (closures run on the store thread).
     pub fn handle(&self) -> &Handle {
         &self.handle
+    }
+
+    /// What queries keep between two changes of the store (`memo.rs`).
+    pub(crate) fn memo(&self) -> crate::memo::Shared {
+        self.memo.clone()
     }
 
     /// Insert or replace a file's base row (the content the row named before is swept when nothing else names it).

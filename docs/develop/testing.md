@@ -41,6 +41,12 @@ timing, judged on a quiet machine (`bin/drgnx test --perf`); a change under `tes
 replaces the narrower ones it contains (`unit` replaces every `lisp:` group, `rust-workspace` every `rust:`, `domr`
 every `domr:`).
 
+**The hub is built with `test-hooks` wherever a group builds it** (`rust-workspace`, `rust-rules`, `domr`), as CI's
+Runtime job does. Cargo keeps one `target/debug/ratatoskr` whatever the features, so a plain `cargo test -p
+drgnx-ratatoskr --test …` overwrites the binary that test binaries built before it then start, and their hub-backed
+rows fail with "sandbox run exists only in a test-hooks build". Built with the hooks, the conformance rows also run
+against the hub CI runs them against.
+
 **Lisp tests map by what they name.** A source file's feature is its file name (`core/drgnx-registry.el` is
 `drgnx-registry`). A unit test file is affected when its text names the feature: a `(require 'drgnx-registry)`, or the
 feature as a prefix of a test name (`drgnx-registry/…`). Almost every test requires the umbrella `drgnx`, so following

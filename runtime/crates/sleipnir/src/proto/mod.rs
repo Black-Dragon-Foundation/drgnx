@@ -225,6 +225,16 @@ mod tests {
                 offset: 77,
                 bytes: b"line\n\x1b[0m".to_vec(),
             },
+            Frame::Returned {
+                r: r(),
+                what: "patch".into(),
+                offset: 0,
+                total: 9,
+                sha256: Sha256([7; 32]),
+                left: vec![("w/bin".into(), "a binary file".into())],
+                kept: false,
+                bytes: b"diff --gi".to_vec(),
+            },
             Frame::Row {
                 r: r(),
                 name: "t::a".into(),

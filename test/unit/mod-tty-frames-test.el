@@ -37,10 +37,13 @@ strings; the real frame is not touched), an empty cache and no terminal to ask: 
        ,@body)))
 
 (defmacro drgnx-tty-frames-test--state (&rest body)
-  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'."
+  "BODY with the state dir (XDG_STATE_HOME) a temp dir, `state'.  A report written in BODY puts the fallback layer
+on the terminal and its prefix in `key-translation-map' (`drgnx-tty-frames-write-report'): taken back after, as
+ui/terminal's teardown does, so no later test finds the prefix bound."
   `(let* ((state (make-temp-file "drgnx-tty-frames" t))
           (process-environment (cons (concat "XDG_STATE_HOME=" state) process-environment)))
      (unwind-protect (progn ,@body)
+       (drgnx-tty-fallback-off)
        (delete-directory state t))))
 
 (defun drgnx-tty-frames-test--report ()

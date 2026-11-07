@@ -7,7 +7,8 @@ use crate::linux::probe::Probe;
 use crate::linux::reserve::{self, Reservation};
 use crate::linux::resize::{self, Head, Resize, Sized};
 use forseti::{
-    Expected, Grant, Job, JobId, JobSpec, JobState, Limits, Priority, RunningJob, WaitReason,
+    Expected, Grant, Job, JobId, JobSpec, JobState, Limits, MachineState, Priority, RunningJob,
+    WaitReason,
 };
 
 /// How long past its timeout an attempt's reservation counts, should nothing remove it.
@@ -113,12 +114,38 @@ pub fn admit(
     .map_err(|e| Refused::because(format!("the admission lock: {e}")))?
 }
 
-/// A running job's grow, as [`grow`] takes it: the job, its reservation's name, and the head's reservation when one
-/// is known.
+/// A running job's grow, as [`grow`] takes it: the job, its reservation's name, and the hub's head reservation on
+/// this machine when its `head` frame told one.
 pub struct Grow {
     pub job: Sized,
     pub reservation: String,
-    pub head: Option<Head>,
+    pub head: Option<HeadHere>,
+}
+
+/// The hub's head reserved on this machine (its `head` frame): what the head needs, and when it is to start.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeadHere {
+    pub need: forseti::Need,
+    pub at: u64,
+}
+
+impl HeadHere {
+    /// The head as a grow on M must leave it: M's budget at the head's start, from BUDGET (M's now) and OURS' expected
+    /// ends ([`forseti::budget_at`]).
+    pub fn on(&self, m: &MachineState, budget: &forseti::Budget, ours: &[RunningJob]) -> Head {
+        let ends = ours
+            .iter()
+            .map(|rj| {
+                let end = forseti::expected_end(rj.started, rj.expected.minutes * 60.0);
+                (rj.id.clone(), end)
+            })
+            .collect();
+        Head {
+            machine: m.name.clone(),
+            need: self.need,
+            at: forseti::budget_at(m, budget, &ends, self.at),
+        }
+    }
 }
 
 /// Grows G's job when [`resize::grow`] says so, under the machine's admission lock: the budget is the machine's as
@@ -141,7 +168,8 @@ pub fn grow(
             .map_err(|e| Refused::because(format!("the machine can't be read: {e}")))?;
         m.running = ours.to_vec();
         let budget = forseti::budget(&m, limits);
-        let Some(r) = resize::grow(&g.job, &budget, g.head.as_ref()) else {
+        let head = g.head.map(|h| h.on(&m, &budget, ours));
+        let Some(r) = resize::grow(&g.job, &budget, head.as_ref()) else {
             return Ok(None);
         };
         let mut held = rs
@@ -404,6 +432,69 @@ mod tests {
             grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(())),
             Ok(None)
         );
+    }
+
+    /// [D] The hub's head reserved here holds a grow to what the machine will have at the head's start less the head's
+    /// need: a head starting before the job's expected end, needing the room, leaves no grow; one starting after it
+    /// counts the job's memory back by then, and the job grows.
+    #[test]
+    fn a_grow_leaves_the_hubs_head_its_room() {
+        let d = tempfile::tempdir().unwrap();
+        let p = probe(d.path());
+        let s = spec(2048);
+        let offer = Offer {
+            id: "a1",
+            attempt: 1,
+            spec: &s,
+            priority: Priority::P3,
+            expected: None,
+        };
+        admit(&p, &limits(), "drgnx-hubA", &[], None, 1000, &offer).unwrap();
+        // started at 1000, expected to take an hour: it ends at 4600
+        let now = 2000;
+        let ours = [RunningJob {
+            id: JobId("a1".into()),
+            priority: Priority::P3,
+            started: 1000,
+            reserve_mib: 2048,
+            current_mib: 3600,
+            cores: 1,
+            expected: Expected {
+                minutes: 60.0,
+                ..unknown(&s)
+            },
+            restartable: true,
+            evicted_once: false,
+            long_build: false,
+        }];
+        let grow_with = |head: Option<HeadHere>| {
+            let g = Grow {
+                job: Sized {
+                    job: JobId("a1".into()),
+                    container: "drgnx-run-a1".into(),
+                    machine: "runner".into(),
+                    cap_mib: 4096,
+                    current_mib: 3600,
+                    max_mib: 8192,
+                },
+                reservation: reservation_job("a1", 1),
+                head,
+            };
+            grow(&p, &limits(), "drgnx-hubA", &ours, now, &g, |_| Ok(()))
+                .unwrap()
+                .map(|r| r.to_mib)
+        };
+        let head = |at: u64| {
+            Some(HeadHere {
+                need: forseti::Need {
+                    mem_mib: 7500,
+                    cpu: 1.0,
+                },
+                at,
+            })
+        };
+        assert_eq!(grow_with(head(3000)), None);
+        assert_eq!(grow_with(head(5000)), Some(5120));
     }
 
     /// [D] A fake runner shares its host's pressure files and disk, so a test build takes the machine's pressure,

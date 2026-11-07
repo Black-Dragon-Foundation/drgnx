@@ -370,14 +370,60 @@ mod tests {
 #[cfg(test)]
 mod name_and_pull_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
     use std::path::PathBuf;
 
+    /// A fake podman at DIR/podman running BODY, written by a `sh` child: never through a file this process holds open
+    /// for writing, which another test's fork here would inherit, so that the exec of the script failed as busy
+    /// (ETXTBSY).
     fn script(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("podman");
-        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut sh = std::process::Command::new("sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&p)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = sh.stdin.take().unwrap();
+        stdin
+            .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .unwrap();
+        drop(stdin);
+        assert!(sh.wait().unwrap().success());
         p
+    }
+
+    /// The fake podman runs while another thread forks all along (the lib's other tests do): a script written here is
+    /// never busy when it is run.
+    #[test]
+    fn a_fake_podman_runs_while_another_thread_forks() {
+        let d = tempfile::tempdir().unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let forks = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = std::process::Command::new("true").status();
+                }
+            })
+        };
+        let mut busy = vec![];
+        for i in 0..200 {
+            let dir = d.path().join(i.to_string());
+            std::fs::create_dir(&dir).unwrap();
+            let p = script(&dir, "echo ok");
+            if let Err(e) = std::process::Command::new(&p).output() {
+                busy.push(e.to_string());
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        forks.join().unwrap();
+        assert!(
+            busy.is_empty(),
+            "{} of 200 runs failed: {:?}",
+            busy.len(),
+            busy.first()
+        );
     }
 
     #[test]
