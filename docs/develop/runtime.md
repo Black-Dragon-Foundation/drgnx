@@ -74,6 +74,15 @@ cargo deny  --manifest-path runtime/Cargo.toml check
 
 Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) runs without `--locked`.
 
+### Zig
+
+The terminal's engine (`ghostty-vt-sys`, libghostty-vt) is built from pinned sources with **Zig 0.17.x**, a build tool
+only: nothing Zig is shipped or fetched by a build script. `install.sh` uses a `zig` 0.17.x on PATH, else downloads the
+pinned tarball into `<data>/zig/` (its sha256 per target and Zig's minisign signature are both checked first; it needs
+the `minisign` package) and records the path in `<data>/zig-path`; `drgnx runtime build` puts that directory on PATH.
+CI gets the same pinned Zig from `test/container/zig.sh` (in the Rust job's image, and on the macOS runner). Bump
+`ZIG_VERSION` and the sha256 lines in `install.sh` and `zig.sh` together, from `https://ziglang.org/download/index.json`.
+
 ### Platforms
 
 Linux and macOS are supported; Android is not a target, but the door stays open. Every `cfg(target_os)` gate names its

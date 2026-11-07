@@ -144,6 +144,11 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   local envs=("PATH=${RT_CARGO%/*}:$PATH" "CARGO_TARGET_DIR=$cache/ratatoskr-target" "DRGNX_BUILD_COMMIT=$commit" "DRGNX_CHECKOUT=$here")
   case " ${RT_ENV[*]-} " in *" CARGO_HOME="*) ;; *) envs+=("CARGO_HOME=$cache/cargo") ;; esac
   for l in ${RT_ENV[@]+"${RT_ENV[@]}"}; do envs+=("$l"); done
+  # the zig install.sh recorded in <data>/zig-path (the terminal engine's build tool; the timer's PATH lacks it)
+  if [[ -f "$(drgnx_dir data)/zig-path" ]]; then
+    l="$(head -n 1 "$(drgnx_dir data)/zig-path")"
+    if [[ "$l" == /* && -x "$l" ]]; then envs[0]="PATH=${l%/*}:${envs[0]#PATH=}"; fi
+  fi
   rt_cap "$jobs"
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \

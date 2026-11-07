@@ -445,12 +445,11 @@ panel's rules on."
     (should-not drgnx-gc-gap-quiet)))
 
 (ert-deftest drgnx-terminal/turning-eat-off-takes-its-advice-and-hooks ()
-  ;; the four advice and the two hooks of tools/terminal-eat's setup are named and recorded: turned off, none is left
+  ;; the three advice and the hook of tools/terminal-eat's setup are named and recorded: turned off, none is left
   (unless (drgnx-terminal-test--eat-dir) (ert-skip drgnx-terminal-test--skip))
   (let ((advice '((eat--pre-prompt . drgnx-terminal-eat--note-integration)
                   (eat--process-output-queue . drgnx-terminal-eat--collect-in-gap)
-                  (drgnx-keys-apply . drgnx-terminal-apply-keys)
-                  (drgnx-surfaces-cheatsheet . drgnx-terminal--sheet-sections)))
+                  (drgnx-keys-apply . drgnx-terminal-apply-keys)))
         (load-path (append load-path (list (drgnx-terminal-test--eat-dir)))))
     (drgnx-test-with-modules '(tools/terminal-eat) :strict t
                              (should (eq (plist-get (alist-get 'tools/terminal-eat (drgnx-modules-report)) :status) 'ok))

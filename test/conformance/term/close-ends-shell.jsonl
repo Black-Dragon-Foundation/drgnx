@@ -1,0 +1,12 @@
+{"scenario": "term/close-ends-shell", "requires": ["v1", "linux"], "doc": "term/close ends the terminal's program (SIGHUP to its process group): term/exit follows and the terminal leaves term/list."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "sleep 600; true"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "term/close", "params": {"id": "$t"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "term/exit", "data": {"id": "$t"}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/list", "params": {}}, "expect": {"id": 4, "result": []}, "within_ms": 10000}

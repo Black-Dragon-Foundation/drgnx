@@ -662,9 +662,10 @@ mod buffer_views {
     }
 }
 
-/// `__test_view_rows {view, rows, images?, labels?}` (test-hooks): this connection's fixture view VIEW shows ROWS (and
-/// may name IMAGES, `[[id, svg]]`), then LABELS (`[[key, text, px]]`, each fitted to PX by the class's fonts and
-/// followed by a stop) in every display class it has an env for ([`crate::view::Views::fixture`]); answered true.
+/// `__test_view_rows {view, rows, images?, labels?, ack?, epoch_reset?}` (test-hooks): this connection's fixture view
+/// VIEW shows ROWS (and may name IMAGES, `[[id, svg]]`), then LABELS (`[[key, text, px]]`, each fitted to PX by the
+/// class's fonts and followed by a stop) in every display class it has an env for ([`crate::view::Views::fixture`]);
+/// ACK and EPOCH_RESET are its options ([`crate::view::ViewOpts`]); answered true.
 #[cfg(feature = "test-hooks")]
 mod view_rows {
     use super::Outbox;
@@ -687,10 +688,14 @@ mod view_rows {
             serde_json::from_value(req.params["images"].clone()).unwrap_or_default();
         let labels: Vec<crate::view::Label> =
             serde_json::from_value(req.params["labels"].clone()).unwrap_or_default();
+        let opts = crate::view::ViewOpts {
+            ack: req.params["ack"].as_bool().unwrap_or(false),
+            epoch_reset: req.params["epoch_reset"].as_bool().unwrap_or(true),
+        };
         front
             .core
             .views
-            .fixture(front, conn, view, (rows, images, labels));
+            .fixture(front, conn, view, (rows, images, labels), opts);
         if let Some(id) = req.id {
             let a = serde_json::to_string(&Answer {
                 id,

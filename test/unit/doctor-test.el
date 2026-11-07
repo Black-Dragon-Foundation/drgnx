@@ -61,6 +61,13 @@
     (should (string-search "installer" (nth 2 r))))
   (should (plist-member (drgnx-doctor-facts) :history-hook)))
 
+(ert-deftest drgnx-doctor/pair-mode ()
+  (should-not (drgnx-doctor-check 'pair-mode (drgnx-doctor-test--facts)))
+  (should (eq 'ok (drgnx-doctor-test--status 'pair-mode (drgnx-doctor-test--facts :history-hook t))))
+  (let ((r (drgnx-doctor-check 'pair-mode (drgnx-doctor-test--facts :history-hook nil))))
+    (should (eq 'info (car r)))
+    (should (string-search "Pair needs Nidhogg .6 with Glitnir" (nth 1 r)))))
+
 (ert-deftest drgnx-doctor/fedora-release ()
   (should-not (drgnx-doctor-check 'fedora-release (drgnx-doctor-test--facts :fedora-release nil)))
   (should (eq 'ok (drgnx-doctor-test--status 'fedora-release (drgnx-doctor-test--facts :fedora-release 45))))

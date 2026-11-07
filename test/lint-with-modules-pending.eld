@@ -14,8 +14,5 @@
  "test/unit/mod-tty-popups-test.el: standard-display-table"
  "test/unit/terminal-keys-test.el: drgnx-keys-last"
  "test/unit/terminal-keys-test.el: drgnx-surfaces-cheatsheet-sections"
- "test/unit/terminal-keys-test.el: eat-semi-char-non-bound-keys"
- "test/unit/terminal-keys-test.el: eat-semi-char-mode-map"
- "test/unit/terminal-keys-test.el: drgnx-terminal--eat-default-non-bound"
  "test/unit/tty-fallback-test.el: drgnx-keys-last"
  )

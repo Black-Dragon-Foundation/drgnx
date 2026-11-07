@@ -48,6 +48,7 @@
   "drgnx-hub-client/proves-itself-and-is-user"
   "drgnx-hub-client/restart-now-over-ratatoskr"
   "drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect"
+  "drgnx-hub-client/the-gated-clock-runs-past-the-parent-watch"
   "drgnx-hub-client/the-update-notice-offers-restart-now"
   "drgnx-huginn/differential-fresh-seed"                ; skips without DRGNX_HUGINN_DUMP, which drgnx-tiers.yml's Linux jobs set
   "drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows" ; skips without DRGNX_RATATOSKR_BIN, which drgnx-tiers.yml's ui job sets
@@ -110,6 +111,7 @@
   "drgnx-hub-client/proves-itself-and-is-user"
   "drgnx-hub-client/restart-now-over-ratatoskr"
   "drgnx-hub-client/the-editor-token-and-held-keys-are-fetched-on-every-connect"
+  "drgnx-hub-client/the-gated-clock-runs-past-the-parent-watch"
   "drgnx-hub-client/the-update-notice-offers-restart-now"
   "drgnx-onboard/chat-needs-its-module"
   "drgnx-onboard/openrouter-key-goes-to-the-keychain"

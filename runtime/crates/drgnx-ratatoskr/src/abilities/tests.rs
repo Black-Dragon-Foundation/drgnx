@@ -439,6 +439,27 @@ async fn first_ability_needs_a_restart() {
     assert!(!r.f.mcp.plugins_changed("s2"));
 }
 
+// [D] pure: a change of the plugin list alone (the editor's `config/settings`) moves a running session's flag
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_settings_change_alone_moves_the_sessions_flag() {
+    let r = rig(&["echo-ability"]).await;
+    r.set("drgnx-agents-plugins", json!([])).await;
+    r.f.mcp.plugins_refresh();
+    let who = worker("claude", None);
+    r.open("s1", &who).await;
+    assert!(!r.f.mcp.plugins_changed("s1"));
+    let params: runstav::methods::config::SettingsParams = runstav::decode::typed(&json!({
+        "overrides": [{"name": "drgnx-agents-plugins", "value": ["echo-ability"], "source": "test"}]
+    }))
+    .unwrap()
+    .0;
+    r.f.config_settings(params).await.unwrap();
+    assert!(
+        r.f.mcp.plugins_changed("s1"),
+        "the set moved with the setting alone"
+    );
+}
+
 // [D] pure: abilities/list-changed-on-enable (a client of a running session sees the new set at its next list)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_running_sessions_list_follows_the_enabled_set() {

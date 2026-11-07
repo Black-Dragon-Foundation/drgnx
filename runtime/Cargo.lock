@@ -1361,6 +1361,7 @@ dependencies = [
  "draugr",
  "drgnx-px",
  "drgnx-rows",
+ "drgnx-term",
  "eitri",
  "fastwebsockets",
  "forseti",
@@ -1424,6 +1425,21 @@ dependencies = [
  "serde_json",
  "skrifa",
  "unicode-width",
+]
+
+[[package]]
+name = "drgnx-term"
+version = "0.1.0"
+dependencies = [
+ "drgnx-rows",
+ "ghostty-vt-sys",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "skuld",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2006,6 +2022,13 @@ dependencies = [
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.1",
 ]
 
 [[package]]

@@ -97,6 +97,13 @@ module never puts back what the second one replaced, nor removes the second one'
 
 (defun drgnx-commands-get (id) (gethash id drgnx-commands--table))
 
+(defun drgnx-commands-for-function (fn)
+  "The registered command whose function is the symbol FN, or nil: a notice names the function it runs, and its
+button says the command's title."
+  (and (symbolp fn)
+       (seq-some (lambda (id) (let ((c (gethash id drgnx-commands--table))) (and c (eq (drgnx-cmd-command c) fn) c)))
+                 drgnx-commands--order)))
+
 (defun drgnx-commands-label (cmd)
   (format "%s: %s" (drgnx-cmd-category cmd) (drgnx-cmd-title cmd)))
 

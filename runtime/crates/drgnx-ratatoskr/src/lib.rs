@@ -131,6 +131,7 @@ pub mod store;
 pub mod store_cli;
 pub mod supervise;
 pub mod supervisor;
+pub mod term;
 pub mod timeline;
 pub mod version;
 pub mod view;

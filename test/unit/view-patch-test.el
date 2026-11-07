@@ -369,3 +369,132 @@ arrives after that reset is dropped."
         (drgnx-rows-demo-settle b "the new hub's resync answered")
         (should (= 1 (drgnx-view-patch-resyncs s)))
         (should (equal "newer 0\nnewer 1\n" (drgnx-rows-demo-text b)))))))
+
+;;;; Styles, acknowledged patches and the epoch exemption (a terminal's view)
+
+(drgnx-view-define 'drgnx-view-patch-test-term :render #'drgnx-view-patch-render
+                   :patched #'drgnx-view-patch--patched :slice drgnx-view-slice :delay 0 :ack t :epoch-reset nil)
+
+(defmacro drgnx-view-patch-test--with-term (&rest body)
+  "BODY as `drgnx-view-patch-test--with', the pair a view of the terminal-like type (acks, no epoch reset)."
+  (declare (indent 0))
+  `(let ((drgnx-view-patch--buffers (make-hash-table :test #'equal))
+         (drgnx-view-patch--hooked nil)
+         (drgnx-view-patch-test--sent nil)
+         (drgnx-view-patch-send-function (lambda (m p) (push (cons m p) drgnx-view-patch-test--sent))))
+     (with-temp-buffer
+       (let* ((buf (current-buffer))
+              (view (drgnx-view-patch-attach "v" "c" :epoch 1 :type 'drgnx-view-patch-test-term)))
+         (ignore buf view)
+         (unwind-protect (progn ,@body)
+           (drgnx-view-patch-teardown)
+           (drgnx-timer-cancel (cons 'drgnx-view buf)))))))
+
+(defun drgnx-view-patch-test--styled (key text runs styles &rest args)
+  "A reset of one row KEY with TEXT and RUNS, carrying STYLES ((ID STYLE) ...)."
+  (append (apply #'drgnx-view-patch-test--patch
+                 (list (list :reset (list (drgnx-view-patch-test--row key text :runs runs)))) args)
+          (list :styles styles)))
+
+(defun drgnx-view-patch-test--rgb (i)
+  "The I-th program colour of a test, as the hub writes it (program data, not a theme colour)."
+  (format "#%06x" (* 4099 (1+ i))))
+
+(ert-deftest drgnx-view-patch/style-run-uses-ansi-face ()
+  "An `s:' run resolves against the buffer's style table: an ansi foreground is the face `drgnx-term-color-N' itself,
+attributes go into an anonymous face before it, and a default colour adds nothing."
+  (drgnx-view-patch-test--with-term
+    (drgnx-view-apply-patch
+     (drgnx-view-patch-test--styled "1" "abcdef" '((0 2 "s:3") (2 4 "s:4") (4 6 "s:5"))
+                                    '((3 (:fg (:ansi 1))) (4 (:fg (:ansi 2) :bold t :underline t)) (5 (:italic :false)))))
+    (drgnx-view-patch-test--draw)
+    (should (eq 'drgnx-term-color-1 (get-text-property (point-min) 'face)))
+    (let ((f (get-text-property (+ 2 (point-min)) 'face)))
+      (should (consp f))
+      (should (eq 'drgnx-term-color-2 (car (last f))))
+      (should (eq 'bold (plist-get (car f) :weight)))
+      (should (eq t (plist-get (car f) :underline)))
+      (should-not (plist-get (car f) :foreground)))
+    (should-not (get-text-property (+ 4 (point-min)) 'face))
+    (should (facep 'drgnx-term-color-15))
+    (should (eq 'ansi-color-bright-white (face-attribute 'drgnx-term-color-15 :inherit)))))
+
+(ert-deftest drgnx-view-patch/rgb-face-cache-is-bounded ()
+  "Program colours become anonymous faces from a per-buffer LRU: one face per (colours, attributes), shared, and never
+more than `drgnx-view-patch-style-face-max' kept; the least recently used go first."
+  (drgnx-view-patch-test--with-term
+    (let ((drgnx-view-patch-style-face-max 8) (n 20))
+      (drgnx-view-apply-patch
+       (drgnx-view-patch-test--styled
+        "1" (make-string (1+ n) ?x)
+        (append (cl-loop for i below n collect (list i (1+ i) (format "s:%d" i)))
+                (list (list n (1+ n) (format "s:%d" (1- n)))))
+        (cl-loop for i below n collect (list i (list :fg (list :rgb (drgnx-view-patch-test--rgb i)))))))
+      (drgnx-view-patch-test--draw)
+      (should (<= (hash-table-count (drgnx-view-patch-faces drgnx-view-patch)) 8))
+      (let ((last (get-text-property (+ (1- n) (point-min)) 'face)))
+        (should (equal (drgnx-view-patch-test--rgb (1- n)) (plist-get last :foreground))))
+      ;; the same style twice is the same face object
+      (should (eq (get-text-property (+ (1- n) (point-min)) 'face) (get-text-property (+ n (point-min)) 'face))))))
+
+(ert-deftest drgnx-view-patch/unknown-style-id-resyncs ()
+  "A run naming a style the buffer does not hold (and the patch does not bring) sends one `view/resync'."
+  (drgnx-view-patch-test--with-term
+    (drgnx-view-apply-patch (drgnx-view-patch-test--styled "1" "ab" '((0 2 "s:3")) '((3 (:bold t)))))
+    (let ((row (drgnx-view-patch-test--row "1" "ab" :runs '((0 2 "s:9")))))
+      (should (eq 'resync (drgnx-view-apply-patch
+                           (drgnx-view-patch-test--patch (list (list :replace (list row))) :base 1 :version 2))))
+      (should (= 1 (drgnx-view-patch-test--resyncs)))
+      ;; held from before, or brought by the patch: applied
+      (should (eq 'apply (drgnx-view-apply-patch
+                          (append (drgnx-view-patch-test--patch (list (list :replace (list row))) :base 1 :version 2)
+                                  (list :styles '((9 (:italic t))))))))
+      (should (eq 'apply (drgnx-view-apply-patch
+                          (drgnx-view-patch-test--patch
+                           (list (list :replace (list (drgnx-view-patch-test--row "1" "ab" :runs '((0 2 "s:3"))))))
+                           :base 2 :version 3)))))))
+
+(ert-deftest drgnx-view-patch/epoch-exempt-view-keeps-rows-on-theme ()
+  "A view exempt from the epoch reset (`:epoch-reset nil') applies a patch of an older epoch after a theme change
+\(its faces repaint in place): it is not held, and the view does not dim.  A plain view still holds it."
+  (drgnx-view-patch-test--with-term
+    (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a")))
+    (drgnx-view-patch-test--draw)
+    (drgnx-view-patch-env-sent "v" "c" 2)
+    (should (eq 'apply (drgnx-view-apply-patch
+                        (drgnx-view-patch-test--patch
+                         (list (list :insert (list :after "a" :rows (list (drgnx-view-patch-test--row "b" "row b")))))
+                         :base 1 :version 2 :epoch 1))))
+    (should-not (drgnx-view-patch-stale drgnx-view-patch))
+    (should (equal "row a\nrow b\n" (drgnx-view-patch-test--draw))))
+  (drgnx-view-patch-test--with
+    (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a")))
+    (drgnx-view-patch-env-sent "v" "c" 2)
+    (should (eq 'hold (drgnx-view-apply-patch
+                       (drgnx-view-patch-test--patch (list (list :remove '("a"))) :base 1 :version 2 :epoch 1))))))
+
+(ert-deftest drgnx-view-patch/ack-sent-after-apply ()
+  "A view that asked for acks sends `view/ack' with the version after each applied patch, and none for a patch it
+drops; a plain view sends none."
+  (drgnx-view-patch-test--with-term
+    (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a")))
+    (should (equal '("view/ack" :view "v" :class "c" :version 1) (car drgnx-view-patch-test--sent)))
+    (drgnx-view-apply-patch (drgnx-view-patch-test--patch (list (list :remove '("a"))) :base 1 :version 2))
+    (should (equal '("view/ack" :view "v" :class "c" :version 2) (car drgnx-view-patch-test--sent)))
+    (should (eq 'drop (drgnx-view-apply-patch
+                       (drgnx-view-patch-test--patch (list (list :remove '("a"))) :base 0 :version 1))))
+    (should (= 2 (cl-count "view/ack" drgnx-view-patch-test--sent :key #'car :test #'equal))))
+  (drgnx-view-patch-test--with
+    (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a")))
+    (should-not (assoc "view/ack" drgnx-view-patch-test--sent))))
+
+(ert-deftest drgnx-view-patch/face-override-on-ansi-shows-live ()
+  "An ansi colour is the face itself on the text, never a resolved colour: a remap of `drgnx-term-color-N' made after
+the patch shows on the rows already inserted, with no new patch."
+  (drgnx-view-patch-test--with-term
+    (drgnx-view-apply-patch (drgnx-view-patch-test--styled "1" "hello" '((0 5 "s:1")) '((1 (:fg (:ansi 1))))))
+    (drgnx-view-patch-test--draw)
+    (face-remap-add-relative 'drgnx-term-color-1 :inherit 'error)
+    (should (eq 'drgnx-term-color-1 (get-text-property (point-min) 'face)))
+    (should (assq 'drgnx-term-color-1 face-remapping-alist))
+    (should (equal "hello\n" (buffer-substring-no-properties (point-min) (point-max))))))

@@ -75,8 +75,10 @@ cargo test -p sleipnir --no-default-features --features linux --test runner_host
 fleet.sh host runtime/target/debug/deps/runner_host-HASH [FILTER]...
 ```
 
-`host` copies the binary (and the `sleipnir` and `drgnx-key` binaries beside its `deps/`, which the job-exec and key rows start) into
-`/fleet/share` and runs it in every runner with `--ignored --test-threads=1`.
+`host` copies the binary (and the `sleipnir`, `drgnx-key` and `drgnx-term` binaries beside its `deps/`, which the job-exec,
+key and terminal rows start) into `/fleet/share` and runs it in every runner with `--ignored --test-threads=1`
+(`DRGNX_TERM_BIN` names the terminal worker). The hub's `tests/term_scope.rs` runs this way too: a terminal's worker
+outlives its hub's unit under `KillMode=mixed` (docs/develop/terminal.md).
 
 ## Fleet rows
 
