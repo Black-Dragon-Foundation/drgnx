@@ -616,7 +616,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           DRGNX_TEST_PX_DIR="$PWD/runtime/target/bundle/x86_64" \
-            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib -- --ignored an_imported_image_runs_px
+            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib --no-fail-fast -- --ignored an_imported_image_runs_px
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
