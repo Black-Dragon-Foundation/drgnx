@@ -193,6 +193,17 @@
  (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
  (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
+ ;; The map on the hub's rows (render offload; read in the combined pass).  work-live's draw is at most 40 kB p50 (it was
+ ;; 831 kB, Lisp drawing the frames); work-live-old (`drgnx-view-old-path`, the paired row) reports the same rows.  The
+ ;; work-nav and work-relayout allocations are a tenth of as2-fix's (2026-11-07, b1: work-nav p50 11191 objects per key,
+ ;; work-relayout p50 128420); their CPU (b1: p90 11.31 and 59.16 ms) and rows (0) are kept as measured.  Both
+ ;; workloads still drive the old path (Sjá's keys are `work-nav-rows').
+ (work-live (:draw_kb :p50) 40 :report-only ot5) (work-live-old (:draw_kb :p50) 40 :report-only ot5)
+ (work-live-old (:slice_ms :max) 4 :report-only ot5) (work-live-old (:draw_ms_s) 40 :report-only ot5)
+ (work-nav (:alloc :p50) 1119 :report-only ot5) (work-nav (:cpu_ms :p90) 11.31 :report-only ot5)
+ (work-nav (:rows) 0 :report-only ot5)
+ (work-relayout (:alloc :p50) 12842 :report-only ot5) (work-relayout (:cpu_ms :p90) 59.16 :report-only ot5)
+ (work-relayout (:rows) 0 :report-only ot5)
  (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
  (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
  (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1)

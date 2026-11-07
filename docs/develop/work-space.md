@@ -602,7 +602,9 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   client keeps no frame for it (its answer is `{hub, version}`: the view is live), so the frame's functions, the edge
   tiles and the header strip draw nothing. A hub restart: the patches dim the view, the client subscribes again on
   the new connection (with `rows`), and the new hub's reset redraws it. Otherwise the map keeps its frames and draws
-  them, unchanged. Tests: `test/unit/work-map-rows-test.el`.
+  them, unchanged. Tests: `test/unit/work-map-rows-test.el`; the view rules on the 30-agent map and a trail (a new
+  class after `text-scale`, a second frame at twice the font, a theme change mid-stream, a face override) in
+  `test/ui/work-map-rows-gui-test.el`, and the map in a terminal class in `test/tty/work-map-test.el`.
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
