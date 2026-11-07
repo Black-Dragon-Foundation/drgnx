@@ -1665,8 +1665,18 @@ checkout read-only for it.
   keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
   `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
   `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
-  `pair-read` is answered with the buffer's text and `buffer-chars-modified-tick` as its version. Until the edit
-  history's shift is here, `drgnx-agent-pair--apply` refuses every write ("pair needs the edit history").
+  `pair-read` is answered with the buffer's text and its version: its drain counter in the edit history after a drain
+  (`drgnx-history-drain-now`; none when the history does not track the buffer, so a whole-file write is refused).
+- **The shift** (`drgnx-agent-pair--shift`): while an `agent` snapshot says a chat is paired in a folder, each buffer
+  there keeps the changes every drain sent (`drgnx-history-drained-functions`) in `drgnx-agent-pair--log`, bounded by
+  4096 drains or back to the hub's `floor` (sent with each `pair-apply`), whichever reaches further; a drain that
+  returned `resync` (and the history's own resync) is a gap. Each version handed out keeps its line starts (the last
+  16). An apply drains first, then moves each `lines` edit's range past the changes since its version: a change before
+  it shifts it, one after leaves it, one inside it (or typed at its start) is a conflict and the whole write is refused
+  `overlap` with the lines it would change now; a version older than the log or before a gap is refused `gap` ("read it
+  with read_file"). An `edit_file` edit must match once in the text. No edit may touch the guard zone (the line at point
+  ±1 in every window on the buffer, and the active region): refused `guard` with its lines. Nothing falls back to an
+  unshifted apply. The applied answer carries the version after the write.
 
 ## Per-session sockets
 

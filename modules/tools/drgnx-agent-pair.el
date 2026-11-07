@@ -17,10 +17,13 @@
 ;;   sends again, on the next connection, the answers the hub did not acknowledge;
 ;; - **tells the hub which files are open** (`pair/open', `pair/closed', `pair/open-set' at setup and on every
 ;;   connection), and answers `pair-read' with the buffer's text, unsaved edits included.
-;; Until the edit history is here (Nidhogg .6 with Glitnir and the history's drain), the apply refuses every write
-;; whole: shifting a write over the typing since the agent's read needs the history's change log, and nothing falls
-;; back to an unshifted apply.  Every call to the hub goes on the subscribed connection, the one the hub sent the
-;; write to: that is how it knows which editor answered.
+;; - **shifts a write over your typing**: a read's version is the buffer's drain counter in the edit history
+;;   (`drgnx-history-drain-now'); while a paired chat works in the buffer's checkout the module keeps the changes each
+;;   drain sent (`drgnx-agent-pair--log'), and a write based on an older version is moved past them, or refused whole
+;;   when it meets them (`drgnx-agent-pair--shift'), or when it touches the lines you are at (the guard zone).  A
+;;   version the log no longer covers is refused "read it with read_file"; nothing falls back to an unshifted apply.
+;; Every call to the hub goes on the subscribed connection, the one the hub sent the write to: that is how it knows
+;; which editor answered.
 
 ;;; Code:
 (require 'cl-lib)
@@ -30,10 +33,13 @@
 (require 'drgnx-large-file)
 (require 'drgnx-no-prompt)
 (require 'drgnx-registry)
+(require 'drgnx-history)
 
-(defconst drgnx-agent-pair-needs-history
-  "pair needs the edit history (Nidhogg .6 with Glitnir); nothing of this write was applied"
-  "Why every write is refused until the edit history can shift a write over the user's typing.")
+(defvar drgnx-agent-pair-log-size 4096
+  "How many drains of a buffer its change log keeps at least; more while the hub still holds a read older than them.")
+
+(defvar drgnx-agent-pair-reads-size 16
+  "How many versions a buffer keeps the line starts of (the versions its reads and applies handed out), newest first.")
 
 (defconst drgnx-agent-pair-record-size 256
   "How many answers the record keeps (`drgnx-agent-pair-answer-of'), newest first: enough for every write still in
@@ -50,6 +56,31 @@ Emacs's clock).  Permanent: a major-mode change keeps it.")
   "The file name the hub was told this buffer has open (`pair/open'), or nil.  Permanent, so a rename knows the old
 name.")
 (put 'drgnx-agent-pair--file 'permanent-local t)
+
+(defvar-local drgnx-agent-pair--log nil
+  "This buffer's drained changes while a paired chat works in its checkout, newest first: (COUNTER . CHANGES), the
+changes (the hub's shape: 0-based `:start', `:old_len', `:inserted') that turned version COUNTER-1 into COUNTER.
+Bounded: `drgnx-agent-pair-log-size' drains, or back to the hub's floor (`drgnx-agent-pair--floor'), whichever
+reaches further.  Permanent.")
+(put 'drgnx-agent-pair--log 'permanent-local t)
+
+(defvar-local drgnx-agent-pair--from nil
+  "The oldest version the log can shift a write from, or nil: no log.  A gap (a drain that returned `resync') moves it
+to the gap's own version.  Permanent.")
+(put 'drgnx-agent-pair--from 'permanent-local t)
+
+(defvar-local drgnx-agent-pair--floor nil
+  "The oldest version the hub still holds a read of this buffer's file at (sent with each `pair-apply'), or nil.")
+(put 'drgnx-agent-pair--floor 'permanent-local t)
+
+(defvar-local drgnx-agent-pair--reads nil
+  "The versions handed out (reads, applies), newest first: (VERSION . STARTS), STARTS the 0-based offsets of the
+text's line starts at VERSION, its length last; at most `drgnx-agent-pair-reads-size'.  A line edit's place.  Permanent.")
+(put 'drgnx-agent-pair--reads 'permanent-local t)
+
+(defvar drgnx-agent-pair--paired (make-hash-table :test 'equal)
+  "Session id → its folder (a directory name), for the chats the hub's `agent' snapshots say are paired.  A buffer
+keeps a change log only inside one of these folders.")
 
 (defvar drgnx-agent-pair--pending nil
   "The buffers whose queue holds writes: the one variable `post-command-hook' reads before draining.")
@@ -122,8 +153,8 @@ depth 0, no `:macro', no `:isearch', the history not `:resyncing' and the lock n
        (not (plist-get gate :locked))))
 
 (defun drgnx-agent-pair--resyncing-p ()
-  "Whether the edit history is resyncing this Emacs's buffers: never yet (the history's drain is not here)."
-  nil)
+  "Whether the edit history is sending some buffer's whole text (the slot waits: the versions are moving)."
+  (drgnx-history-resyncing-p))
 
 (defun drgnx-agent-pair--gate ()
   "The safe slot's gate now (`drgnx-agent-pair-slot-open-p')."
@@ -196,11 +227,216 @@ stops the save, any other error of it is a message, as Emacs has it."
             ((buffer-modified-p) (list :saved :false :not_saved "the save did not write the file"))
             (t (list :saved t))))))
 
-(defun drgnx-agent-pair--apply (_write)
+(defun drgnx-agent-pair--apply (write)
   "Apply WRITE to the current buffer, whole or not at all: its answer (`pair/answer' params without the id).
-Until the edit history is here every write is refused whole: an apply that cannot shift a write over your typing
-since the agent's read could undo it."
-  (list :result "refused" :reason drgnx-agent-pair-needs-history))
+The edits are shifted past your changes since the agent's read (`drgnx-agent-pair--shift'), an `edit_file' edit
+found once in the text; then none may touch the guard zone (`drgnx-agent-pair--guarded').  Applied, the answer
+carries the buffer's version after the write."
+  (let ((ranges (drgnx-agent-pair--place (plist-get write :edits) (plist-get write :version))))
+    (if (eq (car-safe ranges) :refused)
+        (cdr ranges)
+      (dolist (r (sort ranges (lambda (a b) (> (car a) (car b)))))
+        (save-excursion
+          (goto-char (nth 0 r))
+          (delete-region (nth 0 r) (nth 1 r))
+          (insert (nth 2 r))))
+      (drgnx-agent-pair--applied))))
+
+(defun drgnx-agent-pair--applied ()
+  "The answer of an applied write: the buffer's version now, its line starts kept (the hub takes a whole write's text
+as the agent's read at that version)."
+  (let ((v (drgnx-agent-pair-version)))
+    (if v (list :result "applied" :version v) (list :result "applied"))))
+
+(defun drgnx-agent-pair--place (edits version)
+  "EDITS (the hub's, based on VERSION) as ranges of the current buffer, (START END TEXT) each, or (:refused . ANSWER):
+shifted past the changes since VERSION, a `replace' edit found once in the text, none in the guard zone."
+  (let ((shifted (drgnx-agent-pair--shift edits version)))
+    (cond
+     ((eq shifted 'stale) (cons :refused (list :result "refused" :reason "gap")))
+     ((eq (car-safe shifted) 'conflict)
+      (cons :refused (list :result "refused" :reason "overlap" :lines (vconcat (cdr shifted)))))
+     (t
+      (catch 'refused
+        (let ((ranges
+               (mapcar (lambda (e)
+                         (if (eq (car e) :replace)
+                             (let ((at (drgnx-agent-pair--find (nth 1 e))))
+                               (unless (integerp at)
+                                 (throw 'refused (cons :refused (list :result "refused" :reason (symbol-name at)))))
+                               (list at (+ at (length (nth 1 e))) (nth 2 e)))
+                           e))
+                       shifted)))
+          (let ((lines (drgnx-agent-pair--guarded ranges)))
+            (if lines
+                (cons :refused (list :result "refused" :reason "guard" :lines (vconcat lines)))
+              ranges))))))))
+
+(defun drgnx-agent-pair--find (old)
+  "Where OLD is in the current buffer's text: its start, or `no-match', or `several'."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (goto-char (point-min))
+      (if (not (let ((case-fold-search nil)) (search-forward old nil t)))
+          'no-match
+        (let ((at (match-beginning 0)))
+          (goto-char (1+ at))
+          (if (let ((case-fold-search nil)) (search-forward old nil t)) 'several at))))))
+
+;;;; The change log and the shift
+
+(defun drgnx-agent-pair--logging-p (buffer)
+  "Whether BUFFER's file is inside the folder of a paired chat (`drgnx-agent-pair--paired')."
+  (let ((file (buffer-file-name buffer)))
+    (and file (catch 'in
+                (maphash (lambda (_s dir) (when (string-prefix-p dir file) (throw 'in t))) drgnx-agent-pair--paired)
+                nil))))
+
+(defun drgnx-agent-pair--drop-log ()
+  (setq drgnx-agent-pair--log nil drgnx-agent-pair--from nil drgnx-agent-pair--floor nil))
+
+(defun drgnx-agent-pair--drained (buffer counter changes)
+  "`drgnx-history-drained-functions': BUFFER's drain COUNTER sent CHANGES (or `resync', a gap).  Kept in its log while
+a paired chat works in its checkout; a buffer outside any loses its log."
+  (with-current-buffer buffer
+    (cond ((not (drgnx-agent-pair--logging-p buffer)) (when drgnx-agent-pair--from (drgnx-agent-pair--drop-log)))
+          ((or (eq changes 'resync) (null drgnx-agent-pair--from))
+           ;; a gap, or the log's start: nothing older than this version can be shifted
+           (setq drgnx-agent-pair--log nil drgnx-agent-pair--from counter))
+          (t (push (cons counter changes) drgnx-agent-pair--log)
+             (drgnx-agent-pair--trim)))))
+
+(defun drgnx-agent-pair--trim ()
+  "The log back to its bound: `drgnx-agent-pair-log-size' drains, more while they are newer than the hub's floor."
+  (let ((tail (nthcdr (1- drgnx-agent-pair-log-size) drgnx-agent-pair--log)))
+    (when (cdr tail)
+      (let ((floor drgnx-agent-pair--floor))
+        (while (and (cdr tail) floor (> (car (cadr tail)) floor)) (setq tail (cdr tail)))
+        (when (cdr tail)
+          (setq drgnx-agent-pair--from (car (cadr tail)))
+          (setcdr tail nil))))))
+
+(defun drgnx-agent-pair--starts (text)
+  "The 0-based offsets of TEXT's line starts, its length last, as a vector."
+  (let ((starts (list 0)) (at 0))
+    (while (setq at (string-search "\n" text at))
+      (setq at (1+ at))
+      (push at starts))
+    (unless (= (car starts) (length text)) (push (length text) starts))
+    (vconcat (nreverse starts))))
+
+(defun drgnx-agent-pair--remember (version)
+  "Keep the current buffer's line starts as VERSION's (`drgnx-agent-pair--reads'); with a paired chat in its checkout
+and no log yet, the log starts at VERSION."
+  (when version
+    (when (and (null drgnx-agent-pair--from) (drgnx-agent-pair--logging-p (current-buffer)))
+      (setq drgnx-agent-pair--from version drgnx-agent-pair--log nil))
+    (unless (assq version drgnx-agent-pair--reads)
+      (push (cons version (save-restriction (widen) (drgnx-agent-pair--starts (buffer-substring-no-properties
+                                                                               (point-min) (point-max)))))
+            drgnx-agent-pair--reads)
+      (let ((tail (nthcdr (1- drgnx-agent-pair-reads-size) drgnx-agent-pair--reads)))
+        (when tail (setcdr tail nil))))))
+
+(defun drgnx-agent-pair--since (version now)
+  "The logged changes from VERSION to NOW, oldest first, or `stale' when the log does not reach back to VERSION."
+  (cond ((eql version now) nil)
+        ((not (and drgnx-agent-pair--from (integerp version) (integerp now) (>= version drgnx-agent-pair--from) (< version now)))
+         'stale)
+        (t (let ((out nil))
+             (dolist (e drgnx-agent-pair--log)
+               (when (> (car e) version) (setq out (append (cdr e) out))))
+             out))))
+
+(defun drgnx-agent-pair--map (s e change)
+  "The range S..E (0-based) after CHANGE (the hub's shape), as (S . E), or nil when CHANGE meets the range: a change
+inside it, or an insertion at its start when it is not empty."
+  (let* ((cs (plist-get change :start)) (ol (plist-get change :old_len))
+         (ce (+ cs ol)) (d (- (length (plist-get change :inserted)) ol)))
+    (cond ((zerop ol)
+           (cond ((< cs s) (cons (+ s d) (+ e d)))
+                 ((and (= cs s) (> e s)) nil)
+                 ((and (> cs s) (< cs e)) nil)
+                 (t (cons s e))))
+          ((<= ce s) (cons (+ s d) (+ e d)))
+          ((>= cs e) (cons s e))
+          (t nil))))
+
+(defun drgnx-agent-pair--loose (pos change endp)
+  "POS after CHANGE, where it meets it: the change's start, or (ENDP) the end of what it inserted."
+  (let* ((cs (plist-get change :start)) (ol (plist-get change :old_len)) (n (length (plist-get change :inserted))))
+    (cond ((< pos cs) pos)
+          ((>= pos (+ cs ol)) (if (and (= pos cs) (zerop ol) (not endp)) pos (+ pos (- n ol))))
+          (endp (+ cs n))
+          (t cs))))
+
+(defun drgnx-agent-pair--lines-of (s e)
+  "The lines (A B) of the current buffer the 0-based range S..E covers."
+  (save-restriction
+    (widen)
+    (let* ((lo (min (point-max) (1+ s))) (hi (min (point-max) (max lo e))))
+      (list (line-number-at-pos lo t) (line-number-at-pos hi t)))))
+
+(defun drgnx-agent-pair--shift (edits version)
+  "EDITS (the hub's, based on VERSION) shifted to the current buffer: a list of (START END TEXT) buffer ranges and
+\(:replace OLD NEW) for an `edit_file' edit (found at apply time); or (conflict A B) when your changes since VERSION
+meet an edit (the lines it would change now), or `stale' when the log does not reach back to VERSION.  The buffer's
+ring is drained first, so the log holds every change up to now."
+  (let* ((now (drgnx-agent-pair-version))
+         (lines-p (cl-some (lambda (e) (equal (plist-get e :kind) "lines")) edits))
+         (since (and lines-p version (drgnx-agent-pair--since version now)))
+         (starts (and lines-p (if version (cdr (assq version drgnx-agent-pair--reads))
+                                (save-restriction (widen) (drgnx-agent-pair--starts (buffer-string)))))))
+    (cond
+     ((and lines-p (or (eq since 'stale) (null starts))) 'stale)
+     (t
+      (catch 'conflict
+        (mapcar
+         (lambda (edit)
+           (if (not (equal (plist-get edit :kind) "lines"))
+               (list :replace (plist-get edit :old) (plist-get edit :new))
+             (let* ((n (length starts)) (line (plist-get edit :line))
+                    (s (aref starts (min (1- n) (1- line))))
+                    (e (aref starts (min (1- n) (+ (1- line) (plist-get edit :delete)))))
+                    (range (cons s e)) (rest since))
+               (while (and rest range)
+                 (setq range (drgnx-agent-pair--map (car range) (cdr range) (car rest)))
+                 (unless range
+                   (let ((ls s) (le e))
+                     (dolist (c since) (setq ls (drgnx-agent-pair--loose ls c nil) le (drgnx-agent-pair--loose le c t)))
+                     (throw 'conflict (cons 'conflict (drgnx-agent-pair--lines-of ls le)))))
+                 (setq rest (cdr rest)))
+               (list (1+ (car range)) (1+ (cdr range)) (plist-get edit :text)))))
+         edits))))))
+
+;;;; The guard zone
+
+(defun drgnx-agent-pair--guard (&optional buffer)
+  "BUFFER's (default the current one) guard zone as line intervals ((A . B) ...): the line at point ±1 in every
+window showing it, and its active region."
+  (let* ((b (or buffer (current-buffer))) (zone nil))
+    (with-current-buffer b
+      (save-restriction
+        (widen)
+        (dolist (w (get-buffer-window-list b nil t))
+          (let ((l (line-number-at-pos (window-point w) t))) (push (cons (max 1 (1- l)) (1+ l)) zone)))
+        (when (and mark-active (mark t))
+          (push (cons (line-number-at-pos (min (point) (mark t)) t) (line-number-at-pos (max (point) (mark t)) t))
+                zone))))
+    zone))
+
+(defun drgnx-agent-pair--guarded (ranges)
+  "The lines (A B) of the first of RANGES ((START END TEXT) buffer ranges) that touches the guard zone, or nil."
+  (let ((zone (drgnx-agent-pair--guard)))
+    (when zone
+      (catch 'hit
+        (dolist (r ranges)
+          (let* ((a (line-number-at-pos (nth 0 r) t))
+                 (b (line-number-at-pos (max (nth 0 r) (1- (nth 1 r))) t)))
+            (dolist (z zone)
+              (when (and (<= a (cdr z)) (>= b (car z))) (throw 'hit (list a b))))))
+        nil))))
 
 ;;;; The hub's events
 
@@ -223,6 +459,7 @@ Emacs's clock; the safe slot applies it.  Never applied here.  No buffer has the
                                                  :reason "this file is open as a large or remote file; pair edits are off for it")))
           (t (let ((ttl (plist-get data :ttl_ms)))
                (with-current-buffer buf
+                 (when (natnump (plist-get data :floor)) (setq drgnx-agent-pair--floor (plist-get data :floor)))
                  (setq drgnx-agent-pair--queue
                        (nconc drgnx-agent-pair--queue
                               (list (append (list :deadline (+ (drgnx-timer-now) (/ (if (numberp ttl) ttl 0) 1000.0)))
@@ -261,9 +498,12 @@ still queued is answered when the slot takes it; a write this Emacs never had wa
           (t (drgnx-agent-pair--answer write (list :result "dropped" :reason "not-applied"))))))
 
 (defun drgnx-agent-pair-version ()
-  "The current buffer's version as a pair read gives it: its change counter (`buffer-chars-modified-tick') until the
-history's drain counter is here."
-  (buffer-chars-modified-tick))
+  "The current buffer's version as a pair read gives it: its drain counter in the edit history after a drain
+\(`drgnx-history-drain-now'), its line starts kept; nil when the history does not track it (a whole-file write then
+cannot be shifted, and is refused)."
+  (let ((v (drgnx-history-drain-now)))
+    (drgnx-agent-pair--remember v)
+    v))
 
 (defun drgnx-agent-pair--read (data)
   "`pair-read' DATA: the text of the buffer that has its file open, unsaved edits included, with its version; a file
@@ -277,20 +517,35 @@ no normal buffer has is `not-open' (the hub reads the disk)."
            (with-current-buffer buf
              (save-restriction
                (widen)
-               (list :req req :text (buffer-substring-no-properties (point-min) (point-max))
-                     :version (drgnx-agent-pair-version))))
+               (let ((v (drgnx-agent-pair-version)))
+                 (append (list :req req :text (buffer-substring-no-properties (point-min) (point-max)))
+                         (and v (list :version v))))))
          (list :req req :error "not-open"))))))
 
 (defun drgnx-agent-pair--event (event data)
   "`drgnx-hub-event-functions': the pair door's events, from a hub that proved itself.  Each one queues, answers or
 drops; none applies or asks."
-  (when (and (member event '("pair-apply" "pair-read" "pair-drop" "pair-reconcile"))
+  (when (and (member event '("pair-apply" "pair-read" "pair-drop" "pair-reconcile" "agent"))
              (processp drgnx-hub--event-conn) (process-get drgnx-hub--event-conn :drgnx-proven))
     (pcase event
       ("pair-apply" (drgnx-agent-pair--arrived data))
       ("pair-read" (drgnx-agent-pair--read data))
       ("pair-drop" (drgnx-agent-pair-drop (plist-get data :session) (or (plist-get data :reason) "pair-off")))
-      ("pair-reconcile" (drgnx-agent-pair--reconcile data)))))
+      ("pair-reconcile" (drgnx-agent-pair--reconcile data))
+      ("agent" (drgnx-agent-pair--snapshot (plist-get data :id) (plist-get data :session))))))
+
+(defun drgnx-agent-pair--snapshot (id snap)
+  "Session ID's `agent' snapshot SNAP: paired (and live, with an ordinal) in a folder, its buffers there keep a change
+log; no longer, the logs of buffers in no paired folder go."
+  (when (stringp id)
+    (let ((dir (plist-get snap :cwd)) (was (gethash id drgnx-agent-pair--paired)))
+      (if (and (eq (plist-get snap :paired) t) (plist-get snap :ordinal) (stringp dir))
+          (puthash id (file-name-as-directory (expand-file-name dir)) drgnx-agent-pair--paired)
+        (remhash id drgnx-agent-pair--paired)
+        (when was
+          (dolist (b (buffer-list))
+            (when (and (buffer-local-value 'drgnx-agent-pair--from b) (not (drgnx-agent-pair--logging-p b)))
+              (with-current-buffer b (drgnx-agent-pair--drop-log)))))))))
 
 ;;;; The open set
 
@@ -440,6 +695,7 @@ When it cannot be turned on, says why; a chat waiting on your lines says which."
   (add-hook 'after-set-visited-file-name-hook #'drgnx-agent-pair--renamed)
   (add-hook 'pre-command-hook #'drgnx-agent-pair--pre-command)
   (add-hook 'post-command-hook #'drgnx-agent-pair--post-command)
+  (add-hook 'drgnx-history-drained-functions #'drgnx-agent-pair--drained)
   (drgnx-agent-pair--send-open-set))
 
 (defun drgnx-agent-pair--teardown ()
@@ -451,7 +707,11 @@ Nothing is cancelled and nothing it applied is undone."
     (with-current-buffer buf
       (dolist (w (prog1 drgnx-agent-pair--queue (kill-local-variable 'drgnx-agent-pair--queue)))
         (drgnx-agent-pair--answer (plist-get w :write) (list :result "dropped" :reason "pair-off")))
-      (kill-local-variable 'drgnx-agent-pair--file)))
+      (kill-local-variable 'drgnx-agent-pair--file)
+      (dolist (v '(drgnx-agent-pair--log drgnx-agent-pair--from drgnx-agent-pair--floor drgnx-agent-pair--reads))
+        (kill-local-variable v))))
+  (remove-hook 'drgnx-history-drained-functions #'drgnx-agent-pair--drained)
+  (clrhash drgnx-agent-pair--paired)
   (drgnx-agent-pair--unpair-all)
   (drgnx-timer-cancel 'agent-pair-drain)
   (setq drgnx-agent-pair--pending nil drgnx-agent-pair--commands 0 drgnx-agent-pair--lock nil

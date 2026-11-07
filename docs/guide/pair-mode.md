@@ -36,8 +36,12 @@ The module `tools/agent-pair` is pair mode's side in Emacs:
 - **Your Emacs tells drgnx which files are open**, when you open, close or rename one (`write-file` too) and again
   after every reconnection, so a chat writes only the files you have open, and `read_file` gives the chat your
   buffer's text, unsaved edits included.
-- **For now every write is refused whole** ("pair needs the edit history"): applying one safely over what you typed
-  since the chat read the file needs Nidhogg .6 with Glitnir and the edit history, which are not here yet.
+- **A write moves past what you typed since the chat read the file.** Lines you added or removed above the chat's
+  change shift it to where its lines are now; if you changed the very lines it changes, the whole write is refused
+  and the chat is told which lines you are editing. It is refused too when it would touch the line you are on (±1,
+  in every window showing the buffer) or your active region, and when the chat's read is too old to shift from ("read
+  it with read_file"). Shifting needs the edit history (Nidhogg .6 with Glitnir); without it a whole-file write is
+  refused, and nothing is ever applied unshifted.
 - **Saving never asks.** A write to a buffer with no unsaved edits is saved right after it is applied, so the chat's
   builds and tests see it; a buffer with your unsaved edits stays unsaved, and the chat is told the file on disk has
   neither yet. Your `before-save-hook` (a formatter) runs as usual; one that would ask a question stops the save.
