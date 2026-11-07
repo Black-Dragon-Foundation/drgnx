@@ -278,6 +278,7 @@ params! {
     GitLetters(git::LettersParams),
     SearchGrep(search::GrepParams),
     SearchFiles(search::FilesParams),
+    SearchSymbolAt(search::SymbolAtParams),
     SearchGrepReplace(search::GrepReplaceParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),

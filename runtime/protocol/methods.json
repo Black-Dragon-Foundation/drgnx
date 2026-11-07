@@ -27234,6 +27234,64 @@
       "classes": [
         "user"
       ],
+      "doc": "the name of the innermost symbol a file (read from disk) defines around a line, from Hrafn's outline; none outside every symbol",
+      "name": "search/symbol-at",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/symbol-at`: the name of the innermost symbol that FILE (relative to ROOT, read from disk) defines around\nLINE, from Hrafn's outline of it; what the editor's agent line shows for a buffer that is saved.",
+        "properties": {
+          "file": {
+            "description": "Relative to ROOT, inside it.",
+            "type": "string"
+          },
+          "line": {
+            "description": "From 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "file",
+          "line"
+        ],
+        "title": "SymbolAtParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/symbol-at`'s answer: NAME is absent when no symbol holds the line (or the file is not read: missing, larger\nthan 2 MB).",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "SymbolAt",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor's keystroke signal: the vectors wait between requests while typing holds",
       "name": "search/typing",
       "params": {

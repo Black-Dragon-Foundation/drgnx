@@ -32,6 +32,9 @@
 (defvar drgnx-agents-editor-followed)
 (defvar drgnx-chrome-short-breadcrumb-functions)
 (defvar drgnx-agents-editor-draw--modes)
+(defvar drgnx-view-old-path)
+(declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function project-root "project")
 
 (defvar drgnx-agents-editor-line-symbol-function nil
   "A function of (BUFFER POS) returning the name of the symbol at POS, or nil; the default asks `add-log-current-defun'.")
@@ -51,13 +54,55 @@
   "S safe for the mode line."
   (string-replace "%" "%%" s))
 
+(defvar drgnx-agents-editor-line-ask-function #'drgnx-agents-editor-line--ask
+  "A function of (ROOT FILE LINE CALLBACK) that asks the hub's outline for the symbol at LINE of FILE (relative to
+ROOT, as saved) and later calls CALLBACK with its name or nil; it returns nil when it could not ask (no hub).")
+
+(defvar-local drgnx-agents-editor-line--names nil
+  "This buffer's symbol names by line: (TICK (LINE . NAME)...), NAME nil while the hub's answer is awaited.  Dropped
+when the buffer's modification tick moves, so it holds at most one entry per line of the buffer.")
+
+(defun drgnx-agents-editor-line--ask (root file line callback)
+  "Ask the hub (`search/symbol-at') for the symbol at LINE of FILE in ROOT; CALLBACK takes the name.  Nil without a hub."
+  (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+    (drgnx-hub-call "search/symbol-at" (list :root root :file file :line line)
+                    (lambda (result _error) (funcall callback (plist-get result :name))))
+    t))
+
+(defun drgnx-agents-editor-line--defun (buffer pos)
+  "The symbol at POS in BUFFER as `add-log-current-defun' finds it, or nil for a buffer of 2 MB or more."
+  (and (< (buffer-size buffer) 2000000)
+       (with-current-buffer buffer (save-excursion (goto-char pos) (add-log-current-defun)))))
+
+(defun drgnx-agents-editor-line--named (buffer pos)
+  "The symbol at POS in BUFFER, once per (modification tick, line): a saved local file's from the hub's outline
+\(nil until it answers), else computed here."
+  (with-current-buffer buffer
+    (let ((tick (buffer-chars-modified-tick)) (line (line-number-at-pos pos)))
+      (unless (eql (car drgnx-agents-editor-line--names) tick) (setq drgnx-agents-editor-line--names (list tick)))
+      (let ((names drgnx-agents-editor-line--names))
+        (if-let* ((cell (assq line (cdr names))))
+            (cdr cell)
+          (let ((cell (list line)) (file buffer-file-name))
+            (setcdr names (cons cell (cdr names)))
+            (unless (and file (not (buffer-modified-p)) (not (file-remote-p file))
+                         (let ((root (expand-file-name (if-let* ((p (progn (require 'project) (project-current nil)))) (project-root p)
+                                                         (file-name-directory file)))))
+                           (funcall drgnx-agents-editor-line-ask-function root (file-relative-name file root) line
+                                    (lambda (name)
+                                      (when (and (buffer-live-p buffer)
+                                                 (eq (buffer-local-value 'drgnx-agents-editor-line--names buffer) names))
+                                        (setcdr cell name))))))
+              (setcdr cell (drgnx-agents-editor-line--defun buffer pos)))
+            (cdr cell)))))))
+
 (defun drgnx-agents-editor-line--symbol (buffer pos)
-  "The symbol at POS in BUFFER, or nil.  Asked once per frame, never in redisplay."
+  "The symbol at POS in BUFFER, or nil.  Asked once per frame, never in redisplay; the name is kept per line
+\(`drgnx-agents-editor-line--named'), and only the old path computes it every frame."
   (condition-case nil
-      (if drgnx-agents-editor-line-symbol-function
-          (funcall drgnx-agents-editor-line-symbol-function buffer pos)
-        (and (< (buffer-size buffer) 2000000)
-             (with-current-buffer buffer (save-excursion (goto-char pos) (add-log-current-defun)))))
+      (cond (drgnx-agents-editor-line-symbol-function (funcall drgnx-agents-editor-line-symbol-function buffer pos))
+            ((bound-and-true-p drgnx-view-old-path) (drgnx-agents-editor-line--defun buffer pos))
+            (t (drgnx-agents-editor-line--named buffer pos)))
     (error nil)))
 
 (defun drgnx-agents-editor-line--chip (text kind help)

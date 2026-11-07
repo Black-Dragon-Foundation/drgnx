@@ -1484,6 +1484,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
@@ -2254,6 +2255,14 @@ and the ranking are `hrafn::rank`).
   A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
   `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
   typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
+
+### The symbol at a line (`search/symbol-at`)
+
+`search/symbol-at {root, file, line}` answers `{name?}`: of the symbols Hrafn's chunker finds in `file` (relative to
+`root`, inside it, read from disk; at most 2 MB), the innermost whose span reaches into `line` (from 1), the shortest
+one among them; no name outside every symbol or when the file is missing or too large (`hrafn::chunk::symbol_at_line`).
+A path that leaves `root` is refused (`file`). The editor's agent line asks it once per line of a saved file
+([agents-editor.md](agents-editor.md)).
 
 ## Sessions and their sockets
 
