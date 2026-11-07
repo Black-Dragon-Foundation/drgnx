@@ -400,6 +400,7 @@ impl Views {
             || self.git_build(f, key)
             || self.files_build(f, key)
             || self.explorer_build(f, key)
+            || f.core.presence.here_build(f, key.0, &key.1)
         {
             return;
         }
@@ -569,6 +570,36 @@ impl Views {
     /// The hub's instance id the patches carry.
     pub fn hub_id(&self) -> u64 {
         lock(&self.store).hub()
+    }
+
+    /// The front kept at the hub's start (none before it), for a model outside the views that publishes rows later.
+    pub fn front_weak(&self) -> Option<Weak<Front>> {
+        self.front.get().cloned()
+    }
+
+    /// ROWS, which read no env (a data view), for every class CONN shows VIEW in: what changed goes out.
+    pub fn publish_rows(&self, f: &Front, conn: u64, view: &str, rows: Vec<Row>) {
+        let patches: Vec<Patch> = {
+            let mut store = lock(&self.store);
+            store
+                .classes(conn, view)
+                .into_iter()
+                .filter_map(|class| {
+                    store.publish(&(conn, view.to_owned(), class), rows.clone(), &[])
+                })
+                .collect()
+        };
+        for p in patches {
+            f.send_to(conn, "view-patch", json!(p));
+        }
+    }
+
+    /// CONN's VIEW starts afresh: each class's next patch is a reset.
+    pub fn restart_rows(&self, conn: u64, view: &str) {
+        let mut store = lock(&self.store);
+        for class in store.classes(conn, view) {
+            store.restart(&(conn, view.to_owned(), class));
+        }
     }
 
     /// Keep the front once; the searches' threads send through it.

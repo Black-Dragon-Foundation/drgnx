@@ -390,11 +390,13 @@ fn a_file_is_found_by_a_name_through_a_link() {
     let sub = Sub {
         roots: vec![],
         files: [true_name(&asked)].into(),
+        views: BTreeSet::new(),
     };
     assert!(sub.wants(&file));
     let root = Sub {
         roots: vec![true_name(&link.to_string_lossy())],
         files: BTreeSet::new(),
+        views: BTreeSet::new(),
     };
     assert!(root.wants(&file));
 }
@@ -414,6 +416,7 @@ fn a_missing_file_is_named_by_its_folders_true_name() {
     let root = Sub {
         roots: vec![true_name(&link.to_string_lossy())],
         files: BTreeSet::new(),
+        views: BTreeSet::new(),
     };
     assert!(root.wants(&file), "{file} under {:?}", root.roots);
     let asked = link.join("src/b.rs").to_string_lossy().into_owned();

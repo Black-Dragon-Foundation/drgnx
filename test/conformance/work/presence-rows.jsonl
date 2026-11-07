@@ -1,0 +1,19 @@
+{"scenario": "work/presence-rows", "requires": ["v1", "test-hooks"], "doc": "Who is here as rows: an editor that sends view/env for agents-here (a data class) and subscribes to its workspace's presence with that view gets a reset of no rows, then, once an agent reads a file under the root, the agent's row (a:SID) and no path row (a read puts no badge)."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "agents-here", "class": "data", "display": "tty", "scale": 1, "fonts": [], "cell": [1, 1], "width_px": 80, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/presence/subscribe", "params": {"workspace": {"id": "workspace:000000000001", "roots": ["$ROOT/work"]}, "view": "agents-here"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"files": []}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "agents-here", "class": "data", "hub": "$capture:hub", "base": 0, "version": 1, "ops": [{"reset": []}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "moves 4 1\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "agents-here", "class": "data", "hub": "$hub", "base": 1, "version": 2, "ops": [{"insert": {"after": null, "rows": [{"key": "$string", "text": "$string", "props": {"$contains": [[0, "$number", "drgnx-presence-session", "$sid"], [0, "$number", "drgnx-presence-ordinal", 1]]}}]}}]}}, "within_ms": 30000}

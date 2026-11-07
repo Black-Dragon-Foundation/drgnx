@@ -217,7 +217,8 @@ pub struct FilePresence {
     pub entries: Vec<PresenceEntry>,
 }
 
-/// `agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.
+/// `agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file. With a workspace, VIEW
+/// (the editor sent its `view/env`) also gets who is here as rows: one per agent, one per shown path.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PresenceSubscribe {
@@ -225,6 +226,8 @@ pub struct PresenceSubscribe {
     pub workspace: Option<Workspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
 }
 
 /// `agents/presence/get`'s params.
@@ -491,6 +494,13 @@ fn check_map_close(p: &MapClose) -> Result<(), Error> {
 }
 
 fn check_presence_subscribe(p: &PresenceSubscribe) -> Result<(), Error> {
+    match &p.view {
+        Some(v) if v.is_empty() || v.len() > super::view::VIEW_MAX => {
+            return Err(invalid("view", "a view id of 1 to 64 bytes"));
+        }
+        Some(_) if p.workspace.is_none() => return Err(invalid("view", "rows need a workspace")),
+        _ => {}
+    }
     match (&p.workspace, &p.file) {
         (Some(_), None) => Ok(()),
         (None, Some(f)) if f.starts_with('/') => Ok(()),

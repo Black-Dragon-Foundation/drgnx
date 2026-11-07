@@ -792,6 +792,103 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
   (drgnx-perf-w--clean)
   t)
 
+;;;; presence-burst(-old): who is here while 30 agents move over 90 files, one presence change per command
+
+(defvar drgnx-perf-w--pb-n 0 "The presence changes applied since the run began.")
+(defvar drgnx-perf-w--pb-version 0 "The version of the last rows patch applied.")
+(defvar drgnx-agents-editor-here--badges)
+(defvar drgnx-agents-editor-here--rows)
+(defvar drgnx-agents-editor-here-ordinal-function)
+(declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-here--rows-buffer "drgnx-agents-editor-here")
+(declare-function drgnx-view-apply-patch "drgnx-view")
+
+(defun drgnx-perf-w--pb-roots () (list (file-name-as-directory (drgnx-perf-w--tmpdir))))
+
+(defun drgnx-perf-w--pb-file (i)
+  "File I of the 90, six folders of fifteen."
+  (expand-file-name (format "src/d%d/f%d.el" (% i 6) i) (drgnx-perf-w--tmpdir)))
+
+(defun drgnx-perf-w--pb-props (text &rest kvs)
+  (cl-loop for (k v) on kvs by #'cddr collect (list 0 (length text) k v)))
+
+(defun drgnx-perf-w--pb-agent (sid file line)
+  "Agent SID's row, as the hub sends it: editing FILE at LINE."
+  (let ((text (format "%s · edit · %s:%d" sid (file-name-nondirectory file) line)))
+    (list :key (concat "a:" sid) :text text
+          :props (drgnx-perf-w--pb-props text "drgnx-presence-session" sid
+                                         "drgnx-presence-ordinal" (string-to-number (substring sid 1))
+                                         "drgnx-presence-mode" "edit" "drgnx-presence-file" file "drgnx-presence-line" line))))
+
+(defun drgnx-perf-w--pb-path (path ords dir)
+  (list :key (concat "p:" path) :text path
+        :props (drgnx-perf-w--pb-props path "drgnx-presence-ordinals" ords
+                                       "drgnx-presence-dir" (and dir t))))
+
+(defun drgnx-perf-w--pb-patch (ops)
+  (list :view "agents-here" :class "data" :hub 1 :base drgnx-perf-w--pb-version
+        :version (cl-incf drgnx-perf-w--pb-version) :env_epoch 1 :ops ops))
+
+(defun drgnx-perf-w--pb-apply (n)
+  "Presence change N: agent N mod 30 edits file N mod 90, as the old event or as the hub's rows patch."
+  (let ((sid (format "s%d" (1+ (% n 30)))) (file (drgnx-perf-w--pb-file (% n 90))))
+    (if drgnx-view-old-path
+        (drgnx-agents-editor-here--event
+         "agent-presence" (list :file file :entries (list (list :session sid :mode "edit" :line n :at (float n)))))
+      (drgnx-view-apply-patch
+       (drgnx-perf-w--pb-patch (list (list :replace (list (drgnx-perf-w--pb-agent sid file n)
+                                                          (drgnx-perf-w--pb-path file (list (1+ (% n 30))) nil)))))))))
+
+(defun drgnx-perf-w--pb-change ()
+  "Post-command: the next presence change."
+  (drgnx-perf-w--pb-apply (cl-incf drgnx-perf-w--pb-n)))
+
+(defun drgnx-perf-w-presence-burst-setup ()
+  "Who is here on: the module's hooks, its roots the workload's folder, ordinals from the session ids."
+  (require 'drgnx-agents-editor-here)
+  (advice-add 'drgnx-agents-editor-here--roots :override #'drgnx-perf-w--pb-roots)
+  (setq drgnx-agents-editor-here-ordinal-function (lambda (s) (string-to-number (substring s 1))))
+  t)
+
+(defun drgnx-perf-w--pb-each (old)
+  "The 90 files held, each with its agent; OLD: the old path (the cached presence rebuilt per event)."
+  (setq drgnx-view-old-path old drgnx-perf-w--pb-n 0 drgnx-perf-w--pb-version 0)
+  (clrhash drgnx-agents-editor-here--badges)
+  (if old
+      (dotimes (i 90) (drgnx-perf-w--pb-apply i))
+    (when-let* ((b (get-buffer " *drgnx agents here rows*"))) (kill-buffer b))
+    (drgnx-agents-editor-here--rows-buffer)
+    (let (rows)
+      (dotimes (i 30) (push (drgnx-perf-w--pb-agent (format "s%d" (1+ i)) (drgnx-perf-w--pb-file i) i) rows))
+      (dotimes (i 90) (push (drgnx-perf-w--pb-path (drgnx-perf-w--pb-file i) (list (1+ (% i 30))) nil) rows))
+      (dotimes (d 6) (push (drgnx-perf-w--pb-path (expand-file-name (format "src/d%d" d) (drgnx-perf-w--tmpdir))
+                                                  (number-sequence 1 30) t)
+                           rows))
+      (dolist (dir (list (expand-file-name "src" (drgnx-perf-w--tmpdir)) (directory-file-name (drgnx-perf-w--tmpdir))))
+        (push (drgnx-perf-w--pb-path dir (number-sequence 1 30) t) rows))   ; the folders above, up to the root
+      (drgnx-view-apply-patch (drgnx-perf-w--pb-patch (list (list :reset (nreverse rows)))))))
+  (add-hook 'post-command-hook #'drgnx-perf-w--pb-change)
+  t)
+
+(defun drgnx-perf-w-presence-burst-each () (drgnx-perf-w--pb-each nil))
+(defun drgnx-perf-w-presence-burst-old-each () (drgnx-perf-w--pb-each t))
+
+(defun drgnx-perf-w-presence-burst-done ()
+  "Twenty changes applied, 30 agents here and the 90 files' badges held."
+  (and (>= drgnx-perf-w--pb-n 20) (= (length drgnx-agents-editor-here--rows) 30)
+       (>= (hash-table-count drgnx-agents-editor-here--badges) 90)))
+
+(defun drgnx-perf-w-presence-burst-digest ()
+  (format "%d agents, %d badges" (length drgnx-agents-editor-here--rows) (hash-table-count drgnx-agents-editor-here--badges)))
+
+(defun drgnx-perf-w-presence-burst-teardown ()
+  (remove-hook 'post-command-hook #'drgnx-perf-w--pb-change)
+  (advice-remove 'drgnx-agents-editor-here--roots #'drgnx-perf-w--pb-roots)
+  (when-let* ((b (get-buffer " *drgnx agents here rows*"))) (kill-buffer b))
+  (setq drgnx-view-old-path nil drgnx-agents-editor-here-ordinal-function nil)
+  (drgnx-perf-w--clean)
+  t)
+
 ;;;; autosave-typing: typing in a 50 MB buffer across an auto-save
 
 (defvar drgnx-perf-w--as-buffer nil)

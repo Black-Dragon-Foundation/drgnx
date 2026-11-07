@@ -108,6 +108,15 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   identity's mark and face. Its keys are registry commands on the mode's map, so the profiles bind them:
   `agents-here-follow` (RET), `agents-here-panel` (`o`, `drgnx-agent-panel-open` with the hub's session id) and
   `agents-here-quit` (`q`). The list is plain text drawn once per call; teardown kills it.
+  **From the hub's rows** (the default; `drgnx-view-old-path` keeps the cache above): the subscription names the view
+  `agents-here` and first sends `view/env` for its one class, `data` (the rows are data, never drawn). The hub builds
+  the rows (`drgnx-ratatoskr`'s `work/presence/here.rs`): `a:SESSION` per agent (its newest entry; properties
+  `drgnx-presence-session`, `-ordinal`, `-mode`, `-file`, `-line`) and `p:PATH` per file an agent is pending, writing
+  or editing and per folder above it up to the root (`drgnx-presence-ordinals`, `drgnx-presence-dir`); only paths
+  that land in the workspace's roots. The patches go through `drgnx-view-apply-patch` into the hidden buffer
+  ` *drgnx agents here rows*`, whose `drgnx-view-patch-apply-function` takes each op into the badges path by path and,
+  when an `a:` row changed, the who-is-here rows and the status string: an edit costs the paths it names, not a
+  rebuild, and `agent-presence` is left to the cursors. A new hub's reset replaces everything held.
 - **Follow (`drgnx-agents-follow.el`):** `drgnx-agents-follow-start SESSION [HERE]` asks the hub `agents/follow {view,
   session}` (view ids `follow:N`, one follow at a time; the hub is asked again on every connection) and sets
   `drgnx-agents-editor-followed`, so the agent's tag stays on. The `agent-follow` events of that view move a side

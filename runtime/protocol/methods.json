@@ -7409,9 +7409,15 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file.",
+        "description": "`agents/presence/subscribe`'s params: a workspace (every file under its roots) or one file. With a workspace, VIEW\n(the editor sent its `view/env`) also gets who is here as rows: one per agent, one per shown path.",
         "properties": {
           "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
             "type": [
               "string",
               "null"

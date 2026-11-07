@@ -1331,7 +1331,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
-| `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
+| `agents/presence/subscribe` | user | `{file?: string, view?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
@@ -1971,6 +1971,16 @@ and badges build on it). This is its contract.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
+- **Who is here as rows** (`work::presence::here`): `agents/presence/subscribe {workspace, view}` (the editor sent
+  `view/env` for VIEW first; drgnx's is `agents-here` in a data class `data`, its rows reading none of the env) also
+  makes VIEW's classes get rows: one per agent present in the user's tree (`a:SESSION`, in ordinal order, its newest
+  entry: properties `drgnx-presence-session`, `-ordinal`, `-mode`, `-file`, `-line`, `drgnx-work-id`) and one per shown
+  path (`p:PATH`, a file an agent is about to change or has changed (`pending`, `write`, `edit`) and each folder above
+  it up to its root: `drgnx-presence-ordinals`, `drgnx-presence-dir`). A file outside the roots is shown where it lands
+  in the user's tree (a linked worktree's file at its place in the main checkout, from `rel` and the main checkout);
+  one landing nowhere, and an agent the hub has not named yet, are not shown. The subscription starts with a reset;
+  each flush publishes the rows again and only what changed goes out. Marks and colours are the editor's, by ordinal.
+  Tests: `work/presence/here/tests.rs`, scenario `work/presence-rows`.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
