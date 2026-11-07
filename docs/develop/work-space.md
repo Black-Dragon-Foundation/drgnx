@@ -574,6 +574,16 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
   later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
   has left.
+- **On the rows path** (a map whose rows the hub builds: `drgnx-view-patch` with an instance in Sjá, and not
+  `drgnx-view-old-path`) every key is one line through `drgnx-view-nav` (docs/develop/core.md, "Keys through the
+  model"), and the frame's functions above are the frozen path. `drgnx-work-map--nav` keeps `drgnx-work-map--selection`
+  as `(KIND . ID)` (the kind read from the model with the selection) and runs `drgnx-work-map-select-functions` when it
+  moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
+  next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
+  model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
+  `O` sets the model's form, so up and down walk `outline`. Open reads the label once; a file opens at the team's
+  agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
+  `test/unit/work-map-nav-test.el`.
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
