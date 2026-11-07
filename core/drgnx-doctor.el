@@ -671,6 +671,14 @@ severity, the fix the first `:fix'."
                                   (list 'warn "this Emacs has no Nidhogg change hook: the edit history stays off (no revert, no pair mode)"
                                         drgnx-doctor-nidhogg-hint)))))
 
+(drgnx-doctor-define 'pair-mode :group "Emacs"
+                     :doc "Pair mode (an agent's writes to the files you have open) can be turned on: it needs the same change hook"
+                     :check (lambda (f)
+                              (when (plist-member f :history-hook)
+                                (if (plist-get f :history-hook)
+                                    (list 'ok "pair mode can be turned on (Agents: Pair: Turn On or Off)" nil)
+                                  (list 'info "pair mode cannot be turned on: Pair needs Nidhogg .6 with Glitnir" drgnx-doctor-nidhogg-hint)))))
+
 (drgnx-doctor-define 'fedora-release :group "Emacs" :platform 'linux
                      :doc "On Fedora: release 45 or newer (older releases are not supported)"
                      :check (lambda (f)
