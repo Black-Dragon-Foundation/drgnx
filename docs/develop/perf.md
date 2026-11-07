@@ -94,6 +94,38 @@ each `(let ((x` typed left a list open past its form, and Emacs Lisp's font-lock
 through `forward-sexp`) scanned the rest of the 4 MB file at every key, about one key in five costing 190 to 370 ms,
 in every workload that types into the fixture.
 
+
+## The agents-in-the-editor workloads
+
+`harness/drgnx-perf-agents.el` (the session side: `test/fixtures/agents-editor-five-fixture.el`) measures what agents
+in the editor, the agent panel and pair mode cost the typing of the user. A hub of the workload's own
+(`$DRGNX_RATATOSKR_BIN`, a test-hooks build with `ratatoskr-mock` beside it) runs five mock agents, each in a worktree of
+a repository with one 3,000-line file; each makes an edit and then, a second at a time, a chunk and a read of another
+offset, as the thirty-agent fixture's agents do. The keys are typed into that file in the editor window (diff-hl on). A
+workload's setup, `:each` and `:check` call the fixture's premise, which signals when the five agents are not streaming
+and says, in tenths of a second since the start, when each one's status changed, when the follow window began and when
+the file was visited.
+
+| Workload | Situation | Measured |
+|---|---|---|
+| agents-typing | `tools/agents-in-editor` on, a follow window on the second agent | input latency, stalls |
+| agents-typing-none | the same five agents, the module off | input latency, stalls (the baseline) |
+| agents-follow | a follow window moving with an agent while typing, then 20 `<down>` | input latency, stalls |
+| agent-panel-stream | the first agent's panel open while it streams | input latency, stalls |
+| pair-typing | the fifth agent a paired chat writing the file through the drgnx tool | input latency, stalls, `:pair_applied_ratio` |
+
+Budgets (`test/perf/budgets.eld`): input p95 16 ms and `(:stalls) 0` on each. Two rules compare runs
+(`drgnx-perf-run--relative-fails`): `agents-typing` at most 1 ms over `agents-typing-none` in one run, and at least 0.80
+of `pair-typing`'s writes applied. Allocation, CPU and rows follow the first runs on the desktop island. The keys of a
+workload go to the editor window, never to a follow window: its keys stop the follow and take the wheel, and a stray `x`
+or `q` there ended the followed agent's turn (the premise's timeline showed exactly that agent going idle). The stale
+whole-file write every 5 s that the plan names for `pair-typing` is not scripted yet.
+
+The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
+`pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the
+GUI scenes `agents-editor-gui/p3-drawn-frame` (agents in the editor) and `p3-agent-panel-scene` (the panel) draw each look
+in the dark, the light and the high-contrast theme at the session's scale (`DRGNX_UI_SCALE` 1 and 2).
+
 ## Vim keys (evil)
 
 The three `-evil` workloads switch the session to the Vim key stack (`editor/evil` on, the engine started, `(vim app

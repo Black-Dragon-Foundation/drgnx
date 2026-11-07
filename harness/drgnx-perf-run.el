@@ -19,6 +19,7 @@
 (require 'drgnx-perf-extensions)
 (require 'drgnx-perf-workloads)
 (require 'drgnx-perf-work)
+(require 'drgnx-perf-agents)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -784,6 +785,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ,@(drgnx-perf-workers-workloads)
       ;; the Work space: 30 streaming mock agents, the map shown or hidden (harness/drgnx-perf-work.el)
       ,@(drgnx-perf-work-workloads (drgnx-perf-run--visit-fixture-form) kill-fixture)
+      ;; the agents in the editor: five streaming mock agents, a 3,000-line file (harness/drgnx-perf-agents.el)
+      ,@(drgnx-perf-agents-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -940,8 +943,18 @@ under :compose (the compose probe)."
   (let ((plain (drgnx-perf--get results 'typing '(:input :p95)))
         (evil (drgnx-perf--get results 'typing-evil '(:input :p95)))
         (hidden (drgnx-perf--get results 'work-typing-hidden '(:input :p95)))
-        (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95))))
+        (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95)))
+        (agents (drgnx-perf--get results 'agents-typing '(:input :p95)))
+        (agents-none (drgnx-perf--get results 'agents-typing-none '(:input :p95)))
+        (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio))))
     (append
+     ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
+     ;; least 80 % were applied by the editor
+     (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
+       (list (format "agents-typing input p95 %s ms is %s ms over agents-typing-none's %s ms (the agents in the editor may add at most 1 ms)"
+                     (drgnx-perf--round agents) (drgnx-perf--round (- agents agents-none)) (drgnx-perf--round agents-none))))
+     (when (and (numberp ratio) (< ratio 0.80))
+       (list (format "pair-typing applied %s of the paired chat's writes; at least 0.80 are due" (drgnx-perf--round ratio))))
      (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
        (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
                      (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))
@@ -1162,7 +1175,9 @@ version and the commit, as JSON in FILE."
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
 (defconst drgnx-perf-run-unseeded
-  `((live-view . "the container image has no websocket package")
+  `(,@(mapcar (lambda (w) (cons w "report-only until the combined gate pass: allocation, CPU and rows follow its first runs on the desktop island"))
+              '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
+    (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")

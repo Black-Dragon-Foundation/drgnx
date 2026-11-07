@@ -171,4 +171,11 @@
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
  (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
  (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
- (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1))
+ (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1)
+ ;; the agents in the editor, the panel and pair mode (agent system part 3, "Budget rows"): typing p95 within a frame and no
+ ;; freeze over 100 ms; the +1 ms against `agents-typing-none' and the pair writes applied >= 0.80 are `drgnx-perf-run--relative-fails'
+ (agents-typing (:input :p95) 16) (agents-typing (:stalls) 0)
+ (agents-typing-none (:input :p95) 16) (agents-typing-none (:stalls) 0)
+ (agents-follow (:input :p95) 16) (agents-follow (:stalls) 0)
+ (agent-panel-stream (:input :p95) 16) (agent-panel-stream (:stalls) 0)
+ (pair-typing (:input :p95) 16) (pair-typing (:stalls) 0))
