@@ -431,3 +431,109 @@ fn fixture_labels_are_fitted_per_class() {
     let t = super::label_rows(&labels, &tty, &FontSet::new());
     assert_eq!(t[0].text, "abcde… |");
 }
+
+/// An acknowledged view (a terminal's): one patch in flight per (view, class); rows built meanwhile wait, the newest
+/// winning, and go as one patch on the ack of the version sent. An ack of another version releases nothing.
+#[test]
+fn ack_clears_in_flight() {
+    let mut s = Store::new(5);
+    let k = key("gui-1");
+    s.options(
+        CONN,
+        "v",
+        super::ViewOpts {
+            ack: true,
+            epoch_reset: false,
+        },
+    );
+    s.env(CONN, env("gui-1", 1, 400));
+    let first = s.publish(&k, rows("gui-1", 2, 1), &[]).expect("the reset");
+    assert!(is_reset(&first) && s.in_flight(&k));
+    assert_eq!(
+        s.publish(&k, rows("gui-1", 3, 2), &[]),
+        None,
+        "held while v1 is in flight"
+    );
+    assert_eq!(
+        s.publish(&k, rows("gui-1", 4, 3), &[]),
+        None,
+        "held while v1 is in flight"
+    );
+    assert_eq!(
+        s.ack(&k, 0),
+        None,
+        "an ack of an older version releases nothing"
+    );
+    let next = s.ack(&k, 1).expect("the ack releases the waiting rows");
+    assert_eq!((next.base, next.version), (1, 2));
+    let mut held = rows("gui-1", 2, 1);
+    apply(&mut held, &next.ops).unwrap();
+    assert_eq!(held, rows("gui-1", 4, 3), "the newest rows, as one patch");
+    assert!(s.in_flight(&k));
+    // a resync answers at once, with the newest rows, and that reset is what is in flight now
+    assert_eq!(s.publish(&k, rows("gui-1", 1, 4), &[]), None);
+    let r = s.resync(&k, &[]).expect("a resync is never held");
+    assert!(is_reset(&r) && r.version == 3);
+    assert!(matches!(r.ops.as_slice(), [Op::Reset(x)] if *x == rows("gui-1", 1, 4)));
+    assert_eq!(s.ack(&k, 3), None, "nothing waits after the reset");
+    assert!(!s.in_flight(&k));
+    assert!(
+        s.publish(&k, rows("gui-1", 2, 5), &[]).is_some(),
+        "acked: the next patch goes at once"
+    );
+    // a view that asked for no acks is never held
+    let mut plain = Store::new(6);
+    plain.env(CONN, env("gui-1", 1, 400));
+    assert!(plain.publish(&k, rows("gui-1", 2, 1), &[]).is_some());
+    assert!(plain.publish(&k, rows("gui-1", 3, 2), &[]).is_some());
+    assert!(!plain.in_flight(&k));
+}
+
+/// A lost ack never stalls a view: the editor that reconnects is a new connection, and its first patch goes at once.
+#[test]
+fn reconnect_clears_unacked() {
+    let mut s = Store::new(5);
+    let opts = super::ViewOpts {
+        ack: true,
+        epoch_reset: false,
+    };
+    s.options(CONN, "v", opts);
+    s.env(CONN, env("gui-1", 1, 400));
+    let k = key("gui-1");
+    assert!(s.publish(&k, rows("gui-1", 2, 1), &[]).is_some());
+    assert!(s.in_flight(&k), "v1 is not acknowledged");
+    s.gone(CONN);
+    assert!(!s.in_flight(&k));
+    let k2: Key = (CONN + 1, "v".into(), "gui-1".into());
+    s.options(CONN + 1, "v", opts);
+    s.env(CONN + 1, env("gui-1", 1, 400));
+    let p = s
+        .publish(&k2, rows("gui-1", 2, 2), &[])
+        .expect("the new connection's reset");
+    assert!(is_reset(&p) && p.base == 0 && p.version == 1);
+    assert!(s.in_flight(&k2));
+}
+
+/// A view exempt from the epoch reset (a terminal's) answers a new epoch with a diff, echoing the new epoch.
+#[test]
+fn epoch_exempt_view_answers_a_new_epoch_with_a_diff() {
+    let mut s = Store::new(5);
+    let k = key("gui-1");
+    s.options(
+        CONN,
+        "v",
+        super::ViewOpts {
+            ack: false,
+            epoch_reset: false,
+        },
+    );
+    s.env(CONN, env("gui-1", 1, 400));
+    assert!(
+        s.publish(&k, rows("gui-1", 2, 1), &[])
+            .is_some_and(|p| is_reset(&p))
+    );
+    s.env(CONN, env("gui-1", 2, 400));
+    let p = s.publish(&k, rows("gui-1", 3, 2), &[]).expect("a patch");
+    assert!(!is_reset(&p), "{p:?}");
+    assert_eq!(p.env_epoch, 2);
+}

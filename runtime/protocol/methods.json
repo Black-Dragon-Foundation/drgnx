@@ -3246,6 +3246,55 @@
     {
       "data": {
         "$defs": {
+          "Colour": {
+            "description": "A cell colour.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "One of the 16 palette colours.",
+                "properties": {
+                  "ansi": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ansi"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A colour the program chose (the 256-colour cube included), `\"#rrggbb\"` on the wire.",
+                "properties": {
+                  "rgb": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "rgb"
+                ],
+                "type": "object"
+              },
+              {
+                "const": "default",
+                "description": "The view's default: absent on the wire.",
+                "type": "string"
+              }
+            ]
+          },
+          "CursorShape": {
+            "description": "The cursor's shape.",
+            "enum": [
+              "block",
+              "block_hollow",
+              "bar",
+              "underline"
+            ],
+            "type": "string"
+          },
           "ImageId": {
             "description": "an image's content hash and env epoch",
             "pattern": "^[0-9a-f]{16}-[0-9]+$",
@@ -3471,6 +3520,85 @@
               "unit"
             ],
             "type": "object"
+          },
+          "Style": {
+            "description": "One cell style: colours and attributes. Every field left at its default is absent on the wire.",
+            "properties": {
+              "bg": {
+                "$ref": "#/$defs/Colour"
+              },
+              "blink": {
+                "type": "boolean"
+              },
+              "bold": {
+                "type": "boolean"
+              },
+              "faint": {
+                "type": "boolean"
+              },
+              "fg": {
+                "$ref": "#/$defs/Colour"
+              },
+              "inverse": {
+                "type": "boolean"
+              },
+              "italic": {
+                "type": "boolean"
+              },
+              "strike": {
+                "type": "boolean"
+              },
+              "ul_color": {
+                "$ref": "#/$defs/Colour"
+              },
+              "underline": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "TermMeta": {
+            "description": "A terminal view's state besides its rows, on every patch that changes it.",
+            "properties": {
+              "alt_screen": {
+                "default": false,
+                "type": "boolean"
+              },
+              "cursor": {
+                "description": "`[row_key, col, shape, visible]`: COL is a scalar index into the row's text.",
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "$ref": "#/$defs/CursorShape"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ],
+                "type": "array"
+              },
+              "mouse_tracking": {
+                "default": false,
+                "type": "boolean"
+              },
+              "title": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [
+              "cursor"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3519,6 +3647,36 @@
               "$ref": "#/$defs/Op"
             },
             "type": "array"
+          },
+          "styles": {
+            "description": "`[id, style]`: the styles the rows' `s:<id>` runs name and Lisp may not hold yet (a terminal view's).",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/$defs/Style"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "term": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TermMeta"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A terminal view's cursor, screen and title, when they changed."
           },
           "version": {
             "format": "uint64",
@@ -28701,6 +28859,43 @@
         },
         "title": "Timeline",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor applied a (view, class)'s patch of this version: an acknowledged view's next patch may go",
+      "name": "view/ack",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/ack`: the editor applied (VIEW, CLASS)'s patch VERSION. For a view whose patches are acknowledged (a\nterminal's), the hub holds the next patch until this; a reconnect or a `view/resync` clears what it waits for.\nOther views may send it or not.",
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "version"
+        ],
+        "title": "ViewAck",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

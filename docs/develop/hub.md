@@ -1488,6 +1488,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
 | `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
@@ -2091,6 +2092,13 @@ it builds for Android too).
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
   `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
   images the rows name that the editor may not hold yet.
+- **Styles and terminal state** (a terminal's view; `drgnx_rows::style`). A patch may carry `styles: [[id, {fg, bg,
+  ul_color, bold, faint, italic, underline, strike, inverse, blink}]]`, each style sent once and kept by the editor
+  until the next reset (a reset carries every style its rows name). A run names a style as the face `s:<id>`
+  (`Face::Style`). A colour is `{ansi: 0..15}`, `{rgb: "#rrggbb"}` (program data, the 256-colour cube included, never
+  a theme literal) or absent (the default); attributes are present only when true. `term: {cursor: [row_key, col,
+  shape, visible], alt_screen, mouse_tracking, title}` (shape `block`, `block_hollow`, `bar` or `underline`; COL a
+  scalar index) comes on a patch that changes them. Both are left out when empty, so other views see no change.
 
 ### The wire: envs, patches, resyncs (`view`)
 
@@ -2103,8 +2111,9 @@ All of it is in memory only.
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
   class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
-  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
-  view; a connection's views end with it.
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
+  version}` says the editor applied that patch (sent by a view type with `:ack t`; others may ignore it).
+  `view/close {view}` forgets the view; a connection's views end with it.
 - **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
 
 **The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
@@ -2126,6 +2135,18 @@ All of it is in memory only.
 - **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
   other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
+  `epoch_reset`). **Acknowledged** (`ack`, a terminal's): at most one patch is in flight per (view, class). Rows built
+  before the editor's `view/ack` of the version sent wait, the newest winning, and go as one patch on that ack; an ack
+  of another version releases nothing. A `view/resync` answers a reset of the newest rows at once (it is then in
+  flight), and a reconnect starts afresh, so a lost ack never stalls the view. **No epoch reset** (`epoch_reset`
+  false, a terminal's: its faces repaint in the editor): a new epoch is answered by a diff, and the editor applies a
+  patch of an older epoch instead of holding it. A terminal view's resize is a reset, sent by its builder. Views with
+  the default options (`ack` false, `epoch_reset` true) behave as above.
+- **Styles in the editor:** a run naming a style the editor lacks (not in a reset) sends `view/resync`. An ansi
+  foreground is the face `drgnx-term-color-N` itself (it inherits `ansi-color-*` and resets the background), so a
+  remap or a theme shows on rows already inserted; the other attributes, program colours and ansi backgrounds become
+  one anonymous face per distinct style, from a per-buffer LRU of 4,096 (`drgnx-view-patch-style-face-max`).
 - **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
   callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a

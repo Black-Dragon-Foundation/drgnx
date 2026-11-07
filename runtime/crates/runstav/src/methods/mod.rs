@@ -261,6 +261,7 @@ params! {
     WorkFileAt(work::FileAtParams),
     ViewEnv(view::ViewEnv),
     ViewResync(view::ViewResync),
+    ViewAck(view::ViewAck),
     ViewGlyphs(view::ViewGlyphs),
     ViewMeasured(view::ViewMeasured),
     ViewClose(view::ViewClose),

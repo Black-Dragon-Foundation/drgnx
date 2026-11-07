@@ -1678,7 +1678,10 @@ Undo is off.
 `drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
 names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s;
 0: the next timer pass); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
-it drew or grew, to put the view's own overlays back. A definition made in a module's setup pushes the undo
+it drew or grew, to put the view's own overlays back. Two keys are for hub-fed views (`drgnx-view-patch-attach
+... :type NAME`, rendering with `drgnx-view-patch-render`): ACK non-nil sends `view/ack` after every applied patch,
+and EPOCH-RESET nil (default t) applies a patch of an older env epoch instead of holding it (a terminal's view: its
+faces repaint in place). A definition made in a module's setup pushes the undo
 `"view type NAME"`. A view looks its type up by name at each draw: once the type is removed (its module turned off)
 the view draws nothing more, and a redefinition (the module on again, a reload) is picked up. No view is tracked.
 `(drgnx-view-type-p NAME)` is non-nil while NAME is defined (a mode that attaches a module's view checks it first).
@@ -2000,7 +2003,10 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
 - **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
   properties only `drgnx-` ones and `drgnx-view-patch-props` (`intern-soft`, never `intern`). A stop's placeholder
   character shows one shared `(space :align-to (PX))` per PX; an image's shows the image (an id-keyed cache, at most
-  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline.
+  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline. A run
+  `s:<id>` names a style the patch's `styles` sent (kept until the next reset; one the view lacks sends
+  `view/resync`): an ansi foreground is the face `drgnx-term-color-N`, the rest one anonymous face per distinct
+  style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows").
 - **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
   segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
   reported by `view/measured`, after which the hub fits that string by the editor's width.

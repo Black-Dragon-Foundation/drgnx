@@ -184,6 +184,7 @@
   "tasks/ready": ["user"],
   "tasks/write": ["user"],
   "timeline/get": ["user"],
+  "view/ack": ["user"],
   "view/close": ["user"],
   "view/env": ["user"],
   "view/glyphs": ["user"],

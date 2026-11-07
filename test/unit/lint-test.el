@@ -70,6 +70,20 @@ spec's `:box' colour too) or :distant-foreground."
             (should (cl-some (lambda (m) (string-match-p ":color \"red\"" m)) found))))
       (delete-file file))))
 
+(ert-deftest drgnx-lint/no-hard-coded-colours-passes-an-rgb-run ()
+  ;; A terminal's `{rgb}' colour is program data from the hub: the inserter passes it on from the patch (a variable
+  ;; after :foreground, never a string), so it is not a literal; the same code with a literal is one.
+  (let ((file (make-temp-file "drgnx-lint-rgb-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "(defun rgb-run (fg bg) (list :foreground (plist-get fg :rgb) :background (plist-get bg :rgb)))\n"))
+          (should-not (drgnx-lint--colour-literals (list file)))
+          (with-temp-file file
+            (insert "(defun rgb-run (fg) (list :foreground (or (plist-get fg :rgb) \"#0ab0ff\")))\n"))
+          (should (drgnx-lint--colour-literals (list file))))
+      (delete-file file))))
+
 (defun drgnx-lint--keyboard-key-p (key)
   "KEY (a string, `kbd' form or vector) is a keyboard key — not a mouse, header-line, tab-line or remap event."
   (let ((k (pcase key
