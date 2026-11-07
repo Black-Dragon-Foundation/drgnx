@@ -268,21 +268,21 @@ fn put_held(
 /// A tree of WORKTREE when the user took SID's wheel, kept as `refs/drgnx/s/<SID>/wheel` (so it goes with the
 /// session's other refs); answers the tree id.  Blocking.
 pub fn take_held(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
-    let (repo, tree) = write_tree(root, worktree, sid, &[])?;
+    let (repo, tree) = write_tree(root, worktree, &format!("wheel-{sid}"), &[])?;
     let name = format!("refs/drgnx/s/{}/wheel", safe(sid));
     git(&repo, None, None, &["update-ref", &name, &tree])?;
     Ok(tree)
 }
 
-/// The unified diff of every file of WORKTREE from FROM_TREE to what it holds now (a tree written through SID's index,
-/// kept nowhere).  Blocking.
+/// The unified diff of every file of WORKTREE from FROM_TREE to what it holds now (a tree written through an index of its
+/// own, never the step writer's, kept nowhere).  Blocking.
 pub fn diff_now(
     root: &Path,
     worktree: &Path,
     sid: &str,
     from_tree: &str,
 ) -> Result<String, String> {
-    let (repo, tree) = write_tree(root, worktree, sid, &[])?;
+    let (repo, tree) = write_tree(root, worktree, &format!("diff-{sid}"), &[])?;
     let out = git_bytes(
         &repo,
         None,
@@ -725,7 +725,12 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
                 }
             }
             let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(sid))));
-            for key in [format!("turn-{sid}"), format!("write-{sid}")] {
+            for key in [
+                format!("turn-{sid}"),
+                format!("write-{sid}"),
+                format!("wheel-{sid}"),
+                format!("diff-{sid}"),
+            ] {
                 let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(&key))));
             }
         }
