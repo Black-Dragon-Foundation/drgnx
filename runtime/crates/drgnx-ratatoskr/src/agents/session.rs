@@ -4979,9 +4979,38 @@ impl Session {
             PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
         };
         self.pair
-            .write(&self.id, &self.cwd, &eff, &path, kind)
+            .write_with(&self.id, &self.cwd, &eff, &path, kind, self.disk_record())
             .await
             .map_err(|r| r.0)
+    }
+
+    /// The record of a pair write to a file open nowhere, before it lands on disk: the agent's operations in its
+    /// project's history, as [`Self::record_write`] makes them (best effort: no history, no record).
+    fn disk_record(&self) -> Option<crate::pair::disk::Record> {
+        let (hubs, state) = self.history.clone()?;
+        let (cwd, sid) = (self.cwd.clone(), self.id.clone());
+        Some(Box::new(move |real: &Path, bytes: &[u8]| {
+            let Some(rel) = real
+                .strip_prefix(resolve(&cwd))
+                .ok()
+                .and_then(|r| r.to_str())
+                .filter(|r| !r.is_empty())
+            else {
+                return;
+            };
+            let Ok((hub, tree)) = hubs.of_tree(&state, &cwd) else {
+                return;
+            };
+            let cause = verdandi::Cause {
+                session: Some(sid.clone()),
+                ..Default::default()
+            };
+            if let Err(e) =
+                hub.on_agent_write(&tree, rel, bytes, &sid, cause, crate::clock::wall_secs())
+            {
+                tracing::info!(sid, "the agent's write is not in the history: {e}");
+            }
+        }))
     }
 
     /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once

@@ -6,8 +6,8 @@
 //!   refused.
 //! - **An editor that goes away** leaves every file it had open "away": a write refuses ("the editor is away") until
 //!   an editor opens the file again or sends its full set.
-//! - A file no editor has open, and not away, routes to the disk ([`Route::Disk`]); the door refuses that in this
-//!   version ("not open in the editor").
+//! - A file no editor has open, and not away, routes to the disk ([`Route::Disk`]); the door writes it there
+//!   (`pair::disk`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

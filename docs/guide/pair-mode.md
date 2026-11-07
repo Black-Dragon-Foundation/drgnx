@@ -72,5 +72,8 @@ writes are refused the same way, and so they are at once when you change the pre
 
 The chat is told why, in words it can act on: the lines you are editing, "read it with read_file", "the editor is
 away". After two refusals of one file within a minute it is told to wait for you or ask you, and its card shows which
-file it waits on. A chat writes only files open in your editor: a file you have not opened is refused "not open in the
-editor; ask the user to open it", and a file open as a large or remote file is refused too.
+file it waits on. A file open in your editor is written only through it; a file open as a large or remote file is
+refused. A file you have not opened is written on disk by the hub, only if it is still exactly what the chat last read
+("changed since you read it; read it with read_file" otherwise): atomically, keeping its permissions, owner, extended
+attributes and SELinux context, its line ends and byte-order mark, and recorded in the edit history as the chat's
+edit.

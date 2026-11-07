@@ -1628,7 +1628,18 @@ checkout read-only for it.
   at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
   to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
   editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
-  has refuses "not open in the editor" (this version never writes the disk itself), and its read comes from the disk.
+  has is read from the disk and written there (`pair::disk`, next item).
+- **The disk path** (`pair::disk`): a write of a file open nowhere lands only when the file's content hash (of its
+  canonical text: no BOM, LF) equals the last read the hub served that session ("changed since you read it; read it
+  with read_file"; never read: "you have not read it yet"), or, for a whole-file write, when the file does not exist.
+  It is atomic: a temporary file in the same folder, made beneath the checkout without following a link, takes the old
+  file's mode, owner (when the hub may set it), ACLs, extended attributes and SELinux context, keeps its BOM and CRLF
+  line ends, is synced, and is renamed over the file (a hard link is broken on purpose). The gate resolved a link to its
+  target inside the checkout, which is written; a link that names nothing is refused. Missing parent folders are made
+  only after every check passed and removed again if the write fails. Before the rename the write is recorded in the
+  project's edit history as the agent's operations (`Hub::on_agent_write`, the same record an agent's own write gets),
+  so the watcher's event about it is the hub's version, not an outside edit. The written text is the session's read
+  from then on.
 - **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
   door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
   holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing

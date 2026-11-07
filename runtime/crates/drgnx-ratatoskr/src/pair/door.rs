@@ -16,7 +16,8 @@
 //!   for the user or ask them", and the session's snapshot says `waiting {file, lines}` until a write of it applies.
 //! - **Which editor** ([`super::open_set`]): a write goes to the editor that has the file open as a normal buffer; a
 //!   large or remote buffer refuses it, a file an editor had when it went away refuses "the editor is away", and a
-//!   file no editor has refuses "not open in the editor".  The hub never writes the disk behind an open file.
+//!   file no editor has goes to the disk ([`super::disk`]: atomic, over the session's read only, recorded in the
+//!   history as the agent's).  The hub never writes the disk behind an open file.
 //! - **The toggle, the wheel and the matrix** ([`Door::toggle`], [`Door::hold`], [`Door::recheck`]): pair off, the user
 //!   holding the wheel, or a matrix change that makes `chat.project-edit` never ([`follow_matrix`]) closes the
 //!   session's door at once: its writes not yet sent are refused, the editor drops those it holds (`pair-drop`, each
@@ -423,6 +424,20 @@ impl Door {
         path: &str,
         kind: WriteKind,
     ) -> Result<String, Refusal> {
+        self.write_with(session, root, eff, path, kind, None).await
+    }
+
+    /// [`Door::write`], with RECORD told a write to a file open nowhere before it lands on disk (the session's
+    /// history, so the watcher does not count it as an outside edit).
+    pub async fn write_with(
+        self: &Arc<Self>,
+        session: &str,
+        root: &Path,
+        eff: &Effective,
+        path: &str,
+        kind: WriteKind,
+        record: Option<super::disk::Record>,
+    ) -> Result<String, Refusal> {
         if lock(&self.st).sessions.get(session).is_some_and(|s| s.held) {
             return Err(Refusal(HELD.into()));
         }
@@ -435,8 +450,8 @@ impl Door {
         let conn = match self.route(&real) {
             Route::Editor(conn) => conn,
             Route::Refused(why) => return Err(Refusal(why.into())),
-            // this version writes only through an editor: the hub never writes the disk behind an open file
-            Route::Disk => return Err(Refusal(refused_text("not-open", None))),
+            // open nowhere: the disk, atomically, over the session's read
+            Route::Disk => return self.disk(session, root, real, kind, record).await,
         };
         let (rx, id, range) = {
             let mut st = lock(&self.st);
@@ -523,6 +538,42 @@ impl Door {
         let (outcome, answer) = rx.await.unwrap_or((Outcome::Lost, None));
         self.landed(session, id, &real, range, outcome == Outcome::Applied);
         self.verdict(session, &real, outcome, answer)
+    }
+
+    /// SESSION's write KIND of REAL, a file no editor has open, in the checkout ROOT: on disk ([`super::disk::write`]);
+    /// the new text is the session's read from then on.
+    async fn disk(
+        self: &Arc<Self>,
+        session: &str,
+        root: &Path,
+        real: PathBuf,
+        kind: WriteKind,
+        record: Option<super::disk::Record>,
+    ) -> Result<String, Refusal> {
+        let served = {
+            let st = lock(&self.st);
+            match st.sessions.get(session) {
+                Some(s) if s.held => return Err(Refusal(HELD.into())),
+                Some(s) if s.on == Some(false) => return Err(Refusal(OFF_BY_USER.into())),
+                Some(s) if !s.paired() => return Err(Refusal(PAIR_OFF.into())),
+                _ => {}
+            }
+            st.served.get(&(session.to_string(), real.clone())).cloned()
+        };
+        let (root, file) = (root.to_path_buf(), real.clone());
+        let text = crate::clock::blocking(move || {
+            super::disk::write(&root, &file, served.as_ref(), &kind, record)
+        })
+        .await
+        .map_err(|e| Refusal(format!("the write did not run: {e}")))??;
+        lock(&self.st).served.insert(
+            (session.to_string(), real),
+            Served {
+                text,
+                version: None,
+            },
+        );
+        Ok("written to the file on disk (no editor has it open)".to_string())
     }
 
     /// Write ID of SESSION to FILE ended: its pending entry goes; APPLIED, the session is in FILE on RANGE, editing.
@@ -912,7 +963,7 @@ mod tests {
     }
 
     /// [D] A file the editor has open as a large or remote buffer refuses a pair write with the reason, and the
-    /// editor is sent nothing; a file no editor has refuses "not open in the editor".
+    /// editor is sent nothing; a file no editor has goes to the disk (refused there without a read).
     #[tokio::test]
     async fn large_and_remote_refuse() {
         use super::super::open_set::{FileKind, LARGE_OR_REMOTE};
@@ -944,7 +995,11 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(r.0.contains("not open in the editor"), "{r}");
+        assert_eq!(
+            r.0,
+            super::super::disk::UNREAD,
+            "a file open nowhere goes to the disk"
+        );
         assert!(events(&out).is_empty(), "nothing went to the editor");
     }
 
@@ -1063,5 +1118,126 @@ mod tests {
             .unwrap_err();
         assert!(r.0.contains("chat.project-edit"), "{r}");
         assert!(events(&out).is_empty(), "nothing after never");
+    }
+
+    /// [C] (a real checkout in the sandbox container) A file open nowhere is written on disk through the door: a
+    /// link to a file inside the checkout writes its target and stays a link; a hard link is broken on purpose (the
+    /// other name keeps the old text); a link out of the checkout and a link that names nothing are refused, and
+    /// nothing is written.  The record runs once, before the file changes.
+    #[tokio::test]
+    async fn disk_write_resolves_links_inside_the_roots_only() {
+        let (d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let outside = d
+            .path()
+            .join("..")
+            .canonicalize()
+            .unwrap()
+            .join(format!("pair-out-{}", std::process::id()));
+        std::fs::write(&outside, "secret\n").unwrap();
+        std::os::unix::fs::symlink(root.join("a.txt"), root.join("in.txt")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("out.txt")).unwrap();
+        std::os::unix::fs::symlink(root.join("nothing"), root.join("dangling.txt")).unwrap();
+        std::fs::hard_link(root.join("a.txt"), root.join("hard.txt")).unwrap();
+        let link = root.join("in.txt").to_string_lossy().into_owned();
+        door.read("s1", &root, &eff, &link).await.unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s2 = seen.clone();
+        let record: super::super::disk::Record = Box::new(move |p: &Path, b: &[u8]| {
+            lock(&s2).push((p.to_path_buf(), b.to_vec(), std::fs::read(p).unwrap()));
+        });
+        let whole = |c: &str| WriteKind::Whole { content: c.into() };
+        door.write_with("s1", &root, &eff, &link, whole("A\n"), Some(record))
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "A\n");
+        assert!(
+            root.join("in.txt")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("hard.txt")).unwrap(),
+            "a\n",
+            "the hard link is broken"
+        );
+        let seen = lock(&seen).clone();
+        assert_eq!(
+            seen,
+            vec![(root.join("a.txt"), b"A\n".to_vec(), b"a\n".to_vec())]
+        );
+        let r = door
+            .write(
+                "s1",
+                &root,
+                &eff,
+                &root.join("out.txt").to_string_lossy(),
+                whole("x\n"),
+            )
+            .await
+            .unwrap_err();
+        assert!(r.0.contains("outside your project"), "{r}");
+        let r = door
+            .write(
+                "s1",
+                &root,
+                &eff,
+                &root.join("dangling.txt").to_string_lossy(),
+                whole("x\n"),
+            )
+            .await
+            .unwrap_err();
+        assert!(r.0.contains("names nothing"), "{r}");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "secret\n");
+        assert!(!root.join("nothing").exists());
+        std::fs::remove_file(&outside).unwrap();
+        assert!(events(&out).is_empty(), "no editor was asked");
+    }
+
+    /// [C] (a real file in the sandbox container) A disk write keeps the file's mode, its extended attributes and its
+    /// SELinux context; an attribute the file system cannot hold is reported, and the rest still checked.
+    #[tokio::test]
+    async fn disk_write_keeps_xattrs_and_selinux_context() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_d, root, door, _out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let f = root.join("a.txt");
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let user = rustix::fs::setxattr(&f, "user.drgnx", b"kept", rustix::fs::XattrFlags::empty());
+        if let Err(e) = &user {
+            eprintln!(
+                "user attributes are not supported here ({e}): the mode and the context are checked"
+            );
+        }
+        let context = |p: &Path| {
+            let mut v = vec![0u8; 256];
+            rustix::fs::getxattr(p, "security.selinux", &mut v[..])
+                .ok()
+                .map(|n| v[..n].to_vec())
+        };
+        let before = context(&f);
+        let path = f.to_string_lossy().into_owned();
+        door.read("s1", &root, &eff, &path).await.unwrap();
+        door.write(
+            "s1",
+            &root,
+            &eff,
+            &path,
+            WriteKind::Whole {
+                content: "b\n".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "b\n");
+        assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o640);
+        if user.is_ok() {
+            let mut v = [0u8; 16];
+            let n = rustix::fs::getxattr(&f, "user.drgnx", &mut v[..]).unwrap();
+            assert_eq!(&v[..n], b"kept");
+        }
+        assert_eq!(context(&f), before, "the SELinux context is kept");
     }
 }
