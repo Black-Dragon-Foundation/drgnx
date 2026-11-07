@@ -818,7 +818,10 @@ mod tests {
         assert!(!c.tick(true, 168) && !c.tick(true, 287), "then every 120 s");
         assert!(c.tick(true, 288), "the fourth redial");
         assert!(!c.tick(false, 500), "back in reach");
-        assert!(!c.tick(true, 600) && c.tick(true, 605), "a new loss starts at 5 s again");
+        assert!(
+            !c.tick(true, 600) && c.tick(true, 605),
+            "a new loss starts at 5 s again"
+        );
     }
 
     // [D] pure

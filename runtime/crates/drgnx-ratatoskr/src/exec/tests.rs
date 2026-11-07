@@ -27,11 +27,21 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
 /// checkout, so the hub's absolute path would name a folder that does not exist there.
 #[test]
 fn a_runner_is_told_the_jobs_folder_inside_its_tree() {
-    let user = spec(Starter::User, Path::new("/p/proj"), "true", Duration::from_secs(5));
+    let user = spec(
+        Starter::User,
+        Path::new("/p/proj"),
+        "true",
+        Duration::from_secs(5),
+    );
     let f = user.forseti_spec("x1", "1G");
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), ".".into()));
 
-    let mut deep = spec(Starter::User, Path::new("/p/proj/crates/x"), "true", Duration::from_secs(5));
+    let mut deep = spec(
+        Starter::User,
+        Path::new("/p/proj/crates/x"),
+        "true",
+        Duration::from_secs(5),
+    );
     deep.worktree = Some("/p/proj".into());
     let f = deep.forseti_spec("x2", "1G");
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), "crates/x".into()));

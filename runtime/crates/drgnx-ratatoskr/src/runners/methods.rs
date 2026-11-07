@@ -79,12 +79,25 @@ mod on {
         if let Some(r) = run.filter(|r| r.as_os_str().len() <= 24) {
             return Ok(r);
         }
-        let dir = std::env::temp_dir().join(format!("drgnx-hub-{}", rustix::process::getuid().as_raw()));
-        let fail = |e: std::io::Error| error(ErrorCode::Internal, format!("runners: {}: {e}", dir.display()));
-        std::fs::DirBuilder::new().mode(0o700).recursive(true).create(&dir).map_err(fail)?;
+        let dir =
+            std::env::temp_dir().join(format!("drgnx-hub-{}", rustix::process::getuid().as_raw()));
+        let fail = |e: std::io::Error| {
+            error(
+                ErrorCode::Internal,
+                format!("runners: {}: {e}", dir.display()),
+            )
+        };
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(&dir)
+            .map_err(fail)?;
         let m = std::fs::symlink_metadata(&dir).map_err(fail)?;
         if !m.is_dir() || m.uid() != rustix::process::getuid().as_raw() || m.mode() & 0o077 != 0 {
-            return Err(error(ErrorCode::Internal, format!("runners: {} is not a private folder of ours", dir.display())));
+            return Err(error(
+                ErrorCode::Internal,
+                format!("runners: {} is not a private folder of ours", dir.display()),
+            ));
         }
         Ok(dir)
     }
@@ -130,7 +143,10 @@ mod link_dir_tests {
     // [D] pure
     #[test]
     fn a_long_runtime_folder_gets_a_short_private_one_and_a_short_one_stays() {
-        assert_eq!(link_dir(Some("/run/user/1000".into())).unwrap(), PathBuf::from("/run/user/1000"));
+        assert_eq!(
+            link_dir(Some("/run/user/1000".into())).unwrap(),
+            PathBuf::from("/run/user/1000")
+        );
         let long = PathBuf::from("/tmp/a-runtime-folder-far-too-long-for-ssh-sockets");
         let d = link_dir(Some(long.clone())).unwrap();
         assert_ne!(d, long);
