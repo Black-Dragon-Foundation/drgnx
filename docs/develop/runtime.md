@@ -623,6 +623,9 @@ domr connect-as --socket PATH
 - `--perf OUT.json` runs the `perf` rows and writes every `measure` step's timings to the file.
 - `connect-as` connects to the socket and relays stdin and stdout over it: the other-uid connection runs it as
   uid 65534 (`setpriv` as root where util-linux has it, else `sudo -n -u nobody`; `$SUDO` names the sudo command).
+- Started straight under PID 1 (a container's init, `exec`ed by a shell), domr runs as its own child: the harness
+  plays an outside agent's bridge, whose identity is its parent process, and the hub refuses an orphan's
+  (`mcp/an-outside-bridge-is-ext-and-unverified`).
 
 ### The scenario format
 

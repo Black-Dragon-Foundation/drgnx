@@ -184,6 +184,20 @@ fn main() -> ExitCode {
             }
         };
     }
+    // an outside agent's identity is its bridge's parent process, and an orphan's is refused (`sessions::outside`):
+    // the harness plays the bridge, so straight under a container's init (`podman run --init … sh -c '… && domr …'`) its
+    // parent is PID 1 and `mcp/an-outside-bridge-is-ext-and-unverified` is refused there only. Then it runs as its own
+    // child, whose parent is this one, as under a desktop's or CI's shell.
+    if std::os::unix::process::parent_id() == 1 {
+        let status = std::env::current_exe().and_then(|me| Command::new(me).args(&argv).status());
+        return match status {
+            Ok(s) => ExitCode::from(s.code().map_or(1, |c| u8::try_from(c).unwrap_or(1))),
+            Err(e) => {
+                eprintln!("domr: cannot run as its own child: {e}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let args = match parse_args(&argv) {
         Ok(a) => a,
         Err(e) => {
