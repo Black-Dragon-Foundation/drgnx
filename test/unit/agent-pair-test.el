@@ -617,7 +617,7 @@ window's point is refused `guard' with its lines, one away from both applies."
 
 (defun drgnx-agent-pair-test--replace (id old new)
   "The hub's `pair-apply' data for write ID of \"s1\": OLD becomes NEW."
-  (list :write id :session "s1" :edits (list (list :kind "replace" :old old :new new))))
+  (list :write id :session "s1" :step 1 :edits (list (list :kind "replace" :old old :new new))))
 
 (defmacro drgnx-agent-pair-test--undoable (text &rest body)
   "BODY in `buf', a buffer visiting a file holding TEXT with undo on, point at its end, inside the stand-ins."
@@ -673,7 +673,7 @@ keystroke and `undo' take only that keystroke away: `this-command' told the loop
   "A write of several hunks is one undo step: one undo takes every hunk away and nothing of yours."
   (drgnx-agent-pair-test--undoable "one\ntwo\nthree\n"
     (drgnx-agent-pair-test--type ?z)
-    (drgnx-agent-pair--apply (list :write 1 :session "s1"
+    (drgnx-agent-pair--apply (list :write 1 :session "s1" :step 1
                                    :edits (list (list :kind "replace" :old "one" :new "ONE")
                                                 (list :kind "replace" :old "three" :new "THREE"))))
     (should (equal (buffer-string) "ONE\ntwo\nTHREE\nz"))
@@ -702,7 +702,7 @@ change, asking nothing), then the write applies to it.  Under your unsaved edits
                      "applied"))
       (should (equal (buffer-string) "a\nb\nC\n"))
       (should (member "external:disk" origin))
-      (should (member "agent:s1" origin))
+      (should (member "agent:s1#1" origin))
       (insert "mine")
       (with-temp-file buffer-file-name (insert "a\nb\nC\nd\n"))
       (set-visited-file-modtime (time-subtract (current-time) 100))
@@ -732,7 +732,16 @@ returns (the answer's version), so a later resync cannot send them as yours."
                  (lambda (&optional _b) (push (buffer-string) seen) 7)))
         (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
                        (list :result "applied" :version 7))))
-      (should (equal (delete-dups origin) '("agent:s1")))
+      (should (equal (delete-dups origin) '("agent:s1#1")))
       (should (equal (car seen) "ONE\n")))))
+
+(ert-deftest drgnx-agent-pair/the-origin-carries-the-agents-step ()
+  "A write the hub sent with the agent's step is made with the origin \"agent:SESSION#STEP\", so the edit history
+records it under that step."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (let ((origin nil))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (drgnx-agent-pair--apply (plist-put (drgnx-agent-pair-test--replace 1 "one" "ONE") :step 5))
+      (should (equal (delete-dups origin) '("agent:s1#5"))))))
 
 ;;; agent-pair-test.el ends here

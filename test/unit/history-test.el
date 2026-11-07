@@ -28,13 +28,13 @@
   ;; they give the text the one change gave
   (let* ((cap drgnx-history-batch-max)
          (big (make-string (* 3 1024 1024) ?é))
-         (drained (list (list 3 0 "ab" 1.0 nil) (list 5 2 big 2.0 nil) (list 2 1 "z" 3.0 "agent:s1")))
+         (drained (list (list 3 0 "ab" 1.0 nil) (list 5 2 big 2.0 nil) (list 2 1 "z" 3.0 "agent:s1#1")))
          (batches (drgnx-history--batches (drgnx-history--changes drained) cap))
          (flat (apply #'append batches)))
     (should (> (length batches) 1))
     (dolist (b batches)
       (should (<= (apply #'+ (mapcar (lambda (c) (string-bytes (plist-get c :inserted))) b)) cap)))
-    (should (equal (mapcar (lambda (c) (plist-get c :origin)) (last flat)) '("agent:s1")))
+    (should (equal (mapcar (lambda (c) (plist-get c :origin)) (last flat)) '("agent:s1#1")))
     (should (equal (drgnx-history-test--replay "0123456789" flat)
                    (with-temp-buffer
                      (insert "0123456789")

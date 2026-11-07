@@ -74,7 +74,7 @@ fn fx() -> (Fx, OpId) {
     ok(hub
         .batch(
             "b1",
-            &[ch(4, "alpha beta\n", "agent:s9")],
+            &[ch(4, "alpha beta\n", "agent:s9#1")],
             &hash("one\nalpha beta\ntwo\n"),
             5.0,
         )

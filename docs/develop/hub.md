@@ -1683,7 +1683,8 @@ checkout read-only for it.
   else refused (`changed-on-disk`). The ranges get markers first and are replaced last to first through
   `replace-region-contents` (with `drgnx-agent-pair-max-secs`, so point and markers stay on their text), inside one
   change group amalgamated into one undo step, with `undo-boundary` before and after, all inside
-  `drgnx-history-with-origin` bound to `agent:SESSION`; the ring is drained right after (the answer's version), so the
+  `drgnx-history-with-origin` bound to `agent:SESSION#STEP` (`pair-apply` carries `step`, the session's current step, 0
+  before its first; a disk write records the same cause); the ring is drained right after (the answer's version), so the
   change reaches the hub as the agent's before a resync could strip its origin. Then the command loop learns an apply
   ran: from `post-command-hook` `this-command` is set to `drgnx-pair-apply` (the loop copies it to `last-command` after
   the hook); from the timer `last-command` itself. So typing after an apply starts its own undo group, an `undo` run

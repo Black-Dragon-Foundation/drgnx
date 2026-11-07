@@ -119,7 +119,7 @@ inserts more is split (`drgnx-history--pieces')."
 
 (defmacro drgnx-history-with-origin (origin &rest body)
   "Run BODY with its changes to tracked buffers recorded as ORIGIN's (a string such as \"external:git\" or
-\"agent:SESSION\"), not the user's.  Emacs's undo of them, run later, is the user's."
+\"agent:SESSION#STEP\"), not the user's.  Emacs's undo of them, run later, is the user's."
   (declare (indent 1) (debug t))
   `(let ((nidhogg-history-origin ,origin)) ,@body))
 

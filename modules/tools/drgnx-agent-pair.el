@@ -261,7 +261,7 @@ version after the write."
     (let ((ranges (drgnx-agent-pair--place (plist-get write :edits) (plist-get write :version))))
       (if (eq (car-safe ranges) :refused)
           (cdr ranges)
-        (drgnx-agent-pair--replace ranges (plist-get write :session))
+        (drgnx-agent-pair--replace ranges (plist-get write :session) (plist-get write :step))
         (drgnx-agent-pair--applied))))))
 
 (defun drgnx-agent-pair--revert ()
@@ -279,13 +279,14 @@ world's change (origin `external:disk'), asking nothing.  Non-nil when it was re
                (error (error-message-string err))))
        (progn (set-visited-file-modtime) (set-buffer-modified-p nil) t)))
 
-(defun drgnx-agent-pair--replace (ranges session)
-  "RANGES ((START END TEXT) ...) replaced by their texts, as SESSION's change (origin \"agent:SESSION\" in the edit
-history): markers first, then each range from the last to the first through `replace-region-contents' (point and
-your markers stay where their text is), all one change group amalgamated into one undo step with boundaries before
-and after; the history's ring drained right after (the answer's version), so the origin is sent before a resync could
-lose it.  Then the command loop is told an apply ran (`drgnx-pair-apply'): from `post-command-hook' through
-`this-command', which the loop copies to `last-command' after the hook; from the timer, `last-command' itself."
+(defun drgnx-agent-pair--replace (ranges session step)
+  "RANGES ((START END TEXT) ...) replaced by their texts, as SESSION's change at its STEP (origin
+\"agent:SESSION#STEP\" in the edit history, the hub's record of that step): markers first, then each range from the
+last to the first through `replace-region-contents' (point and your markers stay where their text is), all one change
+group amalgamated into one undo step with boundaries before and after; the history's ring drained right after (the
+answer's version), so the origin is sent before a resync could lose it.  Then the command loop is told an apply ran
+(`drgnx-pair-apply'): from `post-command-hook' through `this-command', which the loop copies to `last-command' after
+the hook; from the timer, `last-command' itself."
   (let ((start (float-time))
         (marks (mapcar (lambda (r) (list (copy-marker (nth 0 r)) (copy-marker (nth 1 r) t) (nth 2 r))) ranges))
         (group nil) (done nil))
@@ -294,7 +295,7 @@ lose it.  Then the command loop is told an apply ran (`drgnx-pair-apply'): from 
     (unwind-protect
         (progn
           (activate-change-group group)
-          (drgnx-history-with-origin (concat "agent:" (or session "?"))
+          (drgnx-history-with-origin (format "agent:%s#%s" session step)
             (dolist (m (sort marks (lambda (a b) (> (car a) (car b)))))
               (replace-region-contents (nth 0 m) (nth 1 m) (nth 2 m) drgnx-agent-pair-max-secs)))
           (undo-amalgamate-change-group group)

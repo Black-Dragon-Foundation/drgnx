@@ -424,14 +424,18 @@ impl Door {
         path: &str,
         kind: WriteKind,
     ) -> Result<String, Refusal> {
-        self.write_with(session, root, eff, path, kind, None).await
+        self.write_with(session, 0, root, eff, path, kind, None)
+            .await
     }
 
-    /// [`Door::write`], with RECORD told a write to a file open nowhere before it lands on disk (the session's
-    /// history, so the watcher does not count it as an outside edit).
+    /// [`Door::write`] of SESSION's STEP (the editor's change carries it into the edit history), with RECORD told a
+    /// write to a file open nowhere before it lands on disk (the session's history, so the watcher does not count it
+    /// as an outside edit).
+    #[allow(clippy::too_many_arguments)]
     pub async fn write_with(
         self: &Arc<Self>,
         session: &str,
+        step: i64,
         root: &Path,
         eff: &Effective,
         path: &str,
@@ -493,6 +497,7 @@ impl Door {
             let apply = PairApply {
                 write: id,
                 session: session.to_string(),
+                step,
                 ordinal,
                 file: abs(&real)?,
                 version: planned.version,
@@ -1003,6 +1008,33 @@ mod tests {
         assert!(events(&out).is_empty(), "nothing went to the editor");
     }
 
+    /// [D] A write carries the step of its session it was made in to the editor, which applies it under that step.
+    #[tokio::test]
+    async fn a_write_carries_the_sessions_step() {
+        use super::super::open_set::FileKind;
+        let (_d, root, door, out) = fixture();
+        let eff = chat(Preset::Autonomous);
+        let f = root.join("a.txt");
+        opened(&door, &f, FileKind::Normal);
+        let path = f.to_string_lossy().into_owned();
+        let d2 = door.clone();
+        let (r2, e2) = (root.clone(), eff.clone());
+        let w = tokio::spawn(async move {
+            let edit = WriteKind::Edit {
+                old: "a".into(),
+                new: "b".into(),
+            };
+            d2.write_with("s1", 7, &r2, &e2, &path, edit, None).await
+        });
+        // the write runs to its wait on the editor's answer without yielding: one yield lets it get there
+        tokio::task::yield_now().await;
+        let sent = events(&out);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["event"], "pair-apply");
+        assert_eq!(sent[0]["data"]["step"], 7, "{sent:?}");
+        w.abort();
+    }
+
     /// [D] The user takes the wheel while a write of the session waits in the editor: the editor is told to drop the
     /// session's writes (`pair-drop`), the write's answer is the editor's `dropped` (refused text, never applied), and
     /// every later write is refused at the door with nothing sent.  Given back, writes go to the editor again.
@@ -1147,7 +1179,7 @@ mod tests {
             lock(&s2).push((p.to_path_buf(), b.to_vec(), std::fs::read(p).unwrap()));
         });
         let whole = |c: &str| WriteKind::Whole { content: c.into() };
-        door.write_with("s1", &root, &eff, &link, whole("A\n"), Some(record))
+        door.write_with("s1", 0, &root, &eff, &link, whole("A\n"), Some(record))
             .await
             .unwrap();
         assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "A\n");
