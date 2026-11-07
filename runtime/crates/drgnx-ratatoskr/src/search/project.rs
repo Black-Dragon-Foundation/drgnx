@@ -409,7 +409,7 @@ impl Project {
     }
 
     pub async fn lag(&self, model: Option<&str>) -> Result<Lag, ProjectError> {
-        Ok(hrafn::lag(&self.inner.store, model).await?)
+        Ok(hrafn::lag(&self.inner.store, model, hrafn::View::Base).await?)
     }
 
     /// The file REL as it is now (read through the root's descriptor, at most [`hrafn::files::MAX_FILE_BYTES`]); none

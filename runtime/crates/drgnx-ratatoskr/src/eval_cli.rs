@@ -408,6 +408,7 @@ fn run_set(
         rt.block_on(hrafn::search(
             &store,
             q,
+            hrafn::View::Base,
             Some((spec.id, v.as_slice())),
             &now,
         ))

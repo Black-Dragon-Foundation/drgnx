@@ -185,6 +185,7 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
             scope: Scope::All,
             k: 5,
         },
+        hrafn::View::Base,
         None,
         &|_| None,
     )
@@ -199,6 +200,7 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
             scope: Scope::All,
             k: 5,
         },
+        hrafn::View::Base,
         None,
         &|_| None,
     )

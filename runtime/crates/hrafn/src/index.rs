@@ -12,7 +12,7 @@ use crate::store::{
     ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, content_ids, remove_file_row, sweep_all,
     vec_key, write_version,
 };
-use crate::tree::transition;
+use crate::tree::{View, transition};
 use rusqlite::{Connection, params};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -45,6 +45,8 @@ pub struct Lag {
     pub files_behind: u32,
     pub dirty_files: u32,
     pub built_from: String,
+    /// The worktree view's differing files (its rows, tombstones too); none in the base view.
+    pub differing_files: Option<u32>,
 }
 
 /// Each indexed file's blob in the base.
@@ -419,21 +421,43 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
 }
 
 /// The queries `lag` asks on every answer: one pass over the chunks that is a pass over an index (the chunk rows hold
-/// their text, so a scan of the table reads the whole store: 100 ms of every query at 50,000 chunks).
-pub const LAG_TOTAL_SQL: &str = "select count(*) from chunk where embed = 1";
-pub const LAG_BEHIND_SQL: &str = "select count(*) from chunk c where c.embed = 1 and not exists
-     (select 1 from vec v where v.model = ?1 and v.key = c.key)";
-pub const LAG_FILES_SQL: &str =
-    "select count(distinct c.path) from chunk c where c.embed = 1 and not exists
-     (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+/// their text, so a scan of the table reads the whole store: 100 ms of every query at 50,000 chunks). They count the
+/// base's content only (a chunk the base's row of its path names), probing `file` by its key per chunk.
+pub const LAG_TOTAL_SQL: &str = "select count(*) from chunk c where c.embed = 1
+     and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)";
+pub const LAG_BEHIND_SQL: &str = "select count(*) from chunk c where c.embed = 1
+     and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)
+     and not exists (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+pub const LAG_FILES_SQL: &str = "select count(distinct c.path) from chunk c where c.embed = 1
+     and exists (select 1 from file f where f.tree = 0 and f.path = c.path and f.blob = c.blob)
+     and not exists (select 1 from vec v where v.model = ?1 and v.key = c.key)";
+/// A worktree view's lag as the base's plus a delta over the tree's rows only (?2 the tree, ?1 the model): its rows'
+/// chunks are added and the base chunks of the paths it shadows taken away. The columns are the delta of the total,
+/// of the chunks behind and of the files behind; then the tree's row count.
+pub const LAG_TREE_SQL: &str = "select coalesce(sum(n.sign * n.total), 0), coalesce(sum(n.sign * n.behind), 0),
+       coalesce(sum(n.sign * (n.behind > 0)), 0),
+       (select count(*) from file where tree = ?2)
+     from (
+       select 1 as sign,
+         (select count(*) from chunk c where c.path = t.path and c.blob = t.blob and c.embed = 1) as total,
+         (select count(*) from chunk c where c.path = t.path and c.blob = t.blob and c.embed = 1
+            and not exists (select 1 from vec v where v.model = ?1 and v.key = c.key)) as behind
+       from file t where t.tree = ?2 and t.blob is not null
+       union all
+       select -1,
+         (select count(*) from chunk c where c.path = b.path and c.blob = b.blob and c.embed = 1),
+         (select count(*) from chunk c where c.path = b.path and c.blob = b.blob and c.embed = 1
+            and not exists (select 1 from vec v where v.model = ?1 and v.key = c.key))
+       from file t join file b on b.tree = 0 and b.path = t.path where t.tree = ?2) n";
 
-/// How far behind the index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors).
-pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreError> {
+/// How far behind VIEW's index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors). A
+/// worktree's view is the base's lag plus the delta of its rows, both read through indexes.
+pub async fn lag(store: &CodeStore, model: Option<&str>, view: View) -> Result<Lag, StoreError> {
     let model = model.map(str::to_string);
     Ok(store
         .handle()
         .read(move |c| {
-            let (chunks_behind, files_behind) = match &model {
+            let (mut chunks_behind, mut files_behind) = match &model {
                 None => (0, 0),
                 Some(m) => {
                     let chunks = count(c, LAG_BEHIND_SQL, m)?;
@@ -449,14 +473,32 @@ pub async fn lag(store: &CodeStore, model: Option<&str>) -> Result<Lag, StoreErr
                 }
             };
             let total: i64 = c.query_row(LAG_TOTAL_SQL, [], |r| r.get(0))?;
+            let mut chunks_total = u32::try_from(total).unwrap_or(u32::MAX);
+            let mut differing_files = None;
+            if let View::Tree(t) = view {
+                let m = model.as_deref().unwrap_or_default();
+                let (dt, db, df, rows): (i64, i64, i64, i64) =
+                    c.query_row(LAG_TREE_SQL, params![m, t.0], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                    })?;
+                let add =
+                    |n: u32, d: i64| u32::try_from((i64::from(n) + d).max(0)).unwrap_or(u32::MAX);
+                chunks_total = add(chunks_total, dt);
+                if model.is_some() {
+                    chunks_behind = add(chunks_behind, db);
+                    files_behind = add(files_behind, df);
+                }
+                differing_files = Some(u32::try_from(rows).unwrap_or(u32::MAX));
+            }
             Ok(Lag {
-                chunks_total: u32::try_from(total).unwrap_or(u32::MAX),
+                chunks_total,
                 chunks_behind,
                 files_behind,
                 dirty_files: urdr::meta(c, META_DIRTY)?
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0),
                 built_from: urdr::meta(c, META_BUILT_FROM)?.unwrap_or_default(),
+                differing_files,
                 model,
             })
         })

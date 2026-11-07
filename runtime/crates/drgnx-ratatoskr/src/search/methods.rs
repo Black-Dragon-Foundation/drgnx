@@ -480,6 +480,7 @@ impl Hub {
         let mut a = hrafn::search(
             p.store(),
             &q,
+            hrafn::View::Base,
             qvec.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
             &move |rel: &str| pr.read_now(rel),
         )

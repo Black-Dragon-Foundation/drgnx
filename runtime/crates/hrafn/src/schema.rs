@@ -99,6 +99,7 @@ create index symbol_name_nc on symbol(name collate nocase);";
 ///   in a tree's row marks a path the tree does not have (a tombstone, which needs no other column).
 /// - Chunks and symbols are keyed by `(path, blob)` and shared by every `file` row that names the pair; the pair's
 ///   rows go when the last such row goes (the reference sweep, `store::sweep`), so there is no counter to drift.
+/// - `chunk_path_blob` carries `embed` and `key`, so a worktree's lag delta counts its rows' chunks on the index alone.
 /// - The data is migrated in place: `chunk` gains its `blob` (its ids, and so `chunk_fts`'s rowids and the vectors'
 ///   keys, are kept: nothing is re-chunked or re-embedded); `symbol` is rebuilt with `id` set from its old rowid, so
 ///   `symbol_fts` keeps its link and the ids survive `VACUUM`. The triggers name `symbol`, so they are dropped
@@ -138,7 +139,7 @@ create index file_path_blob on file(path, blob);
 alter table chunk add column blob text not null default '';
 update chunk set blob = coalesce((select f.blob from file f where f.tree = 0 and f.path = chunk.path), '');
 drop index chunk_path;
-create index chunk_path_blob on chunk(path, blob);
+create index chunk_path_blob on chunk(path, blob, embed, key);
 drop index chunk_embed;
 create index chunk_embed on chunk(embed, key, path, blob);
 

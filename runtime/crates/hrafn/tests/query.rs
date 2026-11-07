@@ -147,15 +147,21 @@ async fn exact_symbol_pins_definition() {
     let (_dir, store, texts) = indexed().await;
     let now = unchanged(texts);
     for (name, path) in DEFINERS {
-        let a = search(&store, &q(name, Scope::All), None, &now)
+        let a = search(&store, &q(name, Scope::All), hrafn::View::Base, None, &now)
             .await
             .unwrap();
         assert_eq!(a.hits[0].path, *path, "{name}: {:?}", a.hits);
         assert_eq!(a.hits[0].routes[0], "symbol", "{name}");
     }
-    let a = search(&store, &q("drgnx-timer-fire", Scope::All), None, &now)
-        .await
-        .unwrap();
+    let a = search(
+        &store,
+        &q("drgnx-timer-fire", Scope::All),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     let paths: Vec<&str> = a.hits.iter().map(|h| h.path.as_str()).collect();
     let code = paths
         .iter()
@@ -175,6 +181,7 @@ async fn test_file_demoted_not_dropped() {
     let a = search(
         &store,
         &q("timer fires when due", Scope::Code),
+        hrafn::View::Base,
         None,
         &unchanged(texts),
     )
@@ -196,18 +203,30 @@ async fn test_file_demoted_not_dropped() {
 async fn scope_tests_only_tests() {
     let (_dir, store, texts) = indexed().await;
     let now = unchanged(texts);
-    let tests = search(&store, &q("timer fires", Scope::Tests), None, &now)
-        .await
-        .unwrap();
+    let tests = search(
+        &store,
+        &q("timer fires", Scope::Tests),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     assert!(!tests.hits.is_empty());
     assert!(
         tests.hits.iter().all(|h| h.path.starts_with("test/")),
         "{:?}",
         tests.hits
     );
-    let docs = search(&store, &q("timer fires", Scope::Docs), None, &now)
-        .await
-        .unwrap();
+    let docs = search(
+        &store,
+        &q("timer fires", Scope::Docs),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         docs.hits
             .iter()
@@ -215,9 +234,15 @@ async fn scope_tests_only_tests() {
             .collect::<Vec<_>>(),
         ["docs/timers.md"]
     );
-    let code = search(&store, &q("timer fires", Scope::Code), None, &now)
-        .await
-        .unwrap();
+    let code = search(
+        &store,
+        &q("timer fires", Scope::Code),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     assert!(
         code.hits.iter().all(|h| !h.path.starts_with("docs/")),
         "{:?}",
@@ -230,15 +255,27 @@ async fn scope_tests_only_tests() {
 async fn path_query_adds_path_list() {
     let (_dir, store, texts) = indexed().await;
     let now = unchanged(texts);
-    let a = search(&store, &q("drgnx-hub.el", Scope::All), None, &now)
-        .await
-        .unwrap();
+    let a = search(
+        &store,
+        &q("drgnx-hub.el", Scope::All),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
     assert!(a.hits[0].routes.contains(&"path"), "{:?}", a.hits[0].routes);
     // a bare file stem too
-    let b = search(&store, &q("show me drgnx-hub", Scope::All), None, &now)
-        .await
-        .unwrap();
+    let b = search(
+        &store,
+        &q("show me drgnx-hub", Scope::All),
+        hrafn::View::Base,
+        None,
+        &now,
+    )
+    .await
+    .unwrap();
     assert!(
         b.hits
             .iter()
@@ -255,6 +292,7 @@ async fn no_model_answers_keyword_with_lag() {
     let a = search(
         &store,
         &q("embed role provider", Scope::Code),
+        hrafn::View::Base,
         None,
         &unchanged(texts),
     )
@@ -290,6 +328,7 @@ async fn vector_route_and_lag_line() {
     let a = search(
         &store,
         &q("completely unrelated words", Scope::All),
+        hrafn::View::Base,
         Some((MODEL, &[1.0, 0.0, 0.0, 0.0])),
         &unchanged(texts),
     )
@@ -298,7 +337,10 @@ async fn vector_route_and_lag_line() {
     assert_eq!(a.hits[0].path, "core/drgnx-hub.el", "{:?}", a.hits);
     assert_eq!(a.hits[0].routes, ["vector"]);
     assert_eq!(a.model.as_deref(), Some(MODEL));
-    let behind = lag(&store, Some(MODEL)).await.unwrap().files_behind;
+    let behind = lag(&store, Some(MODEL), hrafn::View::Base)
+        .await
+        .unwrap()
+        .files_behind;
     assert!(behind >= 5, "{behind}");
     assert_eq!(a.lag.files_behind, behind);
     assert!(
@@ -388,9 +430,10 @@ async fn plan_of(store: &CodeStore, sql: &str, binds: usize) -> String {
         .read(move |c| {
             let mut st = c.prepare(&sql)?;
             let rows = st
-                .query_map(rusqlite::params_from_iter(vec![MODEL; binds]), |r| {
-                    r.get::<_, String>(3)
-                })?
+                .query_map(
+                    rusqlite::params_from_iter(vec![MODEL; binds.max(st.parameter_count())]),
+                    |r| r.get::<_, String>(3),
+                )?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows.join("\n"))
         })
@@ -436,9 +479,13 @@ async fn an_unchanged_file_moves_no_hit() {
         .unwrap();
     assert!(starts.len() >= 4, "{starts:?}");
     for (line, name) in starts {
-        let a = search(&store, &q(&name, Scope::All), None, &|_: &str| {
-            Some(text.to_string())
-        })
+        let a = search(
+            &store,
+            &q(&name, Scope::All),
+            hrafn::View::Base,
+            None,
+            &|_: &str| Some(text.to_string()),
+        )
         .await
         .unwrap();
         let h = &a.hits[0];
@@ -457,6 +504,7 @@ async fn reanchors_moved_hit() {
     let still = search(
         &store,
         &q("drgnx-hub-call", Scope::All),
+        hrafn::View::Base,
         None,
         &unchanged(texts.clone()),
     )
@@ -473,9 +521,15 @@ async fn reanchors_moved_hit() {
             }
         })
     };
-    let after = search(&store, &q("drgnx-hub-call", Scope::All), None, &moved)
-        .await
-        .unwrap();
+    let after = search(
+        &store,
+        &q("drgnx-hub-call", Scope::All),
+        hrafn::View::Base,
+        None,
+        &moved,
+    )
+    .await
+    .unwrap();
     let hit = &after.hits[0];
     assert_eq!(hit.path, "core/drgnx-hub.el");
     assert!(hit.reanchored);
@@ -487,6 +541,7 @@ async fn reanchors_moved_hit() {
     let gone = search(
         &store,
         &q("drgnx-hub-call", Scope::All),
+        hrafn::View::Base,
         None,
         &|_: &str| None,
     )
@@ -504,7 +559,7 @@ async fn golden_ranks_vectors_off() {
     let now = unchanged(texts);
     let mut got = Vec::new();
     for text in ["timer", "run BODY with a timer", "hub answer"] {
-        let a = search(&store, &q(text, Scope::All), None, &now)
+        let a = search(&store, &q(text, Scope::All), hrafn::View::Base, None, &now)
             .await
             .unwrap();
         got.push((

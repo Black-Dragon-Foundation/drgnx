@@ -1059,6 +1059,17 @@ transaction as each base change (a tree whose row equals the new base content lo
 naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
 chunks a `(path, blob)` a worktree already stores.
 
+**Views.** `hrafn::search(store, query, view, qvec, now)` and `hrafn::lag(store, model, view)` take a `View`: `Base`,
+or `Tree(id)`, the base with T's rows over it. A path resolves to one `file` row per view (T's over the base's: at
+most two primary-key probes), and a chunk or symbol is seen when that row names its blob; every route (the pinned,
+name, path, keyword and vector lists, and a hit's metadata) applies it before its `limit`, and the vector scan takes
+the first chunk of a key the view sees. A tombstone hides the base's file; a tree's new file is in that tree only.
+`now` reads the view's root (the caller builds it), so a hit is found again in T's file. The lag is the view's: the
+base's counts the base's content only, and a tree's adds its rows' chunks and takes away the base chunks it
+shadows, read through `chunk_path_blob (path, blob, embed, key)`; its line starts "worktree: N files differ from the
+base". `tests/view_query.rs` holds the plan rows: no route scans `chunk`, `symbol` or `file`. The hub asks the base
+view until it resolves a worktree's root to its tree.
+
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
 
