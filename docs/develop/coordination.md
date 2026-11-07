@@ -917,6 +917,19 @@ Not yet: a split huddle's card has no reviewer's recommendation (part 1's review
 contradiction's reviewer does not wait for the replies; a brief names the files, not the two sides' hunks with their
 step ids.
 
+
+## Always grants (`agents/grants.rs`)
+
+An "Always" is the agent's own rule (the option `allow_always` of a permission request); the hub cannot read it back,
+so it writes down each one the user gives. A session's ledger holds a grant for the tool call's kind and a hash of its
+title (`always:<session>:<key>`); the same step again is the same grant. Each grant is also an Urdr record of kind
+`always`, written only as `("hub", Class::System)` (`norn::write::always`). `agents/grants {id}` lists a session's
+grants, revoked ones too. `agents/grants/revoke {id, grant}` marks one revoked and answers `{grant, agent_rule, restart}`:
+from then on a request matching it is held for the user even where the matrix allows (the user's Always, given again,
+lifts the revoke). No adapter takes a rule back today, so `agent_rule` is `kept` (`cleared` is reserved for one that
+does) and `restart` says that a restart of the session at its current step (a fork, which starts a new agent process)
+clears it; revoking a grant twice, or one the session never had, is `invalid-params`. Rows: `always/*`.
+
 ## Take the wheel (`agents/wheel.rs`)
 
 The user can stop an agent after its step, work in its place and give the wheel back with what they changed. User

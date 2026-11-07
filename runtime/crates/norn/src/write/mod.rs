@@ -7,6 +7,7 @@ use urdr::graph::excise::{Blanker, Excised};
 use urdr::graph::{Tx, WriteError};
 
 pub mod agents;
+pub mod always;
 pub mod cards;
 pub mod decisions;
 pub mod event;

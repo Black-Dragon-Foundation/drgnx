@@ -209,6 +209,8 @@ params! {
     AgentsPause(agents::ById),
     AgentsHuddleStart(agents::HuddleStart),
     AgentsHuddleGet(agents::ById),
+    AgentsGrants(agents::ById),
+    AgentsGrantsRevoke(agents::GrantRevoke),
     AgentsWheelTake(agents::ById),
     AgentsWheelGive(agents::ById),
     AgentsWheelSaved(agents::WheelSaved),

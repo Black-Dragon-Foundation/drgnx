@@ -1315,6 +1315,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/explain` | user | `{id: Id, item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | `{facts?: [Fact], item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | no |
 | `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
+| `agents/grants` | user | `{id: Id}` | `{grants: [Grant]}` | no |
+| `agents/grants/revoke` | user | `{grant: string, id: Id}` | `{agent_rule: "cleared" \| "kept", grant: string, restart: boolean}` | yes |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |

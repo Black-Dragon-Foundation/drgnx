@@ -675,6 +675,8 @@ impl Front {
             | Params::AgentsExplain(_)
             | Params::AgentsHuddleStart(_)
             | Params::AgentsHuddleGet(_)
+            | Params::AgentsGrants(_)
+            | Params::AgentsGrantsRevoke(_)
             | Params::AgentsWheelTake(_)
             | Params::AgentsWheelGive(_)
             | Params::AgentsWheelSaved(_)
