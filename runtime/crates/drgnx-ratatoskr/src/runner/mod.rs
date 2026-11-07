@@ -513,11 +513,13 @@ pub trait RunGit: std::marker::Send + Sync {
     }
     /// The gate's card for BRANCH was answered yes: its checked tip may merge.
     fn clear_gate(&self, _branch: &str) {}
-    /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`).
+    /// Merge exactly the tip the gate checked into the job's tree (`merge --no-ff`), with MESSAGE as its commit message
+    /// (none: `Merge BRANCH`).
     fn merge_into<'a>(
         &'a self,
         _job_tree: &'a Path,
         _tree: &'a TaskTree,
+        _message: Option<&'a str>,
     ) -> GitFuture<'a, git::MergeOutcome> {
         Box::pin(async {
             Err(GitError {
@@ -760,6 +762,17 @@ pub(crate) fn card_actions(kind: &str, data: &Value) -> Value {
             ("drop", "Drop the task"),
             ("open", "Open the job's worktree"),
         ]),
+        "hook" => {
+            let retry = match data.get("point").and_then(Value::as_str) {
+                Some("at-review") => ("review", "Review again"),
+                _ => ("merge", "Retry the merge"),
+            };
+            a(&[
+                retry,
+                ("dismiss", "Dismiss and carry on"),
+                ("stop", "Stop the job"),
+            ])
+        }
         "merge-failed" => a(&[
             ("merge", "Merge again"),
             ("drop", "Drop the task"),
@@ -1597,6 +1610,11 @@ pub async fn stop(front: &Front, caller: &Caller, p: ById) -> Result<JobSummary,
         })
         .await?;
     }
+    // a hook card is the job's to answer while it runs: stopped, it is withdrawn
+    settle_cards(front, caller, id, |c| {
+        (c.kind.as_deref() == Some("hook")).then_some("stop")
+    })
+    .await?;
     for t in &l.tasks {
         front.core.runs.set_busy(&t.row.id, None);
     }

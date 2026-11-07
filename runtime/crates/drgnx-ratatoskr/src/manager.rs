@@ -1165,7 +1165,7 @@ async fn merge(
             ))
         }
         Gate::Never(why) => Err(format!("the merge gate refuses: {why}")),
-        Gate::Allow => match git.merge_into(&job_tree, &tree).await {
+        Gate::Allow => match git.merge_into(&job_tree, &tree, None).await {
             Ok(runner::git::MergeOutcome::Merged) => {
                 if let Some(d) = f.dirs.get() {
                     let h = &f.core.history;

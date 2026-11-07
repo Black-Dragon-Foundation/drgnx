@@ -25,6 +25,7 @@ use super::{
 use crate::agents::Origin;
 use crate::coord::fail;
 use crate::front::Front;
+use crate::hook_points;
 use crate::matrix_gate::Gate;
 use norn::read::cards::Card;
 use norn::read::tasks::Task;
@@ -189,6 +190,40 @@ async fn mark_review(front: &Front, sid: &str) {
     if let Err(e) = r {
         tracing::warn!(sid, "the reviewer's session is not marked: {e}");
     }
+}
+
+/// Whether the user dismissed POINT's hook card for TASK: its hooks do not run again for it.
+fn dismissed(data: &Map<String, Value>, task: &str, point: &str) -> bool {
+    data_for(data, "hook-dismissed", task).and_then(Value::as_str) == Some(point)
+}
+
+/// The `git diff --stat` and the changed paths of RANGE in DIR; empty when git cannot tell.
+async fn diff_of(dir: &Path, range: &str) -> (String, Vec<String>) {
+    let stat = tick::git(dir, &["diff", "--stat", range])
+        .await
+        .unwrap_or_default();
+    let names = tick::git(dir, &["diff", "--name-only", range])
+        .await
+        .unwrap_or_default();
+    (stat, names.lines().map(str::to_owned).collect())
+}
+
+/// The `hook` card of TASK at POINT (`before-commit`, `at-review`): the hub's TITLE, the plugin's words in BODY.
+async fn raise_hook_card(
+    front: &Front,
+    job: &str,
+    task: &str,
+    point: &str,
+    title: &str,
+    body: Option<String>,
+) -> Result<(), Error> {
+    let mut data = json!({"point": point, "key": point});
+    if let Some(b) = body {
+        data["body"] = json!(b);
+    }
+    raise_card(front, &service(), job, Some(task), "hook", title, data)
+        .await
+        .map(|_| ())
 }
 
 fn count(data: &Map<String, Value>, bucket: &str, task: &str) -> i64 {
@@ -607,7 +642,95 @@ impl PlanHooks {
         if gate.wait {
             return Ok(());
         }
-        self.start_review_agent(front, job, t, &tree, None).await
+        let Some(notes) = self.review_hooks(front, job, t, &tree, &data).await? else {
+            return Ok(());
+        };
+        self.start_review_agent(front, job, t, &tree, None, &notes)
+            .await
+    }
+
+    /// The `at-review` hooks, before the reviewer starts: their notes (`Some`) go into its brief. A deny fails the
+    /// review as the reviewer's fail would (`REVIEW_TRIES` counts it); a hook that errored is a `hook` card for the
+    /// user, the task is not bounced. `None`: the review did not start.
+    async fn review_hooks(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        t: &Task,
+        tree: &TaskTree,
+        data: &Map<String, Value>,
+    ) -> Result<Option<Vec<String>>, Error> {
+        let tid = t.row.id.as_str();
+        if dismissed(data, tid, "at-review") {
+            return Ok(Some(Vec::new()));
+        }
+        let (diff_stat, _) = diff_of(&tree.path, &format!("job/{job}...HEAD")).await;
+        let info = hook_points::ReviewInfo {
+            summary: t.row.title.clone().unwrap_or_default(),
+            report: String::new(),
+            diff_stat,
+        };
+        let site = hook_points::JobSite {
+            job,
+            task: tid,
+            project: data.get("project").and_then(Value::as_str),
+        };
+        let Some(out) = hook_points::at_review(front, site, &info).await else {
+            return Ok(Some(Vec::new()));
+        };
+        if let Some(why) = hook_points::hook_failure(&out, "review") {
+            raise_hook_card(front, job, tid, "at-review", &why, None).await?;
+            return Ok(None);
+        }
+        if let Some((name, reason)) = hook_points::refusal_of(&out) {
+            let fail = Verdict::Fail(format!("the at-review hook {name} refused: {reason}"));
+            self.reviewed(front, job, t, Some(fail), None, data).await?;
+            return Ok(None);
+        }
+        Ok(Some(out.annotations))
+    }
+
+    /// The `before-commit` hooks, after the gate cleared: `Some(message)` merges (the message a hook changed, else
+    /// git's own); a deny or an error is a `hook` card and `None`.
+    async fn commit_hooks(
+        &self,
+        front: &Arc<Front>,
+        job: &str,
+        t: &Task,
+        tree: &TaskTree,
+        job_tree: &Path,
+        data: &Map<String, Value>,
+    ) -> Result<Option<Option<String>>, Error> {
+        let tid = t.row.id.as_str();
+        if dismissed(data, tid, "before-commit") {
+            return Ok(Some(None));
+        }
+        let (diff_stat, paths) = diff_of(job_tree, &format!("HEAD...{}", tree.branch)).await;
+        let info = hook_points::CommitInfo {
+            branch: tree.branch.clone(),
+            message: format!("Merge {}", tree.branch),
+            diff_stat,
+            paths,
+        };
+        let site = hook_points::JobSite {
+            job,
+            task: tid,
+            project: data.get("project").and_then(Value::as_str),
+        };
+        let Some(out) = hook_points::before_commit(front, site, &info).await else {
+            return Ok(Some(None));
+        };
+        if let Some(why) = hook_points::hook_failure(&out, "commit") {
+            raise_hook_card(front, job, tid, "before-commit", &why, None).await?;
+            return Ok(None);
+        }
+        if let Some((name, reason)) = hook_points::refusal_of(&out) {
+            let title = format!("the before-commit hook refused the merge of {tid}");
+            let body = format!("{reason} \u{2014} by {name}");
+            raise_hook_card(front, job, tid, "before-commit", &title, Some(body)).await?;
+            return Ok(None);
+        }
+        Ok(Some(hook_points::commit_message(&out)))
     }
 
     /// A reviewer agent for TASK, in the task's tree, on PROFILE (the first of the `review` route by default).
@@ -618,6 +741,7 @@ impl PlanHooks {
         t: &Task,
         tree: &TaskTree,
         profile: Option<String>,
+        notes: &[String],
     ) -> Result<(), Error> {
         let tid = t.row.id.as_str();
         let profile = profile
@@ -661,11 +785,17 @@ impl PlanHooks {
             .reviewers
             .insert(tid.to_owned(), Reviewer { sid: sid.clone() });
         mark_review(front, &sid).await;
-        let prompt = format!(
+        let mut prompt = format!(
             "[drgnx review {tid}] {}\n\nReview the changes: git diff job/{job}...HEAD.  Answer with a last line \
              VERDICT: pass, or VERDICT: fail: what to change.",
             t.row.title.as_deref().unwrap_or("")
         );
+        if !notes.is_empty() {
+            prompt.push_str("\n\nNotes from the project's review hooks:");
+            for n in notes {
+                prompt.push_str(&format!("\n- {n}"));
+            }
+        }
         front.core.agents.prompt(&sid, prompt, Origin::Hub)?;
         changed(front, job).await;
         Ok(())
@@ -741,7 +871,7 @@ impl PlanHooks {
                                 let tree = me
                                     .tree_of(&f, &repo, &job2, &task, &data_of(&l.job))
                                     .await?;
-                                me.start_review_agent(&f, &job2, &task, &tree, Some(to))
+                                me.start_review_agent(&f, &job2, &task, &tree, Some(to), &[])
                                     .await
                             };
                             if let Err(e) = r.await {
@@ -767,7 +897,7 @@ impl PlanHooks {
             }
             Ended::Stopped => {
                 let v = verdict(&fallback::last_said(&tr));
-                self.reviewed(front, job, t, v, &s.id, data).await?;
+                self.reviewed(front, job, t, v, Some(&s.id), data).await?;
             }
         }
         Ok(())
@@ -781,7 +911,7 @@ impl PlanHooks {
         job: &str,
         t: &Task,
         v: Option<Verdict>,
-        reviewer: &str,
+        reviewer: Option<&str>,
         data: &Map<String, Value>,
     ) -> Result<(), Error> {
         let tid = t.row.id.as_str();
@@ -794,7 +924,7 @@ impl PlanHooks {
             front,
             job,
             tid,
-            Some(reviewer.to_owned()),
+            reviewer.map(str::to_owned),
             EventKind::Review,
             summary_text,
             kind_data,
@@ -956,10 +1086,16 @@ impl PlanHooks {
             .await
             .map(|_| ()),
             Gate::Allow => {
+                let Some(message) = self
+                    .commit_hooks(front, job, t, &tree, &job_tree, &data)
+                    .await?
+                else {
+                    return Ok(());
+                };
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
                 let old = crate::timeline::snapshot::head_of(&job_tree);
-                match git.merge_into(&job_tree, &tree).await {
+                match git.merge_into(&job_tree, &tree, message.as_deref()).await {
                     Ok(super::git::MergeOutcome::Merged) => {
                         if let Some(d) = front.dirs.get() {
                             let h = &front.core.history;
@@ -1547,6 +1683,26 @@ async fn act(
         "review" => {
             let tid = need_task()?;
             end_task_sessions(front, job, tid).await;
+            set_status(front, tid, "in-review", agent_of(tid)).await
+        }
+        // the user carries on without the hook: its point is not asked again for this task
+        "dismiss" if kind == "hook" => {
+            let tid = need_task()?;
+            let point = card
+                .data
+                .as_ref()
+                .and_then(|d| d.get("point"))
+                .and_then(Value::as_str)
+                .unwrap_or("before-commit")
+                .to_owned();
+            let (t2, p2) = (tid.to_owned(), point.clone());
+            update_data(front, &service(), job, move |d| {
+                put_in(d, "hook-dismissed", &t2, Some(json!(p2)));
+                if p2 == "before-commit" {
+                    put_in(d, "passed", &t2, Some(json!(true)));
+                }
+            })
+            .await?;
             set_status(front, tid, "in-review", agent_of(tid)).await
         }
         "drop" => {

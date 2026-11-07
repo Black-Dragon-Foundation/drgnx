@@ -131,8 +131,24 @@ At four points the hub asks your **rules** and the enabled plugins' **hooks** ab
 | `before-commit` | before the hub merges a task's commit | 10 s |
 | `at-review` | before a task goes to its reviewer | 30 s |
 
-`before-tool` and `after-edit` run today. `before-commit` and `at-review` can be declared and are checked, but the hub
-does not call them yet: they arrive with the checkpoint and review work.
+All four run. `before-commit` and `at-review` belong to a job and a task, not to an agent, so there is no session:
+a plugin's network requests at those points are judged under the job (the job's network cell and the `plugin` tier
+of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.
+
+- **`before-commit`** runs when the merge gate has cleared a task and just before the hub writes the merge commit.
+  A **change** (`{"message": "…"}`) replaces the commit message. A **deny** holds the merge: a `hook` card says "the
+  before-commit hook refused the merge of J7-3" and quotes your reason and which rule or plugin gave it. The card
+  offers **Retry the merge** (after you fixed what the hook objected to), **Dismiss and carry on** (merge this task
+  anyway; only you can, an agent cannot) and **Stop the job**.
+- **`at-review`** runs when a task is about to go to its reviewer. An **annotate** adds its note to the reviewer's
+  brief. A **deny** fails the review without starting the reviewer: the task goes back to its agent with your reason,
+  as any failed review, and counts toward the three failed reviews after which the task waits on you.
+- **A hook that cannot run** (it timed out, trapped, would not load, or was not run) is not a deny of the step: the
+  point stays blocked and a `hook` card says "hook NAME failed at review: WHAT" (or "at commit"), with **Retry** or
+  **Review again**, **Dismiss** and **Stop the job**. The task is not sent back to its agent and no failed review is
+  counted. A hook marked `advisory` only adds a note.
+
+A `hook` card is withdrawn when its job stops.
 
 Each answers **allow** (no objection), **deny** (with a reason), **annotate** (a note shown under the step) or, where
 the hub itself performs the action, **change** (a tool's arguments for the hub's own tools, the content the hub

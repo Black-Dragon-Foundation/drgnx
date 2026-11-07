@@ -537,13 +537,15 @@ async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
         Gate::Ask(_)
     ));
     // the card is still open: nothing merges
-    let r = RunGit::merge_into(&h, &e.repo, &yes).await.unwrap_err();
+    let r = RunGit::merge_into(&h, &e.repo, &yes, None)
+        .await
+        .unwrap_err();
     assert!(r.stderr.contains("not cleared"), "{r:?}");
     assert!(!e.repo.join(".github/workflows/ci.yml").exists());
     // answered yes: the branch is cleared and exactly that tip merges
     RunGit::clear_gate(&h, &yes.branch);
     assert_eq!(
-        RunGit::merge_into(&h, &e.repo, &yes).await.unwrap(),
+        RunGit::merge_into(&h, &e.repo, &yes, None).await.unwrap(),
         MergeOutcome::Merged
     );
     assert!(e.repo.join(".github/workflows/ci.yml").exists());
@@ -556,7 +558,7 @@ async fn a_ci_card_answered_yes_clears_and_merges_and_unanswered_does_not() {
         Gate::Ask(_)
     ));
     for _ in 0..2 {
-        assert!(RunGit::merge_into(&h, &e.repo, &no).await.is_err());
+        assert!(RunGit::merge_into(&h, &e.repo, &no, None).await.is_err());
     }
     assert!(!e.repo.join("Makefile").exists());
 }
