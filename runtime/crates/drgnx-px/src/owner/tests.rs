@@ -459,3 +459,130 @@ async fn stop_finishes_while_the_sidecar_floods() {
         .await
         .expect("stop returns");
 }
+
+/// A key source that answers `ok` and the request back, counting its calls.
+struct Echoing(Arc<AtomicU64>);
+
+impl KeySource for Echoing {
+    fn answer(&self, request: &str) -> AnswerFuture {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let a = format!("ok {request}\n").into_bytes();
+        Box::pin(async move { Box::new(a) as Box<dyn KeyAnswer> })
+    }
+}
+
+impl KeyAnswer for Vec<u8> {
+    fn bytes(&self) -> &[u8] {
+        self
+    }
+}
+
+/// A keyed owner after a good `READY`, its key source counting the requests it answered.
+async fn keyed() -> (Stand, Owner, Arc<AtomicU64>) {
+    let (w, mut out) = tokio::io::duplex(64 * 1024);
+    let (inp, r) = tokio::io::duplex(64 * 1024);
+    let mut stand = Stand {
+        w: Some(w),
+        r,
+        dec: Decoder::new(),
+        got: VecDeque::new(),
+        credit: HashMap::new(),
+    };
+    stand.send(Frame::ready(listen())).await;
+    wait_ready(&mut out, listen(), READY_LIMIT)
+        .await
+        .expect("a good READY");
+    let (stx, streams) = mpsc::channel(STREAMS_ROOM);
+    let (etx, events) = mpsc::channel(16);
+    let log = Log::default();
+    let calls = Arc::new(AtomicU64::new(0));
+    let src: Arc<dyn KeySource> = Arc::new(Echoing(calls.clone()));
+    let end = tokio::spawn(run_keyed(
+        out,
+        inp,
+        stx,
+        src,
+        etx,
+        BEAT,
+        shell::STALL,
+        log.clone(),
+    ));
+    (
+        stand,
+        Owner {
+            streams,
+            events,
+            log,
+            end,
+        },
+        calls,
+    )
+}
+
+impl Stand {
+    /// The `DATA` on `s` until its `FIN` (or `None` at its `RST`).
+    async fn answer(&mut self, s: u32) -> Option<Vec<u8>> {
+        let mut got = Vec::new();
+        loop {
+            match self.next().await {
+                Some(f) if f.stream == s && f.kind == Kind::Data => got.extend(f.payload),
+                Some(f) if f.stream == s && f.kind == Kind::Fin => return Some(got),
+                Some(f) if f.stream == s && f.kind == Kind::Rst => return None,
+                Some(_) => {}
+                None => panic!("the owner ended before the answer on {s}"),
+            }
+        }
+    }
+}
+
+/// [C] A key stream's one request line reaches the key source and its answer comes back, then the stream's `FIN`;
+/// a second line on the same stream is never read. A stream for the proxy carrying the same line never reaches the
+/// key source: it goes to the proxy's side.
+#[tokio::test]
+async fn a_key_stream_reaches_the_key_source_once_and_a_proxy_stream_never() {
+    let (mut stand, mut owner, calls) = keyed().await;
+    stand.send(Frame::open_key(1)).await;
+    stand.push(1, b"get A\nget B\n").await;
+    stand.send(Frame::empty(1, Kind::Fin)).await;
+    assert_eq!(stand.answer(1).await.as_deref(), Some(&b"ok get A\n"[..]));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    stand.send(Frame::empty(3, Kind::Open)).await;
+    stand.push(3, b"get A\n").await;
+    let r = owner.relayed().await;
+    drop(r);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a proxy stream reached the keys"
+    );
+    stand.close();
+    assert_eq!(owner.end().await.0, End::Eof);
+}
+
+/// [C] A key request longer than [`KEY_REQUEST`] bytes without its newline resets the stream, and the key source
+/// never sees it; nor does a line that isn't UTF-8.
+#[tokio::test]
+async fn an_overlong_key_request_is_reset_unread() {
+    let (mut stand, owner, calls) = keyed().await;
+    stand.send(Frame::open_key(1)).await;
+    stand.push(1, &[b'a'; KEY_REQUEST + 1]).await;
+    assert_eq!(stand.answer(1).await, None, "the stream was reset");
+    stand.send(Frame::open_key(3)).await;
+    stand.push(3, b"get \xff\n").await;
+    assert_eq!(stand.answer(3).await, None, "the stream was reset");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    stand.close();
+    assert_eq!(owner.end().await.0, End::Eof);
+}
+
+/// [C] A key stream on a channel whose job has no keys ends the channel with a violation.
+#[tokio::test]
+async fn a_key_stream_on_an_unkeyed_channel_ends_it() {
+    let (mut stand, owner) = plain().await;
+    stand.send(Frame::open_key(1)).await;
+    let (end, _) = owner.end().await;
+    assert!(
+        matches!(&end, End::Violation(v) if v.contains("no keys")),
+        "{end:?}"
+    );
+}
