@@ -25,7 +25,7 @@ pub fn feed(hub: &Hub, tree: &Tree, key: &str, ev: &WatchEvent, now: f64) -> Vec
     })
 }
 
-/// Everything RX holds now, fed in order.
+/// Everything RX holds now, fed in order, then the held events no step claimed in time ([`Hub::release_held`]).
 pub fn pump(
     hub: &Hub,
     tree: &Tree,
@@ -33,9 +33,15 @@ pub fn pump(
     rx: &Receiver<WatchEvent>,
     now: f64,
 ) -> Vec<FileVersion> {
-    rx.try_iter()
+    let mut done: Vec<FileVersion> = rx
+        .try_iter()
         .flat_map(|e| feed(hub, tree, key, &e, now))
-        .collect()
+        .collect();
+    match hub.release_held(tree, now) {
+        Ok(v) => done.extend(v),
+        Err(e) => tracing::warn!("history: a held watcher event was not recorded: {e}"),
+    }
+    done
 }
 
 #[cfg(test)]

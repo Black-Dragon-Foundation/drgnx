@@ -364,6 +364,29 @@ pub(crate) fn versions(tree: &Tree, staged: Vec<Staged>, op: i64) -> Vec<FileVer
         .collect()
 }
 
+/// How long (seconds) the watcher's event about a file of a tree an agent session works in waits for a step boundary
+/// to claim it: the agent's own edit tool writes in its process, and the step that wrote the file names it when it
+/// closes.  An event no step claims is an outside change.
+pub const HOLD: f64 = 2.0;
+
+/// An agent session working in a tree ([`Hub::attach_agent`]); dropped when the session ends.
+pub struct Attached {
+    hub: std::sync::Arc<Hub>,
+    tree: String,
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        let mut g = self.hub.lock();
+        if let Some(n) = g.agents.get_mut(&self.tree) {
+            *n -= 1;
+            if *n == 0 {
+                g.agents.remove(&self.tree);
+            }
+        }
+    }
+}
+
 fn user() -> (String, Value) {
     ("user".to_owned(), json!({"kind": "user"}))
 }
@@ -450,14 +473,95 @@ impl Hub {
         Ok(v)
     }
 
-    /// The watcher saw REL change.
+    /// The watcher saw REL change (at NOW).  In a tree an agent session works in, the event waits up to [`HOLD`] for
+    /// the step that wrote the file to claim it ([`Self::rescan_by`]); [`Self::release_held`] records the rest as
+    /// outside changes.
     pub fn on_disk_change(&self, tree: &Tree, rel: &str, now: f64) -> Result<Vec<FileVersion>> {
+        {
+            let mut g = self.lock();
+            if g.agents.get(&tree.id.0).is_some_and(|n| *n > 0) {
+                let held = g.held.entry(tree.id.0.clone()).or_default();
+                if !held.iter().any(|(r, _)| r == rel) {
+                    held.push((rel.to_owned(), now));
+                }
+                return Ok(Vec::new());
+            }
+        }
         self.observe(tree, &[rel.to_owned()], Src::Watch, now)
+    }
+
+    /// The held events of TREE no step claimed within [`HOLD`] (all of them once no agent session works there): outside
+    /// changes, recorded at NOW.
+    pub fn release_held(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
+        let due: Vec<String> = {
+            let mut g = self.lock();
+            let live = g.agents.get(&tree.id.0).is_some_and(|n| *n > 0);
+            let Some(held) = g.held.get_mut(&tree.id.0) else {
+                return Ok(Vec::new());
+            };
+            let (due, keep) = std::mem::take(held)
+                .into_iter()
+                .partition(|(_, at)| !live || at + HOLD <= now);
+            *held = keep;
+            due.into_iter().map(|(r, _)| r).collect()
+        };
+        if due.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.observe(tree, &due, Src::Watch, now)
     }
 
     /// A step-boundary rescan of RELS.
     pub fn rescan(&self, tree: &Tree, rels: &[String], now: f64) -> Result<Vec<FileVersion>> {
         self.observe(tree, rels, Src::Rescan, now)
+    }
+
+    /// The step-boundary rescan of the files an edit step of the agent SESSION named (CAUSE: the session and the
+    /// step): a new version is the agent's own edit, one record of the step, and the watcher's held events about those
+    /// files are claimed.
+    pub fn rescan_by(
+        &self,
+        tree: &Tree,
+        rels: &[String],
+        session: &str,
+        cause: Cause,
+        now: f64,
+    ) -> Result<Vec<FileVersion>> {
+        let (key, author) = agent(session);
+        let mut g = self.lock();
+        if let Some(held) = g.held.get_mut(&tree.id.0) {
+            held.retain(|(r, _)| !rels.contains(r));
+        }
+        let mut staged = Vec::new();
+        for rel in rels {
+            staged.extend(g.stage(tree, rel, read(tree, rel), Src::Rescan, &key, &author)?);
+        }
+        let summary = match rels {
+            [one] => format!("agent's tool wrote {one}"),
+            _ => format!("agent's tool wrote {} files", rels.len()),
+        };
+        let v = g.finish(
+            tree,
+            Kind::AgentStep,
+            &key,
+            &author,
+            cause,
+            summary,
+            staged,
+            now,
+        )?;
+        drop(g);
+        self.publish(&v);
+        Ok(v)
+    }
+
+    /// An agent session works in TREE until the guard is dropped: the watcher's events there wait for its steps.
+    pub fn attach_agent(self: &std::sync::Arc<Self>, tree: &Tree) -> Attached {
+        *self.lock().agents.entry(tree.id.0.clone()).or_default() += 1;
+        Attached {
+            hub: self.clone(),
+            tree: tree.id.0.clone(),
+        }
     }
 
     /// A rescan of every path that differs from TREE's head (its uncommitted state when the watcher starts): what the
@@ -470,9 +574,15 @@ impl Hub {
         self.rescan(tree, &rels, now)
     }
 
-    /// A rescan of every path the hub knows a version of.
+    /// A rescan of every path the hub knows a version of (a held one waits for its step).
     pub fn rescan_known(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
-        let rels = self.lock().origin.paths(&tree.id.0);
+        let rels = {
+            let g = self.lock();
+            let held = g.held.get(&tree.id.0);
+            let mut rels = g.origin.paths(&tree.id.0);
+            rels.retain(|r| !held.is_some_and(|h| h.iter().any(|(x, _)| x == r)));
+            rels
+        };
         self.rescan(tree, &rels, now)
     }
 

@@ -3005,6 +3005,8 @@ async fn write_steps(
     };
     let mut local = 0u64;
     let mut turn_start = true;
+    // while the session runs, the watcher's events in its tree wait for its steps to claim the agent's own edits
+    let _attached = attach_history(&ctx).await;
     while let Some(first) = rx.recv().await {
         let mut batch = vec![first];
         while batch.len() < STEP_BATCH {
@@ -3034,7 +3036,18 @@ async fn write_steps(
                     each
                 }
             };
-        for ((c, row), edit_col) in batch.into_iter().zip(written).zip(cols) {
+        // a file a later edit step of the batch names is that step's: the disk holds its content, not this one's
+        let named: Vec<Vec<String>> = batch
+            .iter()
+            .map(|c| {
+                if c.open.is_edit() {
+                    named_rels(&ctx.cwd, c)
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        for (i, ((c, row), edit_col)) in batch.into_iter().zip(written).zip(cols).enumerate() {
             local += 1;
             let (id, seq, log_version) = match row {
                 Ok(x) => x,
@@ -3045,7 +3058,12 @@ async fn write_steps(
             };
             ctx.flow.written.send_modify(|w| *w += 1);
             if c.open.is_edit() {
-                rescan_step(&ctx, &c, c.end).await;
+                let rels = named[i]
+                    .iter()
+                    .filter(|r| !named[i + 1..].iter().any(|l| l.contains(r)))
+                    .cloned()
+                    .collect();
+                rescan_step(&ctx, &c, rels, c.end).await;
             }
             let (snapshot, head, history_op) = anchor(
                 &sink,
@@ -3329,13 +3347,38 @@ async fn anchor(
     (snapshot, head, history_op)
 }
 
-/// The step-boundary rescan: the files edit step C named (its detail's path, its diffs' paths) read again into the
-/// edit history at END.  The agent's own edit tool or shell wrote them in its process, not through the hub; a file the
-/// hub wrote itself is no second version ([`crate::history::origin`]).  Paths outside the session's folder are left out.
-async fn rescan_step(ctx: &StepCtx, c: &ClosedStep, end: f64) {
+/// The step-boundary rescan: RELS, the files edit step C named ([`named_rels`]), read again into the edit history at
+/// END, a record of the session caused by the step (its `history_op`).  The agent's own edit tool or
+/// shell wrote them in its process, not through the hub; a file the hub wrote itself is no second version
+/// ([`crate::history::origin`]).  Paths outside the session's folder are left out.
+async fn rescan_step(ctx: &StepCtx, c: &ClosedStep, rels: Vec<String>, end: f64) {
     let Some((hubs, state)) = ctx.history.clone() else {
         return;
     };
+    if rels.is_empty() {
+        return;
+    }
+    let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
+    let cause = verdandi::Cause {
+        session: Some(sid.clone()),
+        step: Some(c.open.key.to_string()),
+        ..Default::default()
+    };
+    let who = sid.clone();
+    let r = crate::clock::blocking(move || {
+        let (hub, tree) = hubs.of_tree(&state, &cwd).ok()?;
+        hub.rescan_by(&tree, &rels, &who, cause, end).err()
+    })
+    .await;
+    if let Ok(Some(e)) = r {
+        tracing::info!(sid, "the step's files are not rescanned: {e}");
+    }
+}
+
+/// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
+/// text to.  None when the session has no history (a folder that is no git worktree, a test, a history that fails).
+/// The files edit step C named (its detail's path, its diffs' paths), relative to CWD; paths outside it are left out.
+fn named_rels(cwd: &Path, c: &ClosedStep) -> Vec<String> {
     let named = c
         .detail
         .as_ref()
@@ -3343,7 +3386,7 @@ async fn rescan_step(ctx: &StepCtx, c: &ClosedStep, end: f64) {
         .into_iter()
         .chain(c.diffs.iter().map(|d| d.0.as_str()));
     let mut rels: Vec<String> = Vec::new();
-    let root = resolve(&ctx.cwd);
+    let root = resolve(cwd);
     for p in named {
         let p = Path::new(p);
         let rel = if p.is_absolute() {
@@ -3364,22 +3407,22 @@ async fn rescan_step(ctx: &StepCtx, c: &ClosedStep, end: f64) {
             rels.push(r.to_owned());
         }
     }
-    if rels.is_empty() {
-        return;
-    }
-    let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
-    let r = crate::clock::blocking(move || {
-        let (hub, tree) = hubs.of_tree(&state, &cwd).ok()?;
-        hub.rescan(&tree, &rels, end).err()
-    })
-    .await;
-    if let Ok(Some(e)) = r {
-        tracing::info!(sid, "the step's files are not rescanned: {e}");
-    }
+    rels
 }
 
-/// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
-/// text to.  None when the session has no history (a folder that is no git worktree, a test, a history that fails).
+/// The session of CTX works in its tree's history until the guard drops ([`crate::history::Hub::attach_agent`]).
+async fn attach_history(ctx: &StepCtx) -> Option<crate::history::Attached> {
+    let (hubs, state) = ctx.history.clone()?;
+    let cwd = ctx.cwd.clone();
+    crate::clock::blocking(move || {
+        let (hub, tree) = hubs.of_tree(&state, &cwd).ok()?;
+        Some(hub.attach_agent(&tree))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 async fn newest_record(ctx: &StepCtx, end: f64) -> Option<i64> {
     let (hubs, state) = ctx.history.clone()?;
     let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());

@@ -380,3 +380,45 @@ fn reads_through_eitri_only() {
         }
     }
 }
+
+/// While an agent session works in a tree, the watcher's event about a file waits for the step that wrote it: the
+/// step's rescan claims it as the agent's (session and step), and an event no step claims is recorded as an outside
+/// change once it has waited [`super::HOLD`].
+#[test]
+fn a_watcher_event_waits_for_the_step_that_claims_it() {
+    let Fixture {
+        repo,
+        hist: _hist,
+        hub,
+        tree,
+    } = fixture(&[("a.txt", "one\n"), ("b.txt", "one\n")]);
+    let hub = std::sync::Arc::new(hub);
+    let attached = hub.attach_agent(&tree);
+    // the agent's tool wrote a.txt in its process; the user's other editor wrote b.txt
+    std::fs::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(repo.path().join("b.txt"), "one\nmine\n").unwrap();
+    assert!(hub.on_disk_change(&tree, "a.txt", 10.0).unwrap().is_empty());
+    assert!(hub.on_disk_change(&tree, "b.txt", 10.0).unwrap().is_empty());
+    assert!(
+        hub.release_held(&tree, 11.0).unwrap().is_empty(),
+        "within the hold"
+    );
+    let v = hub
+        .rescan_by(&tree, &["a.txt".into()], "s1", cause("4"), 11.5)
+        .unwrap();
+    assert_eq!(v.len(), 1);
+    assert_eq!(kind_of(&hub, v[0].op), Kind::AgentStep);
+    assert_eq!(hub.with(|h| h.op(OpId(v[0].op)).unwrap().cause), cause("4"));
+    let out = hub.release_held(&tree, 10.0 + super::HOLD).unwrap();
+    assert_eq!(out.len(), 1, "b.txt only: a.txt was claimed");
+    assert_eq!(out[0].path, "b.txt");
+    assert_eq!(kind_of(&hub, out[0].op), Kind::External);
+    // no agent session: an event is recorded at once
+    drop(attached);
+    std::fs::write(repo.path().join("b.txt"), "one\n").unwrap();
+    assert_eq!(hub.on_disk_change(&tree, "b.txt", 20.0).unwrap().len(), 1);
+}
+
+fn kind_of(hub: &Hub, op: i64) -> Kind {
+    hub.with(|h| h.op(OpId(op)).unwrap().kind)
+}

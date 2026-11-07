@@ -469,6 +469,99 @@ async fn a_runners_patch_after_the_revert_is_kept_not_applied() {
 }
 
 /// A manager's worker reverted: the manager is told, in its own conversation.
+/// An edit the agent's own tool wrote out of band (the hub never saw the write) is the agent's step in the history: the
+/// step anchors its own record, and a revert to the turn before it brings back the content before it, even when the
+/// session wrote the file through the hub in the same turn.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_out_of_band_edit_is_the_agents_step() {
+    let fx = Fx::new();
+    let wt = fx.work();
+    git(&wt, &["init", "-q", "-b", "main"]);
+    std::fs::write(wt.join("a.txt"), FIVE).unwrap();
+    git(&wt, &["add", "-A"]);
+    git(&wt, &["commit", "-q", "-m", "base"]);
+    // a worker: a chat's project is read-only, so its `fs/write_text_file` is refused
+    let p: StartParams =
+        serde_json::from_value(json!({"profile": "mock-claude", "cwd": wt, "role": "worker"}))
+            .unwrap();
+    let sid = fx
+        .front
+        .core
+        .agents
+        .start(&fx.front, p, &user())
+        .await
+        .expect("a session")
+        .id;
+    turn(&fx.front, &sid, "zero").await;
+    let target = turn(&fx.front, &sid, "fs:write a.txt base\\n").await;
+    assert_eq!(fx.read("a.txt"), "base\n", "the handler wrote it");
+    turn(&fx.front, &sid, "fs:write a.txt mine\\n\ntool:edit a.txt").await;
+    assert_eq!(fx.read("a.txt"), "mine\nedited by ratatoskr-mock\n");
+    let key = format!("session:{sid}");
+    let steps = fx
+        .front
+        .writer
+        .db
+        .read(move |c| norn::read::steps::for_session(c, &key, 0))
+        .await
+        .unwrap();
+    let op_of = |title: &str| {
+        steps
+            .iter()
+            .rfind(|s| s.tool.as_deref() == Some(title))
+            .and_then(|s| s.history_op)
+    };
+    let (write, edit) = (op_of("Write a.txt"), op_of("Edit a.txt"));
+    {
+        let dirs = fx.front.dirs.get().unwrap();
+        let (hub, _) = fx.front.core.history.of_tree(&dirs.hub, &wt).unwrap();
+        let g = hub.lock();
+        let last = g.h.last_op().unwrap().map_or(0, |o| o.0);
+        let ops: Vec<String> = (1..=last)
+            .map(|i| {
+                let r = g.h.op(verdandi::OpId(i)).unwrap();
+                format!(
+                    "{i} {:?} {:?} {:?} {}",
+                    r.kind, r.summary, r.cause.step, r.at
+                )
+            })
+            .collect();
+        let shown: Vec<_> = steps
+            .iter()
+            .map(|s| {
+                (
+                    s.seq,
+                    s.tool.clone(),
+                    s.tool_kind.clone(),
+                    s.end,
+                    s.history_op,
+                )
+            })
+            .collect();
+        assert!(
+            edit.is_some() && edit > write,
+            "the edit step anchors its own record: write {write:?} edit {edit:?}; ops {ops:#?} steps {shown:#?}"
+        );
+        let rec = g.h.op(verdandi::OpId(edit.unwrap())).unwrap();
+        assert_eq!(rec.cause.session.as_deref(), Some(sid.as_str()));
+    }
+    let l = Live { fx, sid, target };
+    let card = l.preview().await;
+    apply(
+        &l.fx.front,
+        &user(),
+        w::RevertApplyParams {
+            preview_id: card.preview_id,
+            mode: None,
+            choices: vec![],
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(l.fx.read("a.txt"), "base\n");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn manager_is_told() {
     let fx = Fx::new();
