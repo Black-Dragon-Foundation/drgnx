@@ -97,7 +97,9 @@ text inside the scope's insert goes with it) or `Edited(text)`.
 **The 3-way check.** Where no overlap is found, the result is compared with `git merge-file -p` (ours: now; base: the
 text after the scope; theirs: the text before it), run over three temporary files in a private folder. A clean merge
 that differs is a bug in the span revert: the preview says `threeway_differs` and carries git's text, which the apply
-then writes. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
+then writes. The check is not made when another author's operations lie between the scope's first operation and its
+last (the user typed between two of its records): the text after the scope then holds that typing too, and git, taking
+it for the scope's, would remove it. `src/revert_props.rs` holds the property in 10,000 seeded cases (the spike's, through the history's own
 records and a reload of each document from its rows): every case without an overlap equals git, and every overlap the
 case made is found, and no other. `verdandi::threeway::conflicts(base, ours, theirs)` is the public count of the same
 merge's conflicting hunks (0: clean; git counts at most 127, more is an error), for callers that only need to know
@@ -363,18 +365,42 @@ the preview and apply, and the restart of the hub on the same root. The mock's `
 recorded in (`history/revert/preview {decision}`). Things the rows fix as they are:
 
 - A revert's *files* come from the checkpoint a step holds. A turn's first step holds the tree as it was before the
-  turn's prompt went to the agent, so a revert to it never keeps a write of that turn; an edit's checkpoint is taken
-  once its step is written, so a write the agent makes at once after it can already be in it.
-- The user's edits are those made after the agent's last step. Edits between two steps count as the agent's, and
-  keep-mine puts the checkpoint's file back over them.
+  turn's prompt went to the agent, so a revert to it never keeps a write of that turn. An edit's checkpoint is the
+  tree before the agent's next write that the hub serves (`fs/write_text_file`), when the step's row is written after
+  that write, so a revert to it keeps that edit and removes the next. An agent that writes files itself, outside ACP
+  (its own tools, a shell), is not covered: no hub write marks the point, so such a write made at once after an edit
+  can still be in the edit's checkpoint.
+- Keep mine of a text file the history holds as it is now (the agent's served writes, a drgnx buffer's typing through
+  Nidhogg's hook as `history/batch`, the watcher's outside changes all reached it) takes the history's own keep mine
+  over the records the session caused after the end of the step whose checkpoint the revert goes back to
+  (`History::preview_revert`, its stored preview dropped at once), not the checkpoint. So a user's edit made between
+  two agent steps stays though the agent's later checkpoint holds it, and the agent's lines on both sides of it go. The
+  typing still waiting for the 30 s settle is flushed into its record first (`FlushReason::Revert`). Any other path (no
+  record of the session's, a CRLF or binary file, a history behind the file on disk) is read from the checkpoints
+  alone: a path that differs from the agent's newest checkpoint is the user's, so there an edit between two steps still
+  counts as the agent's. A revert's (and a redo's) own writes are the user's operations in its record, applied onto
+  the documents before the files are written, so after a revert the history still holds the files as they are and a
+  second revert, earlier or later, is decided by the history too; the second's scope may hold the first's record, and
+  the span revert then leaves out what the first deleted of the scope's own text.
+- An agent's write outside ACP (its own tools, a shell command) cannot be told from an edit in another program: both
+  reach the history only through the watcher, as `external:disk`. Neither inotify nor FSEvents names the writer
+  (fanotify does, with `CAP_SYS_ADMIN`, which the hub does not have), the agent runs as the user, and the user may save
+  a file from another editor while an agent's shell step runs, so no rule on time or process tells them apart either.
+  The history's keep mine keeps such a write as if it were the user's; only typing in a drgnx buffer is known to be the
+  user's. An outside edit the watcher had not read before the agent's next served write is diffed into that write's
+  record instead, and then counts as the agent's.
 - A file the agent created and the user then edited has no base to merge from: the card shows an overlap, and the
   default answer keeps the user's file.
 - Two edits that touch neighbouring lines of one file are a conflict in the merge, so they too come back as an overlap.
 - A revert to a subagent's step cuts the conversation at the message before the Task call and carries what the cut
   leaves out in a summary, so it needs the user's message, and the card says so (`needs_message`).
+- A revert of a Codex session to a tool call inside a turn that has ended forks the conversation at the end of the
+  turn before (the mock's fork keeps one turn), and the steps of the later turn up to the call go in a summary, so it
+  needs the user's message too.
 
 `cargo test -p verdandi --test timing -- --ignored --nocapture` prints the cost of the "undone by" scan (a file with 1,000
-later deletes); it is a measurement, not a gate.
+later deletes); it is a measurement, not a gate. `cargo test -p drgnx-ratatoskr --lib write_tree_before_cost -- --ignored
+--nocapture` prints what the tree taken before an agent's write costs per write, for 100, 1,000 and 10,000 files.
 
 `cargo test -p verdandi`: `tests/store.rs`, `tests/docs.rs`, `tests/log.rs`, `tests/revert.rs` and the property in
 `src/revert_props.rs` (in the crate so it can use a store without a sync at each commit; its 10,000 cases make some

@@ -288,11 +288,7 @@ impl Inner {
         }
         let branch = self.branch(tree)?;
         let author_peer = self.peer(branch, key, author)?;
-        let spans = staged
-            .iter()
-            .flat_map(|s| s.spans.iter().map(|sp| (s.doc, *sp)))
-            .filter_map(|(d, sp)| d.map(|d| (d, sp)))
-            .collect();
+        let spans = spans_of(&staged);
         let op = self.h.record(Record {
             kind,
             author: author_peer,
@@ -303,17 +299,61 @@ impl Inner {
             summary,
             at: now,
         })?;
-        Ok(staged
-            .into_iter()
-            .map(|s| FileVersion {
-                worktree: tree.id.0.clone(),
-                path: s.path,
-                blob: s.blob,
-                op: op.0,
-                class: s.class,
-            })
-            .collect())
+        Ok(versions(tree, staged, op.0))
     }
+
+    /// What the hub is about to write at REL in TREE for the user's own act (a revert, a redo), SEEN as the file will
+    /// be: staged onto its document as the user's operations and told to the origin core as the hub's write, so the
+    /// history holds the file as the act leaves it and the watcher's event about it is no outside edit.  None when it
+    /// is no new version.  The caller writes the record that holds the spans.
+    pub(crate) fn stage_users(
+        &mut self,
+        tree: &Tree,
+        rel: &str,
+        seen: Seen,
+    ) -> Result<Option<Staged>> {
+        let seen = match seen {
+            Seen::Bytes(b) if b.len() as u64 > TEXT_CAP => Seen::Big,
+            s => s,
+        };
+        let (key, author) = user();
+        self.stage(tree, rel, seen, Src::Hub, &key, &author)
+    }
+
+    /// The user's peer on TREE's branch (the one their typing in a drgnx buffer is by): the author of the records of
+    /// the user's own acts.
+    pub(crate) fn user_peer(&mut self, tree: &Tree) -> Result<PeerId> {
+        let branch = self.branch(tree)?;
+        let (key, author) = user();
+        self.peer(branch, &key, &author)
+    }
+}
+
+/// The spans STAGED made, by document, for the record that holds them.
+pub(crate) fn spans_of(staged: &[Staged]) -> Vec<(DocId, Span)> {
+    staged
+        .iter()
+        .flat_map(|s| s.spans.iter().map(|sp| (s.doc, *sp)))
+        .filter_map(|(d, sp)| d.map(|d| (d, sp)))
+        .collect()
+}
+
+/// The versions STAGED are in TREE, made by record OP.
+pub(crate) fn versions(tree: &Tree, staged: Vec<Staged>, op: i64) -> Vec<FileVersion> {
+    staged
+        .into_iter()
+        .map(|s| FileVersion {
+            worktree: tree.id.0.clone(),
+            path: s.path,
+            blob: s.blob,
+            op,
+            class: s.class,
+        })
+        .collect()
+}
+
+fn user() -> (String, Value) {
+    ("user".to_owned(), json!({"kind": "user"}))
 }
 
 fn agent(session: &str) -> (String, Value) {

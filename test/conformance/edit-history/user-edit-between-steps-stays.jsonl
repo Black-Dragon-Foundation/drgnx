@@ -1,0 +1,29 @@
+{"scenario": "edit-history/user-edit-between-steps-stays", "requires": ["v1", "test-hooks"], "doc": "An agent added a line to a.txt; then, before its next turn, the user added a line of their own at the top of a.txt in the editor (registered, typed as a batch, saved), and the agent's next turn added another line below. The agent's newer checkpoint holds the user's line, so the checkpoints alone count it as the agent's. Reverting to before the agent's first edit in keep-mine mode takes both of the agent's lines away and leaves the user's."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write a.txt base\\nagent\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s0", "class": "think"}}}, "within_ms": 15000}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/work", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tracked": true}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 0, "inserted": "user\n"}], "region_hash": "c7445023791703dbc8d542637c813df84c90330594adfeaa353d586318bcab35"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 15000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/work && printf 'user\\nbase\\nagent\\n' > a.new && mv a.new a.txt"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "say second\nfs:write a.txt user\\nbase\\nagent\\nmore\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$s0"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$s0", "blocked": []}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"session": "$sid", "op": "$number", "skipped": []}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/work && echo \"a=[$(cat a.txt)]\" && test \"$(cat a.txt)\" = \"$(printf 'user\\nbase')\""], "expect_code": 0}

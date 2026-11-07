@@ -596,31 +596,56 @@ pub async fn redo(f: &Front, c: &Caller, p: w::RedoParams) -> Result<w::Redone, 
     );
     let (back, merges, left) =
         blocking(move || redo_plan(&r, &w2, &cp, &ud).map_err(internal)).await?;
-    let (r, w2, h2, t2, ud) = (
+    let (r, w2, h2, t2, ud, cp) = (
         root.clone(),
         cwd.clone(),
         hub.clone(),
         tree.clone(),
         undone.clone(),
+        checkpoint.clone(),
     );
-    let (written, mut skipped) = blocking(move || {
+    let (written, mut skipped, staged) = blocking(move || {
         let dir =
             std::fs::File::open(&w2).map_err(|e| internal(format!("{}: {e}", w2.display())))?;
-        let mut g = h2.lock();
+        // what the redo leaves at each path, staged onto its document as the user's operations first (and told to
+        // the origin core as the hub's write), so the history holds the files as the redo leaves them
+        let modes: std::collections::HashMap<PathBuf, u32> = snapshot::changed(&r, &w2, &cp, &ud)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.path, c.to_mode))
+            .collect();
+        let mut puts = Vec::new();
         for path in &back {
             let rel = path.to_string_lossy().into_owned();
-            let hash = snapshot::blob_id(&r, &w2, &ud, &rel).unwrap_or_else(|| "gone".into());
-            g.origin
-                .step(&t2.id.0, OriginEv::HubWrite { path: rel, hash });
+            let bytes = || snapshot::blob(&r, &w2, &ud, &rel).ok();
+            let seen = match modes.get(path) {
+                Some(0) => Some(Seen::Gone),
+                Some(0o100644 | 0o100755) => bytes().map(Seen::Bytes),
+                Some(0o120000) => {
+                    bytes().map(|b| Seen::Link(String::from_utf8_lossy(&b).into_owned()))
+                }
+                _ => None,
+            };
+            match seen {
+                Some(seen) => puts.push((rel, seen)),
+                // not a file the history reads: only announced, as the hub's write
+                None => {
+                    let hash =
+                        snapshot::blob_id(&r, &w2, &ud, &rel).unwrap_or_else(|| "gone".into());
+                    h2.lock()
+                        .origin
+                        .step(&t2.id.0, OriginEv::HubWrite { path: rel, hash });
+                }
+            }
         }
         for m in &merges {
             let rel = m.path.to_string_lossy().into_owned();
-            if let Ok(hash) =
-                super::blob::hash_object(&t2.git_dir, &t2.root, &rel, m.text.as_bytes())
-            {
-                g.origin
-                    .step(&t2.id.0, OriginEv::HubWrite { path: rel, hash });
-            }
+            puts.push((rel, Seen::Bytes(m.text.as_bytes().to_vec())));
+        }
+        let mut g = h2.lock();
+        let mut staged = Vec::new();
+        for (rel, seen) in puts {
+            staged.extend(g.stage_users(&t2, &rel, seen).map_err(store)?);
         }
         drop(g);
         let done = snapshot::restore_into(&r, &w2, &w2, &ud, Some(&back), &[]).map_err(internal)?;
@@ -631,31 +656,39 @@ pub async fn redo(f: &Front, c: &Caller, p: w::RedoParams) -> Result<w::Redone, 
                 Err(e) => skipped.push((m.path, e.to_string())),
             }
         }
-        Ok((written, skipped))
+        Ok((written, skipped, staged))
     })
     .await?;
     skipped.extend(left);
-    let (h2, s2, now) = (hub.clone(), sid.clone(), crate::clock::wall_secs());
-    let redone = blocking(move || {
+    let (h2, t2, s2, now) = (
+        hub.clone(),
+        tree.clone(),
+        sid.clone(),
+        crate::clock::wall_secs(),
+    );
+    let (redone, versions) = blocking(move || {
         let mut g = h2.lock();
-        let author = g.h.peer(&user_author(), None).map_err(store)?;
-        g.h.record(Record {
-            kind: Kind::Redo,
-            author,
-            cause: Cause {
-                session: Some(s2.clone()),
-                step: Some(seq.to_string()),
-                ..Cause::default()
-            },
-            spans: Vec::new(),
-            parents: vec![OpId(op)],
-            git: None,
-            summary: format!("redo of revert {op} of session {s2}"),
-            at: now,
-        })
-        .map_err(store)
+        let author = g.user_peer(&t2).map_err(store)?;
+        let redone =
+            g.h.record(Record {
+                kind: Kind::Redo,
+                author,
+                cause: Cause {
+                    session: Some(s2.clone()),
+                    step: Some(seq.to_string()),
+                    ..Cause::default()
+                },
+                spans: capture::spans_of(&staged),
+                parents: vec![OpId(op)],
+                git: None,
+                summary: format!("redo of revert {op} of session {s2}"),
+                at: now,
+            })
+            .map_err(store)?;
+        Ok((redone, capture::versions(&t2, staged, redone.0)))
     })
     .await?;
+    hub.publish(&versions);
     let mut out = w::Redone {
         op: redone.0,
         written: written

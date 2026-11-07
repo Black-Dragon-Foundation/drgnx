@@ -73,6 +73,37 @@ impl Timeline {
     }
 }
 
+/// An edit step's checkpoint, taken once: by the step writer when it writes the step's anchors, or by the session
+/// before it serves the agent's next write, whichever comes first ([`Snap::before_write`]).  The writer holds it while
+/// it takes its own, so no write is served meanwhile.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct EditCell(Arc<tokio::sync::Mutex<Mark>>);
+
+#[derive(Debug, Default)]
+enum Mark {
+    /// Nobody took it yet.
+    #[default]
+    Open,
+    /// The tree before a later write (held by its ref until the writer keeps it).
+    Before(String),
+    /// The writer is done with it.
+    Done,
+}
+
+impl EditCell {
+    /// The writer is done with it: nothing more to take.
+    pub(crate) fn is_done(&self) -> bool {
+        self.0.try_lock().is_ok_and(|m| matches!(*m, Mark::Done))
+    }
+
+    /// Its step's row was never written, so no step keeps a tree taken for it: none is taken from now on.  A tree
+    /// taken already stays held by its ref (the edit steps closed before one write share it) until the session's refs
+    /// are pruned.
+    pub(crate) async fn close(&self) {
+        *self.0.lock().await = Mark::Done;
+    }
+}
+
 /// What a session needs to take its snapshots: the shadow repositories' folder, the cap (read at every use, so a
 /// change applies at once) and the shared state.
 #[derive(Clone)]
@@ -117,17 +148,60 @@ impl Snap {
             .ok()
     }
 
+    /// The tree of WORKTREE before SID's agent's next write is served, kept in CELLS (edit steps closed before the write
+    /// whose checkpoints nobody took yet): one tree for all of them, taken only when one is still open.  A cell the
+    /// writer holds is waited for, since the writer takes the tree then.
+    pub(crate) async fn before_write(&self, sid: &str, worktree: &Path, cells: Vec<EditCell>) {
+        if self.state.stopped.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut tree: Option<String> = None;
+        for c in cells {
+            let mut m = c.0.lock().await;
+            if !matches!(*m, Mark::Open) {
+                continue;
+            }
+            if tree.is_none() {
+                let (root, wt, sid_) = (self.root.clone(), worktree.to_path_buf(), sid.to_string());
+                match crate::clock::blocking(move || snapshot::write_tree_before(&root, &wt, &sid_))
+                    .await
+                {
+                    Ok(Ok(t)) => tree = Some(t),
+                    Ok(Err(e)) => {
+                        tracing::warn!(sid, "the tree before a write is not taken: {e}");
+                        return;
+                    }
+                    Err(_) => return,
+                }
+            }
+            *m = Mark::Before(tree.clone().unwrap_or_default());
+        }
+    }
+
     /// A tree of WORKTREE after a completed edit (step SEQ of SID), or TURN (the [`Snap::before_turn`] tree of the
-    /// turn's first step) kept as that step's; its id.  Over the cap, the oldest finished sessions' refs go first; with
-    /// none left, snapshots stop and the editors get one notice.
-    pub async fn after_edit(
+    /// turn's first step) kept as that step's; its id.  An edit step's CELL gives the tree taken before the agent's next
+    /// write when there is one ([`Snap::before_write`]), else the tree is taken now, with the cell held so no write is
+    /// served meanwhile.  Over the cap, the oldest finished sessions' refs go first; with none left, snapshots stop and
+    /// the editors get one notice.
+    pub(crate) async fn after_edit(
         &self,
         sid: &str,
         worktree: &Path,
         seq: u64,
-        turn: Option<&str>,
+        (turn, cell): (Option<&str>, Option<&EditCell>),
         editors: &crate::settings::agents::Editors,
     ) -> Option<String> {
+        let mut held = match cell {
+            Some(c) => Some(c.0.lock().await),
+            None => None,
+        };
+        let before = match held
+            .as_deref_mut()
+            .map(|m| std::mem::replace(m, Mark::Done))
+        {
+            Some(Mark::Before(t)) => Some(t),
+            _ => None,
+        };
         if self.state.stopped.load(Ordering::Relaxed) {
             return None;
         }
@@ -137,14 +211,16 @@ impl Snap {
             sid.to_string(),
             turn.map(str::to_string),
         );
-        let tree = crate::clock::blocking(move || match turn {
-            Some(t) => snapshot::put_turn_tree(&root, &wt, &sid_, seq, &t).map(|()| t),
-            None => snapshot::take(&root, &wt, &sid_, seq, &[]),
+        let tree = crate::clock::blocking(move || match (before, turn) {
+            (Some(t), _) => snapshot::put_write_tree(&root, &wt, &sid_, seq, &t).map(|()| t),
+            (None, Some(t)) => snapshot::put_turn_tree(&root, &wt, &sid_, seq, &t).map(|()| t),
+            (None, None) => snapshot::take(&root, &wt, &sid_, seq, &[]),
         })
         .await
         .ok()?
         .map_err(|e| tracing::warn!(sid, "snapshot not taken: {e}"))
         .ok()?;
+        drop(held);
         let cap = self.settings.current().loaded.values.agents_checkpoint_cap;
         let (root, finished) = (
             self.root.clone(),

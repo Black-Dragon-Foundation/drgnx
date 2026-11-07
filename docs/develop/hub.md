@@ -983,10 +983,15 @@ else (Gemini, an agent without the capability) `summary`.
 - **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
   assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
   the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
-  turn that completed at or before the step (the step that carries its `turn_id`), cut at that turn's last message,
-  because a Codex fork point is inclusive and cannot be a turn in progress. The steps a cut drops are `retained`: a
-  labelled summary carries them. No id found (or the first turn still running): `summary`, carrying every step up to
-  the one asked for.
+  turn that completed at or before the step, cut at that turn's last message, because a Codex fork point is inclusive
+  and cannot be a turn in progress. A turn's end is its last step: once a turn ends every step of it carries its
+  `turn_id` (the step writer's anchors), so a step inside an ended turn rounds down too. The steps a cut drops are
+  `retained`: a labelled summary carries them, so the revert needs the user's message (`needs_message`). No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for. Only the step's own conversation counts: a step an earlier revert abandoned (`step.undone_by`)
+  is no cut point, ends no turn and is in no summary, since the new conversation never held it and may reuse its turn
+  ids (Codex's restart after a fork). The steps after a step that is not abandoned stay its conversation's, abandoned
+  or not, because a revert marks them before it rewinds; an abandoned step's conversation is the steps its revert
+  abandoned with it and the ones before them that no revert abandoned.
 - **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
   fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
   session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
@@ -1004,8 +1009,10 @@ else (Gemini, an agent without the capability) `summary`.
   conversation's spend from its first reading (`spend_total_in` names `self.acp`).
 - **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
   (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
-  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` and the
-  head recorded there) joined with the user's message, which is then required: without one the rewind is refused
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` in the
+  step's own conversation, by the cut's own filter (`rewind::same_line`, so no step an earlier revert abandoned), the
+  head recorded there, and the decisions stamped in those steps; an unstamped decision unless its version is after
+  the step's `log_version`) joined with the user's message, which is then required: without one the rewind is refused
   (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
   summary and the message; with no message the summary waits, held, at the front of the queue.
 - **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
@@ -1042,11 +1049,20 @@ A revert takes an agent's work back to one of its steps: the files, the decision
   edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
   theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
   user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  A text file the project's `history.db` holds as it is now is decided by the history instead: the typing waiting to
+  settle is flushed, and `History::preview_revert` over the records the session caused after the end of the step whose
+  checkpoint is used gives the text with the agent's operations undone and everyone else's kept, so an edit the user
+  made between two agent steps (which the agent's later checkpoint holds) stays; a hunk where the two meet is an
+  overlap as above (`docs/develop/history.md`, "Testing", says what this cannot tell apart).
   `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
   `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
 - **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
   after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
-  none; the pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  none. A revert is the user's act: the record is by the user's peer, and what the revert is about to write at each
+  path (the checkpoint's file, link or nothing, or the merged or edited text) is applied onto the path's document
+  first as the user's operations, which the record holds (and each version is published as `history/file-version`).
+  So the history holds the files as the revert leaves them, and a later revert of them is decided by the history
+  again. The pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
   At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
   revert from the files on.
 
@@ -1144,7 +1160,8 @@ budget chain; the forecast line the user saw is the editor's).
   against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
   since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
   user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
-  revert, one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  revert, by the user's peer and holding what the redo writes as the user's operations on the documents (as a
+  revert's record does), one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
   hub: its conversation is not restored.
 - The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
   session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
@@ -3185,7 +3202,14 @@ adds `revertible`: it has a history record and its session's snapshots were not 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
 tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. A
 turn's tree is taken before its prompt goes to the agent (through an index of its own, held by `refs/drgnx/turn/<sid>`
-until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. Each
+until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. An edit's
+tree is taken by the step writer once the step's row is written, unless the session serves the agent's next
+`fs/write_text_file` first: then the session takes the tree before it serves that write (`Snap::before_write`, through an
+index of its own, held by `refs/drgnx/write/<sid>/<tree>` until the step keeps it), one tree for every edit step closed
+since the last write, and the writer keeps that one. The writer holds the step's cell while it takes its own tree, so no
+write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
+written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
+already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and

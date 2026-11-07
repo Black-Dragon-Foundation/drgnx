@@ -180,6 +180,9 @@ struct State {
     closed: Vec<ClosedStep>,
     /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
     before: Option<String>,
+    /// The checkpoints of the edit steps closed since the agent's last served write, which their step's writer may
+    /// not have taken yet: the next write takes them first ([`crate::timeline::Snap::before_write`]).
+    edits: Vec<crate::timeline::EditCell>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
@@ -267,6 +270,14 @@ struct OpenStep {
     parent_tool: Option<String>,
 }
 
+impl OpenStep {
+    /// A tool call that changes files: its step gets a checkpoint.
+    fn is_edit(&self) -> bool {
+        self.class == StepClass::Tool
+            && matches!(self.tool_kind.as_deref(), Some("edit" | "delete" | "move"))
+    }
+}
+
 /// A step that ended, waiting to be written to the `step` table and announced.
 #[derive(Clone, Debug)]
 struct ClosedStep {
@@ -292,6 +303,8 @@ struct ClosedStep {
     call_end: Option<crate::work::presence::CallStatus>,
     /// A tool step's `diff` content items: where an edit's lines are found when the step is written.
     diffs: Diffs,
+    /// On an edit step: its checkpoint, taken by the writer or before the agent's next write, whichever is first.
+    cell: Option<crate::timeline::EditCell>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -337,6 +350,7 @@ impl State {
             plan_now: None,
             closed: Vec::new(),
             before: None,
+            edits: Vec::new(),
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
@@ -403,7 +417,14 @@ impl State {
                 .as_deref()
                 .map(|id| self.tool_diffs(id))
                 .unwrap_or_default();
+            let cell = open.is_edit().then(|| {
+                let c = crate::timeline::EditCell::default();
+                self.edits.retain(|e| !e.is_done());
+                self.edits.push(c.clone());
+                c
+            });
             self.closed.push(ClosedStep {
+                cell,
                 detail,
                 command,
                 call_end,
@@ -2959,7 +2980,7 @@ async fn write_steps(
             seq,
             c.turn_id.as_deref(),
             &c.open,
-            (turn_start, c.before.as_deref()),
+            (turn_start, c.before.as_deref(), c.cell.as_ref()),
             c.end,
         )
         .await;
@@ -3135,8 +3156,9 @@ async fn write_steps(
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
 /// last), and a snapshot of the worktree after a completed edit and at the turn's first step (BEFORE: the tree taken
-/// before the turn's prompt went, else the worktree now), with the worktree's commit then (from its ref files).  Best
-/// effort; answers the snapshot and the commit.
+/// before the turn's prompt went, else the worktree now; CELL: an edit's, the tree taken before the agent's next write
+/// when the session served one first), with the worktree's commit then (from its ref files).  Best effort; answers the
+/// snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -3146,14 +3168,17 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
-    (turn_start, before): (bool, Option<&str>),
+    (turn_start, before, cell): (bool, Option<&str>, Option<&crate::timeline::EditCell>),
     end: f64,
 ) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
+        // the row is lost: an edit's checkpoint would be a tree no step keeps, so the agent's next write takes none
+        if let Some(c) = cell {
+            c.close().await;
+        }
         return (None, None, None);
     }
-    let edit = open.class == StepClass::Tool
-        && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let edit = open.is_edit();
     let turn_start = turn_start || before.is_some();
     let history_op = if edit || turn_start {
         newest_record(ctx, end).await
@@ -3163,8 +3188,14 @@ async fn anchor(
     let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
             let before = before.filter(|_| !edit);
-            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, before, &sink.editors)
-                .await
+            s.after_edit(
+                &ctx.session,
+                &ctx.cwd,
+                seq as u64,
+                (before, cell),
+                &sink.editors,
+            )
+            .await
         }
         _ => None,
     };
@@ -5016,6 +5047,14 @@ impl Session {
                 self.steer_in(crate::hook_points::change_notice(&hook, path));
             }
         }
+        // the edit steps closed since the last write hold the tree as it is now, before this one (after the hooks:
+        // a refused write leaves them for the next)
+        let cells = std::mem::take(&mut lock(&self.state).edits);
+        if let Some(s) = &self.snap
+            && !cells.is_empty()
+        {
+            s.before_write(&self.id, &self.cwd, cells).await;
+        }
         // the edit history records what is written: the content after the hooks' change, never a refused write
         self.record_write(&real, &content).await;
         tokio::fs::write(&real, content)
@@ -6308,6 +6347,7 @@ mod tests {
                 before: None,
                 call_end: None,
                 diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }
@@ -6407,6 +6447,7 @@ mod tests {
                 before: None,
                 call_end: None,
                 diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }
@@ -6507,6 +6548,7 @@ mod tests {
                 before: None,
                 call_end: None,
                 diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }
@@ -6515,6 +6557,95 @@ mod tests {
         assert_eq!(edit.history_op, Some(made[0].op as u64));
         assert!(edit.revertible);
         assert_eq!(read.history_op, None, "a read step anchors no record");
+    }
+
+    // test-pattern: D (the step's row cannot be written: its store's folder is a file)
+    #[tokio::test]
+    async fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("not-a-folder"), "").unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "edited").unwrap();
+        let snap = crate::timeline::Snap::for_test(
+            dir.path().join("cp"),
+            Arc::new(crate::settings::Settings::new()),
+        );
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: Some(snap.clone()),
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+        };
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: wt.clone(),
+            acp: None,
+            history: None,
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let cell = crate::timeline::EditCell::default();
+        tx.send(ClosedStep {
+            open: OpenStep {
+                class: StepClass::Tool,
+                start: 1.0,
+                tool: Some("Edit a.txt".into()),
+                tool_kind: Some("edit".into()),
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 2.0,
+            turn_id: None,
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: None,
+            command: None,
+            context: None,
+            before: None,
+            cell: Some(cell.clone()),
+        })
+        .unwrap();
+        // the step is announced though its row is lost
+        seen.recv().await.unwrap();
+        assert!(cell.is_done(), "the lost step's checkpoint is closed");
+        // so the agent's next write takes no tree for it
+        snap.before_write("a1", &wt, vec![cell]).await;
+        let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
+        let refs = if repo.exists() {
+            let out = std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(&repo)
+                .args(["for-each-ref", "--format=%(refname)"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        } else {
+            String::new()
+        };
+        assert_eq!(refs, "", "no tree is held for a step nobody keeps");
     }
 
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
@@ -6586,6 +6717,7 @@ mod tests {
                 before: None,
                 call_end: None,
                 diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }

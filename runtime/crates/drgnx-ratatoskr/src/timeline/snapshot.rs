@@ -206,12 +206,61 @@ pub fn put_turn_tree(
     seq: u64,
     tree: &str,
 ) -> Result<(), String> {
+    put_held(root, worktree, sid, seq, tree, &turn_ref(sid))
+}
+
+/// The refs that hold SID's trees taken before a write ([`write_tree_before`]), each until its step is written.
+fn write_refs(sid: &str) -> String {
+    format!("refs/drgnx/write/{}/", safe(sid))
+}
+
+/// A tree of WORKTREE as it is before the hub serves one of SID's agent's writes: the checkpoint of the edit steps that
+/// closed before it and whose rows are not written yet.  Through an index of its own, and held by a ref until
+/// [`put_write_tree`] keeps it as a step's.
+pub fn write_tree_before(root: &Path, worktree: &Path, sid: &str) -> Result<String, String> {
+    let (repo, tree) = write_tree(root, worktree, &format!("write-{sid}"), &[])?;
+    git(
+        &repo,
+        None,
+        None,
+        &["update-ref", &format!("{}{tree}", write_refs(sid)), &tree],
+    )?;
+    Ok(tree)
+}
+
+/// TREE (a [`write_tree_before`]) kept as SID's step SEQ, and its holding ref gone.
+pub fn put_write_tree(
+    root: &Path,
+    worktree: &Path,
+    sid: &str,
+    seq: u64,
+    tree: &str,
+) -> Result<(), String> {
+    put_held(
+        root,
+        worktree,
+        sid,
+        seq,
+        tree,
+        &format!("{}{tree}", write_refs(sid)),
+    )
+}
+
+/// TREE kept as SID's step SEQ, and the ref HELD that held it until then gone.
+fn put_held(
+    root: &Path,
+    worktree: &Path,
+    sid: &str,
+    seq: u64,
+    tree: &str,
+    held: &str,
+) -> Result<(), String> {
     put(root, worktree, sid, seq, tree)?;
     git(
         &repo_of(root, worktree),
         None,
         None,
-        &["update-ref", "-d", &turn_ref(sid)],
+        &["update-ref", "-d", held],
     )
     .map(drop)
 }
@@ -665,9 +714,20 @@ pub fn prune(repos: &[PathBuf], cap: u64, finished: &[String]) -> Pruned {
                 any |= git(repo, None, None, &["update-ref", "-d", r]).is_ok();
             }
             let _ = git(repo, None, None, &["update-ref", "-d", &turn_ref(sid)]);
+            if let Ok(held) = git(
+                repo,
+                None,
+                None,
+                &["for-each-ref", "--format=%(refname)", &write_refs(sid)],
+            ) {
+                for r in held.lines().filter(|l| !l.is_empty()) {
+                    let _ = git(repo, None, None, &["update-ref", "-d", r]);
+                }
+            }
             let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(sid))));
-            let _ =
-                std::fs::remove_file(repo.join(format!("index-{}", safe(&format!("turn-{sid}")))));
+            for key in [format!("turn-{sid}"), format!("write-{sid}")] {
+                let _ = std::fs::remove_file(repo.join(format!("index-{}", safe(&key))));
+            }
         }
         if !any {
             continue;
@@ -1064,6 +1124,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(refs, "refs/drgnx/s/live/1");
+    }
+
+    /// Pattern D: the tree taken before a write is held by a ref of its own until a step keeps it, then only the step's
+    /// ref holds it; a finished session's held trees go with its refs at the cap.
+    #[test]
+    fn write_tree_before_is_held_until_its_step_keeps_it() {
+        let d = tempfile::tempdir().unwrap();
+        let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "agent").unwrap();
+        let t = write_tree_before(&root, &wt, "s1").unwrap();
+        let repo = repo_of(&root, &wt);
+        let refs = || git(&repo, None, None, &["for-each-ref", "--format=%(refname)"]).unwrap();
+        assert_eq!(refs(), format!("refs/drgnx/write/s1/{t}"));
+        std::fs::write(wt.join("b.txt"), "next").unwrap();
+        put_write_tree(&root, &wt, "s1", 3, &t).unwrap();
+        assert_eq!(refs(), "refs/drgnx/s/s1/3");
+        assert_eq!(listing(&repo, &t), ["a.txt"], "taken before b.txt");
+        let held = write_tree_before(&root, &wt, "s1").unwrap();
+        assert_ne!(held, t);
+        // a cap of 0 bytes: every finished session's refs go (and the snapshots then stop)
+        prune(std::slice::from_ref(&repo), 0, &["s1".into()]);
+        assert_eq!(refs(), "");
+    }
+
+    /// The cost of the tree taken before a write, per write, with one file changed each time and the index warm.
+    #[test]
+    #[ignore = "timing: prints what the tree before a write costs"]
+    fn write_tree_before_cost() {
+        use std::time::Instant;
+        for n in [100usize, 1_000, 10_000] {
+            let d = tempfile::tempdir().unwrap();
+            let (root, wt) = (d.path().join("cp"), d.path().join("wt"));
+            for i in 0..n {
+                let p = wt.join(format!("d{}/f{i}.txt", i / 100));
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(p, format!("line {i}\n")).unwrap();
+            }
+            write_tree_before(&root, &wt, "s1").unwrap();
+            let runs = 20;
+            let t = Instant::now();
+            for i in 0..runs {
+                std::fs::write(wt.join("d0/f0.txt"), format!("write {i}\n")).unwrap();
+                write_tree_before(&root, &wt, "s1").unwrap();
+            }
+            let ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(runs);
+            println!("COST tree before a write, {n} files: {ms:.2} ms per write");
+        }
     }
 
     /// Pattern D: an added, a modified, a deleted file and a mode change, each with both sides' git modes, read in
