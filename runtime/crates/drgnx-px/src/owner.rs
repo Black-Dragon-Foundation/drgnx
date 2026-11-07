@@ -296,12 +296,22 @@ impl Sidecar {
     }
 
     /// Closes the sidecar's stdin (and stdout, if never taken), waits up to [`STOP_LIMIT`] for it to exit, then runs
-    /// `podman rm -f name` and kills what is still running.
-    pub async fn stop(mut self, podman: &Path, name: &str, env: &[(OsString, OsString)]) {
+    /// `podman rm -f name` and kills what is still running. Answers the sidecar's exit code (a signal `n` as `128 + n`),
+    /// or `None` when it did not exit within the limit.
+    pub async fn stop(
+        mut self,
+        podman: &Path,
+        name: &str,
+        env: &[(OsString, OsString)],
+    ) -> Option<i32> {
+        use std::os::unix::process::ExitStatusExt;
         self.io = None;
-        let exited = tokio::time::timeout(STOP_LIMIT, self.child.wait())
+        let code = tokio::time::timeout(STOP_LIMIT, self.child.wait())
             .await
-            .is_ok();
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|s| s.code().or_else(|| s.signal().map(|n| 128 + n)));
+        let exited = code.is_some();
         let _ = Command::new(podman)
             .args(["rm", "-f", name])
             .envs(env.iter().map(|(k, v)| (k, v)))
@@ -314,6 +324,7 @@ impl Sidecar {
             let _ = self.child.kill().await;
         }
         self.drain.abort();
+        code
     }
 }
 

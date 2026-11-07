@@ -1959,7 +1959,8 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
 not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
-(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+(`stopped`, `timed-out` or `infra: proxy: <reason>`, written before the hub kills the group; the infra reason is also
+the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the

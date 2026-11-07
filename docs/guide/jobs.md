@@ -29,7 +29,9 @@ it does not depend on the agent that started it or on the editor, and it survive
   hour is always kept); older ones are removed, so `exec/get` and `exec/log` answer "no job" for them, while the
   job's row in the graph stays.
 - **Time box.** 1 to 86400 seconds (default 3600; a missing `timebox_s` means the default). At the end the job's process
-  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). The user's
+  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). A job the
+  hub's own machinery ends (a networked container job whose relay stopped, or one the hub's stop or restart ended) is
+  `infra`; the last line of its log says why (`infra: proxy: …`). The user's
   job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
   `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
   with `invalid-params`, like the four fields below.
@@ -99,12 +101,17 @@ manager and the memory, pids and cpu controllers, the job is refused with the re
 user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
 It has **no network of its own**
 (`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
-job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
-container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
-inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
+job gets the one route there is: a relay sidecar (`drgnx-px`, a tiny image the hub makes from the binary next to it)
+shares the job's loopback only, listens on `127.0.0.1:3128` there and carries each connection over its stdio to the
+job's own allow-list proxy in the hub. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
 hosts on the allow-list are reached: the setting `agents-net-hosts` (an alist tier to `"host:port"` strings; the
 `packages` tier is a granted network's). Its default is `crates.io`, `index.crates.io`, `static.crates.io`,
-`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`. A networked job needs rootless podman 5.0 or newer; otherwise, or
+if its relay can't start (no `READY` within 10 s), a job that was allowed a network is refused with what to fix. The
+relay lives as long as the job: if it stops first (the sidecar exits, breaks the channel's rules or stops reading) the
+job ends `infra` with the sidecar's exit code and its meaning in its log (137: killed, most likely at its memory limit).
+A networked job can't outlive its hub: stopping the hub ends it, and a hub that restarts after a crash ends the ones
+it finds. An Ask on the Network cell refuses the start with the matrix card. The request has no
 other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
 not ignored).
 

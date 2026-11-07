@@ -43,6 +43,7 @@ required-features = ["fleet"]
 [dependencies]
 runstav = { path = "../runstav", version = "0.1.0" }
 draugr = { path = "../draugr", version = "0.1.0" }
+drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
 saga = { path = "../saga", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }

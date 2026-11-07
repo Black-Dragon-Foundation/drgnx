@@ -36,6 +36,7 @@ holds the jobs this client started or heard end, trimmed to `drgnx-exec--keep' b
     ("done" (if (memq exit '(nil 0)) 'done 'failed))
     ("stopped" 'stopped)
     ("timed-out" 'failed)
+    ("infra" 'failed)
     (_ 'gone)))
 
 (defun drgnx-exec--row (json)

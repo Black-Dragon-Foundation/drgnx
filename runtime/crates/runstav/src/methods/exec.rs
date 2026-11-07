@@ -37,6 +37,9 @@ pub enum ExecStatus {
     TimedOut,
     /// Its unit or process was gone at a hub start and left no exit.
     Lost,
+    /// Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub
+    /// stopped or restarted under it); the reason is the last line of its log.
+    Infra,
 }
 
 /// A job's end, as the wake and `exec/get` give it: at most 20 lines.

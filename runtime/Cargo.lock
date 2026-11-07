@@ -875,6 +875,7 @@ dependencies = [
  "bifrost",
  "bytes",
  "draugr",
+ "drgnx-px",
  "eitri",
  "fastwebsockets",
  "forseti",
