@@ -589,10 +589,13 @@ impl<W: Write> Serve<W> {
         } else {
             vec![]
         };
+        // k1's create half where the key sockets are made: under the runner folder
+        let key_socket = crate::helper::selinux::self_check(&self.probe.folder).err();
         self.send(&Frame::ProbeResult {
             facts,
             missing,
             limits,
+            key_socket,
             features,
         })
     }

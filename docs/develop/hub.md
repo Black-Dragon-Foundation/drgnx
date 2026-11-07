@@ -3190,12 +3190,12 @@ or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `u
 The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
 benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
 **The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
-a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, k1's `key_socket`, the free disk), a canary attempt
 offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
 `RemoteRunner.image`, priority 1, no grace;
 offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
 (`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
-answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+answered with nothing missing and no `check_limits` or `key_socket` failure, 20 GB free (and 10 % where the size is known), the canary
 `Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
 or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
 failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
@@ -3220,7 +3220,7 @@ config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); t
 puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
 one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
-already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)
+already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items, `check_limits` and `key_socket`)
 is refused with all of it, each with its fix. Then `podman pull --policy=missing` of each image in
 `drgnx-runners-image` (it must be pinned by digest), `sleipnir bench` in the first, the record, and the link:
 `Session::start` over the queue's route and events, `Queue::add_runner`. A root must be absolute, plain, and never the

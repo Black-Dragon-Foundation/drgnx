@@ -328,6 +328,8 @@ fn drgnx_key_exec_sets_env_in_the_process_only() {
         cgroup_parent: None,
         label: None,
         name_prefix: PREFIX.into(),
+        owner: String::new(),
+        job_labels: false,
     };
     let argv: Vec<String> = podman::argv(&req, &caps, &ra)
         .unwrap()
@@ -529,4 +531,229 @@ fn a_job_that_grew_most_is_stopped_below_the_floor() {
     }
     let _ = unit::stop(&big);
     let _ = unit::stop(&small);
+}
+
+/// k1 on an SELinux host (enforcing, the stock targeted policy and container-selinux; the VM gate, never a fake
+/// runner, whose container has no SELinux of its own): a keyed job reaches its key socket, another job's categories
+/// don't, and the job on the other end is `container_t`. Run as the host's own user with rootless podman:
+/// `runner_host_helper --ignored selinux::`.
+mod selinux {
+    use super::*;
+    use sleipnir::helper::selinux as k1;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixListener;
+
+    /// A keyed container's argv for job ID in DIR, its key socket SOCKET and its `drgnx-key` copy, whose command is
+    /// CMD (sh -c).
+    fn keyed_argv(id: &str, dir: &Path, socket: &Path, cmd: &str) -> Vec<String> {
+        let key_copy = dir.join("drgnx-key");
+        fs::copy(drgnx_key_bin(), &key_copy).unwrap();
+        let src = dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let req = ContainerReq {
+            image: "base".into(),
+            argv: vec!["sh".into(), "-c".into(), cmd.into()],
+            worktree: src,
+            subdir: PathBuf::new(),
+            job: id.into(),
+            net: false,
+            runner: Some(RunnerMounts {
+                writes_tree: false,
+                target: dir.join("target"),
+                caches: vec![],
+                keys: Some(KeyMounts {
+                    socket: socket.to_path_buf(),
+                    helper: key_copy,
+                    vars: vec![("TOKEN".into(), "JOB_TOKEN".into())],
+                }),
+            }),
+        };
+        let caps = Caps {
+            images: vec![ContainerImage {
+                name: "base".into(),
+                image: base_ref(),
+            }],
+            memory: "256M".into(),
+            cpus: 1,
+            pids: 100,
+            proxy: None,
+            net_hosts: vec![],
+            pins: vec![],
+        };
+        let ra = RunnerArgs {
+            cgroup_parent: None,
+            label: None,
+            name_prefix: PREFIX.into(),
+            owner: String::new(),
+            job_labels: false,
+        };
+        podman::argv(&req, &caps, &ra)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect()
+    }
+
+    /// Runs ARGV to its end (podman removes nothing: the rows remove their containers by name).
+    fn run(argv: &[String], name: &str) -> std::process::Output {
+        let out = Command::new("podman").args(argv).output().unwrap();
+        let _ = Command::new("podman")
+            .args(["rm", "-f", "-t", "0", name])
+            .output();
+        out
+    }
+
+    fn enforcing() {
+        assert!(k1::host_active(), "SELinux is active on this host");
+        assert_eq!(
+            fs::read_to_string("/sys/fs/selinux/enforce")
+                .unwrap()
+                .trim(),
+            "1",
+            "SELinux enforces"
+        );
+    }
+
+    /// [C, VM gate] A keyed job on an enforcing host: its `drgnx-key` reaches the helper's key socket and the command
+    /// runs with the key in its environment (it says so by a file; the value is never printed). Before k1 the socket
+    /// carried the user's own label and `container_t` could not connect to it.
+    #[test]
+    #[ignore = "selinux"]
+    fn a_keyed_job_reads_its_key() {
+        enforcing();
+        let a = attempt("k1a");
+        let h = HelperSpec {
+            keys: vec!["TOKEN".into()],
+            ..HelperSpec::default()
+        };
+        spec("k1a", &a.dir, vec!["true".into()], h)
+            .write(&a.dir)
+            .unwrap();
+        let _h = Helper::start(&a.dir, &[]);
+        keys::hand(&a.dir.join(keys::HELPER_SOCK), "TOKEN", secret().as_bytes()).unwrap();
+        let argv = keyed_argv(
+            "k1a",
+            &a.dir,
+            &a.dir.join(keys::KEY_SOCK),
+            "test -n \"$JOB_TOKEN\" && touch /target/keyed",
+        );
+        let out = run(&argv, &format!("{PREFIX}k1a"));
+        assert!(
+            a.dir.join("target/keyed").exists(),
+            "the job had its key: exit {:?}, {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// [C, VM gate] Another job given the first job's key socket file, without relabelling it (its mount carries
+    /// the first job's categories), is refused: its `drgnx-key` gets no key and its command never runs. The first
+    /// job read its key from the same socket just before.
+    #[test]
+    #[ignore = "selinux"]
+    fn another_jobs_categories_are_refused() {
+        enforcing();
+        let a = attempt("k1b");
+        let h = HelperSpec {
+            keys: vec!["TOKEN".into()],
+            ..HelperSpec::default()
+        };
+        spec("k1b", &a.dir, vec!["true".into()], h)
+            .write(&a.dir)
+            .unwrap();
+        let _h = Helper::start(&a.dir, &[]);
+        keys::hand(&a.dir.join(keys::HELPER_SOCK), "TOKEN", secret().as_bytes()).unwrap();
+        let sock = a.dir.join(keys::KEY_SOCK);
+        let cmd = "test -n \"$JOB_TOKEN\" && touch /target/keyed; touch /target/ran";
+        let out = run(
+            &keyed_argv("k1b", &a.dir, &sock, cmd),
+            &format!("{PREFIX}k1b"),
+        );
+        assert!(
+            a.dir.join("target/keyed").exists(),
+            "the socket's own job had its key: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // the other job: its own folder, the first job's socket mounted as it is (no :Z), its type pinned as every
+        // keyed job's is
+        let other = attempt_in(&a.root, "k1c");
+        let mut argv = keyed_argv("k1c", &other, &other.join(keys::KEY_SOCK), cmd);
+        let own = format!(
+            "{}:{}:ro,Z",
+            other.join(keys::KEY_SOCK).display(),
+            podman::KEY_SOCKET
+        );
+        let at = argv
+            .iter()
+            .position(|s| *s == own)
+            .expect("the key socket's mount");
+        argv[at] = format!("{}:{}:ro", sock.display(), podman::KEY_SOCKET);
+        let out = run(&argv, &format!("{PREFIX}k1c"));
+        assert!(!out.status.success(), "the other job ran");
+        assert!(
+            !other.join("target/keyed").exists() && !other.join("target/ran").exists(),
+            "the other job's command ran: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// [C, VM gate] SO_PEERSEC on a socket made as the helper makes the key socket: the keyed job's process that
+    /// connects is `container_t`, at categories of its own (not the socket's `s0`).
+    #[test]
+    #[ignore = "selinux"]
+    fn the_peer_is_container_t() {
+        enforcing();
+        let a = attempt("k1p");
+        let ctx = k1::job_context()
+            .unwrap()
+            .expect("a context on an SELinux host");
+        let l: UnixListener = k1::bind_labelled(
+            &a.dir,
+            keys::KEY_SOCK,
+            &ctx,
+            Path::new("/proc/thread-self/attr/sockcreate"),
+        )
+        .unwrap();
+        let argv = keyed_argv("k1p", &a.dir, &a.dir.join(keys::KEY_SOCK), "true");
+        let name = format!("{PREFIX}k1p");
+        let mut child = Command::new("podman")
+            .args(&argv)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        l.set_nonblocking(true).unwrap();
+        let conn = skuld::wait_until("drgnx-key connects", 120, || {
+            l.accept().ok().map(|(c, _)| c)
+        });
+        let mut buf = [0u8; 256];
+        let mut len = buf.len() as libc::socklen_t;
+        // SAFETY: BUF is LEN bytes; the kernel writes at most LEN and sets LEN to what it wrote
+        let rc = unsafe {
+            libc::getsockopt(
+                conn.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERSEC,
+                buf.as_mut_ptr().cast(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 0, "SO_PEERSEC: {}", std::io::Error::last_os_error());
+        let peer = String::from_utf8_lossy(&buf[..len as usize])
+            .trim_end_matches('\0')
+            .to_string();
+        drop(conn);
+        let _ = Command::new("podman")
+            .args(["rm", "-f", "-t", "0", &name])
+            .output();
+        let _ = child.wait();
+        let parts: Vec<&str> = peer.splitn(4, ':').collect();
+        assert_eq!(parts.get(2), Some(&"container_t"), "{peer}");
+        assert!(
+            parts
+                .get(3)
+                .is_some_and(|l| l.contains(":c") || l.contains(",c")),
+            "the job has categories of its own: {peer}"
+        );
+    }
 }
