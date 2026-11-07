@@ -1318,8 +1318,8 @@ names), again only when the cache learns of a root or the buffer's file changes.
   (let ((left (eval (car (get 'drgnx-statusbar-left 'standard-value)) t))
         (quiet (eval (car (get 'drgnx-statusbar-quiet 'standard-value)) t))
         (drop (eval (car (get 'drgnx-statusbar-drop-order 'standard-value)) t)))
-    (should (equal (seq-filter (lambda (s) (memq s '(jobs agents needs-you drgnx modal misc))) left)
-                   '(jobs agents needs-you drgnx modal misc)))
+    (should (equal (seq-filter (lambda (s) (memq s '(jobs needs-you drgnx modal misc))) left)
+                   '(jobs needs-you drgnx modal misc)))   ; no `agents': the agent panel replaced its segment
     (should (memq 'needs-you quiet))
     (should (memq 'drgnx quiet))
     (should (memq 'drgnx drop))
