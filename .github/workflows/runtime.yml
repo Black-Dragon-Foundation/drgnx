@@ -134,6 +134,10 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: sh test/container/rust-packages.sh
+      - name: Zig (in the prebuilt image already; the terminal engine's build tool)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: ${{ github.workspace }}
+        run: bash test/container/zig.sh linux
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -977,6 +981,9 @@ jobs:
         run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
+      # the terminal engine is built from source with a pinned Zig (test/container/zig.sh)
+      - name: Zig
+        run: /bin/bash test/container/zig.sh macos
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a
       # real sshd. Remote Login on with a throwaway key (.github/ci/macos-sshd.sh), then the generated ssh config and
