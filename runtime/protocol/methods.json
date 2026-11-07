@@ -29680,6 +29680,56 @@
       "classes": [
         "user"
       ],
+      "doc": "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
+      "name": "work/board/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/board/subscribe`'s params: one view of the connection shows the Board of the tracker's tasks (of `plans`,\nelse every task), each card naming the agent of map view `map` that works on it.",
+        "properties": {
+          "map": {
+            "type": "string"
+          },
+          "plans": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "map"
+        ],
+        "title": "BoardSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "a session's decisions and findings, numbered, each with the step the hub stamped and the steps it rests on",
       "name": "work/conclusions",
       "params": {
@@ -30416,7 +30466,7 @@
       "classes": [
         "user"
       ],
-      "doc": "end one trail or Timeline view of this connection (a connection's views end with it)",
+      "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
       "name": "work/trail/close",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

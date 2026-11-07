@@ -1502,6 +1502,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
@@ -2094,6 +2095,15 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
   (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
   query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
+  the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
+  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
+  `cards:I:1` (state · agent · steps done), or `none`. Its model is its own, not the map's: a `card` node per task
+  (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
+  in its column, left and right to the nearest column with cards, at the same height or its last card), lists
+  `cards` (column by column) and `team` (the cards an agent works on).
 
 ### The follow feed
 

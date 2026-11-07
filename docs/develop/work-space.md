@@ -686,6 +686,13 @@ card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every t
 `drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
 works on a card when its `task` field names the card's id.
 
+On the rows path (the map is a hub-fed view `VIEW`) the Board is the hub-fed view `VIEW/board` in the map's class:
+`drgnx-work-board-refresh` asks `work/board/subscribe {view, map, plans}` instead of the tasks (docs/develop/hub.md,
+"The Board"), and the hub sends its model and rows. Its keys answer from its own model (`drgnx-work-board--rows-nav`:
+the `board` form's links, `team` for the agent keys, the card's `agent` field to open). Its selection is its own: it
+neither follows the map's nor moves it, and switching back to the map selects nothing there (a decision of 2026-11-08:
+the map's model holds no tracker tasks, so the Board is not an instance in the map's selection group).
+
 ### The Timeline and the trail
 
 `modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;

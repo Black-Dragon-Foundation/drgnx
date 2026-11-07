@@ -261,6 +261,7 @@ params! {
     WorkMapClose(work::MapClose),
     WorkTrailSubscribe(work::TrailSubscribe),
     WorkTrailClose(work::TrailClose),
+    WorkBoardSubscribe(work::BoardSubscribe),
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
