@@ -1,6 +1,11 @@
 [Unit]
 Description=Turn linger on for runner (the fleet's linger rows)
 
+# stays active once run, so its path unit doesn't start it again and again while the file is there (systemd's
+# trigger limit then fails the path unit, and the next request is never heard); the opposite request stops it
+Conflicts=fleet-nolinger.service
+
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/bin/loginctl enable-linger runner
