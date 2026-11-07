@@ -72,19 +72,21 @@ impl Args {
     }
 }
 
-/// No core dump and no ptrace by another process of this user: `PR_SET_DUMPABLE` 0 (a piped `core_pattern` ignores
-/// `RLIMIT_CORE`), and `RLIMIT_CORE` 0 besides.
+/// No core dump and no ptrace by another process of this user: `PR_SET_DUMPABLE` 0, and `RLIMIT_CORE` 1 (soft and
+/// hard): a piped `core_pattern` (systemd-coredump) ignores a limit of 0 but skips a process whose limit is 1, and
+/// with `fs.suid_dumpable` 2 a process that isn't dumpable is still dumped there. Its children inherit the limit, so
+/// it must be 1 for them too: crun can't raise a hard limit of 0 to the sidecar's `--ulimit core=1`.
 pub fn harden() -> io::Result<()> {
     // SAFETY: plain prctl/setrlimit calls with constant arguments
     unsafe {
         if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
-        let none = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
+        let one = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
         };
-        if libc::setrlimit(libc::RLIMIT_CORE, &none) != 0 {
+        if libc::setrlimit(libc::RLIMIT_CORE, &one) != 0 {
             return Err(io::Error::last_os_error());
         }
     }

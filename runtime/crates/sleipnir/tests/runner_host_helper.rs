@@ -166,7 +166,9 @@ fn uid() -> u32 {
 }
 
 /// [C] The helper, announced by its `ready` line, is not dumpable: its /proc files belong to root and its
-/// environment can't be read by its own user, unlike a plain child of the same user beside it.
+/// environment can't be read by its own user, unlike a plain child of the same user beside it. Its core limit is 1,
+/// soft and hard (what systemd-coredump honours; 0 it ignores, and a sidecar's `--ulimit core=1` can't be raised from
+/// it).
 #[test]
 #[ignore = "runner-host"]
 fn helper_is_not_dumpable() {
@@ -190,6 +192,13 @@ fn helper_is_not_dumpable() {
         fs::read(format!("/proc/{}/environ", h.pid)).is_err(),
         "the helper's environment was readable"
     );
+    let limits = fs::read_to_string(format!("/proc/{}/limits", h.pid)).unwrap();
+    let core = limits
+        .lines()
+        .find(|l| l.starts_with("Max core file size"))
+        .unwrap();
+    let w: Vec<&str> = core.split_whitespace().collect();
+    assert_eq!((w[4], w[5]), ("1", "1"), "{core}");
     let _ = plain.kill();
     let _ = plain.wait();
 }
@@ -687,7 +696,9 @@ mod relay_keys {
             .args([
                 "bash",
                 "-c",
-                "exec 3<>/dev/tcp/127.0.0.1/3128; printf 'get TOKEN\\n\\n' >&3; timeout 10 head -c 300 <&3",
+                // the key request as a complete head (CRLF), so the proxy judges it at once: a head it has to wait
+                // for ends only at its own 10 s head timeout, which raced this row's
+                "exec 3<>/dev/tcp/127.0.0.1/3128; printf 'get TOKEN\\r\\n\\r\\n' >&3; timeout 10 head -c 300 <&3",
             ])
             .output()
             .unwrap();
@@ -698,7 +709,10 @@ mod relay_keys {
         );
         assert!(
             said.starts_with("HTTP/1.1 4"),
-            "the proxy's refusal: {said:?}"
+            "the proxy's refusal: {said:?} ({:?}, stderr {:?}; the helper's log {:?})",
+            out.status,
+            String::from_utf8_lossy(&out.stderr),
+            fs::read_to_string(a.dir.join(sleipnir::helper::LOG)).unwrap_or_default()
         );
         rm(&sidecar_of("rk5"));
     }
@@ -725,10 +739,11 @@ mod relay_keys {
             .find(|l| l.starts_with("Max core file size"))
             .unwrap();
         assert_eq!(core.split_whitespace().nth(4), Some("1"), "{core}");
-        // a dumpable process's /proc files are its own user's (here nobody's, mapped); root's when it isn't dumpable
+        // a dumpable process's /proc files are its own uid's (65534 inside, a subordinate id here); a process that isn't
+        // dumpable has them owned by its user namespace's root, which for rootless podman is this login
         assert_eq!(
             fs::metadata(format!("/proc/{pid}/environ")).unwrap().uid(),
-            0,
+            uid(),
             "the sidecar is dumpable"
         );
         let out = Command::new("podman")

@@ -229,8 +229,10 @@ One per attempt, owning what the job may use and must never keep. job-exec start
 its slice, capped at no swap), and it reads job-exec's pipe: when job-exec ends, or the unit stops, the helper goes
 with it. Nothing outlives the job, so no daemon is left behind, and `serve` may end with the link while it runs. It:
 
-- sets `PR_SET_DUMPABLE=0` and `RLIMIT_CORE` 0 first: no core dump (a piped `core_pattern` ignores `RLIMIT_CORE`),
-  and no other process of the user can read its memory or `/proc` files;
+- sets `PR_SET_DUMPABLE=0` and `RLIMIT_CORE` 1 (soft and hard) first: no core dump (a piped `core_pattern`, as
+  systemd-coredump's, ignores a limit of 0 but honours 1, and with `fs.suid_dumpable` 2 dumps a process that isn't
+  dumpable), and no other process of the user can read its memory or `/proc` files. Its children inherit the limit
+  (so the sidecar's `--ulimit core=1` is not a raise, which crun would be refused);
 - takes the job's keys from `serve` on `D/helper.sock` (0600, this user only) and answers the job's requests for them
   through the job's relay sidecar ("Keys" below);
 - with `--hub-allow`, or for a job with keys, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the
