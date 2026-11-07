@@ -17,6 +17,7 @@ commands=(
   'rollback:the packages of an earlier generation'
   'generations:list the package generations'
   'lock:the package lock'
+  'plugins:the plugins drgnx runs'
   'extensions:the catalog of the archives'"'"' packages'
   'record:record the outside ends of a run'
   'replay:run drgnx with a recording backing the outside ends'
@@ -86,6 +87,8 @@ case $cmd in
       '--progress[JSON steps for the editor]:file:_files' ;;
   rollback)
     _arguments '--progress[JSON steps for the editor]:file:_files' '1:generation:' ;;
+  plugins)
+    _arguments '1:action:(install list remove)' '--replace[replace an installed plugin]' '--json[the list as JSON]' '2:path:_files' ;;
   extensions)
     _arguments '1:action:(refresh fetch-readme)' '--progress[JSON steps for the editor]:file:_files' ;;
   record)
