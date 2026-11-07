@@ -36,6 +36,13 @@ RUST_MIN=1.95
 RUST_PRIVATE=1.99.1
 RUSTUP_VERSION=1.28.2
 RUSTUP_URL=https://static.rust-lang.org/rustup/archive
+# Zig 0.17.x builds the terminal's engine (libghostty-vt, from pinned sources) and nothing else: a build tool, never
+# shipped.  Fetched the way rustup-init is: a pinned version, one sha256 per target, and Zig's minisign signature
+# checked against the pinned public key (ziglang.org/download).  A zig 0.17.x on PATH is used as it is.
+ZIG_VERSION=0.17.0
+ZIG_MINOR=0.17
+ZIG_URL="${DRGNX_INSTALL_ZIG_URL:-https://ziglang.org/download}"
+ZIG_PUBKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -741,6 +748,72 @@ rust_toolchain() { # RUST_HOW path | distro | versioned | rustup | none, RUST_VE
   fi
 }
 
+# --- Zig: the terminal engine's build tool ----------------------------------------------------------------
+
+zig_target() { # the Zig release name of this machine (ARCH-OS), nothing for an unknown one
+  local a="$ARCH"
+  if [[ "$a" == arm64 ]]; then a=aarch64; fi
+  case "$OS:$a" in
+    linux:x86_64|linux:aarch64) printf '%s-linux' "$a" ;;
+    macos:x86_64|macos:aarch64) printf '%s-macos' "$a" ;;
+  esac
+}
+
+zig_sha256() { # TARGET → the sha256 of that target's tarball $ZIG_VERSION (DRGNX_INSTALL_ZIG_SHA256 stands in under test)
+  if [[ -n "${DRGNX_INSTALL_ZIG_SHA256:-}" ]]; then echo "$DRGNX_INSTALL_ZIG_SHA256"; return; fi
+  case "$1" in
+    x86_64-linux) echo 1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;;
+    aarch64-linux) echo 9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8 ;;
+    x86_64-macos) echo 4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6 ;;
+    aarch64-macos) echo b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a ;;
+  esac
+}
+
+record_zig() { # PATH — <data>/zig-path: the zig the runtime build uses (as <data>/cargo, for the update timer)
+  local dir; dir="$(drgnx_dir data)"
+  { mkdir -p "$dir" && printf '%s\n' "$1" >"$dir/zig-path.new" && mv -f "$dir/zig-path.new" "$dir/zig-path"; } ||
+    warn "could not record Zig in $dir/zig-path: drgnx update will not find $1 (run install.sh again)"
+}
+
+ensure_zig() { # a zig 0.17.x: on PATH, else the pinned tarball in <data>/zig/, sha256 and signature checked; recorded
+  local v target sha dir tmp name got z
+  if command -v zig >/dev/null 2>&1; then
+    v="$(zig version 2>/dev/null || true)"
+    case "$v" in
+      "$ZIG_MINOR".*) say "Zig $v on PATH."; record_zig "$(command -v zig)"; return 0 ;;
+      *) warn "Zig ${v:-?} on PATH is not $ZIG_MINOR.x: fetching $ZIG_VERSION" ;;
+    esac
+  fi
+  target="$(zig_target)"; sha="$(zig_sha256 "$target")"; dir="$(drgnx_dir data)/zig"
+  [[ -n "$target" && -n "$sha" ]] || { warn "there is no Zig $ZIG_VERSION for ${ARCH} on $OS"; return 1; }
+  if ! command -v minisign >/dev/null 2>&1; then
+    warn "minisign is needed to check Zig's signature: install the minisign package, then run install.sh again"; return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then (download_tools) || return 1; fi
+  name="zig-$target-$ZIG_VERSION"
+  mkdir -p "$dir" || return 1
+  tmp="$(mktemp -d "$dir/fetch.XXXXXX")" || return 1
+  say "Downloading Zig $ZIG_VERSION ($target)…"
+  if ! curl -fsSL -o "$tmp/$name.tar.xz" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz" ||
+     ! curl -fsSL -o "$tmp/$name.tar.xz.minisig" "$ZIG_URL/$ZIG_VERSION/$name.tar.xz.minisig"; then
+    rm -rf "${tmp:?}"; warn "could not download Zig (no network?)"; return 1
+  fi
+  got="$(sha256_of "$tmp/$name.tar.xz")"
+  if [[ "$got" != "$sha" ]]; then
+    rm -rf "${tmp:?}"; warn "the Zig tarball is not the file install.sh pins (sha256 $got, expected $sha): nothing was unpacked"; return 1
+  fi
+  if ! minisign -Vm "$tmp/$name.tar.xz" -P "$ZIG_PUBKEY" -x "$tmp/$name.tar.xz.minisig" >/dev/null 2>&1; then
+    rm -rf "${tmp:?}"; warn "the Zig tarball's minisign signature does not verify: nothing was unpacked"; return 1
+  fi
+  if ! tar -xJf "$tmp/$name.tar.xz" -C "$tmp"; then rm -rf "${tmp:?}"; warn "could not unpack the Zig tarball"; return 1; fi
+  rm -rf "${dir:?}/$name"
+  mv "$tmp/$name" "$dir/$name" || { rm -rf "${tmp:?}"; return 1; }
+  rm -rf "${tmp:?}"
+  z="$dir/$name/zig"
+  [[ -x "$z" ]] || { warn "no zig at $z after unpacking"; return 1; }
+  record_zig "$z"
+}
+
 plan_ratatoskr() { # the Ratatoskr lines of the plan
   ((!RUST_SKIP)) || return 0
   local sudo="sudo " target
@@ -761,6 +834,8 @@ plan_ratatoskr() { # the Ratatoskr lines of the plan
     if [[ "$FAMILY" == macos ]]; then note "C compiler: ${CC_CMD[*]} (Apple's Command Line Tools; asked)"; else note "C compiler: sudo ${CC_CMD[*]}"; fi
   else note "C compiler: gcc comes with the packages above"; fi
   note "record the toolchain in $(drgnx_dir data)/cargo (the update timer finds the same cargo)"
+  if command -v zig >/dev/null 2>&1 && [[ "$(zig version 2>/dev/null)" == "$ZIG_MINOR".* ]]; then note "Zig: $(zig version) on PATH (builds the terminal's engine)"
+  else note "Zig: download $ZIG_URL/$ZIG_VERSION/zig-$(zig_target)-$ZIG_VERSION.tar.xz into $(drgnx_dir data)/zig, check its sha256 and minisign signature (builds the terminal's engine)"; fi
 }
 
 rust_install_packages() { # the distro packages of RUST_CMD, as root (asked)
@@ -837,6 +912,7 @@ build_ratatoskr() { # the toolchain, then `drgnx runtime build' and `runtime ins
     return 0
   fi
   record_cargo
+  ensure_zig || warn "no Zig was set up (above): the terminal's engine is not built. Fix it, then run: drgnx runtime build --install"
   mkdir -p "$(dirname "$log")"
   say "Building Ratatoskr (Rust; a few minutes, log: $log)…"
   if ! "$DIR/bin/drgnx" runtime build >"$log" 2>&1; then
@@ -943,6 +1019,7 @@ nidhogg_only() { # --nidhogg-only: the Nidhogg step of main, nothing else (drgnx
 main() {
   parse_args "$@"
   detect
+  if [[ "${DRGNX_INSTALL_ZIG_ONLY:-}" == 1 ]]; then ensure_zig; exit; fi   # tests: just the Zig step
   probe_emacs
   choose_method
   find_brew

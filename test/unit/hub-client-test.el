@@ -49,6 +49,16 @@
       (should agents)
       (should-not nope))))
 
+(ert-deftest drgnx-hub-client/the-gated-clock-runs-past-the-parent-watch ()
+  ;; binary: the hub watches its --parent-pid on real time, so seconds of the test clock wake no task without an origin
+  (drgnx-hub-client-test--with-hub
+    (let ((n 0))
+      (drgnx-test-gated '()
+        (drgnx-hub-connect)
+        (drgnx-test-wait (lambda () (drgnx-test-hub-advance 100) (> (cl-incf n) 30)) :what "three seconds of the hub's clock")
+        (drgnx-test-deliver-all)
+        (should (process-live-p drgnx-hub--events))))))
+
 (ert-deftest drgnx-hub-client/ping-probe-skips-the-challenge ()
   ;; binary: the challenge is the first line on every connection; the probe reads past it to the answer.  The probe is
   ;; its own socket and its own real-time look, so it runs outside the gate: there is no client connection to order.

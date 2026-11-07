@@ -61,7 +61,7 @@ pair mode on or off for a chat in your project, the one there is or the one you 
 When it cannot be turned on it says why:
 
 - "Pair is off: the matrix's chat.project-edit is never for this chat" — change the preset or the cell first;
-- "Pair needs Nidhogg .6 with Glitnir" — the edit history pair mode needs is not in this Emacs;
+- "Pair needs Nidhogg .6 with Glitnir" — the edit history pair mode needs is not in this Emacs (`drgnx doctor` says so in its `pair-mode` row);
 - "Pair is not available for this agent yet: REASON" — Claude and Gemini have pair mode now; Codex, Kimi and DeepSeek
   get it once their own edit tools are proven off.
 

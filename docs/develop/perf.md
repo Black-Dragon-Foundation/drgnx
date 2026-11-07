@@ -46,8 +46,8 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | motions-evil | a 5000-line copy of the fixture, normal state, from the middle: `j`×20, `w`×20, `}`×10, `C-d`×5, `C-u`×5 (checked: point moved) | input latency |
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
 | window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
-| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into an eat terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and eat draws it) | input latency |
-| terminal-output | the same 120 characters typed into the fixture while an eat terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal's process is alive, its window is shown and its text changed while typing) | input latency |
+| terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into drgnx's terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and the hub's terminal worker draws it; the workload starts its own hub, the worker beside it, and runs `tools/term` on it) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while drgnx's terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal is open, its window is shown and its text changed while typing) | input latency |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -457,6 +457,8 @@ several runs, range shown):
 |---|---|---|---|---|
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
+
+The numbers below were measured with eat; the terminal workloads now drive drgnx's terminal and are report-only until its perf task seeds them on the desktop island.
 
 Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
 a terminal costs about what typing into a file does.

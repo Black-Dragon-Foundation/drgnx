@@ -61,7 +61,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
-  `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
+  `--parent-pid` counts; real time, also under `--test-clock`). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
   of them), and the outside bridges' connections `mcp/attach` handed to MCP, so its clients see the end before the hub
   waits on anything that can hang. Last, it stops its store
@@ -238,7 +238,8 @@ Every timer of the hub and every reading of its time go through `drgnx-ratatoskr
 `tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
-the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+the hub (a podman pull); `real_interval(period)` ticks on real time on every clock, for watching something outside
+the hub (the `--parent-pid` process). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
 close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
 and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
 the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`
@@ -531,7 +532,9 @@ Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`)
 worth nothing on another connection, because each connection's challenge differs.
 
 1. On accept the hub sends `{"event":"challenge","data":{"nonce":HUB_NONCE}}`, 32 lowercase hex from 16 random bytes.
-2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?}`. `proof` is
+2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?, cwd?, session?}`.
+   An editor's `session` names its Emacs session: its terminals draw on that connection again ([the
+   terminal](terminal.md), "Lifetime"). `proof` is
    `HMAC-SHA256(cap, "drgnx-hub client " + HUB_NONCE + " " + nonce)` as 64 lowercase hex, keyed with the cap file's 64
    hex characters.
 3. The hub compares the decoded digests in constant time:
@@ -1403,7 +1406,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/scrub` | user | `{}` | `{blocked_by?: string, vacuumed: boolean, wal_truncated: boolean}` | yes |
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
-| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum, session?: string}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
@@ -1499,7 +1502,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
+| `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
+| `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
+| `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
+| `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
+| `term/key` | user | `{id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/list` | user | `{}` | `[TermStatus]` | no |
+| `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], rows: natnum, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
+| `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
+| `term/search` | user | `{dir?: string, id: string, query: string}` | `{matches: [[string \| null, natnum, natnum]]}` | no |
+| `term/session-end` | user | `{}` | `natnum` | no |
+| `term/text` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
 | `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
@@ -2161,6 +2180,13 @@ it builds for Android too).
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
   `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
   images the rows name that the editor may not hold yet.
+- **Styles and terminal state** (a terminal's view; `drgnx_rows::style`). A patch may carry `styles: [[id, {fg, bg,
+  ul_color, bold, faint, italic, underline, strike, inverse, blink}]]`, each style sent once and kept by the editor
+  until the next reset (a reset carries every style its rows name). A run names a style as the face `s:<id>`
+  (`Face::Style`). A colour is `{ansi: 0..15}`, `{rgb: "#rrggbb"}` (program data, the 256-colour cube included, never
+  a theme literal) or absent (the default); attributes are present only when true. `term: {cursor: [row_key, col,
+  shape, visible], alt_screen, mouse_tracking, title}` (shape `block`, `block_hollow`, `bar` or `underline`; COL a
+  scalar index) comes on a patch that changes them. Both are left out when empty, so other views see no change.
 
 ### The wire: envs, patches, resyncs (`view`)
 
@@ -2174,8 +2200,9 @@ All of it is in memory only.
   class) and builds its rows again. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
-  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
-  view; a connection's views end with it.
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
+  version}` says the editor applied that patch (sent by a view type with `:ack t`; others may ignore it).
+  `view/close {view}` forgets the view; a connection's views end with it.
 - **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
 
 **The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
@@ -2197,6 +2224,18 @@ All of it is in memory only.
 - **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
   class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
+  `epoch_reset`). **Acknowledged** (`ack`, a terminal's): at most one patch is in flight per (view, class). Rows built
+  before the editor's `view/ack` of the version sent wait, the newest winning, and go as one patch on that ack; an ack
+  of another version releases nothing. A `view/resync` answers a reset of the newest rows at once (it is then in
+  flight), and a reconnect starts afresh, so a lost ack never stalls the view. **No epoch reset** (`epoch_reset`
+  false, a terminal's: its faces repaint in the editor): a new epoch is answered by a diff, and the editor applies a
+  patch of an older epoch instead of holding it. A terminal view's resize is a reset, sent by its builder. Views with
+  the default options (`ack` false, `epoch_reset` true) behave as above.
+- **Styles in the editor:** a run naming a style the editor lacks (not in a reset) sends `view/resync`. An ansi
+  foreground is the face `drgnx-term-color-N` itself (it inherits `ansi-color-*` and resets the background), so a
+  remap or a theme shows on rows already inserted; the other attributes, program colours and ansi backgrounds become
+  one anonymous face per distinct style, from a per-buffer LRU of 4,096 (`drgnx-view-patch-style-face-max`).
 - **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
   callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a

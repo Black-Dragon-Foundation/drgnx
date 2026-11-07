@@ -457,19 +457,19 @@ The key sheet says who wins where: `C-o Jump Back (vim; normal, visual, motion s
 
 ## In the terminal
 
-A terminal (New Terminal, `tools/terminal-eat`) is a program that wants most keys itself, so the active profile
+A terminal (New Terminal, `tools/term`) is a program that wants most keys itself, so the active profile
 decides which keys it gets, the way VS Code's terminal does:
 
 - **App and window keys reach drgnx** when they are not control or Alt characters: the palette, panel and terminal
   keys of the VS Code profile (`Ctrl+Shift+P`, `F1`, ``Ctrl+` ``), function keys, `C-c` keys, whatever the profile uses.
 - **Editing keys go to the shell**: a control or Alt key (`C-a`, `C-e`, `C-w`, `C-d`, `M-f`) means what readline or zle
   make of it, even when the profile gives it to a drgnx command outside the terminal (VS Code's `C-w` Close Tab, `C-s`
-  Save, `C-n` New Untitled). Eat's own reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
+  Save, `C-n` New Untitled). The terminal's reserved keys (`C-x`, `C-c`, `C-g`, `C-h`, `C-u`, `C-q`, `M-x`, `M-:`, `M-!`,
   `M-&`) stay with Emacs.
 - **VS Code's own exceptions, in the VS Code profile**: VS Code's terminal skips the shell for some control keys
   (`terminal.integrated.commandsToSkipShell`), so the VS Code profile gets them in the terminal too: `C-p` Quick Open
-  (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f` Find in File,
-  which searches the text of the terminal. This is the option `drgnx-terminal-skip-shell-keys` (a list of first keys,
+  (Go to File), `C-b` Toggle Sidebar, every `C-k` chord (Keyboard Shortcuts, Open Folder, ...), and `C-f`, which is
+  *Find in Terminal* there: it searches the terminal's screen and scrollback. This is the option `drgnx-terminal-skip-shell-keys` (a list of first keys,
   default `("C-p" "C-b" "C-k" "C-f")`; drop a key from it and that key reaches the shell again). It only applies
   to keys the active profile binds: in the Emacs and Vim profiles nothing is bound to these keys, so `C-p` (previous
   history entry), `C-b`, `C-k` (kill to end of line) and `C-f` all reach the shell. In the VS Code profile `C-k` is a
@@ -485,8 +485,17 @@ palette)". Several chords of one key are shown once ("C-k chords").
 
 **Copy and paste**: `Ctrl+Shift+C` copies the selected text of the terminal (nothing selected, nothing happens) and
 `Ctrl+Shift+V` pastes, on a Mac `Cmd+C` / `Cmd+V`. They are the commands *Terminal: Copy* and *Terminal: Paste* and
-work in terminal buffers only. The Emacs profile leaves eat's own keys: `C-y` pastes, and copying is `C-c C-e`
-(Emacs mode) then `M-w`.
+work in terminal buffers only. The Emacs profile pastes with `C-y`, and copies with `C-c C-e` (*Terminal: Copy
+Mode*) then `M-w`.
+
+**Copy mode** (*Terminal: Copy Mode*) stops the screen and makes the terminal an ordinary read-only buffer: move,
+select, `C-s` and `M-w` as anywhere else. The program's output is kept meanwhile and drawn when you leave; `C-g` (or
+the command again) leaves it. *Find in Terminal* asks for text, enters copy mode and jumps to the nearest match
+above.
+
+**Mouse**: while the program asks for the mouse (htop, vim with `mouse=a`, tmux), clicks, drags and the wheel go to
+it; otherwise they select text as in any buffer. A link the program prints (OSC 8, `ls --hyperlink`) is underlined on
+hover and opens on a click: a file in the other window, anything else in the browser.
 
 ## Conflicts are reported, never hidden
 

@@ -34,6 +34,10 @@ pub struct HelloParams {
     /// home.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<AbsPath>,
+    /// The editor session the connection carries (an editor sends it): its terminals draw on its subscribed
+    /// connection, and end when no connection says it for a minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Bounded<String, 64>>,
 }
 
 /// The binary that serves: its version and build commit.

@@ -1220,6 +1220,78 @@ mod tests {
         assert!((got - 0.005).abs() < 1e-12, "{got}");
     }
 
+    /// Pure (D): a store in a temp folder.  `share_per_usd` reads the `usd-est` the provider's steps booked since the
+    /// meter's first reading: not another provider's, not another unit, not a step from before the readings.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn share_per_usd_reads_the_estimated_spend_of_real_steps() {
+        use norn::write::steps::{StepClass, StepEnd, StepNew, close, open};
+        let dir = tempfile::tempdir().unwrap();
+        let f = front(dir.path());
+        session_entity(
+            &f,
+            "s1",
+            serde_json::json!({"profile": "claude", "role": "worker", "job": null}),
+        )
+        .await;
+        let scope: runstav::methods::timeline::BudgetScope =
+            serde_json::from_value(serde_json::json!({"worker": "w1"})).unwrap();
+        f.core.budgets.reading(&scope, "claude", 0.10, None, 1000.0);
+        f.core.budgets.reading(&scope, "claude", 0.20, None, 1900.0);
+        f.writer
+            .write(&crate::runner::service(), "test/steps", |tx| {
+                // (provider, start, cost, unit)
+                for (provider, start, cost, unit) in [
+                    ("claude", 500.0, 50.0, "usd-est"), // before the first reading
+                    ("claude", 1100.0, 4.0, "usd-est"),
+                    ("claude", 1200.0, 6.0, "usd-est"),
+                    ("claude", 1300.0, 9.0, "tokens"), // another unit
+                    ("codex", 1400.0, 30.0, "usd-est"), // another provider
+                ] {
+                    let id = open(
+                        tx,
+                        StepNew {
+                            session: "session:s1".into(),
+                            task: None,
+                            plan: None,
+                            project: None,
+                            agent: None,
+                            provider: Some(provider.into()),
+                            class: StepClass::Think,
+                            start,
+                            tool: None,
+                            tool_kind: None,
+                            message_id: None,
+                            turn_id: None,
+                            snapshot: None,
+                            log_version: None,
+                            acp: None,
+                        },
+                    )?;
+                    close(
+                        tx,
+                        id,
+                        StepEnd {
+                            end: start + 1.0,
+                            cost: Some(cost),
+                            cost_unit: Some(unit.into()),
+                            ..StepEnd::default()
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        // the meter rose 0.10 while 4 + 6 estimated dollars were booked
+        let got = share_per_usd(&f, "claude", 2000.0).await.unwrap();
+        assert!((got - 0.01).abs() < 1e-12, "{got}");
+        assert_eq!(
+            share_per_usd(&f, "codex", 2000.0).await,
+            None,
+            "no meter readings"
+        );
+    }
+
     /// Pure (D): use outside drgnx raises the share per dollar, and the effect says it is an estimate.
     #[test]
     fn outside_use_makes_it_higher_and_it_is_labelled_an_estimate() {

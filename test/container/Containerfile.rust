@@ -2,6 +2,6 @@
 # the tools its tests run (rust-packages.sh), and Nidhogg 31.1 (nidhogg.sh) for the conformance rows that start the
 # editor's CLIs.  CI pulls it by digest from `Test images`; without one the job runs the same two scripts itself.
 FROM registry.fedoraproject.org/fedora:45
-COPY rust-packages.sh nidhogg.sh /tmp/
-RUN sh /tmp/rust-packages.sh && bash /tmp/nidhogg.sh fedora-45 && rm /tmp/rust-packages.sh /tmp/nidhogg.sh
+COPY rust-packages.sh nidhogg.sh zig.sh /tmp/
+RUN sh /tmp/rust-packages.sh && bash /tmp/nidhogg.sh fedora-45 && bash /tmp/zig.sh linux && rm /tmp/rust-packages.sh /tmp/nidhogg.sh /tmp/zig.sh
 ENV DRGNX_EMACS=/opt/nidhogg/31.1-nidhogg.5/bin/nidhogg

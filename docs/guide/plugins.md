@@ -131,6 +131,9 @@ At four points the hub asks your **rules** and the enabled plugins' **hooks** ab
 | `before-commit` | before the hub merges a task's commit | 10 s |
 | `at-review` | before a task goes to its reviewer | 30 s |
 
+Hooks cover the agents drgnx starts. An outside agent (one the hub did not launch, such as Claude Code run by hand and
+reporting in) is not asked at `before-tool`: its tools run in its own process, so a plugin's rule does not reach them.
+
 All four run. `before-commit` and `at-review` belong to a job and a task, not to an agent, so there is no session:
 a plugin's network requests at those points are judged under the job (the job's network cell and the `plugin` tier
 of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.

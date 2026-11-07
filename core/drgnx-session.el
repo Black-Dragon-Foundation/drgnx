@@ -116,13 +116,23 @@ is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call nev
   (seq-filter (lambda (b) (and (buffer-modified-p b) (or (buffer-file-name b) (buffer-local-value 'buffer-offer-save b))))
               (buffer-list)))
 
+(defvar drgnx-session-running-functions nil
+  "Functions the quit question calls first, with no argument: each returns the names of programs still running that
+no Emacs process stands for (drgnx's terminals: their programs run in the hub's workers), or nil, and may bring
+processes' query flags up to date before they are read.  A failing one never stops the question.")
+
 (defun drgnx-session--running-programs ()
   "The live processes whose end Emacs would ask about (`process-query-on-exit-flag'): terminals, shells, servers
-you started — not drgnx's own background helpers.  The terminal module, when it is there, first brings its
-terminals' flags up to date (a shell at a prompt does not ask)."
-  (when (fboundp 'drgnx-terminal-eat-refresh-query-flags)
-    (ignore-errors (funcall 'drgnx-terminal-eat-refresh-query-flags)))   ; a failing refresh never stops the question
+you started — not drgnx's own background helpers."
   (seq-filter (lambda (p) (and (process-live-p p) (process-query-on-exit-flag p))) (process-list)))
+
+(defun drgnx-session--running-names ()
+  "The names of the programs quitting would stop: those `drgnx-session-running-functions' name, then the processes of
+`drgnx-session--running-programs' (read after the functions ran)."
+  (let ((others nil))
+    (run-hook-wrapped 'drgnx-session-running-functions
+                      (lambda (f) (setq others (append others (ignore-errors (funcall f)))) nil))
+    (append (mapcar #'process-name (drgnx-session--running-programs)) others)))
 
 (defun drgnx-session-quit-confirm ()
   "Ask what quitting needs: offer to save each changed file and New Untitled buffer, then confirm losing what
@@ -135,10 +145,10 @@ a caller that quits afterwards never gets there."
                                                   (length unsaved) (if (cdr unsaved) "s are" " is")))))
            (message "drgnx keeps running; nothing was lost")
            nil)
-          ((when-let* ((running (drgnx-session--running-programs)))
+          ((when-let* ((running (drgnx-session--running-names)))
              (not (yes-or-no-p (format "%d program%s still running (%s); quit and stop %s? "
                                        (length running) (if (cdr running) "s are" " is")
-                                       (mapconcat #'process-name running ", ") (if (cdr running) "them" "it")))))
+                                       (string-join running ", ") (if (cdr running) "them" "it")))))
            (message "drgnx keeps running; nothing was stopped")
            nil)
           (t t))))

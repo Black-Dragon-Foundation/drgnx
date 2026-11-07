@@ -186,6 +186,8 @@ struct State {
     edits: Vec<crate::timeline::EditCell>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
+    /// How many message ids the hub made for messages whose provider sent none ([`State::own_mid`]).
+    minted: u64,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
     last_update: f64,
     /// Tool calls started this turn, by title and command, and the most any one was repeated.
@@ -345,6 +347,7 @@ impl State {
             cur: None,
             stash: None,
             last_mid: None,
+            minted: 0,
             last_update: now(),
             cmd_counts: HashMap::new(),
             max_repeat: 0,
@@ -667,6 +670,22 @@ impl State {
         i
     }
 
+    /// The message id of a chunk of KIND whose provider sent none: that of the entry it joins, else a key of the
+    /// hub's own, so `agents/slice` can tell the message from the steps that name it.
+    fn own_mid(&mut self, kind: EntryType) -> String {
+        if let Some((k, i)) = self.open
+            && k == kind
+            && let Some(m) = self.entries[i]
+                .rest
+                .get("messageId")
+                .and_then(Value::as_str)
+        {
+            return m.to_owned();
+        }
+        self.minted += 1;
+        format!("hub-{}", self.minted)
+    }
+
     /// Text of KIND (a user, agent or thought message chunk): joined onto the entry still open.
     fn text(&mut self, kind: EntryType, text: &str, message_id: Option<&str>) {
         if let Some((k, i)) = self.open
@@ -731,7 +750,16 @@ impl State {
                 None => c.map(Value::to_string).unwrap_or_default(),
             }
         };
-        let mid = u.get("messageId").and_then(Value::as_str);
+        let own = match (u.get("messageId").and_then(Value::as_str), kind) {
+            (None, "user_message_chunk") => Some(self.own_mid(EntryType::User)),
+            (None, "agent_message_chunk") => Some(self.own_mid(EntryType::Agent)),
+            (None, "agent_thought_chunk") => Some(self.own_mid(EntryType::Thought)),
+            _ => None,
+        };
+        let mid = u
+            .get("messageId")
+            .and_then(Value::as_str)
+            .or(own.as_deref());
         if mid.is_some() {
             self.last_mid = mid.map(str::to_string);
         }
@@ -7430,6 +7458,34 @@ mod tests {
         assert_eq!(roll.secs_by_class["tool"], sum("tool"));
         assert_eq!(roll.tokens.input, 3);
         assert_eq!(roll.tokens.output, 6);
+    }
+
+    /// A provider that sends no `messageId` still has its messages and the steps that follow them tied together.
+    #[test]
+    fn a_message_without_an_id_gets_one_of_the_hubs_own() {
+        let mut st = State::new();
+        let chunk = |t: &str| {
+            upd(
+                json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": t}}),
+            )
+        };
+        st.apply(&chunk("Hel"));
+        st.apply(&chunk("lo"));
+        st.apply(&upd(
+            json!({"sessionUpdate": "tool_call", "toolCallId": "t1",
+            "title": "Edit x", "kind": "edit", "status": "in_progress"}),
+        ));
+        st.apply(&chunk("again"));
+        let ids: Vec<Option<&str>> = st
+            .entries
+            .iter()
+            .map(|e| e.rest.get("messageId").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids[0], Some("hub-1"), "{ids:?}");
+        assert_eq!(ids[1], None, "the tool entry has none");
+        assert_eq!(ids[2], Some("hub-2"), "{ids:?}");
+        assert_eq!(st.entries[0].rest["text"], "Hello");
+        assert_eq!(st.last_mid.as_deref(), Some("hub-2"));
     }
 
     #[test]

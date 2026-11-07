@@ -224,23 +224,16 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
       (should (assq (car u) drgnx-perf-run-unseeded))
       (should (stringp (cdr u))))))
 
-(ert-deftest drgnx-perf-run/the-terminal-workloads-run-in-the-container-with-eat ()
-  ;; DRGNX_USER_ELPA with an eat package: the terminal workloads are not skipped, and their setup names that directory
-  ;; (the session does not inherit the variable); the other skipped workloads stay skipped
-  (let ((elpa (make-temp-file "drgnx-perf-elpa" t)))
-    (unwind-protect
-        (progn
-          (let ((process-environment (cons "DRGNX_USER_ELPA" process-environment)))
-            (should (stringp (drgnx-perf-run--container-skip 'terminal-output))))
-          (let ((process-environment (cons (concat "DRGNX_USER_ELPA=" elpa) process-environment)))
-            (should (stringp (drgnx-perf-run--container-skip 'terminal-output)))   ; no eat in it yet
-            (make-directory (expand-file-name "eat-0.9.4" elpa))
-            (should-not (drgnx-perf-run--container-skip 'terminal-output))
-            (should-not (drgnx-perf-run--container-skip 'terminal-typing))
-            (should (stringp (drgnx-perf-run--container-skip 'live-view)))
-            (should (string-search (prin1-to-string elpa)
-                                   (plist-get (cdr (assq 'terminal-output (drgnx-perf-run--workloads))) :setup)))))
-      (delete-directory elpa t))))
+(ert-deftest drgnx-perf-run/the-terminal-workloads-run-in-the-container ()
+  ;; drgnx's terminal needs no package: the terminal workloads are never skipped, and their setup starts the workload's
+  ;; hub (its worker beside it) and runs tools/term on it
+  (let ((process-environment (cons "DRGNX_USER_ELPA" process-environment)))
+    (should-not (drgnx-perf-run--container-skip 'terminal-output))
+    (should-not (drgnx-perf-run--container-skip 'terminal-typing))
+    (should (stringp (drgnx-perf-run--container-skip 'live-view)))
+    (let ((setup (plist-get (cdr (assq 'terminal-output (drgnx-perf-run--workloads))) :setup)))
+      (should (string-search "(drgnx-perf--hub-start nil)" setup))
+      (should (string-search "drgnx-term-start" setup)))))
 
 (ert-deftest drgnx-perf-run/the-live-view-runs-in-the-container-with-websocket ()
   ;; DRGNX_USER_ELPA with a websocket package: live-view is not skipped, its setup names that directory and counts
@@ -251,7 +244,6 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
           (should (stringp (drgnx-perf-run--container-skip 'live-view)))
           (make-directory (expand-file-name "websocket-1.16" elpa))
           (should-not (drgnx-perf-run--container-skip 'live-view))
-          (should (stringp (drgnx-perf-run--container-skip 'terminal-output)))
           (let ((w (cdr (assq 'live-view (drgnx-perf-run--workloads)))))
             (should (string-search (prin1-to-string elpa) (plist-get w :setup)))
             (should (equal (plist-get w :measure) "(drgnx-perf--live-measure)"))
@@ -266,8 +258,8 @@ without them would pass unjudged), unless `drgnx-perf-run-unseeded' says why it 
         (should (stringp setup))
         (should (consp (read setup)))
         (should (string-match-p (regexp-quote (cadr spec)) setup))
-        (should (string-match-p "tools/terminal-eat" setup))   ; the session has no eat package at start: the module runs here
-        (should (string-match-p "need the tools/terminal-eat module" setup))   ; and the workload stops when it did not reach ok
+        (should (string-match-p "tools/term\\_>" setup))   ; the session's modules ran before its hub: the module runs here
+        (should (string-match-p "need the tools/term module" setup))   ; and the workload stops when it did not reach ok
         (should-not (string-match-p "\\.bashrc\\|\\.zshrc\\|SHELL" setup))))
     (should (string-match-p "seq 1 2000" (plist-get (cdr (assq 'terminal-output ws)) :setup)))))
 
