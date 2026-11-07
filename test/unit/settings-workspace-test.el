@@ -188,6 +188,22 @@ fixture settings; the buffers it opened are killed after."
     (drgnx-swt--in "a.txt"
       (should-not (local-variable-p 'drgnx-swt--mine)))))
 
+(ert-deftest drgnx-settings-workspace/private-shared-overlay-goes-in-its-projects-set ()
+  ;; your own file turns a project's `drgnx-runners-shared-overlay' on: the editor sends it in that project's set to the
+  ;; hub (whose placement takes it for that project's jobs only); another root's set doesn't have it
+  (require 'drgnx-agents-matrix)
+  (require 'drgnx-settings-runtime)
+  (drgnx-swt--with
+    (drgnx-swt--private " (drgnx-runners-shared-overlay t)")
+    (should-not (drgnx-settings-workspace-problems (drgnx-swt--private-file)))
+    (should (eq (drgnx-setting-for-root 'drgnx-runners-shared-overlay drgnx-swt--root) t))
+    (should (member '(:name "drgnx-runners-shared-overlay" :value t :source "workspace")
+                    (drgnx-settings-runtime-overrides drgnx-swt--root)))
+    (let ((other (file-name-as-directory (expand-file-name "other" drgnx-test-config-root))))
+      (make-directory other t)
+      (should-not (cl-find "drgnx-runners-shared-overlay" (drgnx-settings-runtime-overrides other)
+                           :key (lambda (o) (plist-get o :name)) :test #'equal)))))
+
 (ert-deftest drgnx-settings-workspace/shared-still-refuses-it ()
   ;; a repository's .drgnx/settings.el and the old shims still refuse it
   (drgnx-swt--with

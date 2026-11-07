@@ -191,7 +191,12 @@ settings:
 - `drgnx-runners-weight`: its share against other projects within a priority (default 1);
 - `drgnx-runners-project-visibility`: `"private"` (the default) or `"public"` (see below);
 - `drgnx-runners-shared-overlay`: off (the default) or on: whether a `shared` runner may have its uncommitted files.
-  Your own settings only: a repository's files can never turn it on.
+  Your own settings only: a repository's files can never turn it on. For one project, set it in your private workspace
+  file for that project (the Settings page's Workspace tab, `docs/guide/settings.md`); that project's jobs take it,
+  other projects' don't.
+
+A project's value of each of these, from a workspace, is the one its jobs take; without one, they take your global
+value.
 
 A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
 runner.

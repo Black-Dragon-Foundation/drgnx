@@ -1951,7 +1951,27 @@ fn machine(p: &StartParams, q: &Queue) -> Result<Machine, Error> {
 
 /// Where the request asks its job to run, and what its project's settings and the starter's `machines` cell say.
 async fn placement(f: &Front, c: &Caller, p: &StartParams, m: Machine, runners: bool) -> Placement {
-    let setting = |name: &str| f.settings.effective(name, None).map(|(v, _)| v);
+    // the project's own value (the set the editor sent for it, under its id or slug), else the global one
+    let projects = match p.cwd.as_ref().map(|c| PathBuf::from(c.as_str())) {
+        Some(at) => crate::clock::blocking(move || norn::project::resolve(&at))
+            .await
+            .ok()
+            .flatten()
+            .map(|r| vec![r.id, r.slug])
+            .unwrap_or_default(),
+        None => vec![],
+    };
+    let setting = |name: &str| {
+        projects
+            .iter()
+            .find_map(|pr| {
+                f.settings
+                    .effective(name, Some(pr))
+                    .filter(|(_, seen)| *seen)
+            })
+            .or_else(|| f.settings.effective(name, None))
+            .map(|(v, _)| v)
+    };
     let send = setting("drgnx-runners-send")
         .and_then(|v| v.as_str().and_then(queue::SendMode::parse))
         .unwrap_or_default();

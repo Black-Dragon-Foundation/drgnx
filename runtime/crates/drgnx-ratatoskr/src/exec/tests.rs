@@ -1536,3 +1536,52 @@ fn meta_without_relay_still_reads() {
     let m: Meta = serde_json::from_value(v).unwrap();
     assert_eq!(m.relay, None);
 }
+
+/// [D] A project's own runner settings (the set the editor sends for it: your W2 file's `drgnx-runners-shared-overlay`)
+/// reach its jobs' placement, under the project's slug or id; another project's job keeps the global value.
+#[tokio::test]
+async fn a_projects_own_runner_settings_reach_its_jobs_only() {
+    let d = tempfile::tempdir().unwrap();
+    let f = crate::front::Front::new(
+        runstav::proof::Cap::generate().unwrap(),
+        d.path().join("hub-x.sock"),
+        crate::store::WorkDb::spawn(d.path().join("work.db")).unwrap(),
+        norn::store::CoordDb::spawn(d.path().join("work.db")),
+    );
+    for p in ["alpha", "beta"] {
+        let at = d.path().join(p);
+        std::fs::create_dir(&at).unwrap();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&at)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
+    f.settings
+        .set_overrides(
+            Some("alpha"),
+            vec![crate::settings::overrides::Override {
+                name: "drgnx-runners-shared-overlay".into(),
+                value: json!(true),
+                source: "workspace".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    let c = Caller {
+        class: runstav::registry::Class::User,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let overlay = async |p: &str| {
+        let cwd = d.path().join(p).join("");
+        let p = params(json!({"cwd": cwd.to_str().unwrap()}));
+        placement(&f, &c, &p, Machine::Auto, false)
+            .await
+            .shared_overlay
+    };
+    assert!(overlay("alpha").await);
+    assert!(!overlay("beta").await);
+}
