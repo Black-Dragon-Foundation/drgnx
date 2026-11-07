@@ -54,7 +54,7 @@ fn write(root: &Path, files: &[(&str, &str)]) {
 
 /// Set every file's mtime an hour back, so the index written after it is not racy (file times sit on 1 ms ticks).
 fn backdate(root: &Path, paths: &[&str]) {
-    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let then = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     for p in paths {
         let f = std::fs::File::options()
             .write(true)
