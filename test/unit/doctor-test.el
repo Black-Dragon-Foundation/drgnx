@@ -52,6 +52,15 @@
 (ert-deftest drgnx-doctor/facts-name-nidhogg ()
   (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
 
+(ert-deftest drgnx-doctor/edit-history-hook ()
+  (should-not (drgnx-doctor-check 'edit-history (drgnx-doctor-test--facts)))   ; not asked: no row
+  (should (eq 'ok (drgnx-doctor-test--status 'edit-history (drgnx-doctor-test--facts :history-hook t))))
+  (let ((r (drgnx-doctor-check 'edit-history (drgnx-doctor-test--facts :history-hook nil))))
+    (should (eq 'warn (car r)))
+    (should (string-search "edit history stays off" (nth 1 r)))
+    (should (string-search "installer" (nth 2 r))))
+  (should (plist-member (drgnx-doctor-facts) :history-hook)))
+
 (ert-deftest drgnx-doctor/fedora-release ()
   (should-not (drgnx-doctor-check 'fedora-release (drgnx-doctor-test--facts :fedora-release nil)))
   (should (eq 'ok (drgnx-doctor-test--status 'fedora-release (drgnx-doctor-test--facts :fedora-release 45))))

@@ -852,7 +852,8 @@ restores code, decisions and commit and says so, and Fork sits beside it.
 The edit history (`history.db`, one per project) is part of the nightly backup, beside `work.db`: one checked copy per
 project, `backup/history-<project>.db`, replaced each night and never rotated; its 2 GiB cap per project bounds it.
 `drgnx doctor` shows the newest copy in its `history` row and warns when a copy failed. A failed history copy never
-stops the `work.db` copy.
+stops the `work.db` copy. The `edit-history` row of the doctor says when this Emacs lacks Nidhogg's change hook: the edit
+history then stays off (no revert, no pair mode) until Nidhogg is rebuilt.
 
 After a revert, a file you have open reverts quietly. A buffer with unsaved changes in a file the revert wrote is never
 touched: a notice leads to **History: Resolve Unsaved Changes**, a card showing the difference with *keep mine*,
