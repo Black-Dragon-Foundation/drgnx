@@ -989,7 +989,9 @@ jobs:
           trap 'bash .github/ci/macos-sshd.sh down "$SSHD_DIR"; rm -rf "$SSHD_DIR"' EXIT
           DRGNX_TEST_SSHD_HOST=$(bash .github/ci/macos-sshd.sh up "$SSHD_DIR" | tail -n 1)
           export DRGNX_TEST_SSHD_HOST
-          cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored
+          # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
+          skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored $skips
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
       - id: build
