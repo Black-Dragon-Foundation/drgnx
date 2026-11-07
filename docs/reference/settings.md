@@ -1532,6 +1532,25 @@ hidden in the sandbox.  npm's global config is PREFIX/etc/npmrc.
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-search-base
+
+The checkout a project's search index is built from (its base); nil: the main checkout.
+Every other worktree is an overlay of what differs from it, so a base on the line most worktrees branch from keeps
+the overlays small.  Changing it builds the base again.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const :tag "The main checkout" nil) directory)` |
+| `:scope` | `project` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"Option<String>"` |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
 ## drgnx-search-builtin
 
 Non-nil: the built-in embedding model indexes every project's code and your tasks and notes, whatever servers are

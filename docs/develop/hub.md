@@ -1306,11 +1306,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
 | `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
 | `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
+| `agents/config` | user | `{id: Id, option: string, value: string}` | `boolean` | yes |
 | `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
 | `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/explain` | user | `{id: Id, item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | `{facts?: [Fact], item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | no |
 | `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
@@ -1471,7 +1473,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
-| `search/query` | user | `{k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `{hits: [Hit], lag: Lag, lag_line: string, model?: string, notice?: string}` | no |
+| `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
@@ -3299,6 +3301,22 @@ not: its steps reach the hooks through its lock's managed hook instead ("The `be
   session whose agent does not offer the feature gets `invalid-params` "this agent does not offer it" (the editor hides
   the action instead). An agent's error is `not-allowed` with its message quoted; no answer in time, or an answer that
   does not fit its schema, is `internal`.
+- **Mode and model: `agents/config {id, option, value}`** (user class, writes). `option` is `mode` or `model`; any
+  other is `not-allowed`. A mode is switched only to one on the provider's lock allow-list
+  (`agents::lock::allowed_modes`: Claude `default` and `plan`, Gemini `default`, Kimi Code `default` without plan, Codex
+  and DeepSeek none); any other is `not-allowed` with the mode, the allowed list and why (Claude's other modes run tools
+  without asking, which skips the matrix; Codex's lock pins `read-only`). A session with no lock cannot switch its mode.
+  A model is free within the profile (the agent refuses one it does not have). The agent is asked by
+  `session/set_config_option {sessionId, configId, value}`; one without the method (`-32601`) gets `session/set_mode`
+  or `session/set_model`. An agent's refusal is `not-allowed` with its message quoted.
+- **The facts behind a chip: `agents/explain {id, item}`** (user class), `item` among `context`, `cost`, `mode`,
+  `model`, `waiting`, `mcp`; the answer `{item, facts: [{name, value}]}`, facts only (a value the hub does not know is
+  not listed, or says so). `context` is the adapter's own `_drgnx/context` count when it sent one (`source` says so),
+  else the agent's `usage_update`, else says none is known. `mode` names the lock (provider, enforced or why not), the
+  matrix column (`row`: role, agent, provider), the allowed switches and why the others are refused. `cost` has the
+  turns, the tokens of finished turns and the cost the agent reported; `model` the profile's model and environment;
+  `waiting` the status, the job waited on and the permission requests waiting; `mcp` the hub's server and the agent's
+  `mcpCapabilities`.
 - **`_drgnx/before_tool`** (agent → hub request) `{sessionId, toolCall}`, `toolCall` as in
   `session/request_permission`: the session's `before-tool` rules and hooks run at the adapter site
   (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with

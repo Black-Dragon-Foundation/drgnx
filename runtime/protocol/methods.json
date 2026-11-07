@@ -4193,6 +4193,53 @@
       "classes": [
         "user"
       ],
+      "doc": "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+      "name": "agents/config",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The user's switch of a session's mode or model.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "option": {
+            "description": "`mode` or `model`.",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "value": {
+            "description": "The mode id or model id; a mode must be on the provider's lock allow-list.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "option",
+          "value"
+        ],
+        "title": "ConfigParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
       "name": "agents/context-drop",
       "params": {
@@ -4451,6 +4498,104 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
+      "name": "agents/explain",
+      "params": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "ExplainParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Fact": {
+            "additionalProperties": false,
+            "description": "One fact behind a chip: a name and what it is, in words.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).",
+        "properties": {
+          "facts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Fact"
+            },
+            "type": "array"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "Explained",
+        "type": "object"
       },
       "writes": false
     },
@@ -25940,6 +26085,13 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "base": {
+            "description": "True: answer from the base (the main checkout's rows) even when `root` is a linked worktree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "k": {
             "description": "How many hits, 1 to 100; default 10.",
             "format": "uint32",
@@ -26072,6 +26224,34 @@
               "built_from"
             ],
             "type": "object"
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -26103,12 +26283,16 @@
               "string",
               "null"
             ]
+          },
+          "view": {
+            "$ref": "#/$defs/QueryView"
           }
         },
         "required": [
           "hits",
           "lag",
-          "lag_line"
+          "lag_line",
+          "view"
         ],
         "title": "QueryAnswer",
         "type": "object"
@@ -26490,6 +26674,86 @@
             ],
             "type": "object"
           },
+          "SearchWatch": {
+            "additionalProperties": false,
+            "description": "The project's file watches.",
+            "properties": {
+              "budget": {
+                "description": "What Hrafn allows itself: half of `limit`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "limit": {
+                "description": "`fs.inotify.max_user_watches`, where there is one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "unwatched": {
+                "description": "Trees that run unwatched.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "description": "Directories under watch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "unwatched"
+            ],
+            "type": "object"
+          },
+          "TreeInfo": {
+            "additionalProperties": false,
+            "description": "One worktree overlay.",
+            "properties": {
+              "differing_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "door": {
+                "description": "The git door: `cli`, or `gix` for a tree an agent's sandbox touched.",
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`seeding`, `live`, `stale` or `unwatched`.",
+                "type": "string"
+              },
+              "watched": {
+                "description": "Whether the project's watcher serves it (else a query checks it, at most every 5 s).",
+                "type": "boolean"
+              },
+              "worktree": {
+                "description": "History's worktree id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree",
+              "root",
+              "state",
+              "door",
+              "differing_files",
+              "watched"
+            ],
+            "type": "object"
+          },
           "WorkerStatus": {
             "additionalProperties": false,
             "properties": {
@@ -26574,6 +26838,16 @@
             "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
             "type": "string"
           },
+          "trees": {
+            "description": "The project's worktree overlays.",
+            "items": {
+              "$ref": "#/$defs/TreeInfo"
+            },
+            "type": "array"
+          },
+          "watch": {
+            "$ref": "#/$defs/SearchWatch"
+          },
           "worker": {
             "$ref": "#/$defs/WorkerStatus"
           }
@@ -26587,7 +26861,9 @@
           "models",
           "worker",
           "tier2",
-          "embedded"
+          "embedded",
+          "trees",
+          "watch"
         ],
         "title": "StatusAnswer",
         "type": "object"
@@ -27077,6 +27353,33 @@
             ],
             "type": "object"
           },
+          "ProjectWatch": {
+            "additionalProperties": false,
+            "description": "One project's file watches.",
+            "properties": {
+              "error": {
+                "description": "Why the project runs unwatched (the watch budget is spent, or the watcher could not start); none: it is watched.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "root": {
+                "type": "string"
+              },
+              "watched": {
+                "description": "Directories under watch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "root",
+              "watched"
+            ],
+            "type": "object"
+          },
           "ProviderWarning": {
             "additionalProperties": false,
             "description": "A warning about one provider (a keyed one whose key travels in clear text).",
@@ -27301,6 +27604,31 @@
             ],
             "type": "object"
           },
+          "WatchStatus": {
+            "additionalProperties": false,
+            "description": "`status.watch`: the inotify budget and each open project's watches.",
+            "properties": {
+              "max_user_watches": {
+                "description": "`fs.inotify.max_user_watches` (none off Linux or when unreadable).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "projects": {
+                "items": {
+                  "$ref": "#/$defs/ProjectWatch"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "projects"
+            ],
+            "type": "object"
+          },
           "WriterState": {
             "description": "Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the\nmigration waits or after it failed, `read-only` for a newer file).",
             "enum": [
@@ -27477,6 +27805,17 @@
               }
             ],
             "description": "The front's writer (none from a Lisp hub)."
+          },
+          "watch": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WatchStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hrafn's file watches: what is watched and which projects run unwatched (none from a Lisp hub)."
           }
         },
         "required": [

@@ -509,3 +509,204 @@ unanswered, and panel \"s1\" as `buf'."
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
+
+;;;; Task 42: why each step was allowed, and what each chip means
+
+(declare-function drgnx-agent-panel-explain--popup-text "drgnx-agent-panel-explain")
+(declare-function drgnx-agent-panel-revoke-always "drgnx-agent-panel-explain")
+
+(ert-deftest drgnx-agent-panel/provenance-under-its-step ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps
+       (list (list :seq 3 :hooks (vector (list :point "before-tool" :outcome "deny" :tool "rm"
+                                               :records (vector (list :source "rule:no-rm" :verdict "deny" :ms 1
+                                                                      :reason "never rm")))))
+             (list :seq 4)))
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run rm" "failed" :step 3))
+             (list 1 (drgnx-agent-panel-test--tool "t2" "Read a" "completed" :step 4))))
+      (let* ((text (drgnx-agent-panel-test--text buf))
+             (at (string-search "refused by rule no-rm" text)))
+        (should at)
+        (should (string-match-p "\"never rm\"" text))
+        ;; the line sits under its own step, above the next one
+        (should (< (string-search "Run rm" text) at (string-search "Read a" text))))
+      ;; a click on the line shows the provenance: who, what, how long
+      (goto-char (point-min))
+      (search-forward "refused by")
+      (backward-char 3)
+      (push-button)
+      (with-current-buffer "*agent hook*"
+        (should (string-match-p "Source:   rule no-rm" (buffer-string)))
+        (should (string-match-p "Time:     1 ms" (buffer-string))))
+      (kill-buffer "*agent hook*"))))
+
+(ert-deftest drgnx-agent-panel/revoke-an-always ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot
+       (list :id "s1" :status "waiting"
+             :permissions (list (list :id 7 :title "Run make" :tool (list :id "t1")
+                                      :options (list (list :optionId "allow" :kind "allow_once")
+                                                     (list :optionId "always" :kind "allow_always"))))))
+      (drgnx-agent-panel-test--text buf)
+      (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
+      (drgnx-agent-panel-always)
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "allowed by your Always · V revokes" text)))
+      (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0))))
+        (drgnx-agent-panel-revoke-always))
+      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf)))
+      ;; the line is gone because the panel forgot it; nothing is asked of the hub (the agent keeps its own rule)
+      (should (equal "agents/permission" (car (car drgnx-agent-panel-test--calls)))))))
+
+(ert-deftest drgnx-agent-panel/context-popup-shows-drop-only-when-advertised ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((ctx (list :used 1200 :size 200000 :compact_frees 300
+                        :parts (vector (list :kind "tool-output" :tokens 1000
+                                             :items (vector (list :id "i1" :label "Bash ls" :tokens 1000))))))
+             (snap (lambda (features) (list :id "s1" :panel (list :features features :context ctx))))
+             (facts (list (list :name "used" :value "1200 of 200000 tokens")))
+             (text (lambda (features)
+                     (substring-no-properties
+                      (drgnx-agent-panel-explain--popup-text 'context facts (funcall snap (vconcat features)))))))
+        (should (string-match-p "Bash ls" (funcall text '("context"))))
+        (should (string-match-p "1200 of 200000 tokens" (funcall text '("context"))))
+        (should-not (string-match-p "\\[drop\\]" (funcall text '("context"))))
+        (should-not (string-match-p "\\[pin\\]" (funcall text '("context"))))
+        (should-not (string-match-p "What /compact keeps" (funcall text '("context"))))
+        (should (string-match-p "\\[drop\\]" (funcall text '("context" "drop"))))
+        (should (string-match-p "\\[pin\\]" (funcall text '("context" "pin"))))
+        (should (string-match-p "What /compact keeps" (funcall text '("context" "compact-preview"))))))))
+
+(ert-deftest drgnx-agent-panel/a-chip-opens-its-facts-from-the-hub ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :mcp 2 :mode "default"))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (goto-char (point-min))
+        (search-forward "MCP 2")
+        (should (equal 'mcp (get-text-property (1- (point)) 'drgnx-agent-panel-chip)))
+        (should text))
+      (drgnx-agent-panel-chip 'mcp)
+      (should (equal '("agents/explain" :id "s1" :item "mcp") (car drgnx-agent-panel-test--calls))))))
+
+;;;; Task 43: subagents and huddle threads
+
+(declare-function drgnx-agent-panel-huddle-buffer "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle--take "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-send "drgnx-agent-panel-huddle")
+
+(ert-deftest drgnx-agent-panel/subagent-steps-indent-in-their-colour ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps (list (list :seq 1) (list :seq 2 :detail (list :parent_tool "task-1"))))
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "task-1" "Task: explore" "completed" :step 1))
+             (list 1 (drgnx-agent-panel-test--tool "c1" "Read b.el" "completed" :step 2))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "^  [●○] Task: explore" text))
+        (should (string-match-p "^      [●○] Read b.el" text)))
+      (goto-char (point-min))
+      (search-forward "Read b.el")
+      (let ((faces (ensure-list (get-text-property (match-beginning 0) 'face))))
+        (should (seq-some (lambda (f) (string-match-p "\\`drgnx-agent-[0-9]+\\'" (symbol-name f))) faces))))))
+
+(defun drgnx-agent-panel-test--huddle ()
+  (list :id "huddle:1" :clash "src/a.el" :participants (vector "s1" "s2") :state "open"
+        :replies (vector (list :from "s1" :text "I would keep the old API" :proposal "keep")
+                         (list :from "s2" :text "I would drop it"))))
+
+(ert-deftest drgnx-agent-panel/huddle-thread-shows-both-positions-quoted ()
+  (drgnx-agent-panel-test--with
+    (let ((hb (drgnx-agent-panel-huddle-buffer "huddle:1")))
+      (unwind-protect
+          (progn
+            (with-current-buffer hb (drgnx-agent-panel-huddle--take (drgnx-agent-panel-test--huddle)))
+            (let ((text (drgnx-agent-panel-test--text hb)))
+              (should (string-match-p "▎ I would keep the old API" text))
+              (should (string-match-p "▎ I would drop it" text))
+              (should (string-match-p "s1" text))
+              (should (string-match-p "s2" text))
+              (should (string-match-p "src/a.el" text))
+              (should (string-match-p "open" text))))
+        (kill-buffer hb)))))
+
+(ert-deftest drgnx-agent-panel/composer-in-a-huddle-sends-to-both ()
+  (drgnx-agent-panel-test--with
+    (let ((hb (drgnx-agent-panel-huddle-buffer "huddle:1")))
+      (unwind-protect
+          (with-current-buffer hb
+            (drgnx-agent-panel-huddle--take (drgnx-agent-panel-test--huddle))
+            (drgnx-agent-panel-huddle-send "settle it with a shim")
+            (should (equal '(("agents/send" :id "s2" :text "settle it with a shim")
+                             ("agents/send" :id "s1" :text "settle it with a shim"))
+                           (seq-filter (lambda (c) (equal (car c) "agents/send")) drgnx-agent-panel-test--calls))))
+        (kill-buffer hb)))))
+
+;;;; Task 44: session control
+
+(declare-function drgnx-agent-panel--offer-modes "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-move "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-compact "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--compact-after-preview "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-start "drgnx-agent-panel-composer")
+
+(ert-deftest drgnx-agent-panel/mode-chip-offers-only-the-allow-list ()
+  (drgnx-agent-panel-test--with
+    (let (coll)
+      (cl-letf (((symbol-function 'completing-read) (lambda (_p c &rest _) (setq coll c) "plan")))
+        (drgnx-agent-panel--offer-modes buf (list (list :name "allowed switches" :value "default, plan")))
+        (should (equal '("default" "plan") coll))
+        (should (equal '("agents/config" :id "s1" :option "mode" :value "plan")
+                       (car drgnx-agent-panel-test--calls))))
+      ;; a lock that allows none refuses, with the hub's reason
+      (setq drgnx-agent-panel-test--calls nil)
+      (let ((err (should-error (drgnx-agent-panel--offer-modes
+                                buf (list (list :name "allowed switches" :value "none")
+                                          (list :name "other modes are refused because" :value "the matrix says so")))
+                               :type 'user-error)))
+        (should (string-match-p "the matrix says so" (cadr err))))
+      (should-not drgnx-agent-panel-test--calls))))
+
+(ert-deftest drgnx-agent-panel/move-to-another-profile ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :profile "Claude"))
+      (let (coll)
+        (cl-letf (((symbol-function 'drgnx-agents-profile-names) (lambda () '("Claude" "Gemini")))
+                  ((symbol-function 'completing-read) (lambda (_p c &rest _) (setq coll c) "Gemini"))
+                  ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+          (drgnx-agent-panel-move)
+          (should (equal '("Gemini") coll))
+          (should (equal '("agents/move" :id "s1" :profile "Gemini") (car drgnx-agent-panel-test--calls))))))))
+
+(ert-deftest drgnx-agent-panel/compact-shows-the-preview-when-advertised ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        ;; not advertised: a plain /compact after the question
+        (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle"))
+        (drgnx-agent-panel-compact)
+        (should (equal '("agents/send" :id "s1" :text "/compact") (car drgnx-agent-panel-test--calls)))
+        ;; advertised: the preview is asked first, and /compact goes after the answer
+        (setq drgnx-agent-panel-test--calls nil)
+        (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :panel (list :features (vector "compact-preview"))))
+        (drgnx-agent-panel-compact)
+        (should (equal '(("agents/compact-preview" :id "s1")) drgnx-agent-panel-test--calls))
+        (drgnx-agent-panel--compact-after-preview buf (list :frees 900 :note "kept: the plan"))
+        (should (equal '("agents/send" :id "s1" :text "/compact") (car drgnx-agent-panel-test--calls)))
+        (kill-buffer "*agent compact preview*")))))
+
+(ert-deftest drgnx-agent-panel/start-a-session-in-this-folder ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :cwd "/work/p"))
+      (cl-letf (((symbol-function 'drgnx-agents-profile-names) (lambda () '("Claude" "Gemini")))
+                ((symbol-function 'completing-read) (lambda (&rest _) "Gemini")))
+        (drgnx-agent-panel-start)
+        (should (equal '("agents/start" :profile "Gemini" :cwd "/work/p") (car drgnx-agent-panel-test--calls)))))))

@@ -31,13 +31,13 @@ another session's; `hello` through it names its own agent; a call naming the oth
 |---|---|---|---|
 | Claude (claude-agent-acp) | the drgnx MCP tools `edit_file {path, old, new}` and `write_file {path, content}`; reads through `read_file {path}` | `Edit`, `Write`, `MultiEdit`, `NotebookEdit`: in `_meta.claudeCode.options.disallowedTools` of every chat in a project, from its start (they take effect only when Claude's query process starts, so toggling them would rebuild the session; pair is gated at the hub instead). `Bash` stays: a shell write gets `EROFS` | `EROFS` (`Read-only file system`, os error 30) for a shell or process write; a disallowed tool is not offered to the model |
 | Gemini (gemini-cli ACP) | ACP `fs/write_text_file` (its `write_file` and `edit` tools inside the root use the client's file system, `AcpFileSystemService`), `fs/read_text_file` for reads; the drgnx MCP tools too | none needed: inside the root its writes are ACP requests the hub answers. Its tools make missing parent folders natively first, which fails on the read-only bind, so the door makes them for an allowed write | `EROFS` for its shell tool or a native `mkdir` |
-| Codex | filled by its own task (the read-only mode lock, `apply_patch` cannot write) | | |
-| Kimi | filled by its own task (its lock, plan mode refused while locked) | | |
+| Codex (codex-acp) | the drgnx MCP tools `edit_file`, `write_file`, `read_file` | `apply_patch` and shell writes: every Codex chat runs in the `read-only` mode its lock asks for (and the adapter must report), so a shell write gets `EROFS`; an `apply_patch` it asks permission for in a project chat is refused by the hub, never approved (an approved patch would run outside Codex's sandbox) | the refusal entry: "this chat edits your project through drgnx: use edit_file {path, old, new} or write_file {path, content}"; `EROFS` for a shell write |
+| Kimi (kimi acp) | the drgnx MCP tools `edit_file`, `write_file`, `read_file` | `Write` and `Edit`: denied by user rules the hub adds to the lock's `config.toml` in every project chat. Kimi's plan mode is refused while the lock holds (its plan-file writes skip the hooks), so no write is left unseen | the tool is denied without asking; `EROFS` for a `Bash` write |
 | DeepSeek | filled by its own task (its lock, the fork's ask plugin) | | |
 
-Rows: `pair/native-edit-blocked-claude`, `pair/native-edit-blocked-gemini` (a release hub, the real sandbox: a native
+Rows: `pair/native-edit-blocked-claude`, `pair/native-edit-blocked-gemini`, `pair/native-edit-blocked-codex`, `pair/native-edit-blocked-kimi` (a release hub, the real sandbox: a native
 write of `README` in a project chat fails with `EROFS` and the file is unchanged). The routing rows of the door
-itself (every edit shape reaching it with the native tools off) are `pair/proof-claude` and `pair/proof-gemini`.
+itself (every edit shape reaching it with the native tools off) are `pair/proof-claude`, `pair/proof-gemini`, `pair/proof-codex` and `pair/proof-kimi`; `pair/kimi-plan-mode-refused-while-paired` covers Kimi's plan mode.
 
 ## What the result decides
 

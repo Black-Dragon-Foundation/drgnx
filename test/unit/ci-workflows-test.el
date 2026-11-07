@@ -49,6 +49,13 @@
       ;; no test step of its own: the tiers workflow is the one place those steps live
       (should-not (string-search "bin/drgnx test" yml)))))
 
+(ert-deftest drgnx-ci/the-tiers-fail-a-missing-nidhogg-primitive-on-the-line ()
+  ;; on `nidhogg: line' / `artifact' every test job runs strict (a missing primitive fails, as in the local runs);
+  ;; on `release' the value is empty, which drgnx-test-require-nidhogg reads as off (it compares to "1")
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    (drgnx-ci-test--has tiers "\nenv:\n  DRGNX_NIDHOGG_STRICT: ${{ (inputs.nidhogg == 'line' || inputs.nidhogg == 'artifact') && '1' || '' }}\n")))
+
 (ert-deftest drgnx-ci/the-tiers-workflow-runs-each-tier-only-when-asked ()
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
@@ -95,8 +102,62 @@
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "nidhogg-line" "needs.nidhogg-line.result != 'failure'"))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if [ \"$MODE\" = artifact ] || [ \"$MODE\" = line ]; then")
-    (drgnx-ci-test--has sh "status=success" "never falls back to the release" "exit 1")
+    (drgnx-ci-test--has sh "status=completed" "never falls back to the release" "exit 1")
     (should (string-match-p "^[a-z0-9][a-z0-9./_-]*$" line))))   ; a line of its own names the branch
+
+(defun drgnx-ci-test--line (artifacts runs)
+  "Run nidhogg-line.sh for ARTIFACTS with a stub git and gh; RUNS is ((ID JOBS ARTIFACTS)...) newest first.
+Returns (EXIT . OUTPUT)."
+  (let* ((dir (make-temp-file "drgnx-line" t)) (bin (expand-file-name "bin" dir)) (data (expand-file-name "data" dir))
+         (ci (expand-file-name "ci" dir)))
+    (unwind-protect
+        (progn
+          (dolist (d (list bin data ci)) (make-directory d))
+          (dolist (f '("nidhogg-line" "nidhogg-line.sh"))
+            (copy-file (expand-file-name (concat ".github/ci/" f) drgnx-ci-test--root) (expand-file-name f ci)))
+          (with-temp-file (expand-file-name "runs" data)
+            (dolist (r runs) (insert (format "%s\n" (car r)))))
+          (dolist (r runs)
+            (with-temp-file (expand-file-name (format "jobs-%s" (car r)) data) (dolist (j (nth 1 r)) (insert j "\n")))
+            (with-temp-file (expand-file-name (format "artifacts-%s" (car r)) data) (dolist (a (nth 2 r)) (insert a "\n"))))
+          (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nprintf 'abc123def456\\trefs/heads/x\\n'\n"))
+          (with-temp-file (expand-file-name "gh" bin)
+            (insert "#!/bin/sh\ncase \"$2\" in\n *workflows/build.yml/runs*) cat \"$DATA/runs\" ;;\n"
+                    " */runs/*/jobs*) r=${2#*/runs/}; cat \"$DATA/jobs-${r%%/*}\" ;;\n"
+                    " */runs/*/artifacts*) r=${2#*/runs/}; cat \"$DATA/artifacts-${r%%/*}\" ;;\nesac\n"))
+          (set-file-modes (expand-file-name "git" bin) #o755)
+          (set-file-modes (expand-file-name "gh" bin) #o755)
+          (let ((process-environment (append (list (format "PATH=%s:%s" bin (getenv "PATH")) (concat "DATA=" data))
+                                             process-environment)))
+            (with-temp-buffer
+              (let ((rc (apply #'call-process "bash" nil t nil (expand-file-name "nidhogg-line.sh" ci) artifacts)))
+                (cons rc (buffer-string))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-ci/the-line-takes-the-head-s-run-whose-tarball-jobs-passed ()
+  ;; the run may be red (its test jobs); what counts is the job that builds each asked tarball, and the artifact
+  (skip-unless (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+  (let* ((both '("Linux (fedora-45)" "macOS (NS app)")) (arts '("tarball-fedora-45" "tarball-macos"))
+         (red (list "7" both arts)))
+    ;; a red run whose tarball jobs succeeded is picked
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") (list red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^commit=abc123def456$" (cdr r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; the newest run whose tarball job failed is skipped for an older one that has it
+    (let ((r (drgnx-ci-test--line '("tarball-macos") (list (list "9" '("Linux (fedora-45)") arts) red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; only the asked tarballs' jobs matter
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45") (list (list "5" '("Linux (fedora-45)") '("tarball-fedora-45"))))))
+      (should (= 0 (car r))))
+    ;; a tarball job that failed, or an expired artifact: one error, exit 1, no run= line
+    (dolist (runs (list (list (list "8" '("Linux (fedora-45)") arts))
+                        (list (list "8" both '("tarball-fedora-45")))))
+      (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") runs)))
+        (should (= 1 (car r)))
+        (should (string-match-p "::error::" (cdr r)))
+        (should-not (string-match-p "^run=" (cdr r)))))))
 
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))

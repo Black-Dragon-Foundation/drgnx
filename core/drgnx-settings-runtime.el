@@ -89,6 +89,13 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
   :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
   :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
+(drgnx-defsetting drgnx-search-base nil
+  "The checkout a project's search index is built from (its base); nil: the main checkout.
+Every other worktree is an overlay of what differs from it, so a base on the line most worktrees branch from keeps
+the overlays small.  Changing it builds the base again."
+  :type '(choice (const :tag "The main checkout" nil) directory) :group 'drgnx :scope 'project :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
 (defun drgnx-settings-runtime--str (x)
@@ -193,6 +200,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-search-include . drgnx-settings-runtime--strings)
     (drgnx-search-exclude . drgnx-settings-runtime--strings)
     (drgnx-search-off . drgnx-settings-runtime--bool)
+    (drgnx-search-base . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
     ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone

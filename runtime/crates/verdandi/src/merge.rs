@@ -122,3 +122,34 @@ impl History {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::find;
+
+    fn cs(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn find_is_the_first_occurrence_in_characters() {
+        assert_eq!(find(&cs("abcabc"), &cs("ca")), Some(2));
+        assert_eq!(find(&cs("abcabc"), &cs("bc")), Some(1));
+        assert_eq!(find(&cs("abcabc"), &cs("abc")), Some(0));
+        assert_eq!(find(&cs("äbc"), &cs("bc")), Some(1));
+    }
+
+    #[test]
+    fn find_is_none_without_a_match_an_empty_needle_or_a_longer_needle() {
+        assert_eq!(find(&cs("abcabc"), &cs("cb")), None);
+        assert_eq!(find(&cs("abc"), &[]), None);
+        assert_eq!(find(&cs("abc"), &cs("abcd")), None);
+        assert_eq!(find(&cs("abc"), &cs("abcdefg")), None);
+    }
+
+    #[test]
+    fn find_matches_a_needle_as_long_as_the_hay() {
+        assert_eq!(find(&cs("abc"), &cs("abc")), Some(0));
+        assert_eq!(find(&cs("x"), &cs("x")), Some(0));
+    }
+}

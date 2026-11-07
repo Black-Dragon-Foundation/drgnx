@@ -230,6 +230,9 @@ struct Store {
     db: urdr::Handle,
 }
 
+/// The servers a session has (name, tool count) and the ones it should have and has not (name, why).
+pub type Served = (Vec<(String, Option<usize>)>, Vec<(String, String)>);
+
 /// A session whose socket is bound.
 struct Live {
     row: Row,
@@ -237,6 +240,8 @@ struct Live {
     path: PathBuf,
     /// Ends its accept loop and its connections (and the gateway socket's).
     cancel: CancellationToken,
+    /// How many tools its `mcp.sock` serves.
+    tools: usize,
     /// Its `gateway.sock`, once a registration asked for it.
     gateway: Option<PathBuf>,
     /// Its `search.sock`, when the row has one.
@@ -881,6 +886,7 @@ impl Sessions {
         list: ToolList,
     ) {
         let cancel = CancellationToken::new();
+        let tools = list.len();
         let ctx: Arc<Ctx> = Arc::new((self.tools.clone(), row.identity()));
         tokio::spawn(accept(
             listener,
@@ -907,6 +913,7 @@ impl Sessions {
                 dir,
                 path,
                 cancel,
+                tools,
                 gateway: None,
                 search,
                 plugins,
@@ -1007,6 +1014,33 @@ impl Sessions {
             .expect("sessions")
             .get(sid)
             .map(|l| l.path.clone())
+    }
+
+    /// The MCP servers the hub serves session SID, with each one's tool count where it is fixed (the plugins' abilities
+    /// are offered per connection: no count), and the servers it should serve and does not (name, why).
+    pub fn served(&self, sid: &str) -> Served {
+        let live = self.live.lock().expect("sessions");
+        let Some(l) = live.get(sid) else {
+            return (
+                Vec::new(),
+                vec![(
+                    "drgnx".into(),
+                    "the coordination tools are not bound: the session has none of the hub's tools"
+                        .into(),
+                )],
+            );
+        };
+        let mut up = vec![("drgnx".to_owned(), Some(l.tools))];
+        if l.search.is_some() {
+            up.push((
+                "drgnx-search".into(),
+                self.search_tools.get().map(|t| t.len()),
+            ));
+        }
+        if l.plugins.is_some() {
+            up.push(("drgnx-plugins".into(), None));
+        }
+        (up, Vec::new())
     }
 
     /// Whether session SID's socket is bound now.

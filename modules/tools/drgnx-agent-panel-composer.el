@@ -161,6 +161,96 @@
       (call-interactively (drgnx-cmd-command cmd))
     (user-error "Pair mode is not available")))
 
+;;;; Session control: start, move, compact, mode and model
+
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
+(declare-function drgnx-agents-profile-names "drgnx-agents")
+(declare-function drgnx-agent-panel-explain--fresh "drgnx-agent-panel-explain")
+(declare-function drgnx-agents-hooks--preview-text "drgnx-agents-hooks")
+
+(defun drgnx-agent-panel--say (method)
+  "A callback that says how METHOD went."
+  (lambda (_r err) (message "%s" (if err (format "%s: %s" method err) (format "%s: done" method)))))
+
+(defun drgnx-agent-panel--fact (facts name)
+  (plist-get (seq-find (lambda (f) (equal (plist-get f :name) name)) (append facts nil)) :value))
+
+(defun drgnx-agent-panel--offer-modes (buffer facts)
+  "Offer the modes FACTS (the hub's `agents/explain' for mode) allow switching to, and switch to the one you choose.
+When the lock allows none, say why (the hub's reason)."
+  (let* ((allowed (drgnx-agent-panel--fact facts "allowed switches"))
+         (modes (unless (member allowed '(nil "none")) (split-string allowed ", " t))))
+    (unless modes
+      (user-error "No mode switch is allowed here: %s"
+                  (or (drgnx-agent-panel--fact facts "other modes are refused because") "this agent's lock allows none")))
+    (let ((mode (completing-read "Switch mode to: " modes nil t)))
+      (with-current-buffer buffer
+        (drgnx-agent-panel--ask "agents/config" (list :id drgnx-agent-panel--session :option "mode" :value mode)
+                                (drgnx-agent-panel--say "agents/config"))))))
+
+(defun drgnx-agent-panel-switch-mode ()
+  "Switch the agent's mode, to one its lock allows (the hub says which, and why the others are not offered)."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (drgnx-agent-panel--ask "agents/explain" (list :id drgnx-agent-panel--session :item "mode")
+                            (lambda (r err)
+                              (if err (message "agents/explain: %s" err)
+                                (drgnx-agent-panel--offer-modes buffer (plist-get r :facts)))))))
+
+(defun drgnx-agent-panel-switch-model ()
+  "Switch the agent's model; the agent refuses one it does not have, and the panel says so."
+  (interactive)
+  (let ((model (string-trim (read-string "Model: " (plist-get drgnx-agent-panel--snap :model)))))
+    (unless (string-empty-p model)
+      (drgnx-agent-panel--ask "agents/config" (list :id drgnx-agent-panel--session :option "model" :value model)
+                              (drgnx-agent-panel--say "agents/config")))))
+
+(defun drgnx-agent-panel--other-profiles ()
+  (require 'drgnx-agents)
+  (seq-remove (lambda (n) (equal n (plist-get drgnx-agent-panel--snap :profile))) (drgnx-agents-profile-names)))
+
+(defun drgnx-agent-panel-move ()
+  "Move this session to another profile: it stops after its tool call and the new agent continues in the same worktree."
+  (interactive)
+  (let ((profile (completing-read "Move to profile: " (drgnx-agent-panel--other-profiles) nil t)))
+    (when (y-or-n-p (format "Move to %s? The agent stops after its current tool call " profile))
+      (drgnx-agent-panel--ask "agents/move" (list :id drgnx-agent-panel--session :profile profile)
+                              (lambda (r err)
+                                (if err (message "agents/move: %s" err)
+                                  (drgnx-agent-panel-open (plist-get r :id))))))))
+
+(defun drgnx-agent-panel-start ()
+  "Start another agent in this session's folder and open its panel."
+  (interactive)
+  (require 'drgnx-agents)
+  (let ((profile (completing-read "Start profile: " (drgnx-agents-profile-names) nil t))
+        (cwd (plist-get drgnx-agent-panel--snap :cwd)))
+    (drgnx-agent-panel--ask "agents/start" (append (list :profile profile) (and cwd (list :cwd cwd)))
+                            (lambda (r err)
+                              (if err (message "agents/start: %s" err)
+                                (drgnx-agent-panel-open (plist-get r :id)))))))
+
+(defun drgnx-agent-panel--compact-after-preview (buffer preview)
+  "Show PREVIEW, what a compaction would free and keep, and send /compact to BUFFER's agent when you agree."
+  (with-current-buffer (drgnx-agent-panel-explain--fresh "*agent compact preview*")
+    (let ((inhibit-read-only t)) (insert (drgnx-agents-hooks--preview-text preview)))
+    (special-mode)
+    (display-buffer (current-buffer)))
+  (when (y-or-n-p "Compact now? ")
+    (with-current-buffer buffer (drgnx-agent-panel-composer--send-text "/compact"))))
+
+(defun drgnx-agent-panel-compact ()
+  "Compact the agent's context (`/compact').  An agent that can say what it keeps shows that first."
+  (interactive)
+  (let ((buffer (current-buffer)))
+    (if (member "compact-preview" (append (plist-get (plist-get drgnx-agent-panel--snap :panel) :features) nil))
+        (drgnx-agent-panel--ask "agents/compact-preview" (list :id drgnx-agent-panel--session)
+                                (lambda (r err)
+                                  (if err (message "agents/compact-preview: %s" err)
+                                    (drgnx-agent-panel--compact-after-preview buffer r))))
+      (when (y-or-n-p "Compact the agent's context? ")
+        (drgnx-agent-panel-composer--send-text "/compact")))))
+
 (defun drgnx-agent-panel-composer-setup ()
   (dolist (c '((agents-panel-send "Write to the Agent" drgnx-agent-panel-send
                                   "A message to the agent; while it works it is queued, never a cancel")
@@ -173,7 +263,17 @@
                                          "Change the queued note at point until it is sent")
                (agents-panel-drop-queued "Drop the Queued Note" drgnx-agent-panel-drop-queued
                                          "Take the queued note at point out of the queue")
-               (agents-panel-pair "Pair With the Agent" drgnx-agent-panel-pair "Pair mode, when it is available")))
+               (agents-panel-pair "Pair With the Agent" drgnx-agent-panel-pair "Pair mode, when it is available")
+               (agents-panel-start "Start Another Agent Here" drgnx-agent-panel-start
+                                   "Start an agent of a profile you choose in this session's folder")
+               (agents-panel-move "Move to Another Profile" drgnx-agent-panel-move
+                                  "Stop after the current tool call and continue in the same worktree with another profile")
+               (agents-panel-compact "Compact the Context" drgnx-agent-panel-compact
+                                     "/compact, with what it keeps shown first when the agent can say")
+               (agents-panel-mode "Switch the Mode" drgnx-agent-panel-switch-mode
+                                  "Switch the agent's mode to one its lock allows")
+               (agents-panel-model "Switch the Model" drgnx-agent-panel-switch-model
+                                   "Switch the agent's model")))
     (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
                           :map 'drgnx-agent-panel-mode-map :doc (nth 3 c))))
 

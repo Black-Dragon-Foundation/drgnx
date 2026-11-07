@@ -668,3 +668,6 @@ impl History {
         }
     }
 }
+
+#[cfg(test)]
+mod mut_tests;
