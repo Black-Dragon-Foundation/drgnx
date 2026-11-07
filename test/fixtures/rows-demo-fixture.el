@@ -51,7 +51,7 @@
            (unwind-protect (save-window-excursion ,@body)
              (dolist (h drgnx-rows-demo--hubs)
                (when (process-live-p h) (signal-process h 'term))
-               (ignore-errors (drgnx-test-wait (lambda () (not (process-live-p h))) :secs 10 :what "a restarted hub ends"))
+               (ignore-errors (drgnx-test-wait (lambda () (process-get h :done)) :secs 10 :what "a restarted hub ends"))
                (when (process-live-p h) (signal-process h 'kill))
                (when (buffer-live-p (process-buffer h)) (kill-buffer (process-buffer h))))
              (drgnx-view-env-teardown)
@@ -122,15 +122,26 @@ then draw it.  WHAT names the wait."
   (with-current-buffer buffer (drgnx-view-draw-now drgnx-view))
   buffer)
 
+(defun drgnx-rows-demo--subscribed-p ()
+  "Whether this Emacs's subscription to the hub is open (waiting for it to start is no race with a sentinel)."
+  (process-live-p drgnx-hub--events))
+
 (defun drgnx-rows-demo-restart-hub ()
   "End the hub (its process: a crash, not a shutdown), wait for this Emacs to see it gone, start a new one on the
 same runtime dir and connect again; return once `drgnx-hub-connected-functions' ran for the new hub."
   (let* ((old (or (car drgnx-rows-demo--hubs) drgnx-test-ratatoskr-process)) (up nil)
-         (mark (lambda () (setq up t))))
+         (mark (lambda () (setq up t)))
+         (events drgnx-hub--events)
+         (closed (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))))
+    ;; the waits read a done flag a sentinel sets: `process-live-p' turns nil before the sentinel has run
+    (when (processp events) (add-function :after (process-sentinel events) closed))
     (signal-process old 'kill)
-    (drgnx-test-wait (lambda () (not (process-live-p old))) :secs 10 :what "the old hub gone")
-    (drgnx-test-wait (lambda () (not (process-live-p drgnx-hub--events))) :secs 10 :what "the subscription closed")
+    (drgnx-test-wait (lambda () (process-get old :done)) :secs 10 :what "the old hub gone")
+    (when (processp events)
+      (unwind-protect (drgnx-test-wait (lambda () (process-get events :done)) :secs 10 :what "the subscription closed")
+        (remove-function (process-sentinel events) closed)))
     (let ((new (make-process :name "ratatoskr-restarted" :noquery t :connection-type 'pipe
+                             :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
                              :buffer (generate-new-buffer " *ratatoskr restarted*")
                              :command (list (getenv "DRGNX_RATATOSKR_BIN") "serve" "--foreground"
                                             "--parent-pid" (number-to-string (emacs-pid))))))
@@ -139,7 +150,7 @@ same runtime dir and connect again; return once `drgnx-hub-connected-functions' 
       (add-hook 'drgnx-hub-connected-functions mark)
       (unwind-protect
           (progn (drgnx-hub-connect)
-                 (drgnx-test-wait (lambda () (and up (process-live-p drgnx-hub--events))) :secs 30
+                 (drgnx-test-wait (lambda () (and up (drgnx-rows-demo--subscribed-p))) :secs 30
                                   :what "subscribed to the new hub"))
         (remove-hook 'drgnx-hub-connected-functions mark)))))
 

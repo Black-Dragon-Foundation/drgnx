@@ -284,6 +284,62 @@ pub struct HuddleStart {
     pub clash: Option<String>,
 }
 
+/// One "Always" the user gave a session, as the hub's ledger keeps it (Urdr kind `always`, written by the hub):
+/// the tool step it covers (the kind of tool call and a key made of its title), the card it was answered on, when, and
+/// whether the user took it back.  A revoked grant makes the hub ask again for a matching request.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Grant {
+    /// `always:SESSION:KEY`.
+    pub id: String,
+    pub session: String,
+    /// The tool call's kind (`edit`, `execute`, …).
+    pub tool: String,
+    /// What the grant matches: the kind and a hash of the tool call's title.
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+    /// Seconds since the epoch.
+    pub at: f64,
+    pub revoked: bool,
+}
+
+/// `agents/grants`: a session's Always grants, revoked ones included, oldest first.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Grants {
+    pub grants: Vec<Grant>,
+}
+
+/// `agents/grants/revoke`: take back grant GRANT (its id) of session ID.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrantRevoke {
+    pub id: Id,
+    pub grant: String,
+}
+
+/// Whether the agent's own rule is gone: `cleared` when its adapter took the grant back, `kept` when only the hub's
+/// ledger did (the agent may still go on without asking until it starts again: a restart at the current step clears it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentRule {
+    Cleared,
+    Kept,
+}
+
+/// The answer of `agents/grants/revoke`.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Revoked {
+    pub grant: String,
+    pub agent_rule: AgentRule,
+    /// Whether a restart at the current step would clear the agent's rule (a session with steps to restart at).
+    pub restart: bool,
+}
+
 /// `wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the
 /// editor saves its buffers there and answers `agents/wheel/saved` with the same REQ.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -383,6 +439,51 @@ pub struct CompactPreview {
     pub summarised: Option<Bounded<Vec<ContextItem>, 200>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<Bounded<String, 1024>>,
+}
+
+/// The user's switch of a session's mode or model.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ConfigParams {
+    pub id: Id,
+    /// `mode` or `model`.
+    pub option: Bounded<String, 32>,
+    /// The mode id or model id; a mode must be on the provider's lock allow-list.
+    pub value: Bounded<String, 256>,
+}
+
+/// What `agents/explain` explains: a chip of the agent panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExplainItem {
+    Context,
+    Cost,
+    Mode,
+    Model,
+    Waiting,
+    Mcp,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExplainParams {
+    pub id: Id,
+    pub item: ExplainItem,
+}
+
+/// One fact behind a chip: a name and what it is, in words.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fact {
+    pub name: String,
+    pub value: String,
+}
+
+/// The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Explained {
+    pub item: ExplainItem,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub facts: Vec<Fact>,
 }
 
 /// The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the
@@ -744,6 +845,16 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "the session's turn is cancelled once the tool call running now completes, and its queue is held",
         ),
         method!(
+            "agents/grants", AgentsGrants(ById) -> Grants,
+            classes: [User], writes: false,
+            doc: "the Always grants the user gave a session, as the hub's ledger keeps them (revoked ones included)",
+        ),
+        method!(
+            "agents/grants/revoke", AgentsGrantsRevoke(GrantRevoke) -> Revoked,
+            classes: [User], writes: true,
+            doc: "the user takes back an Always: the ledger marks it revoked, so the hub asks again for a matching request; says whether the agent's own rule is cleared or kept until it starts again, and whether a restart at the current step would clear it",
+        ),
+        method!(
             "agents/huddle/get", AgentsHuddleGet(ById) -> Huddle,
             classes: [User], writes: false,
             doc: "a huddle's record: its clash, the two sessions, its state, the replies (agent text), the agreement's proposal and the user's decision",
@@ -783,6 +894,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/context-pin", AgentsContextPin(ContextPinParams) -> bool,
             classes: [User], writes: false,
             doc: "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+        ),
+        method!(
+            "agents/config", AgentsConfig(ConfigParams) -> bool,
+            classes: [User], writes: true,
+            doc: "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+        ),
+        method!(
+            "agents/explain", AgentsExplain(ExplainParams) -> Explained,
+            classes: [User], writes: false,
+            doc: "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
         ),
         method!(
             "agents/compact-preview", AgentsCompactPreview(ById) -> CompactPreview,

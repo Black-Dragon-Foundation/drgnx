@@ -174,7 +174,6 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
 | `jobs` | `◎ 2 jobs` while jobs run (the Jobs module's: gone when it is off) | What Needs You, every job's |
-| `agents` | `◎ 1 busy` (the Agents module's: gone when it is off) | the Agents tab |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `toasts` | `+2`: the notices that wait for a place while three toasts show (notices.md, "Toasts") | the Notices list |
@@ -244,7 +243,7 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running. The Jobs module defines the segment and counts them from the
 same `job/status` answer that feeds the notice model (when a job or a card changes, never on redisplay; nothing while
-there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work cockpit.
+there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work space.
 
 **Waiting on you.** The number in `◐ 2 waiting on you` is the notice model's one count (`drgnx-needs-you-count`): the
 agents' permission requests and edits to review, the cards and messages of jobs, and the questions no job holds, each

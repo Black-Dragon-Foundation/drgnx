@@ -11,11 +11,15 @@
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::settings::agents::Editors;
+use drgnx_rows::fit::Measure;
+use drgnx_rows::svg::Palette;
+use drgnx_rows::{ImageId, Row};
 use runstav::methods::agents::{SessionStatus, Snapshot};
 use runstav::methods::timeline::StepClass;
+use runstav::methods::view::{Display, ViewEnv};
 use runstav::methods::work::{
-    Machine, MapClose, MapDensity, MapFilters, MapFrame, MapSet, MapSubscribe, MapVersion,
-    PresenceMode, WorkMap, Workspace,
+    Machine, MapClose, MapDensity, MapFilters, MapFrame, MapRows, MapSet, MapSubscribe,
+    MapSubscribed, MapVersion, PresenceMode, WorkMap, Workspace,
 };
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -25,6 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 use vegvisir::layout::{self, Layout};
+use vegvisir::render;
 use vegvisir::{
     CardFact, CardKind, Core, Delta, Density, Effect, Event, Filters, GraphFact, ItemId, JobFact,
     Kind, MachineFact, Mode, PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State,
@@ -360,6 +365,8 @@ struct View {
     state: ViewState,
     shown: bool,
     selected: Option<ItemId>,
+    /// Its rows come as `view-patch` per display class (`work/map/subscribe`'s `rows`), never as `work-map`.
+    rows: bool,
     version: u64,
     layout: Option<Layout>,
     /// The items the editor's frame holds.
@@ -387,6 +394,9 @@ pub struct Map {
     /// The front, for a session a step or presence names before its first snapshot reached the map.
     front: OnceLock<Weak<Front>>,
     origin: OnceLock<tokio::time::Instant>,
+    /// What went out, in order (`work-map`, `rows`): tests read it.
+    #[cfg(test)]
+    log: Mutex<Vec<&'static str>>,
 }
 
 fn lock(m: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
@@ -507,6 +517,100 @@ fn frame_items(m: &vegvisir::Model, v: &ViewState, l: &Layout) -> Vec<vegvisir::
         .collect()
 }
 
+/// The rows of view V (its layout and the items it shows) of model M in one display class: ENV, measured with FONTS;
+/// NOW is the wall clock's second (the job chips).
+fn view_rows(
+    m: &vegvisir::Model,
+    v: &View,
+    env: &ViewEnv,
+    fonts: &dyn Measure,
+    now: u64,
+) -> (Vec<Row>, Vec<(ImageId, String)>) {
+    let Some(l) = v.layout.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let items: BTreeMap<ItemId, vegvisir::Item> = v
+        .sent
+        .iter()
+        .filter_map(|id| m.item(id).map(|it| (id.clone(), it)))
+        .collect();
+    let edges: Vec<vegvisir::Edge> = m
+        .edges()
+        .into_iter()
+        .filter(|e| v.sent.contains(&e.from) && v.sent.contains(&e.to))
+        .collect();
+    let chain = v
+        .selected
+        .as_ref()
+        .map(|s| m.chain(s).edges)
+        .unwrap_or_default();
+    let new = BTreeSet::new();
+    let scene = render::Scene {
+        items: &items,
+        edges: &edges,
+        layout: l,
+        new: &new,
+        chain: &chain,
+        outline: render::Outline::Auto,
+        now,
+    };
+    let palette = Palette(env.palette.clone());
+    let renv = render_env(env, &palette);
+    let drawn = render::rows(&scene, &render::Index::of(&scene), &renv, fonts);
+    let machines: Vec<vegvisir::Item> = m
+        .items()
+        .into_values()
+        .filter(|it| it.kind == Kind::Machine)
+        .collect();
+    let mut rows = vec![render::strip(
+        &scene,
+        &m.needs_you(),
+        &machines,
+        &renv,
+        fonts,
+    )];
+    rows.extend(drawn.rows);
+    (rows, drawn.images)
+}
+
+/// The renderer's view of ENV: a card line's height and ascent from the `ui` font (else the cell's, 80 % up).
+pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
+    let line = env
+        .fonts
+        .iter()
+        .find(|f| f.0 == "ui")
+        .map(|f| (f.4 + f.5, f.4))
+        .filter(|(h, _)| *h > 0.0)
+        .map_or((env.cell.1, 80), |(h, a)| {
+            (
+                h.round() as u32,
+                ((100.0 * a / h).round() as u32).clamp(1, 100),
+            )
+        });
+    render::Env {
+        epoch: env.epoch,
+        scale: env.scale,
+        tty: env.display == Display::Tty,
+        cell: env.cell,
+        width_px: env.width_px,
+        palette,
+        tty_widths: &env.tty_widths,
+        line,
+    }
+}
+
+/// The drawing width (units) of a rows view: its narrowest GUI class's window, less the labels' margin and the
+/// padding (`(px / scale - 96) / 4`); none while no GUI class sent an env (a terminal draws the outline).
+fn rows_width(envs: &[ViewEnv]) -> Option<u32> {
+    envs.iter()
+        .filter(|e| e.display == Display::Gui)
+        .map(|e| {
+            let px = e.width_px as f32 / if e.scale > 0.0 { e.scale } else { 1.0 };
+            ((px - 96.0).max(0.0) / 4.0) as u32
+        })
+        .min()
+}
+
 impl Map {
     /// Whether any map view is open.
     pub fn open(&self) -> bool {
@@ -519,6 +623,11 @@ impl Map {
     }
 
     fn send(&self, conn: u64, data: &WorkMap) {
+        #[cfg(test)]
+        self.log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push("work-map");
         if let Some(e) = self.editors.get() {
             e.send_to(conn, "work-map", json!(data));
         }
@@ -617,6 +726,10 @@ impl Map {
 
     /// Session SID closed timeline step STEP of CLASS, at AT (the hub's seconds).
     pub fn step(self: &Arc<Self>, sid: &str, step: i64, class: &StepClass, at: f64) {
+        // the trails read the session's steps again
+        if let Some(f) = self.front.get().and_then(Weak::upgrade) {
+            f.writer.signals.trail.notify_one();
+        }
         if !self.open() {
             return;
         }
@@ -928,6 +1041,10 @@ impl Map {
         let Some(v) = g.views.get_mut(key) else {
             return;
         };
+        // a rows view's editor hid it itself: no mark, no patch until it is shown again
+        if v.rows {
+            return;
+        }
         v.version += 1;
         let data = WorkMap {
             view: key.view.clone(),
@@ -1006,6 +1123,10 @@ impl Map {
         }
         v.layout = Some(next);
         v.version += 1;
+        if v.rows {
+            self.publish(sp, v, key);
+            return;
+        }
         let machines = items.iter().any(|it| it.kind == Kind::Machine);
         let data = WorkMap {
             view: key.view.clone(),
@@ -1042,6 +1163,10 @@ impl Map {
         }
         let m = sp.core.model();
         let frame = Self::frame(m, v);
+        if v.rows {
+            self.publish(sp, v, key);
+            return;
+        }
         let data = WorkMap {
             view: key.view.clone(),
             version: v.version,
@@ -1058,6 +1183,173 @@ impl Map {
             stale: None,
         };
         self.send(key.conn, &data);
+    }
+
+    /// Rows view V (KEY) of space SP: first its model (`view-model`, what changed since its editor's replica was last
+    /// sent one), then to each display class its editor sent an env for the rows built in that class and the patch
+    /// from what it holds (`view::Views::publish_built`), naming the model's version.
+    fn publish(&self, sp: &Space, v: &View, key: &ViewKey) {
+        if !v.rows || !v.shown {
+            return;
+        }
+        let m = sp.core.model();
+        let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
+        #[cfg(test)]
+        {
+            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            if doc.is_some() {
+                log.push("model");
+            }
+            log.push("rows");
+        }
+        let Some(f) = self.front.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        if let Some(doc) = doc {
+            f.core.views.publish_model(&f, key.conn, &key.view, doc);
+        }
+        // the job chips' elapsed time: whole seconds of the wall clock
+        let now = crate::clock::wall_secs() as u64;
+        for class in f.core.views.classes(key.conn, &key.view) {
+            let k3 = (key.conn, key.view.clone(), class);
+            f.core
+                .views
+                .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now));
+        }
+        Self::publish_detail(&f, m, v, key, None);
+    }
+
+    /// The Detail panel beside rows view V (KEY): its rows for V's selection, to each class its editor sent an env
+    /// for (CLASS: only that one). Nothing while no editor shows it.
+    fn publish_detail(
+        f: &Front,
+        m: &vegvisir::Model,
+        v: &View,
+        key: &ViewKey,
+        class: Option<&str>,
+    ) {
+        let view = detail::view_of(&key.view);
+        let lines = detail::lines(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        for c in f.core.views.classes(key.conn, &view) {
+            if class.is_some_and(|only| only != c) {
+                continue;
+            }
+            let k3 = (key.conn, view.clone(), c);
+            f.core
+                .views
+                .publish_built(f, &k3, |_env, _fonts| (detail::rows(&lines), Vec::new()));
+        }
+    }
+
+    /// The sessions whose Timeline lanes the selection of connection CONN's shown rows map views lights: the agents
+    /// and subagents on its chain, the selection's own included (a subagent stands for its session).
+    /// The agents on map view VIEW of connection CONN that work on a tracker task: (the task's title, the agent's item
+    /// id, its label), by start order. The Board puts each on its task's card (`work::trail::board`).
+    pub fn agents_of(&self, conn: u64, view: &str) -> Vec<(String, String, String)> {
+        let g = lock(&self.inner);
+        let key = ViewKey {
+            conn,
+            view: view.to_owned(),
+        };
+        let Some(sp) = g.views.get(&key).and_then(|v| g.spaces.get(&v.space)) else {
+            return Vec::new();
+        };
+        let mut agents: Vec<vegvisir::model::Item> = sp
+            .core
+            .model()
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Agent && it.fields.task.is_some())
+            .collect();
+        agents.sort_by_key(|it| it.order);
+        agents
+            .into_iter()
+            .map(|it| (it.fields.task.unwrap_or_default(), it.id.0, it.label))
+            .collect()
+    }
+
+    pub fn near(&self, conn: u64) -> Vec<String> {
+        Self::near_in(&lock(&self.inner), conn)
+    }
+
+    fn near_in(g: &Inner, conn: u64) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, v) in g
+            .views
+            .iter()
+            .filter(|(k, v)| k.conn == conn && v.rows && v.shown)
+        {
+            let (Some(sel), Some(sp)) = (v.selected.as_ref(), g.spaces.get(&v.space)) else {
+                continue;
+            };
+            let m = sp.core.model();
+            let c = m.chain(sel);
+            for id in std::iter::once(sel).chain(&c.up).chain(&c.down) {
+                let agent = m
+                    .item(id)
+                    .is_some_and(|it| matches!(it.kind, Kind::Agent | Kind::Subagent));
+                let sid =
+                    id.0.strip_prefix("agent:")
+                        .and_then(|r| r.split('/').next());
+                if let Some(sid) = sid.filter(|_| agent)
+                    && !out.iter().any(|s| s == sid)
+                {
+                    out.push(sid.to_owned());
+                }
+            }
+        }
+        out
+    }
+
+    /// An env of (connection, view, class) K3 arrived: a rows map view of that name lays out again at its classes'
+    /// width when it changed (as the user's own change, at once), else draws again for it.
+    pub fn view_env(self: &Arc<Self>, f: &Front, k3: &crate::view::Key) {
+        if let Some(map_view) = detail::map_of(&k3.1) {
+            // a Detail panel's class: its rows for the map's selection now
+            let key = ViewKey {
+                conn: k3.0,
+                view: map_view.to_owned(),
+            };
+            let g = lock(&self.inner);
+            if let Some(v) = g.views.get(&key).filter(|v| v.rows && v.shown)
+                && let Some(sp) = g.spaces.get(&v.space)
+            {
+                Self::publish_detail(f, sp.core.model(), v, &key, Some(&k3.2));
+            }
+            return;
+        }
+        let key = ViewKey {
+            conn: k3.0,
+            view: k3.1.clone(),
+        };
+        let width = rows_width(&f.core.views.envs(k3.0, &k3.1));
+        let mut g = lock(&self.inner);
+        let Some(v) = g.views.get_mut(&key) else {
+            return;
+        };
+        if !v.rows {
+            return;
+        }
+        match width.filter(|w| *w != v.state.width_units) {
+            Some(w) => {
+                v.state.width_units = w;
+                let (space, state) = (v.space.clone(), v.state.clone());
+                if let Some(sp) = g.spaces.get_mut(&space) {
+                    sp.core.step(Event::View(ViewOp::Set {
+                        view: key.clone(),
+                        state,
+                    }));
+                }
+                let now = self.now_ms();
+                self.coalesce(&mut g, &key, Some(CoIn::User), now);
+            }
+            None => {
+                let v = &g.views[&key];
+                if let Some(sp) = g.spaces.get(&v.space) {
+                    self.publish(sp, v, &key);
+                }
+            }
+        }
     }
 
     /// V laid out again from model M: its next version's full frame (V's layout, frame and version follow it).
@@ -1108,7 +1400,7 @@ impl Map {
 }
 
 /// `work/map/subscribe`: VIEW of CALLER's connection opens (again) on its workspace; the answer is its full frame.
-pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapFrame, Error> {
+pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubscribed, Error> {
     let map = &f.core.map;
     let _ = map.editors.set(f.editors.clone());
     let roots: Vec<PathBuf> = p
@@ -1136,8 +1428,14 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapFram
         conn: c.conn_id,
         view: p.view.clone(),
     };
+    // a rows view's width is its GUI classes' (`view/env`), the given one until they sent one
+    let width = if p.rows {
+        rows_width(&f.core.views.envs(c.conn_id, &p.view)).unwrap_or(p.width_units)
+    } else {
+        p.width_units
+    };
     let state = ViewState {
-        width_units: p.width_units,
+        width_units: width,
         density: density(p.density),
         filters: filters(&p.filters),
         collapsed: p.collapsed.iter().copied().collect(),
@@ -1176,14 +1474,27 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapFram
         state,
         shown: true,
         selected: p.selected.map(ItemId),
+        rows: p.rows,
         version: 0,
         layout: None,
         sent: BTreeSet::new(),
         co: Coalescer::default(),
     };
     let frame = Map::frame(sp.core.model(), &mut v);
+    if !v.rows {
+        g.views.insert(key, v);
+        return Ok(MapSubscribed::Frame(frame));
+    }
+    // a rows view: its model (a reset), then its rows to each class it has an env for (the first patch of each a
+    // reset)
+    f.core.views.model_restart(c.conn_id, &p.view);
+    map.publish(sp, &v, &key);
+    let version = v.version;
     g.views.insert(key, v);
-    Ok(frame)
+    Ok(MapSubscribed::Rows(MapRows {
+        hub: f.core.views.hub(),
+        version,
+    }))
 }
 
 /// `work/map/set`: VIEW changes; the user's own change relayouts at once (a `work-map` full frame); the answer is the
@@ -1215,6 +1526,10 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     if selected.is_some() {
         v.selected = selected;
     }
+    if p.clear {
+        v.selected = None;
+    }
+    let moved = p.selected.is_some() || p.clear;
     let space = v.space.clone();
     let mut ops = Vec::new();
     if state != v.state {
@@ -1228,8 +1543,11 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         && shown != v.shown
     {
         v.shown = shown;
-        // a hidden view drops what it gathered; shown again, it gets one full frame
+        // a hidden view drops what it gathered; shown again, it gets one full frame (and a model reset)
         v.co = Coalescer::default();
+        if !shown && v.rows {
+            f.core.views.model_hidden(c.conn_id, &p.view);
+        }
         ops.push(ViewOp::Shown {
             view: key.clone(),
             shown,
@@ -1257,8 +1575,18 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if relayout {
         f_map.coalesce(&mut g, &key, Some(CoIn::User), now);
-    } else if p.selected.is_some() {
+    } else if moved {
         f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
+        // a rows view draws its new chain's edges (the tiles and lanes on it)
+        if let Some(v) = g.views.get(&key)
+            && let Some(sp) = g.spaces.get(&v.space)
+        {
+            f_map.publish(sp, v, &key);
+        }
+    }
+    if moved {
+        // the Timelines of this connection light the lanes the new selection reaches
+        f.core.trails.map_moved(c.conn_id);
     }
     Ok(MapVersion {
         version: g.views.get(&key).map_or(0, |v| v.version),
@@ -1461,5 +1789,7 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+mod detail;
+mod model;
 #[cfg(test)]
 mod tests;

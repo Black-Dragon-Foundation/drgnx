@@ -288,6 +288,7 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-SPC` | Show Hover | — | `F6 Space` |
 | `C-.` | Quick Fix | — | `F6 .` |
 | `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
+| `C-S-x` | View: Extensions | — | `F6 x` |
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Recent Buffers | — | `F6 Tab` |

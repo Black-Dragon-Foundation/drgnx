@@ -246,3 +246,24 @@ fn uncommitted_work_counts() {
         std::fs::canonicalize(&main).ok()
     );
 }
+
+/// [D] A check's bases come from `work.db` when the session's row is there, and from the edit history when it is not
+/// written yet (the hub writes it after the session starts, unordered with the agent's first edit: the clash row
+/// `clash/sessions-outside-a-run-get-clashes` missed its card when B's row came late).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tree_whose_base_row_is_not_written_yet_has_a_base() {
+    let fx = crate::agents::session::attach_tests::Fx::new();
+    let (main, wt) = (fx.work(), fx.dir.path().join("wt-b"));
+    sh(
+        &main,
+        "git init -q -b main && echo one > x.rs && git add x.rs && \
+         git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b ../wt-b",
+    );
+    let head = crate::timeline::snapshot::head_of(&main).unwrap();
+    let got = bases(&fx.front, vec![main.clone(), wt.clone()]).await;
+    let want: BTreeMap<String, String> = [&main, &wt]
+        .iter()
+        .map(|t| (t.to_string_lossy().into_owned(), head.clone()))
+        .collect();
+    assert_eq!(got, want);
+}

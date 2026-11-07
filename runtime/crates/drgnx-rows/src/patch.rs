@@ -45,6 +45,10 @@ pub struct Patch {
     /// A terminal view's cursor, screen and title, when they changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub term: Option<TermMeta>,
+    /// The version of the view's model (`view-model`) these rows were built from; none for a view with no model.
+    /// The editor applies its queued models up to it before it draws these rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<u64>,
 }
 
 /// The ops that turn OLD into NEW, rows matched by key: removes, then replaces of changed rows, then inserts of new

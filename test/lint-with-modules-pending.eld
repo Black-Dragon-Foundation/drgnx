@@ -5,7 +5,7 @@
 ;; body (or require the library first), then delete the line; a line whose site is gone fails the lint.
 (
  "test/unit/ai-ghost-test.el: drgnx-keys-last"
- "test/unit/job-ui-test.el: drgnx-job-ui--running"
+ "test/unit/jobs-test.el: drgnx-jobs--running"
  "test/unit/mod-editing-test.el: child-frame-chrome"
  "test/unit/mod-remote-test.el: eglot--servers-by-project"
  "test/unit/mod-terminal-test.el: drgnx-terminal--notice-shown"

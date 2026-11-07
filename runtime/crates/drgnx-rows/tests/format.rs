@@ -92,6 +92,7 @@ fn ids_never_appear_as_object_keys() {
         images: [(img, "<svg/>".into())].into_iter().collect(),
         styles: vec![],
         term: None,
+        model: None,
     };
     let v = serde_json::to_value(&p).unwrap();
     let mut found = BTreeSet::new();
@@ -191,6 +192,7 @@ fn styles_serialise_as_arrays() {
             mouse_tracking: false,
             title: "vim".into(),
         }),
+        model: None,
     };
     let v = serde_json::to_value(&p).unwrap();
     assert_eq!(

@@ -47,9 +47,11 @@ hook is `advisory`.
 
 `input_json` is the point's `detail` object with `v`, `point`, `session`, `step` and `previous` set (see "The hook
 engine"). `before-tool` carries `tool` (`kind`, `name`, `title`, `input`, `paths`, `command`); `after-edit` carries
-`edit` (`path`, `diff`, and `content` when the hub writes the file). `before-commit` and `at-review` are in the engine
-and the manifest but the hub does not run them yet (they wait for the checkpoint and review work), so a hook at those
-points is never called today. A `change` returns the point's replacement object: `{"arguments": {…}}`, `{"content": "…"}`, `{"message": "…"}` or `{"notes":
+`edit` (`path`, `diff`, and `content` when the hub writes the file). `before-commit` carries
+`commit` (`branch`, `message`, `diff_stat`, `paths`) and `at-review` carries `review` (`summary`, `report`,
+`diff_stat`); `session`, `step` and the role are `null` at both, since a job's point has no calling session
+(`hook_points::before_commit`, `hook_points::at_review`; the runner calls them in `runner/review.rs`: `commit_hooks`
+after the gate cleared, `review_hooks` before `start_review_agent`). `report` is empty today. A `change` returns the point's replacement object: `{"arguments": {…}}`, `{"content": "…"}`, `{"message": "…"}` or `{"notes":
 "…"}`, and is accepted only where the hub itself performs the action (the guide's "Before a tool call" and "After an
 edit" say where).
 

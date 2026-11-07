@@ -1336,10 +1336,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-fwd"
+name = "drgnx-px"
 version = "0.1.0"
 dependencies = [
+ "gleipnir",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "skuld",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1352,6 +1359,7 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-px",
  "drgnx-rows",
  "drgnx-term",
  "eitri",
@@ -3014,6 +3022,7 @@ dependencies = [
  "inotify",
  "libc",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -5688,6 +5697,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-px",
  "forseti",
  "gleipnir",
  "libc",
@@ -6502,6 +6512,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-rows",
  "proptest",
  "serde",
  "serde_json",

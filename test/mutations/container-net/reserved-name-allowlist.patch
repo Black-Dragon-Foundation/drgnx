@@ -1,0 +1,17 @@
+Target: row container-escape/host-grant-one-port
+The job policy sends host.drgnx.internal through the allow-list like any other target: no card, no grant opens it.
+
+diff --git a/runtime/crates/gleipnir/src/net/proxy.rs b/runtime/crates/gleipnir/src/net/proxy.rs
+index c8137ded..2683ec81 100644
+--- a/runtime/crates/gleipnir/src/net/proxy.rs
++++ b/runtime/crates/gleipnir/src/net/proxy.rs
+@@ -49,7 +49,8 @@ pub(crate) fn by_web_rules(policy: &Policy, target: &Target) -> bool {
+         Policy::Allowlist => false,
+         Policy::Web(_) => true,
+         Policy::Job(_) => {
+-            matches!(&target.host, Host::Name(n) if n == crate::net::policy::RESERVED_HOST)
++            let _ = target;
++            false
+         }
+     }
+ }

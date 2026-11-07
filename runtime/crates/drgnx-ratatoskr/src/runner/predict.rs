@@ -192,6 +192,52 @@ pub fn texts(
 
 // ---- the hub's shell ----
 
+/// Each of TREES' base commits, by its path: the one the hub recorded at its session's start (`work.db`), else the edit
+/// history's (the tree's branch base, else its head).  The row is written after the session starts, unordered with the
+/// agent's first edit, so a check never waits on it.
+pub(crate) async fn bases(front: &Front, trees: Vec<PathBuf>) -> BTreeMap<String, String> {
+    let keys: Vec<String> = trees
+        .iter()
+        .map(|t| t.to_string_lossy().into_owned())
+        .collect();
+    let mut out = front
+        .writer
+        .db
+        .read(move |c| {
+            let mut out = BTreeMap::new();
+            for t in keys {
+                if let Some(b) = norn::read::work::base(c, &t)?.and_then(|b| b.base_commit) {
+                    out.insert(t, b);
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .unwrap_or_default();
+    let missing: Vec<PathBuf> = trees
+        .into_iter()
+        .filter(|t| !out.contains_key(t.to_string_lossy().as_ref()))
+        .collect();
+    let (Some(dirs), false) = (front.dirs.get(), missing.is_empty()) else {
+        return out;
+    };
+    let (hubs, state) = (front.core.history.clone(), dirs.hub.clone());
+    let found = crate::clock::blocking(move || {
+        missing
+            .into_iter()
+            .filter_map(|t| {
+                let (hub, tree) = hubs.of_tree(&state, &t).ok()?;
+                let base = hub.base_commit(&tree).ok().flatten()?;
+                Some((t.to_string_lossy().into_owned(), base))
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+    out.extend(found);
+    out
+}
+
 #[derive(Default)]
 struct Inner {
     gate: Gate,
@@ -310,26 +356,11 @@ impl Live {
             return;
         }
         // each tree's base commit, as the hub recorded it
-        let trees: Vec<String> = std::iter::once(&tree)
+        let trees: Vec<PathBuf> = std::iter::once(&tree)
             .chain(others.iter().map(|o| &o.tree))
-            .map(|t| t.to_string_lossy().into_owned())
+            .cloned()
             .collect();
-        let Ok(bases) = front
-            .writer
-            .db
-            .read(move |c| {
-                let mut out = BTreeMap::new();
-                for t in trees {
-                    if let Some(b) = norn::read::work::base(c, &t)?.and_then(|b| b.base_commit) {
-                        out.insert(t, b);
-                    }
-                }
-                Ok(out)
-            })
-            .await
-        else {
-            return;
-        };
+        let bases = bases(front, trees).await;
         let Some(my_base) = bases.get(tree.to_string_lossy().as_ref()).cloned() else {
             return;
         };

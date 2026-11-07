@@ -13,6 +13,7 @@ pub mod exec;
 pub mod extensions;
 pub mod forecast;
 pub mod gateway;
+pub mod git;
 pub mod graph;
 pub mod history;
 pub mod hub;
@@ -210,6 +211,8 @@ params! {
     AgentsPause(agents::ById),
     AgentsHuddleStart(agents::HuddleStart),
     AgentsHuddleGet(agents::ById),
+    AgentsGrants(agents::ById),
+    AgentsGrantsRevoke(agents::GrantRevoke),
     AgentsWheelTake(agents::ById),
     AgentsWheelGive(agents::ById),
     AgentsWheelSaved(agents::WheelSaved),
@@ -217,6 +220,8 @@ params! {
     AgentsContextDrop(agents::ContextDropParams),
     AgentsContextPin(agents::ContextPinParams),
     AgentsCompactPreview(agents::ById),
+    AgentsConfig(agents::ConfigParams),
+    AgentsExplain(agents::ExplainParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),
@@ -257,6 +262,9 @@ params! {
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
+    WorkTrailSubscribe(work::TrailSubscribe),
+    WorkTrailClose(work::TrailClose),
+    WorkBoardSubscribe(work::BoardSubscribe),
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
@@ -287,6 +295,12 @@ params! {
     SearchEmbedders(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
+    GitLetters(git::LettersParams),
+    SearchGrep(search::GrepParams),
+    SearchFiles(search::FilesParams),
+    SearchSymbolAt(search::SymbolAtParams),
+    SearchGrepReplace(search::GrepReplaceParams),
+    ExplorerSubscribe(search::ExplorerParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),
     SearchServerStop(search::ServerKindParams),
@@ -357,6 +371,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(term::methods());
     v.extend(editor::methods());
     v.extend(search::methods());
+    v.extend(git::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());

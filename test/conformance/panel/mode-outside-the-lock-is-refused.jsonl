@@ -1,0 +1,25 @@
+{"scenario": "panel/mode-outside-the-lock-is-refused", "requires": ["v1", "test-hooks"], "doc": "[C] A mode off the provider's lock allow-list is refused with its reason and never reaches the agent (Claude: bypassPermissions; Codex: any preset); a mode on the list (Claude: plan) goes through; Kimi Code's plan mode is refused."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--config-options\" \"--log\" \"$ROOT/claude.log\")) (\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--config-options\" \"--log\" \"$ROOT/codex.log\")) (\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--config-options\" \"--log\" \"$ROOT/kimi.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:cl", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/config", "params": {"id": "$cl", "option": "mode", "value": "bypassPermissions"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "error": {"code": "not-allowed", "message": "mode `bypassPermissions` is outside claude's lock (allowed: default, plan): its other modes (`acceptEdits`, `bypassPermissions`, `dontAsk`) run tools without asking, which skips the hub's matrix"}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/config", "params": {"id": "$cl", "option": "mode", "value": "plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}, "within_ms": 15000}
+{"do": "file", "path": "$ROOT/claude.log", "contains": "{\"config_option\":{\"configId\":\"mode\",\"value\":\"plan\"}}", "within_ms": 10000}
+{"do": "file_grep", "paths": ["$ROOT/claude.log"], "absent": "bypassPermissions"}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$capture:cx", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/config", "params": {"id": "$cx", "option": "mode", "value": "agent"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "error": {"code": "not-allowed", "message": "mode `agent` is outside codex's lock (allowed: none): its lock pins the `read-only` preset, and every other preset runs tools without the hub's answer"}}, "within_ms": 15000}
+{"do": "file_grep", "paths": ["$ROOT/codex.log"], "absent": "\"config_option\""}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"id": "$capture:km", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/config", "params": {"id": "$km", "option": "mode", "value": "plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "not-allowed", "message": "$string"}}, "within_ms": 15000}
+{"do": "file_grep", "paths": ["$ROOT/kimi.log"], "absent": "\"config_option\""}

@@ -1,0 +1,27 @@
+{"scenario": "work/map-resize-sends-replace-not-reset", "requires": ["v1", "test-hooks"], "doc": "A rows view's width change in the same epoch (a view/env with only width_px changed) is answered by a replace of the rows whose fit changed, against the version the editor holds, never a reset: here a terminal class, whose outline lines are cut to the new columns."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && echo one > a.rs && git add a.rs && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m", "class": "tty", "display": "tty", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [1, 1], "width_px": 60, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "class": "tty", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "__test_advance", "params": {"ms": 1500}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "hub": "$hub", "ops": {"$contains": [{"insert": "$any"}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/resync", "params": {"view": "m", "class": "tty", "version": 0}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "class": "tty", "hub": "$hub", "version": "$capture:v1", "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/env", "params": {"view": "m", "class": "tty", "display": "tty", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [1, 1], "width_px": 24, "palette": [["accent", "#123456"], ["edge", "#654321"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m", "class": "tty", "hub": "$hub", "base": "$v1", "env_epoch": 1, "ops": {"$contains": [{"replace": "$any"}]}}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["work-map"]}

@@ -14,7 +14,7 @@
 (defvar drgnx-start--after-file)
 
 (defvar drgnx-start-test--ran nil "The stub commands that ran (newest first).")
-(dolist (id '(files palette keys folder graph))
+(dolist (id '(files palette keys folder))
   (defalias (intern (format "drgnx-start-test-%s" id))
     (let ((id id)) (lambda () (interactive) (push id drgnx-start-test--ran)))))
 
@@ -61,7 +61,6 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
          (drgnx-command-define 'palette :title "Command Palette" :category "View" :command #'drgnx-start-test-palette)
          (drgnx-command-define 'keys-sheet :title "Keys" :category "Help" :command #'drgnx-start-test-keys)
          (drgnx-command-define 'open-folder :title "Open Folder…" :category "File" :command #'drgnx-start-test-folder)
-         (drgnx-command-define 'work-graph :title "Show Work as Graph" :category "Work" :command #'drgnx-start-test-graph)
          (drgnx-start-test--bind ,profile)
          (drgnx-start-test--fresh-scratch)
          (set-window-buffer (selected-window) (get-scratch-buffer-create))
@@ -100,14 +99,12 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (let ((text (drgnx-start-test--text)))
         (should (string-match-p "drgnx" text))
         (should (string-match-p "Open a folder…" text))
-        (should (string-match-p "Open the work graph" text))
         (should (string-match-p "All keys" text))
         (should (string-match-p "Don't show this again" text)))
       ;; each button runs its command
       (drgnx-start-test--press "Open a folder…")
-      (drgnx-start-test--press "Open the work graph")
       (drgnx-start-test--press "All keys")
-      (should (equal (reverse drgnx-start-test--ran) '(folder graph keys))))))
+      (should (equal (reverse drgnx-start-test--ran) '(folder keys))))))
 
 (ert-deftest drgnx-start/centred-with-plain-bullets ()
   (drgnx-start-test--with 'vscode

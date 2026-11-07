@@ -385,6 +385,14 @@ redialled with a backoff."
 (defun drgnx-hub-core-step (state event)
   "The client in STATE takes EVENT (one of `drgnx-hub-core-event-kinds'): (NEW-STATE . EFFECTS).  STATE is not
 changed.  Signals on an event of no known kind."
+  (pcase event
+    ;; the hot path: an event changes nothing in the client, so it copies nothing
+    (`(event ,conn ,name ,data)
+     (cons state (when (drgnx-hub-core--conn state conn :events) (list (list 'hook 'events conn name data)))))
+    (_ (drgnx-hub-core--step-copy state event))))
+
+(defun drgnx-hub-core--step-copy (state event)
+  "`drgnx-hub-core-step' for every EVENT but an `event': on a copy of STATE."
   (let ((s (drgnx-hub-core--copy state)) (drgnx-hub-core--effects nil))
     ;; fresh cells: `drgnx-hub-core--conn-put' replaces their plists, never STATE's
     (setf (drgnx-hub-core-conns s) (mapcar (lambda (c) (cons (car c) (cdr c))) (drgnx-hub-core-conns s)))
@@ -395,8 +403,6 @@ changed.  Signals on an event of no known kind."
       (`(call ,conn ,method ,params ,cb . ,keys) (apply #'drgnx-hub-core--call s conn method params cb keys))
       (`(challenge ,conn ,nonce ,socket) (drgnx-hub-core--challenge s conn nonce socket))
       (`(answer ,_conn ,id ,result ,error) (drgnx-hub-core--settle s id result error))
-      (`(event ,conn ,name ,data)
-       (when (drgnx-hub-core--conn s conn :events) (drgnx-hub-core--do 'hook 'events conn name data)))
       (`(closed ,conn ,now) (drgnx-hub-core--closed s conn now))
       (`(timer ,key . ,keys)
        (pcase key

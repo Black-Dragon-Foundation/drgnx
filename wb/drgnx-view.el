@@ -1252,7 +1252,8 @@ font or scale change makes the rows draw again anyway).")
 ;; `drgnx-term-faint'.  A theme change repaints in place (`drgnx-view-patch-repaint': the LRU emptied, every row drawn
 ;; again).  A terminal's patch also carries `term' (cursor, alt screen, mouse tracking, title): kept in the state, and
 ;; the cursor's row is drawn again so the view type's PATCHED places the cursor after the draw.
-;; Selection, dimming and the stale shade are the view's own state, put back as the last step of every draw.
+;; The stale shade is the view's own state, put back as the last step of every draw; the classes (selected, match,
+;; lit, dim) come from the view's model in Sjá and go on each node's span, not the line (`drgnx-view-nav.el').
 
 (defvar drgnx-hub--events)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
@@ -1266,7 +1267,7 @@ render offload's combined pass compares the two).  Never a user option.")
   :group 'drgnx)
 
 (defface drgnx-view-selected '((t :inherit highlight :extend t))
-  "The selected row of a hub-fed view."
+  "The selected node of a hub-fed view, over its span."
   :group 'drgnx)
 
 ;; The terminal's 16 colours.  Each inherits its `ansi-color-' face for the foreground and resets the background to
@@ -1385,13 +1386,19 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   (rows (make-hash-table :test #'equal))        ; KEY → its row (a plist as the event has it)
   (images (make-hash-table :test #'equal))      ; image id → the image spec (`:alt' on a terminal: the alt shows)
   (stops (make-hash-table))                     ; PX → the shared (space :align-to (PX))
-  selected                                      ; the selected row's key
-  dimmed                                        ; keys shown dimmed (a filter's)
-  overlays                                      ; the selection's and dimming's overlays
   stale-overlay
-  (resyncs 0) (refits 0) (measures 0))          ; counters, for tests and the perf lab
+  handle                                        ; this buffer's instance of the view in Sjá (nil without Sjá)
+  model                                         ; the highest model version its row patches named, not applied yet
+  (ids (make-hash-table :test #'equal))         ; node id → the keys of the rendered rows that hold its span
+  (spans (make-hash-table :test #'equal))       ; node id → the overlays of its class (drgnx-view-nav.el)
+  class-faces                                   ; the faces by class index, made by the class step; nil: again
+  (resyncs 0) (refits 0) (measures 0)           ; counters, for tests and the perf lab
+  (classed 0))                                  ; the class step's overlays made and deleted (the perf lab's)
 
 (defvar-local drgnx-view-patch nil "This buffer's hub-fed (view, class), or nil.")
+
+(defvar-local drgnx-view-patch-id-prop 'drgnx-work-id
+  "The text property whose value is a node's id over that node's span in this view's rows (the class step's).")
 
 ;;;; The rules: a pure decision per patch, and the bookkeeping
 
@@ -1489,22 +1496,6 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
            (delete-overlay o)
            (setf (drgnx-view-patch-stale-overlay state) nil)))))
 
-(defun drgnx-view-patch--next-row (view key gone)
-  "The key of the row after KEY in VIEW that is not in GONE, else the one before, else nil."
-  (let ((i (gethash key (drgnx-view--index view))) (n (drgnx-view--n view)) (keys (drgnx-view--keys view)) found)
-    (when i
-      (let ((j (1+ i)))
-        (while (and (not found) (< j n))
-          (let ((k (aref keys j)))
-            (when (and (not (drgnx-view--ghost-p view j)) (not (member k gone))) (setq found k)))
-          (setq j (1+ j))))
-      (let ((j (1- i)))
-        (while (and (not found) (>= j 0))
-          (let ((k (aref keys j)))
-            (when (and (not (drgnx-view--ghost-p view j)) (not (member k gone))) (setq found k)))
-          (setq j (1- j)))))
-    found))
-
 (defun drgnx-view-patch--keys (rows)
   (mapcar (lambda (r) (plist-get r :key)) rows))
 
@@ -1536,9 +1527,8 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
        ((plist-member op :reset)
         (let ((rows (plist-get op :reset)))
           (clrhash table)
+          (clrhash (drgnx-view-patch-ids state))
           (dolist (r rows) (puthash (plist-get r :key) r table))
-          (unless (and (drgnx-view-patch-selected state) (gethash (drgnx-view-patch-selected state) table))
-            (setf (drgnx-view-patch-selected state) nil))
           (drgnx-view-reset view (drgnx-view-patch--keys rows))))
        ((plist-member op :insert)
         (let* ((ins (plist-get op :insert)) (rows (plist-get ins :rows)))
@@ -1549,9 +1539,7 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
           (dolist (r rows) (puthash (plist-get r :key) r table))
           (drgnx-view-dirty view (drgnx-view-patch--keys rows))))
        ((plist-member op :remove)
-        (let ((keys (plist-get op :remove)) (sel (drgnx-view-patch-selected state)))
-          (when (and sel (member sel keys))
-            (setf (drgnx-view-patch-selected state) (drgnx-view-patch--next-row view sel keys)))
+        (let ((keys (plist-get op :remove)))
           (dolist (k keys) (remhash k table))
           (drgnx-view-remove view keys)))))
     (drgnx-view-patch--evict-images state)))
@@ -1598,6 +1586,9 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
               ('apply
                (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
                (drgnx-view-patch--apply-ops state drgnx-view patch)
+               (when-let* ((n (plist-get patch :model)))
+                 (drgnx-view-model--named state n (drgnx-view-patch--reset-p patch))
+                 (drgnx-view-touch drgnx-view))
                ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
                (when-let* ((term (plist-get patch :term)))
                  (setf (drgnx-view-patch-term state) term)
@@ -1609,8 +1600,9 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
             what))))))
 
 (defun drgnx-view-patch-event (event data)
-  "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer."
-  (when (equal event "view-patch") (drgnx-view-apply-patch data)))
+  "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer, a `view-model' to its view's queue."
+  (cond ((equal event "view-patch") (drgnx-view-apply-patch data))
+        ((equal event "view-model") (drgnx-view-model-event data))))
 
 (defun drgnx-view-patch-env-sent (view class epoch)
   "This editor sent (VIEW, CLASS) the env EPOCH (`drgnx-view-env'): patches of an older one are held from now on."
@@ -1648,7 +1640,188 @@ every row is drawn again, with no message to the hub."
                (with-current-buffer buffer
                  (drgnx-view-patch--forget drgnx-view-patch)
                  (drgnx-view-patch--stale drgnx-view-patch t))))
+           drgnx-view-patch--buffers)
+  (drgnx-view-model--hub-lost))
+
+;;;; The native view model (Sjá): each view's model strings, queued, applied at the draw
+;;
+;; A view whose keys move a selection also gets its model (`view-model', docs/develop/hub.md "The native view model"):
+;; one JSON string per version, which drgnx never parses.  The strings queue per view (not per class) and go to Sjá
+;; (`nidhogg-view-apply') at the draw that inserts the rows built from them: a draw's first slice (the type's SYNC)
+;; applies every queued model up to the highest `model' its buffer's row patches named, so a key answers from the model
+;; that is drawn.  A model no row patch names (a change the rows don't show) applies on the view's own timer one
+;; throttle later.  The envelope's rules are the rows' (`drgnx-view-patch--decide'), read from four scalars and
+;; `reset'.  Without Sjá (an Emacs that is not Nidhogg) models are ignored.
+
+(require 'nidhogg-views nil t)          ; Nidhogg's, not preloaded; `nidhogg-view--call' is the C door
+(declare-function nidhogg-view-apply "nidhogg-views" (view hub version model))
+(declare-function nidhogg-view-open "nidhogg-views" (view &optional group))
+(declare-function nidhogg-view-close "nidhogg-views" (h))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
+(declare-function nidhogg-view-hub-lost "nidhogg-views" ())
+
+(defconst drgnx-view-model-queue-max 64
+  "The most model strings a view holds unapplied; past that the queue is dropped and a reset asked for.")
+
+(defvar drgnx-view-model--gen 0
+  "Counts the model streams this Emacs began.  Sjá is told the hub as \"HUB/GEN\": a new subscription's reset (version
+1 again, from the same hub) is a new stream to it, never a version it already holds.")
+
+(cl-defstruct (drgnx-view-model (:constructor drgnx-view-model--make) (:copier nil))
+  "One hub-fed VIEW's model stream.  HUB, GEN and VERSION: the stream's (HUB nil: no reset since the view was attached,
+the hub went or the queue was dropped).  QUEUE: (VERSION . STRING) not applied yet, oldest first.  NAMED: the highest
+model version a row patch of the stream named.  RESYNC: non-nil while a `view/resync' with `model' is outstanding.
+LAST: Sjá's answer to the last apply."
+  view hub gen version queue (named 0) resync last (applied 0) (resyncs 0))
+
+(defvar drgnx-view-model--views (make-hash-table :test #'equal)
+  "VIEW → its `drgnx-view-model', while a buffer of VIEW lives (pruned with the last: `drgnx-view-patch--killed').")
+
+(defsubst drgnx-view-model--sja-p ()
+  "Non-nil when this Emacs has Sjá."
+  (fboundp 'nidhogg-view--call))
+
+(defun drgnx-view-model--decide (state data)
+  "What to do with DATA, a `view-model' event's, given STATE: `restart' (a reset of a new stream: a subscription's,
+base 0, or another hub's), `queue', `drop' (another hub's diff, one before the first reset, or an old one) or
+`resync' (a gap)."
+  (let ((version (drgnx-view-model-version state))
+        (same (and (drgnx-view-model-hub state) (eql (drgnx-view-model-hub state) (plist-get data :hub)))))
+    (cond ((plist-get data :reset)
+           (cond ((or (not same) (eql (plist-get data :base) 0)) 'restart)
+                 ((<= (plist-get data :version) version) 'drop)
+                 (t 'queue)))
+          ((not same) 'drop)
+          ((< (plist-get data :base) version) 'drop)
+          ((> (plist-get data :base) version) 'resync)
+          (t 'queue))))
+
+(defun drgnx-view-model--resync (state)
+  "Ask the hub for a reset of STATE's view, unless one is outstanding."
+  (unless (drgnx-view-model-resync state)
+    (setf (drgnx-view-model-resync state) t)
+    (cl-incf (drgnx-view-model-resyncs state))
+    (funcall drgnx-view-patch-send-function "view/resync" (list :view (drgnx-view-model-view state) :model t))))
+
+(defun drgnx-view-model--lose (state)
+  "STATE drops its queue and its stream: nothing is queued again before a reset."
+  (setf (drgnx-view-model-queue state) nil (drgnx-view-model-hub state) nil (drgnx-view-model-version state) nil
+        (drgnx-view-model-named state) 0))
+
+(defun drgnx-view-model--arm (state)
+  "One throttle from now, STATE's queued models no row patch named apply (`drgnx-view-model--due')."
+  (let ((view (drgnx-view-model-view state)))
+    (drgnx-timer-soon (cons 'drgnx-view-model view) drgnx-view-delay #'drgnx-view-model--due
+                      :args (list view) :owner :core)))
+
+(defun drgnx-view-model-event (data)
+  "A `view-model' event's DATA: decided by its envelope (`drgnx-view-model--decide') and queued; Sjá gets it at the
+draw.  Returns the decision, or nil when no buffer shows the view or this Emacs has no Sjá."
+  (when-let* (((drgnx-view-model--sja-p))
+              (state (gethash (plist-get data :view) drgnx-view-model--views)))
+    (let ((what (drgnx-view-model--decide state data)))
+      (pcase what
+        ('resync (drgnx-view-model--resync state))
+        ((or 'restart 'queue)
+         (when (eq what 'restart)
+           (drgnx-view-model--lose state)
+           (setf (drgnx-view-model-gen state) (cl-incf drgnx-view-model--gen)))
+         (when (plist-get data :reset)
+           (setf (drgnx-view-model-queue state) nil (drgnx-view-model-resync state) nil
+                 (drgnx-view-model-hub state) (plist-get data :hub)))
+         (setf (drgnx-view-model-version state) (plist-get data :version))
+         (if (>= (length (drgnx-view-model-queue state)) drgnx-view-model-queue-max)
+             (progn (drgnx-view-model--lose state) (drgnx-view-model--resync state))
+           (setf (drgnx-view-model-queue state)
+                 (nconc (drgnx-view-model-queue state)
+                        (list (cons (plist-get data :version) (plist-get data :model)))))
+           (drgnx-view-model--arm state))))
+      what)))
+
+(defun drgnx-view-model--apply (state upto)
+  "Hand STATE's queued models of a version up to UPTO (t: all) to Sjá, oldest first.  Sjá's `resync' drops the queue
+and asks for a reset; `too-large' drops it (the view keeps what it holds)."
+  (let ((hub (format "%s/%s" (drgnx-view-model-hub state) (drgnx-view-model-gen state))) (q nil))
+    (while (and (setq q (drgnx-view-model-queue state)) (or (eq upto t) (<= (car (car q)) upto)))
+      (setf (drgnx-view-model-queue state) (cdr q))
+      (let ((status (nidhogg-view-apply (drgnx-view-model-view state) hub (car (car q)) (cdr (car q)))))
+        (setf (drgnx-view-model-last state) status)
+        (pcase status
+          ('applied (cl-incf (drgnx-view-model-applied state))
+                    (drgnx-view-model--forget-faces (drgnx-view-model-view state)))
+          ('resync (drgnx-view-model--lose state) (drgnx-view-model--resync state))
+          ('too-large (drgnx-view-model--lose state)))))))
+
+(defun drgnx-view-model--forget-faces (view)
+  "VIEW's buffers make their faces by class again: a reset may name other classes."
+  (maphash (lambda (pair buffer)
+             (when (and (equal (car pair) view) (buffer-live-p buffer))
+               (with-current-buffer buffer
+                 (when drgnx-view-patch (setf (drgnx-view-patch-class-faces drgnx-view-patch) nil)))))
            drgnx-view-patch--buffers))
+
+(defun drgnx-view-model--due (view)
+  "The timer of VIEW's queue: models no row patch named apply now.  One a patch named waits for that patch's draw,
+which arms this again for what is left."
+  (when-let* ((state (gethash view drgnx-view-model--views)) (q (drgnx-view-model-queue state)))
+    (when (> (car (car q)) (drgnx-view-model-named state))
+      (drgnx-view-model--apply state t)
+      (drgnx-view-model--reclass view))))
+
+(defun drgnx-view-model--reclass (view)
+  "VIEW's buffers take the classes a model no row patch named changed (a list another view's selection lit): no
+draw follows it to run the class step."
+  (when (fboundp 'drgnx-view-nav-class-step)
+    (maphash (lambda (pair buffer)
+               (when (and (equal (car pair) view) (buffer-live-p buffer))
+                 (with-current-buffer buffer (drgnx-view-nav-class-step drgnx-view))))
+             drgnx-view-patch--buffers)))
+
+(defun drgnx-view-model--named (patch-state n reset)
+  "A row patch applied in PATCH-STATE's buffer named model N (RESET: a reset of the rows): its draw applies up to N."
+  (setf (drgnx-view-patch-model patch-state) (if reset n (max n (or (drgnx-view-patch-model patch-state) 0))))
+  (when-let* ((m (gethash (drgnx-view-patch-view patch-state) drgnx-view-model--views)))
+    (setf (drgnx-view-model-named m) (max n (drgnx-view-model-named m)))))
+
+(defun drgnx-view-patch--sync (_view)
+  "SYNC of `drgnx-view-rows', at a draw's first slice in the view's buffer: the view's queued models up to the
+highest one this buffer's row patches named go to Sjá, before the rows built from them are inserted."
+  (let ((state drgnx-view-patch))
+    (when-let* ((n (drgnx-view-patch-model state))
+                (m (gethash (drgnx-view-patch-view state) drgnx-view-model--views)))
+      (setf (drgnx-view-patch-model state) nil)
+      (drgnx-view-model--apply m n)
+      (when (drgnx-view-model-queue m) (drgnx-view-model--arm m)))))
+
+(defun drgnx-view-model--hub-lost ()
+  "The hub went: every view's queue and stream go, and Sjá marks every view stale; keys keep working on what is
+drawn."
+  (maphash (lambda (_ m) (drgnx-view-model--lose m) (setf (drgnx-view-model-resync m) nil)) drgnx-view-model--views)
+  (when (drgnx-view-model--sja-p) (nidhogg-view-hub-lost)))
+
+(defun drgnx-view-model--open (state)
+  "Open PATCH-STATE's instance in Sjá, and its view's queue when it is the view's first buffer."
+  (when (drgnx-view-model--sja-p)
+    (let ((view (drgnx-view-patch-view state)))
+      (unless (gethash view drgnx-view-model--views)
+        (puthash view (drgnx-view-model--make :view view :gen (cl-incf drgnx-view-model--gen)) drgnx-view-model--views))
+      (setf (drgnx-view-patch-handle state) (nidhogg-view-open view)))))
+
+(defun drgnx-view-model--close (state &optional all)
+  "Close PATCH-STATE's instance; its view's queue goes with the view's last buffer (ALL: now)."
+  (when-let* ((h (drgnx-view-patch-handle state)))
+    (setf (drgnx-view-patch-handle state) nil)
+    (nidhogg-view-close h))
+  (let ((view (drgnx-view-patch-view state)) (other nil))
+    (unless all
+      (maphash (lambda (key b)
+                 (when (and (equal (car key) view) (buffer-live-p b) (not (eq b (current-buffer)))) (setq other t)))
+               drgnx-view-patch--buffers))
+    (unless other
+      (remhash view drgnx-view-model--views)
+      (drgnx-timer-cancel (cons 'drgnx-view-model view))
+      ;; the view is closed in Sjá with its last instance: a broken one starts whole when opened again
+      (when (fboundp 'drgnx-notice-clear) (drgnx-notice-clear 'render (cons 'view-broken view))))))
 
 ;;;; Rendering a stored row
 
@@ -1751,7 +1924,10 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
         (put-text-property (nth 0 run) (nth 1 run) 'face face text)))
     (dolist (p (plist-get row :props))
       (when-let* ((name (drgnx-view-patch--prop (nth 2 p))))
-        (put-text-property (nth 0 p) (nth 1 p) name (nth 3 p) text)))
+        (put-text-property (nth 0 p) (nth 1 p) name (nth 3 p) text)
+        (when (eq name drgnx-view-patch-id-prop)        ; the rows that hold a node, for the class step
+          (let ((ids (drgnx-view-patch-ids state)))
+            (unless (member key (gethash (nth 3 p) ids)) (push key (gethash (nth 3 p) ids)))))))
     (dolist (stop stops)
       (put-text-property (car stop) (1+ (car stop)) 'display (drgnx-view-patch--stop state (cadr stop)) text))
     (dolist (im (plist-get row :images))
@@ -1762,37 +1938,29 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
       (when h (put-text-property 0 1 'line-height (* (plist-get h :lines) (default-line-height)) nl))
       (concat text nl))))
 
-;;;; Selection, dimming, the stale shade: the last step
+;;;; Classes and the stale shade: the last step
 
-(defun drgnx-view-patch--line-overlay (view key face)
-  "An overlay in FACE over KEY's drawn row in VIEW, or nil when it is not drawn."
-  (when-let* ((beg (drgnx-view-row-start view key)))
-    (let ((ov (make-overlay beg (save-excursion (goto-char beg) (line-beginning-position 2)))))
-      (overlay-put ov 'face face)
-      ov)))
+(declare-function drgnx-view-nav-class-step "drgnx-view-nav" (view &optional keys))
 
-(defun drgnx-view-patch--patched (view _keys)
-  "PATCHED of `drgnx-view-rows': put the selection, the dimming and the stale shade back over the rows by key."
+(defvar drgnx-view-patch-patched-functions nil
+  "Called with (VIEW KEYS) in a hub-fed view's buffer after the rows KEYS were drawn and got their classes: a view's
+own marks over the hub's rows go back on here (the Search view's tick boxes, user state in Sjá).  Added buffer-locally
+by the view that owns the buffer.")
+
+(defun drgnx-view-patch--patched (view keys)
+  "PATCHED of `drgnx-view-rows': the stale shade, then the model's classes on the patched rows KEYS, then
+`drgnx-view-patch-patched-functions'.  The classes (selected, match, lit, dim) come from Sjá by node id
+(`drgnx-view-nav-class-step'), never from a row patch."
   (with-current-buffer (drgnx-view--buffer view)
     (let ((state drgnx-view-patch))
-      (mapc #'delete-overlay (drgnx-view-patch-overlays state))
-      (setf (drgnx-view-patch-overlays state) nil)
-      (when-let* ((sel (drgnx-view-patch-selected state))
-                  (ov (drgnx-view-patch--line-overlay view sel 'drgnx-view-selected)))
-        (push ov (drgnx-view-patch-overlays state)))
-      (dolist (k (drgnx-view-patch-dimmed state))
-        (when-let* ((ov (drgnx-view-patch--line-overlay view k 'shadow)))
-          (push ov (drgnx-view-patch-overlays state))))
       (when (drgnx-view-patch-stale-overlay state)
-        (move-overlay (drgnx-view-patch-stale-overlay state) (point-min) (point-max))))))
-
-(defun drgnx-view-patch-select (key)
-  "Select KEY's row in the current hub-fed view (nil: none); drawn now, so it wins over a queued patch."
-  (setf (drgnx-view-patch-selected drgnx-view-patch) key)
-  (drgnx-view-patch--patched drgnx-view nil))
+        (move-overlay (drgnx-view-patch-stale-overlay state) (point-min) (point-max)))
+      (when (fboundp 'drgnx-view-nav-class-step)
+        (drgnx-view-nav-class-step view keys))
+      (run-hook-with-args 'drgnx-view-patch-patched-functions view keys))))
 
 (drgnx-view-define 'drgnx-view-rows :render #'drgnx-view-patch-render :patched #'drgnx-view-patch--patched
-                   :slice drgnx-view-slice)
+                   :sync #'drgnx-view-patch--sync :slice drgnx-view-slice)
 
 ;;;; Attaching
 
@@ -1811,6 +1979,7 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
   (when drgnx-view-patch
     (remhash (cons (drgnx-view-patch-view drgnx-view-patch) (drgnx-view-patch-class drgnx-view-patch))
              drgnx-view-patch--buffers)
+    (drgnx-view-model--close drgnx-view-patch)
     (setq drgnx-view-patch nil))
   (drgnx-view-patch--hooks))
 
@@ -1820,9 +1989,11 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
 `drgnx-view-define').  EPOCH: the env epoch sent for the pair.  Returns the view."
   (with-current-buffer (or buffer (current-buffer))
     (let* ((v (drgnx-view-attach (or type 'drgnx-view-rows) :start start)) (ty (drgnx-view--type v)))
+      (when drgnx-view-patch (drgnx-view-model--close drgnx-view-patch))   ; attached again: the old instance goes
       (setq-local drgnx-view-patch (drgnx-view-patch--make :view view :class class :epoch (or epoch 0)
                                                            :ack (drgnx-view-type-ack ty)
                                                            :epoch-reset (drgnx-view-type-epoch-reset ty)))
+      (drgnx-view-model--open drgnx-view-patch)
       (puthash (cons view class) (current-buffer) drgnx-view-patch--buffers)
       (add-hook 'kill-buffer-hook #'drgnx-view-patch--killed nil t)
       (drgnx-view-patch--hooks)
@@ -1832,7 +2003,9 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
   "Forget every hub-fed buffer's pairing and remove the hub hooks (the owning module's teardown)."
   (maphash (lambda (_ b)
              (when (buffer-live-p b)
-               (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-view-patch--killed t))))
+               (with-current-buffer b
+                 (remove-hook 'kill-buffer-hook #'drgnx-view-patch--killed t)
+                 (when drgnx-view-patch (drgnx-view-model--close drgnx-view-patch t)))))
            drgnx-view-patch--buffers)
   (clrhash drgnx-view-patch--buffers)
   (drgnx-view-patch--hooks))

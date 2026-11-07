@@ -1,0 +1,25 @@
+[package]
+name = "drgnx-px"
+description = "A networked container job's relay sidecar: the job's TCP connections as framed streams over stdio to the owner's proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# test-only flags of the binary (`--test-log-frames`, `--test-panic-on-beat`); never in a shipped build
+test-hooks = []
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+libc.workspace = true
+gleipnir = { path = "../gleipnir", version = "0.1.0" }
+sha2.workspace = true
+
+[dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }
+tempfile.workspace = true
+

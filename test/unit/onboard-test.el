@@ -113,12 +113,11 @@ unset around its use, or it wins."
     (let ((s (drgnx-modules-read-state)))
       (should (memq 'ui/look (plist-get s :disabled)))             ; the user's own choice stays
       (should (memq 'extra/magit (plist-get s :disabled)))
-      (should (memq 'extra/llm (plist-get s :disabled)))
       (should (eq (plist-get s :theme) 'tango)))
     (drgnx-onboard-apply-preset 'ide)
     (should (equal (seq-filter (lambda (m) (string-prefix-p "extra/" (symbol-name m)))
                                (plist-get (drgnx-modules-read-state) :disabled))
-                   '(extra/llm)))
+                   nil))
     (drgnx-onboard-apply-preset 'full-ai)
     (should-not (seq-filter (lambda (m) (string-prefix-p "extra/" (symbol-name m)))
                             (plist-get (drgnx-modules-read-state) :disabled)))))
@@ -187,8 +186,7 @@ unset around its use, or it wins."
                                 :options '(:preset ide :keys "Emacs" :theme modus-vivendi))))
       (should (eq (cadr (car r)) 'ok))
       (should (string-match-p "(drgnx-keys-layers ((emacs app editing window)))" (drgnx-test-areas-text)))
-      (should (eq (plist-get (drgnx-modules-read-state) :theme) 'modus-vivendi))
-      (should (memq 'extra/llm (plist-get (drgnx-modules-read-state) :disabled))))))
+      (should (eq (plist-get (drgnx-modules-read-state) :theme) 'modus-vivendi)))))
 
 ;;;; Task 3: projects onto the board
 
@@ -1139,8 +1137,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
                 ((symbol-function 'drgnx-onboard--packages-to-install) #'ignore))
         (drgnx-onboard--look-step '(:interactive t :options (:keys "Emacs" :theme modus-vivendi))))
       (should (string-prefix-p "Modules" (car (car (last asked)))))
-      (should (equal (cdr (car (last asked))) "full-ai"))
-      (should-not (drgnx-module-disabled-p 'extra/llm)))
+      (should (equal (cdr (car (last asked))) "full-ai")))
     ;; a mix of your own: Return keeps it
     (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/magit))))
     (should-not (drgnx-onboard--current-preset))
@@ -1264,60 +1261,6 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
         (drgnx-onboard--look-step `(:interactive t :options ,opts))
         (should (equal (nth 2 (car seen)) "types characters"))))))
 
-(ert-deftest drgnx-onboard/chat-check-in-batch-offers-no-restart ()
-  :tags '(:frozen)
-  ;; gptel installed, module extra/llm on, gptel not loaded yet: in batch the Finish step never offers a restart, so
-  ;; the result says it loads at the next start; a restart is needed only when this run turned the module on or
-  ;; installed the package.
-  (drgnx-onboard-test--with root
-    (let ((drgnx-onboard--restart-needed nil))
-      (should-not (featurep 'gptel))
-      (make-directory (expand-file-name "gptel-0.9.9" (drgnx-elpa-dir)) t)
-      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled nil)))
-      ;; batch, module already on
-      (should noninteractive)
-      (let ((r (drgnx-onboard--chat-module '(:interactive nil))))
-        (should (car r))
-        (should (string-search "loads at drgnx's next start" (cdr r)))
-        (should-not (string-search "Finish" (cdr r)))
-        (should-not drgnx-onboard--restart-needed))
-      ;; the app, module already on: nothing changed by this run, nothing to restart for
-      (let ((noninteractive nil) (r nil))
-        (setq r (drgnx-onboard--chat-module '(:interactive t)))
-        (should (string-search "loads at drgnx's next start" (cdr r)))
-        (should-not (string-search "Finish" (cdr r)))
-        (should-not drgnx-onboard--restart-needed))
-      ;; the app, this run turns the module on: the restart is offered
-      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-        (let ((noninteractive nil) (r nil))
-          (setq r (drgnx-onboard--chat-module '(:interactive t)))
-          (should (string-search "the Finish step offers it" (cdr r)))
-          (should drgnx-onboard--restart-needed)))
-      ;; batch, this run turns it on: no Finish offer is promised
-      (setq drgnx-onboard--restart-needed nil)
-      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-        (let ((r (drgnx-onboard--chat-module '(:interactive t))))
-          (should (string-search "loads at drgnx's next start" (cdr r)))
-          (should-not (string-search "Finish" (cdr r))))))))
-
-(ert-deftest drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now ()
-  :tags '(:frozen)
-  ;; This Emacs applied a settings.el with extra/llm off; the file has it on since (a hand edit, another process).
-  ;; "Turn on Chat? y" must leave it on: a toggle would read the file and turn it off.
-  (drgnx-onboard-test--with root
-    (let ((drgnx-onboard--restart-needed nil))
-      (drgnx-modules-update-state (lambda (s) (plist-put (copy-sequence s) :disabled '(extra/llm))))
-      (drgnx-test-areas-put-entries '((drgnx-modules-disabled)))
-      (should (drgnx-module-disabled-p 'extra/llm))                       ; the applied copy still has it off
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
-                ((symbol-function 'drgnx-onboard--installed-p) (lambda (_) t)))
-        (drgnx-onboard--chat-module '(:interactive t)))
-      (should-not (drgnx-modules--disabled-in
-                   (drgnx-modules--state-of (drgnx-settings-area-fresh (mapcar #'cdr drgnx-modules--settings)))
-                   'extra/llm)))))
-
 (ert-deftest drgnx-onboard/look-step-stops-at-a-keys-mistake-before-any-change ()
   ;; settings.el has a mistake: the Look step refuses before the preset, the engine or the live keys change, in batch and
   ;; in a session (where the live keys used to switch before the save refused).
@@ -1392,7 +1335,7 @@ as the second element: (FUNCTION . PROMPTS-CELL).  An unexpected question is an 
   ;; app) offers the restart — drgnx open, detached, then quit — or says how to do it yourself.
   (drgnx-onboard-test--with root
     (let ((drgnx-onboard--restart-needed nil) (asked nil) (lines nil) (quit 0) (answer t))
-      (cl-letf (((symbol-function 'drgnx-onboard--packages-to-install) (lambda () '(:names (gptel))))
+      (cl-letf (((symbol-function 'drgnx-onboard--packages-to-install) (lambda () '(:names (magit))))
                 ((symbol-function 'drgnx-onboard--job) (lambda (&rest _) 'ok))
                 ((symbol-function 'y-or-n-p) (lambda (p) (push p asked) answer))
                 ((symbol-function 'drgnx-doctor-run) (lambda (&rest _) nil))

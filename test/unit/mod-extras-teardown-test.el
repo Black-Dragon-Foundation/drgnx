@@ -1,6 +1,6 @@
 ;;; mod-extras-teardown-test.el --- batch tests: the package-backed extras turn off and leave what the user had -*- lexical-binding: t -*-
 ;; The 15 `extra/' modules (teardown batch): what a setup sets in another package's options comes back, a mode a
-;; module turned on in live buffers goes off, gptel's backend returns.  A module whose package is missing here
+;; module turned on in live buffers goes off.  A module whose package is missing here
 ;; (`extra/debug': dape) is covered by its teardown function alone.
 ;; test-class: det
 (require 'ert)
@@ -55,19 +55,6 @@
            (should-not (buffer-local-value 'indent-bars-mode buf))
            (should-not keycast-mode-line-mode))
        (kill-buffer buf)))))
-
-(ert-deftest drgnx-extras-teardown/llm-hook-is-a-name-and-the-backend-returns ()
-  :tags '(:frozen)
-  (drgnx-extras-teardown-test--with-packages
-   (skip-unless (drgnx-extras-teardown-test--installed-p 'gptel))
-   (require 'gptel)
-   (let ((process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment))
-         (backend gptel-backend) (model gptel-model))
-     (drgnx-test-with-modules '(extra/llm) :strict t
-                              (should-not (seq-remove #'symbolp drgnx-ai-probe-done-hook))          ; no closure on a global hook
-                              (should (memq 'drgnx-llm--configure drgnx-ai-probe-done-hook)))
-     (should (eq gptel-backend backend))
-     (should (eq gptel-model model)))))
 
 (ert-deftest drgnx-extras-teardown/debug-session-keys-go-with-the-module ()
   (load (expand-file-name "modules/extra/drgnx-debug" drgnx-dir) nil t)

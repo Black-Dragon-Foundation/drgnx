@@ -131,8 +131,30 @@ At four points the hub asks your **rules** and the enabled plugins' **hooks** ab
 | `before-commit` | before the hub merges a task's commit | 10 s |
 | `at-review` | before a task goes to its reviewer | 30 s |
 
-`before-tool` and `after-edit` run today. `before-commit` and `at-review` can be declared and are checked, but the hub
-does not call them yet: they arrive with the checkpoint and review work.
+All four run. `before-commit` and `at-review` belong to a job and a task, not to an agent, so there is no session:
+a plugin's network requests at those points are judged under the job (the job's network cell and the `plugin` tier
+of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.
+
+- **`before-commit`** runs when the merge gate has cleared a task and just before the hub writes the merge commit.
+  A **change** (`{"message": "…"}`) replaces the commit message. A **deny** holds the merge: a `hook` card says "the
+  before-commit hook refused the merge of J7-3" and quotes your reason and which rule or plugin gave it. The card
+  offers **Retry the merge** (after you fixed what the hook objected to), **Dismiss and carry on** (merge this task
+  anyway; only you can, an agent cannot) and **Stop the job**. A manager's `merge` tool goes through the same hook: a
+  deny answers the manager with the reason and raises the card. That card offers **Merge again** and **Dismiss and let it
+  merge** (the manager is told to call `merge` again; a dismissal lets that one merge through) and **Withdraw the
+  card**.
+- **`at-review`** runs when a task is about to go to its reviewer. An **annotate** adds its note to the reviewer's
+  brief. A **deny** fails the review without starting the reviewer: the task goes back to its agent with your reason,
+  as any failed review, and counts toward the three failed reviews after which the task waits on you.
+- **A hook that cannot run** (it timed out, trapped, would not load, or was not run) is not a deny of the step: the
+  point stays blocked and a `hook` card says "hook NAME failed at review: WHAT" (or "at commit"), with **Retry** or
+  **Review again**, **Dismiss** and **Stop the job**. The task is not sent back to its agent and no failed review is
+  counted. A hook marked `advisory` only adds a note.
+
+Dismissing a hook card skips that hook for the current review round only: after a failed review, the next round asks
+the hook again.
+
+A `hook` card is withdrawn when its job stops.
 
 Each answers **allow** (no objection), **deny** (with a reason), **annotate** (a note shown under the step) or, where
 the hub itself performs the action, **change** (a tool's arguments for the hub's own tools, the content the hub
@@ -250,7 +272,7 @@ Claude a hook can annotate or deny but never change.
 - **Hook verdicts with provenance.** A refused step shows the rule or hook that refused it, with each source's verdict
   and time, and the notes under the step. A step an agent made itself and a hook denied afterwards is marked refused by
   hook.
-- **Context breakdown.** The palette command `Context Breakdown…` shows what fills an agent's context, for an agent
+- **Context breakdown.** The agent panel's context chip (`i` on it) shows what fills an agent's context, for an agent
   that reports it (below). Where the agent can drop or pin an item, the entries say so; where it cannot, they are plain
   text.
 - **Plugins page.** `Plugins…`, as above. The page's keys: `a` approve, `d` disable, `p` turn on or off in this

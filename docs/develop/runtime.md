@@ -54,6 +54,7 @@ runtime/
 | `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
+| `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
 | `domr` (formerly `drgnx-conformance`; lives in `runtime/conformance/`) | the conformance harness (this page) |
 
 The protocol is still called "the hub protocol", and the socket, cap and lock files keep their `hub-HASH.*` names.
@@ -644,7 +645,8 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
-the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
+the PATH; an excused skip otherwise), `rootless` (`podman info` says the podman is rootless, as the networked container
+jobs need; an excused skip otherwise, with the reason), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
 says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)), `chromium` (the hub
 gives sessions a browser here: its `sandbox check` reports Landlock ABI 9 or later, and `browser list --json` resolves a
 Chromium), `playwright-mcp` (`node` on the PATH and Playwright MCP in `/opt/pw-mcp`, as the browser test image has them),
@@ -698,7 +700,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
-  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
+  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:run CMD` (pending first, so the call lasts as long as CMD), `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
   `commit MSG`, `sleep-loop` (asks to run `sleep 30; pgrep …`), `silent N` (a `session/cancel` ends it),
   `crash` (exit 3); anything else is echoed. `--script` gives the n-th prompt its n-th line. Every answer carries
@@ -1438,6 +1440,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
 | `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
+| `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`drgnx_px::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; no seed corpus ([drgnx-px.md](drgnx-px.md)) |
+| `px_owner` | bytes as the relay sidecar's output into the owner's end (`drgnx_px::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; no seed corpus ([drgnx-px.md](drgnx-px.md)) |
+| `px_mux` | bytes as a sequence of both ends' inputs into the relay's `Mux` and `Pending` (opens, bytes within the credit, ends, resets, drains, each writer taking a frame, each reader stepping one, frames injected as the peer's): no panic, every `Deliver` within what the end credited and never more than the window queued, and no `FIN` before its stream's last `DATA` or `OPEN` out of id order; no seed corpus ([drgnx-px.md](drgnx-px.md)) |
 
 The seed corpus in `fuzz/corpus/<target>/` is the request lines of the conformance rows (phase 1; for `mcp_message` and
 `jsonrpc_parse` the JSON-RPC lines the `mcp/*` and `bridge/*` rows send), the unit tables (gleipnir's targets) and, for

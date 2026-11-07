@@ -83,10 +83,10 @@ yet gets the next ordinal first, as its `agent' snapshot would give it."
     (drgnx-explorer-remove-decorator #'ignore)
     (should (equal before drgnx-explorer-decorators))))
 
-(ert-deftest drgnx-agents-editor/agents-here-segment-sits-after-agents ()
+(ert-deftest drgnx-agents-editor/agents-here-segment-sits-after-jobs ()
   (let ((before (copy-sequence drgnx-statusbar-left)))
     (drgnx-agents-editor-here-test--with
-      (let ((tail (memq 'agents drgnx-statusbar-left)))
+      (let ((tail (memq 'jobs drgnx-statusbar-left)))
         (should tail)
         (should (eq 'agents-here (cadr tail)))
         (should (gethash 'agents-here drgnx-statusbar--segments))))

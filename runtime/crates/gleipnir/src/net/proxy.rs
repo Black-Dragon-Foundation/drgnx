@@ -1,9 +1,10 @@
 //! The proxy outside the sandbox: one resolution per request, no TLS termination, and a policy per instance (Task 10).
 //!
-//! One proxy per job, listening on every session socket of that job ([`ProxyHandle::listen`], each with a tag), with
-//! one policy they share. Under [`Policy::Allowlist`] (the provider proxy) it answers `CONNECT host:port` only, to exact
+//! One proxy per job, listening on every session socket of that job ([`ProxyHandle::listen`], each with a tag), or on
+//! the streams a container's relay channel hands over ([`Listener::Streams`]), with one policy they share. Under [`Policy::Allowlist`] (the provider proxy) it answers `CONNECT host:port` only, to exact
 //! listed targets. Under [`Policy::Web`] (a browser session's web proxy) it judges by `net::policy` and also forwards
-//! plain-HTTP absolute-form requests in origin-form. An allowed target's bytes are spliced both ways as they are.
+//! plain-HTTP absolute-form requests in origin-form. Under [`Policy::Job`] (a container job's) only
+//! `host.drgnx.internal:PORT` goes to the web rules; everything else is the allow-list's. An allowed target's bytes are spliced both ways as they are.
 //! Everything else is refused, and the caller hears of it through [`ProxyEvent`]. See docs/develop/gleipnir.md, "The
 //! proxy".
 
@@ -18,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UnixListener};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{AbortHandle, JoinSet};
 
 use super::host::{Host, Target, TargetError, is_public, parse_target};
@@ -36,6 +37,21 @@ pub enum Policy {
     /// The web policy (`net::policy`) on the state the caller keeps changing; CONNECT and plain-HTTP absolute-form.
     /// `allow` and `pinned` are not read.
     Web(Arc<WebState>),
+    /// A container job's proxy: [`Policy::Allowlist`] for every target but `host.drgnx.internal:PORT`, which the web
+    /// rules judge on the state (its `browser.private` grants of that name, the never-set; `browser.web` stays off and
+    /// no web hosts or deny list are set). Absolute-form only for that name; every listed target stays CONNECT only.
+    Job(Arc<WebState>),
+}
+
+/// Whether TARGET goes to the web rules under POLICY (else to the allow-list).
+pub(crate) fn by_web_rules(policy: &Policy, target: &Target) -> bool {
+    match policy {
+        Policy::Allowlist => false,
+        Policy::Web(_) => true,
+        Policy::Job(_) => {
+            matches!(&target.host, Host::Name(n) if n == crate::net::policy::RESERVED_HOST)
+        }
+    }
 }
 
 /// What the web policy is judged on, read afresh at each request; the setters take effect on the next one.
@@ -134,6 +150,8 @@ pub struct ProxyConfig {
     pub head_timeout: Duration,
     /// The most client connections at once, over every listener.
     pub max_conns: usize,
+    /// How long one upstream connect attempt may take; one that takes longer counts as that address failing.
+    pub connect_timeout: Duration,
 }
 
 impl Default for ProxyConfig {
@@ -145,6 +163,7 @@ impl Default for ProxyConfig {
             max_head: 8192,
             head_timeout: Duration::from_secs(10),
             max_conns: 64,
+            connect_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -215,11 +234,23 @@ pub enum RefuseWhy {
     Rebound,
 }
 
-/// A socket the proxy accepts clients on: a Unix socket on Linux, `127.0.0.1:0` on macOS.
+/// A socket the proxy accepts clients on: a Unix socket on Linux, `127.0.0.1:0` on macOS, or the streams a
+/// container's relay channel hands over.
 #[derive(Debug)]
 pub enum Listener {
     Unix(UnixListener),
     Tcp(TcpListener),
+    /// Streams relayed from a container's sidecar. A closed channel ends the listener, and its connections with it,
+    /// as [`ProxyHandle::close`] does.
+    Streams(mpsc::Receiver<Relayed>),
+}
+
+/// One relayed stream: its bytes, and `gone`, which resolves when the owner drops its sender (the stream closed or
+/// the channel ended). The proxy then drops the connection at once, whatever it was doing, and frees its place.
+#[derive(Debug)]
+pub struct Relayed {
+    pub io: tokio::io::DuplexStream,
+    pub gone: oneshot::Receiver<()>,
 }
 
 /// Resolves a name to addresses. The proxy asks once per request and connects only to what it got.
@@ -268,6 +299,7 @@ struct Shared {
     max_head: usize,
     head_timeout: Duration,
     max_conns: usize,
+    connect_timeout: Duration,
     conns: AtomicUsize,
     resolver: Arc<dyn Resolver>,
     connect: Connect,
@@ -322,6 +354,7 @@ fn start_with(
             max_head: cfg.max_head,
             head_timeout: cfg.head_timeout,
             max_conns: cfg.max_conns,
+            connect_timeout: cfg.connect_timeout,
             conns: AtomicUsize::new(0),
             resolver,
             connect,
@@ -415,22 +448,32 @@ impl Drop for Slot {
 }
 
 /// The accept loop of one listener. Its connections live in its `JoinSet`, so aborting it ends them too.
-async fn serve(sh: Arc<Shared>, listener: Listener, tag: u64) {
+async fn serve(sh: Arc<Shared>, mut listener: Listener, tag: u64) {
     let mut conns = JoinSet::new();
     loop {
         tokio::select! {
-            accepted = accept(&listener) => match accepted {
-                Ok(client) => {
+            accepted = accept(&mut listener) => match accepted {
+                Ok(Some((client, gone))) => {
                     // the place is taken here, in accept order, so the cap holds however the tasks run
                     let slot = Slot::take(&sh);
                     let sh = sh.clone();
-                    conns.spawn(async move {
+                    let work = async move {
                         match slot {
                             Some(slot) => handle(sh, client, tag, slot).await,
                             None => answer(client, FORBIDDEN).await,
                         }
+                    };
+                    // a relayed client that is gone ends its work wherever it is (the head, the resolve, the
+                    // connects, the copy), dropping the upstream and the place with it
+                    conns.spawn(async move {
+                        tokio::select! {
+                            () = work => {}
+                            () = gone => {}
+                        }
                     });
                 }
+                // a relay channel that ended: its connections end with the loop
+                Ok(None) => return,
                 // out of fds and the like: wait a little rather than spin
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
             },
@@ -439,11 +482,26 @@ async fn serve(sh: Arc<Shared>, listener: Listener, tag: u64) {
     }
 }
 
-async fn accept(listener: &Listener) -> io::Result<Box<dyn Client>> {
-    Ok(match listener {
-        Listener::Unix(l) => Box::new(l.accept().await?.0),
-        Listener::Tcp(l) => Box::new(l.accept().await?.0),
-    })
+/// Resolves when a client is gone: a relayed stream's `gone`; never for a socket client.
+type Gone = Pin<Box<dyn Future<Output = ()> + Send>>;
+
+/// The next client and when it is gone; `None` when a relay channel has ended.
+async fn accept(listener: &mut Listener) -> io::Result<Option<(Box<dyn Client>, Gone)>> {
+    let never = || -> Gone { Box::pin(std::future::pending()) };
+    let client: (Box<dyn Client>, Gone) = match listener {
+        Listener::Unix(l) => (Box::new(l.accept().await?.0), never()),
+        Listener::Tcp(l) => (Box::new(l.accept().await?.0), never()),
+        Listener::Streams(rx) => {
+            let Some(Relayed { io, gone }) = rx.recv().await else {
+                return Ok(None);
+            };
+            let gone: Gone = Box::pin(async move {
+                let _ = gone.await;
+            });
+            (Box::new(io), gone)
+        }
+    };
+    Ok(Some(client))
 }
 
 const FORBIDDEN: &str = "403 Forbidden";
@@ -722,6 +780,13 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     let connect = connect_request(head);
     let absolute = match (connect, &sh.policy) {
         (None, Policy::Web(_)) => absolute_request(head),
+        // a job's absolute-form only to the reserved name: a listed target stays CONNECT only (400 below)
+        (None, p @ Policy::Job(_)) => absolute_request(head).filter(|a| {
+            std::str::from_utf8(&a.target)
+                .ok()
+                .and_then(|t| parse_target(t).ok())
+                .is_some_and(|t| by_web_rules(p, &t))
+        }),
         _ => None,
     };
     let raw: &[u8] = match (&absolute, connect) {
@@ -783,8 +848,10 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     };
 
     let addrs = match &sh.policy {
-        Policy::Allowlist => allowlisted(&sh, tag, &target).await,
-        Policy::Web(w) => web(&sh, w, tag, &target).await,
+        Policy::Web(w) | Policy::Job(w) if by_web_rules(&sh.policy, &target) => {
+            web(&sh, w, tag, &target).await
+        }
+        _ => allowlisted(&sh, tag, &target).await,
     };
     let addrs = match addrs {
         Ok(a) => a,
@@ -793,7 +860,8 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
 
     let mut upstream = None;
     for a in addrs {
-        if let Ok(s) = (sh.connect)(a).await {
+        // a connect that never completes (a blackhole) is that address failing
+        if let Ok(Ok(s)) = tokio::time::timeout(sh.connect_timeout, (sh.connect)(a)).await {
             upstream = Some(s);
             break;
         }
@@ -1043,10 +1111,75 @@ mod tests {
         fn attempts(&self) -> Vec<SocketAddr> {
             self.attempts.lock().unwrap().clone()
         }
+
+        /// A relay channel's listener on `tag`; the sender is what the owner's end holds.
+        fn relay(&self, tag: u64) -> mpsc::Sender<Relayed> {
+            let (tx, rx) = mpsc::channel(256);
+            self.handle.listen(Listener::Streams(rx), tag);
+            tx
+        }
+
+        /// The places taken now.
+        fn conns(&self) -> usize {
+            self.handle.shared.conns.load(Ordering::SeqCst)
+        }
+
+        /// Waits until every place is free again.
+        async fn all_free(&self) {
+            skuld::wait_until_async("every place is free", WAIT.as_secs(), || async move {
+                (self.conns() == 0).then_some(())
+            })
+            .await;
+        }
+    }
+
+    /// A new relayed stream on `tx`: the job's end, and the sender whose drop says the stream is gone.
+    async fn relayed(tx: &mpsc::Sender<Relayed>) -> (tokio::io::DuplexStream, oneshot::Sender<()>) {
+        let (job, io) = tokio::io::duplex(16384);
+        let (alive, gone) = oneshot::channel();
+        tx.send(Relayed { io, gone }).await.unwrap();
+        (job, alive)
+    }
+
+    /// Sends a CONNECT to `target` on `s` and reads the answer's status.
+    async fn connect_on(s: &mut (impl AsyncRead + AsyncWrite + Unpin), target: &str) -> u16 {
+        let head = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+        s.write_all(head.as_bytes()).await.unwrap();
+        status(&read_head(s).await)
+    }
+
+    /// A connector under which `hole` never answers: each attempt there is reported on the receiver, then hangs. Any
+    /// other address is connected as it is.
+    fn blackhole(hole: SocketAddr) -> (Connect, mpsc::UnboundedReceiver<SocketAddr>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
+            if a == hole {
+                let _ = tx.send(a);
+                Box::pin(std::future::pending())
+            } else {
+                tcp_connect(a)
+            }
+        });
+        (connect, rx)
+    }
+
+    /// `up.test` (an upstream on loopback port `up`) and `hole.test` (the blackhole's address), listed and pinned.
+    fn up_and_hole(up: u16, hole: SocketAddr) -> ProxyConfig {
+        ProxyConfig {
+            allow: vec![
+                t(&format!("up.test:{up}")),
+                t(&format!("hole.test:{}", hole.port())),
+            ],
+            pinned: vec![
+                ("up.test".into(), IpAddr::V4(LOOP)),
+                ("hole.test".into(), hole.ip()),
+            ],
+            ..ProxyConfig::default()
+        }
     }
 
     /// Reads a response head byte by byte (so no tunnelled byte is taken), or what came before EOF.
-    async fn read_head(s: &mut UnixStream) -> String {
+    async fn read_head(s: &mut (impl AsyncRead + Unpin)) -> String {
         let mut head = Vec::new();
         let mut b = [0u8; 1];
         while !head.ends_with(b"\r\n\r\n") {
@@ -1111,7 +1244,7 @@ mod tests {
         (a, rx)
     }
 
-    async fn echoes(s: &mut UnixStream, text: &[u8]) -> bool {
+    async fn echoes(s: &mut (impl AsyncRead + AsyncWrite + Unpin), text: &[u8]) -> bool {
         if s.write_all(text).await.is_err() {
             return false;
         }
@@ -1119,7 +1252,7 @@ mod tests {
         matches!(timeout(WAIT, s.read_exact(&mut got)).await, Ok(Ok(_))) && got == text
     }
 
-    async fn closed(s: &mut UnixStream) -> bool {
+    async fn closed(s: &mut (impl AsyncRead + Unpin)) -> bool {
         let mut b = [0u8; 64];
         matches!(timeout(WAIT, s.read(&mut b)).await, Ok(Ok(0) | Err(_)))
     }
@@ -1814,6 +1947,135 @@ mod tests {
         assert!(closed(&mut a).await);
     }
 
+    #[tokio::test]
+    async fn a_relayed_stream_is_judged_like_a_socket_client() {
+        let up = echo().await;
+        let mut r = rig(pinned_up(up.port()), &[], &[]);
+        let tx = r.relay(7);
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(
+            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+            200
+        );
+        assert!(echoes(&mut s, b"hello").await);
+
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, "x.test:443").await, 403);
+        assert!(closed(&mut s).await);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 7,
+                target: t("x.test:443")
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cap_counts_relayed_streams() {
+        let up = echo().await;
+        let target = format!("up.test:{}", up.port());
+        let cfg = ProxyConfig {
+            max_conns: 2,
+            ..pinned_up(up.port())
+        };
+        let r = rig(cfg, &[], &[]);
+        let tx = r.relay(1);
+        let held = [relayed(&tx).await, relayed(&tx).await];
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, &target).await, 403, "the third");
+        assert!(closed(&mut s).await);
+
+        // the places come back when the streams are gone
+        drop(held);
+        r.all_free().await;
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(connect_on(&mut s, &target).await, 200);
+    }
+
+    #[tokio::test]
+    async fn close_tag_ends_relayed_streams() {
+        let up = echo().await;
+        let target = format!("up.test:{}", up.port());
+        let r = rig(pinned_up(up.port()), &[], &[]);
+        let (tx1, tx2) = (r.relay(1), r.relay(2));
+        let (mut a, _alive_a) = relayed(&tx1).await;
+        let (mut b, _alive_b) = relayed(&tx2).await;
+        assert_eq!(connect_on(&mut a, &target).await, 200);
+        assert_eq!(connect_on(&mut b, &target).await, 200);
+        // one still in its head, on tag 1
+        let (mut c, _alive_c) = relayed(&tx1).await;
+        c.write_all(b"CONNECT up").await.unwrap();
+
+        r.handle.close(1);
+        assert!(closed(&mut a).await, "tag 1's tunnel ends");
+        assert!(closed(&mut c).await, "tag 1's half-read stream ends");
+        timeout(WAIT, tx1.closed())
+            .await
+            .expect("tag 1's channel is let go");
+        assert!(echoes(&mut b, b"after").await, "tag 2's tunnel stays");
+
+        // a channel that ends ends its listener's streams too
+        drop(tx2);
+        assert!(closed(&mut b).await, "tag 2's tunnel ends with its channel");
+    }
+
+    #[tokio::test]
+    async fn abandoned_connects_to_a_blackhole_never_cost_a_403() {
+        let up = echo().await;
+        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let (connect, mut attempts) = blackhole(hole);
+        let cfg = ProxyConfig {
+            max_conns: 128,
+            ..up_and_hole(up.port(), hole)
+        };
+        let r = rig_with(cfg, &[], move |a| connect(a));
+        let tx = r.relay(1);
+        // the job's ends stay open throughout: only the owner's word that a stream is gone frees its place
+        let mut jobs = Vec::new();
+        for wave in [64, 64, 64, 8] {
+            let mut alive = Vec::new();
+            for _ in 0..wave {
+                let (mut s, a) = relayed(&tx).await;
+                s.write_all(b"CONNECT hole.test:443 HTTP/1.1\r\n\r\n")
+                    .await
+                    .unwrap();
+                jobs.push(s);
+                alive.push(a);
+            }
+            for _ in 0..wave {
+                timeout(WAIT, attempts.recv())
+                    .await
+                    .expect("each stream reaches its connect");
+            }
+            drop(alive);
+            r.all_free().await;
+        }
+        let (mut s, _alive) = relayed(&tx).await;
+        assert_eq!(
+            connect_on(&mut s, &format!("up.test:{}", up.port())).await,
+            200
+        );
+        assert!(echoes(&mut s, b"room").await);
+    }
+
+    #[tokio::test]
+    async fn an_upstream_connect_times_out() {
+        let hole = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
+        let (connect, mut attempts) = blackhole(hole);
+        let cfg = ProxyConfig {
+            connect_timeout: Duration::from_millis(300),
+            ..up_and_hole(1, hole)
+        };
+        let r = rig_with(cfg, &[], move |a| connect(a));
+        let p = r.listen(1);
+        let (mut s, code) = connect_to(&p, "hole.test:443").await;
+        assert_eq!(code, 502);
+        assert!(closed(&mut s).await);
+        assert_eq!(attempts.try_recv(), Ok(hole));
+        r.all_free().await;
+    }
+
     use crate::net::policy::PrivateTarget;
 
     fn web_on() -> Arc<WebState> {
@@ -2274,5 +2536,191 @@ mod tests {
             ]
         );
         assert_eq!(r.attempts(), vec![public]);
+    }
+
+    // ---- Policy::Job: a container job's proxy (container-net Task 11) ----
+
+    fn job_state(never: &[u16]) -> (Arc<WebState>, Arc<RwLock<NeverSet>>) {
+        let set = Arc::new(RwLock::new(NeverSet {
+            loopback_ports: never.iter().copied().collect(),
+        }));
+        let w = Arc::new(WebState::new(
+            Arc::new(RwLock::new(HostAddrs::default())),
+            set.clone(),
+        ));
+        (w, set)
+    }
+
+    fn job_cfg(w: &Arc<WebState>, allow: &[&str]) -> ProxyConfig {
+        ProxyConfig {
+            policy: Policy::Job(w.clone()),
+            allow: allow.iter().map(|a| t(a)).collect(),
+            ..ProxyConfig::default()
+        }
+    }
+
+    fn host_grant(port: u16) -> PrivateGrant {
+        PrivateGrant {
+            target: PrivateTarget::HostPort(t(&format!(
+                "{}:{port}",
+                crate::net::policy::RESERVED_HOST
+            ))),
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn job_policy_sends_only_the_reserved_name_to_the_web_rules() {
+        let (w, _) = job_state(&[]);
+        let job = Policy::Job(w.clone());
+        assert!(by_web_rules(&job, &t("host.drgnx.internal:8080")));
+        for other in [
+            "localhost:8080",
+            "127.0.0.1:8080",
+            "crates.io:443",
+            "192.168.1.20:8080",
+        ] {
+            assert!(!by_web_rules(&job, &t(other)), "{other}");
+        }
+        assert!(by_web_rules(&Policy::Web(w), &t("crates.io:443")));
+        assert!(!by_web_rules(
+            &Policy::Allowlist,
+            &t("host.drgnx.internal:8080")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_granted_host_port_connects_to_loopback() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(5);
+        let (mut s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"to the host").await);
+        assert!(
+            r.attempts()
+                .iter()
+                .all(|a| a.ip().is_loopback() && a.port() == up.port())
+        );
+        // absolute-form to the reserved name is forwarded in origin-form
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec();
+        let (rec, got) = recorder(answer).await;
+        w.set_grants(vec![host_grant(rec.port())]);
+        let back = send_all(
+            &p,
+            format!(
+                "GET http://host.drgnx.internal:{0}/x HTTP/1.1\r\nHost: host.drgnx.internal:{0}\r\n\r\n",
+                rec.port()
+            )
+            .as_bytes(),
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        let sent = timeout(WAIT, got).await.unwrap().unwrap();
+        assert!(
+            sent.starts_with(b"GET /x HTTP/1.1"),
+            "{}",
+            String::from_utf8_lossy(&sent)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ungranted_port_is_a_private_event() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(6);
+        let (_s, code) = connect_to(&p, "host.drgnx.internal:8080").await;
+        assert_eq!(code, 403);
+        let said = r.said();
+        assert!(
+            matches!(said.as_slice(), [ProxyEvent::Private { tag: 6, asked, .. }] if *asked == t("host.drgnx.internal:8080")),
+            "{said:?}"
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn localhost_and_127_are_refused_under_a_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[("localhost", vec![vec![up]])], &[]);
+        let p = r.listen(7);
+        for target in [
+            format!("localhost:{}", up.port()),
+            format!("127.0.0.1:{}", up.port()),
+            format!("[::1]:{}", up.port()),
+        ] {
+            let (_s, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 403, "{target}");
+        }
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_never_port_is_refused_under_any_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[up.port()]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(8);
+        let (_s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 403);
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_port_added_to_the_never_set_after_the_grant_is_refused_at_the_next_dial() {
+        let up = echo().await;
+        let (w, never) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(9);
+        let target = format!("host.drgnx.internal:{}", up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        never.write().unwrap().loopback_ports.insert(up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 403);
+    }
+
+    #[tokio::test]
+    async fn allowed_targets_stay_connect_only() {
+        let (w, _) = job_state(&[]);
+        let r = rig(job_cfg(&w, &["listed.test:80"]), &[], &[]);
+        let p = r.listen(10);
+        let back = send_all(
+            &p,
+            b"GET http://listed.test:80/ HTTP/1.1\r\nHost: listed.test\r\n\r\n",
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 400"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn web_stays_off_under_the_job_policy() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &["crates.io:443"]), &[], &[]);
+        let p = r.listen(11);
+        let (_s, code) = connect_to(&p, "pub.test:443").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 11,
+                target: t("pub.test:443")
+            }]
+        );
     }
 }

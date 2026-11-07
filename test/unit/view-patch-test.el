@@ -42,32 +42,15 @@
 
 ;;;; One patch at a time
 
-(ert-deftest drgnx-view-patch/replace-keeps-selection ()
+(ert-deftest drgnx-view-patch/replace-patches-the-row ()
+  ;; the selection on a replaced row is the class step's (view-nav-test.el: replaced-row-keeps-its-class)
   (drgnx-view-patch-test--with
     (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a" "b")))
     (drgnx-view-patch-test--draw)
-    (drgnx-view-patch-select "b")
     (drgnx-view-apply-patch (drgnx-view-patch-test--patch
                              (list (list :replace (list (drgnx-view-patch-test--row "b" "row B"))))
                              :base 1 :version 2))
-    (should (equal "row a\nrow B\n" (drgnx-view-patch-test--draw)))
-    (should (equal "b" (drgnx-view-patch-selected drgnx-view-patch)))
-    (should (eq 'drgnx-view-selected
-                (get-char-property (drgnx-view-row-start drgnx-view "b") 'face)))))
-
-(ert-deftest drgnx-view-patch/remove-of-selected-row-moves-selection ()
-  (drgnx-view-patch-test--with
-    (drgnx-view-apply-patch (drgnx-view-patch-test--reset '("a" "b" "c")))
-    (drgnx-view-patch-test--draw)
-    (drgnx-view-patch-select "b")
-    (drgnx-view-apply-patch (drgnx-view-patch-test--patch (list (list :remove '("b"))) :base 1 :version 2))
-    (should (equal "c" (drgnx-view-patch-selected drgnx-view-patch)))
-    (drgnx-view-patch-test--draw)
-    (drgnx-view-apply-patch (drgnx-view-patch-test--patch (list (list :remove '("c"))) :base 2 :version 3))
-    (should (equal "a" (drgnx-view-patch-selected drgnx-view-patch)))
-    (drgnx-view-patch-test--draw)
-    (drgnx-view-apply-patch (drgnx-view-patch-test--patch (list (list :remove '("a"))) :base 3 :version 4))
-    (should-not (drgnx-view-patch-selected drgnx-view-patch))))
+    (should (equal "row a\nrow B\n" (drgnx-view-patch-test--draw)))))
 
 (ert-deftest drgnx-view-patch/unknown-face-is-dropped-not-interned ()
   (drgnx-view-patch-test--with
@@ -185,8 +168,7 @@ are kept as a list, newest first."
            (setq s (plist-put s :applied (cons p (plist-get s :applied)))))))
       ('disconnect (drgnx-view-patch--forget st))
       ('env (setf (drgnx-view-patch-epoch st) (cadr ev)))
-      ('select (setq s (plist-put s :select-last (cadr ev)))
-               (setf (drgnx-view-patch-selected st) (cadr ev))))
+      ('select (setq s (plist-put s :select-last (cadr ev)))))
     (cons (plist-put s :sent (drgnx-view-patch-resyncs st)) nil)))
 
 (defun drgnx-view-patch-test--p (hub base version epoch &optional reset)
@@ -247,20 +229,6 @@ are kept as a list, newest first."
    :check (lambda (s _)
             (cond ((> (plist-get s :sent) 0) (format "%d resyncs sent" (plist-get s :sent)))
                   ((not (eql 5 (drgnx-view-patch-version (plist-get s :state)))) "not at the reset's version")))))
-
-(ert-deftest drgnx-view-patch/selection-made-while-a-patch-waits-wins ()
-  (drgnx-test-every-order
-   :kinds '(patch env select)
-   :sources `(("hub" ,(drgnx-view-patch-test--p 7 0 1 1 t) ,(drgnx-view-patch-test--p 7 1 2 1)
-               ,(drgnx-view-patch-test--p 7 2 3 2 t))
-              ("editor" (env 2))
-              ("user" (select "a") (select "b")))
-   :edges '((("hub" . 0) . ("user" . 0)) (("hub" . 1) . ("editor" . 0)) (("editor" . 0) . ("hub" . 2)))
-   :init #'drgnx-view-patch-test--core-init :step #'drgnx-view-patch-test--core-step
-   :check (lambda (s _)
-            (cond ((not (equal (plist-get s :select-last) (drgnx-view-patch-selected (plist-get s :state))))
-                   "a patch undid the user's last selection")
-                  ((not (eql 3 (drgnx-view-patch-version (plist-get s :state)))) "the epoch 2 reset was not applied")))))
 
 (ert-deftest drgnx-view-patch/no-mixed-epochs-on-screen ()
   (drgnx-test-every-order

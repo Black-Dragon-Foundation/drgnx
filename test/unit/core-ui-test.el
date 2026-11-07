@@ -244,24 +244,17 @@
   (should (eq (get 'drgnx-wb-close 'face-alias) 'drgnx-ui-close)))
 
 (ert-deftest drgnx-ui-kit/the-three-close-marks-have-an-ascii-form ()
-  ;; M12f-AF-1: the Buffers row's close, the find bar's close and the agents queue's unqueue were a literal ×
+  ;; M12f-AF-1: the Buffers row's close and the find bar's close were a literal ×
   (require 'drgnx-buffers)
   (load (expand-file-name "modules/tools/drgnx-replace" drgnx-dir) nil t)
-  (load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
-  (let ((queue (lambda ()
-                 (with-temp-buffer
-                   (drgnx-agents-ui-render (drgnx-agents--make :name "q" :status 'busy :queue '("one") :paused nil))
-                   (buffer-string))))
-        (bar (lambda ()
+  (let ((bar (lambda ()
                (unwind-protect
                    (with-current-buffer (drgnx-replace--bar-buffer)
                      (buffer-substring-no-properties (point-min) (pos-eol)))
                  (when (get-buffer drgnx-replace-bar-buffer-name) (kill-buffer drgnx-replace-bar-buffer-name))))))
     (drgnx-ui-test--ascii
      (with-temp-buffer (should (string-prefix-p "x " (drgnx-buffers--row (current-buffer)))))
-     (should (string-search "[↓] [x]" (funcall bar)))
-     (should (string-search "one [-]" (funcall queue))))
+     (should (string-search "[↓] [x]" (funcall bar))))
     (drgnx-ui-test--unicode
      (with-temp-buffer (should (string-prefix-p "× " (drgnx-buffers--row (current-buffer)))))
-     (should (string-search "[↓] [×]" (funcall bar)))
-     (should (string-search "one [−]" (funcall queue))))))
+     (should (string-search "[↓] [×]" (funcall bar))))))

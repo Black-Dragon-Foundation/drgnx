@@ -102,8 +102,62 @@
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "nidhogg-line" "needs.nidhogg-line.result != 'failure'"))
     (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if [ \"$MODE\" = artifact ] || [ \"$MODE\" = line ]; then")
-    (drgnx-ci-test--has sh "status=success" "never falls back to the release" "exit 1")
+    (drgnx-ci-test--has sh "status=completed" "never falls back to the release" "exit 1")
     (should (string-match-p "^[a-z0-9][a-z0-9./_-]*$" line))))   ; a line of its own names the branch
+
+(defun drgnx-ci-test--line (artifacts runs)
+  "Run nidhogg-line.sh for ARTIFACTS with a stub git and gh; RUNS is ((ID JOBS ARTIFACTS)...) newest first.
+Returns (EXIT . OUTPUT)."
+  (let* ((dir (make-temp-file "drgnx-line" t)) (bin (expand-file-name "bin" dir)) (data (expand-file-name "data" dir))
+         (ci (expand-file-name "ci" dir)))
+    (unwind-protect
+        (progn
+          (dolist (d (list bin data ci)) (make-directory d))
+          (dolist (f '("nidhogg-line" "nidhogg-line.sh"))
+            (copy-file (expand-file-name (concat ".github/ci/" f) drgnx-ci-test--root) (expand-file-name f ci)))
+          (with-temp-file (expand-file-name "runs" data)
+            (dolist (r runs) (insert (format "%s\n" (car r)))))
+          (dolist (r runs)
+            (with-temp-file (expand-file-name (format "jobs-%s" (car r)) data) (dolist (j (nth 1 r)) (insert j "\n")))
+            (with-temp-file (expand-file-name (format "artifacts-%s" (car r)) data) (dolist (a (nth 2 r)) (insert a "\n"))))
+          (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nprintf 'abc123def456\\trefs/heads/x\\n'\n"))
+          (with-temp-file (expand-file-name "gh" bin)
+            (insert "#!/bin/sh\ncase \"$2\" in\n *workflows/build.yml/runs*) cat \"$DATA/runs\" ;;\n"
+                    " */runs/*/jobs*) r=${2#*/runs/}; cat \"$DATA/jobs-${r%%/*}\" ;;\n"
+                    " */runs/*/artifacts*) r=${2#*/runs/}; cat \"$DATA/artifacts-${r%%/*}\" ;;\nesac\n"))
+          (set-file-modes (expand-file-name "git" bin) #o755)
+          (set-file-modes (expand-file-name "gh" bin) #o755)
+          (let ((process-environment (append (list (format "PATH=%s:%s" bin (getenv "PATH")) (concat "DATA=" data))
+                                             process-environment)))
+            (with-temp-buffer
+              (let ((rc (apply #'call-process "bash" nil t nil (expand-file-name "nidhogg-line.sh" ci) artifacts)))
+                (cons rc (buffer-string))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-ci/the-line-takes-the-head-s-run-whose-tarball-jobs-passed ()
+  ;; the run may be red (its test jobs); what counts is the job that builds each asked tarball, and the artifact
+  (skip-unless (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+  (let* ((both '("Linux (fedora-45)" "macOS (NS app)")) (arts '("tarball-fedora-45" "tarball-macos"))
+         (red (list "7" both arts)))
+    ;; a red run whose tarball jobs succeeded is picked
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") (list red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^commit=abc123def456$" (cdr r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; the newest run whose tarball job failed is skipped for an older one that has it
+    (let ((r (drgnx-ci-test--line '("tarball-macos") (list (list "9" '("Linux (fedora-45)") arts) red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; only the asked tarballs' jobs matter
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45") (list (list "5" '("Linux (fedora-45)") '("tarball-fedora-45"))))))
+      (should (= 0 (car r))))
+    ;; a tarball job that failed, or an expired artifact: one error, exit 1, no run= line
+    (dolist (runs (list (list (list "8" '("Linux (fedora-45)") arts))
+                        (list (list "8" both '("tarball-fedora-45")))))
+      (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") runs)))
+        (should (= 1 (car r)))
+        (should (string-match-p "::error::" (cdr r)))
+        (should-not (string-match-p "^run=" (cdr r)))))))
 
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
@@ -235,7 +289,7 @@
         (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
                             "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
         (should (and fetch test (< fetch test)))
-        (should (string-search "env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true'" text))))
+        (should (string-search "env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true'" text))))
     (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
                             (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
@@ -294,7 +348,8 @@
                  (member (match-string 1 line) timed))
         (setq runs (1+ runs))
         (should (string-suffix-p " $skips" line))))
-    (should (= runs 1))
+    ;; two runs: the escape-host's sandbox lane and the macos job's ssh rows (--test macos)
+    (should (= runs 2))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
                         "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 
@@ -483,9 +538,9 @@
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
 
-;; A cache is written only by a trusted run (a push or a manual run of main, the daily run, or a pull request from a
-;; branch of this repository, whose cache GitHub scopes to its merge ref, for the families that pay off), never by a
-;; ci/* branch or a fork's pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
+;; A cache is written only by a trusted run (a push or a manual run of main, the daily run, or, for the test ELPA and
+;; the like, a pull request from a branch of this repository, whose cache GitHub scopes to its merge ref); runtime.yml's
+;; and the test binaries' only by main.  Never by a ci/* branch or a fork's pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
 (defconst drgnx-ci-test--own-pr "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository")
 
 (ert-deftest drgnx-ci/no-fork-pull-request-writes-a-cache ()
@@ -496,9 +551,6 @@
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
                   (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
-                  ;; the model files: main and a pull request from this repository (CACHE_SAVE_PR), once models.sh
-                  ;; checked every file's sum
-                  (string-search "(env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
@@ -507,11 +559,12 @@
         (unless (string-search "steps.prune.outcome == 'success'" c)
           (should (string-search "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)" c))
           (should (string-search "github.repository == 'Black-Dragon-Foundation/drgnx'" c)))))
-    ;; a pull request saves only when its head is a branch of this repository
+    ;; a pull request saves only when its head is a branch of this repository, or never (the main-only conditions)
     (dolist (c (append (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml)
                        (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml)))
       (when (string-search "'pull_request'" c)
-        (should (string-search drgnx-ci-test--own-pr c))))
+        (should (or (string-search drgnx-ci-test--own-pr c)
+                    (string-search "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'" c)))))
     (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
       (should (or (string-search "env.CACHE_SAVE == 'true'" c)
                   (string-search "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'" c)))
@@ -520,13 +573,9 @@
   (let ((rt (drgnx-ci-test--yml "runtime.yml")))
     (skip-unless rt)
     (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}"
-                        (concat "CACHE_SAVE_PR: ${{ " drgnx-ci-test--own-pr " }}")
                         "CARGO_INCREMENTAL: \"0\"")
-    ;; a pull request saves the two families that pay off, linux and macos; the others restore main's
-    (dolist (job '("linux" "macos"))
-      (should (string-search "env.CACHE_SAVE_PR == 'true'" (drgnx-ci-test--job rt job))))
-    (dolist (job '("msrv" "escape-host" "agent-containers" "android" "fuzz"))
-      (should-not (string-search "env.CACHE_SAVE_PR" (drgnx-ci-test--job rt job))))))
+    ;; runtime.yml's caches are saved by main only: a pull request restores them and writes none
+    (should-not (string-search "CACHE_SAVE_PR" rt))))
 
 (ert-deftest drgnx-ci/the-fuzz-targets-are-built-once-for-the-four-shards ()
   ;; one build job (the only one with the fuzz cargo cache) uploads each shard's binaries; a shard downloads its own
@@ -645,7 +694,6 @@
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
       (dolist (s (list "github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
-                       drgnx-ci-test--own-pr
                        "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)"
                        "github.repository == 'Black-Dragon-Foundation/drgnx'"))
         (should (string-search s cond)))

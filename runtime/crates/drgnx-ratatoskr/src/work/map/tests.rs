@@ -345,3 +345,416 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
         Some("suite")
     );
 }
+
+// ---- rows views: the map's rows as patches ------------------------------------------------------------------------
+
+use drgnx_rows::fit::Measure;
+use drgnx_rows::{ImageId, Op, Patch, Row};
+use runstav::methods::view::ViewEnv;
+
+/// 8 px a column.
+struct Cols;
+
+impl Measure for Cols {
+    fn advance(&self, _role: &str, ch: char) -> Option<f32> {
+        Some(8.0 * drgnx_rows::fit_tty::char_width(ch, &[]) as f32)
+    }
+    fn fallback(&self, _role: &str) -> f32 {
+        8.0
+    }
+}
+
+/// Session I starts (no place: the "No plan" block).
+fn add_session(core: &mut Core, i: u64) {
+    let snap: Snapshot =
+        serde_json::from_value(json!({"id": format!("s{i}"), "name": format!("agent {i}")}))
+            .expect("a snapshot");
+    let sess = Sess {
+        snap,
+        kids: Vec::new(),
+        place: None,
+        seq: i,
+        state: State::Running,
+        since: 0,
+        job: None,
+    };
+    for ev in sess.facts() {
+        core.step(ev);
+    }
+}
+
+fn core_with(n: u64) -> Core {
+    let mut core = Core::new();
+    for i in 1..=n {
+        add_session(&mut core, i);
+    }
+    core
+}
+
+/// A rows view of M laid out at WIDTH units, holding what that layout shows.
+fn rows_view(m: &vegvisir::Model, width: u32) -> View {
+    let state = ViewState {
+        width_units: width,
+        ..ViewState::default()
+    };
+    let l = layout::layout(m, &state, None);
+    let sent = frame_items(m, &state, &l)
+        .into_iter()
+        .map(|it| it.id)
+        .collect();
+    View {
+        space: "w".into(),
+        state,
+        shown: true,
+        selected: None,
+        rows: true,
+        version: 1,
+        layout: Some(l),
+        sent,
+        co: Coalescer::default(),
+    }
+}
+
+fn env() -> ViewEnv {
+    serde_json::from_value(
+        json!({"view": "m", "class": "gui-1", "epoch": 1, "display": "gui", "scale": 1.0,
+                                  "cell": [8, 16], "width_px": 1000}),
+    )
+    .expect("an env")
+}
+
+/// An editor's side of one (view, class), by the rules: nothing before a reset, an older base dropped, a newer one
+/// or an image it lacks asks for a resync.
+#[derive(Default)]
+struct Editor {
+    hub: Option<u64>,
+    version: u64,
+    rows: Vec<Row>,
+    images: BTreeSet<ImageId>,
+    resync: bool,
+}
+
+impl Editor {
+    fn apply(&mut self, p: &Patch) {
+        let reset = matches!(p.ops.as_slice(), [Op::Reset(_)]);
+        if reset {
+            if self.hub == Some(p.hub) && p.version <= self.version {
+                return;
+            }
+            self.hub = Some(p.hub);
+            self.images.clear();
+        } else if self.hub != Some(p.hub) || p.base < self.version {
+            return;
+        } else if p.base > self.version {
+            self.resync = true;
+            return;
+        }
+        self.images.extend(p.images.iter().map(|i| i.0));
+        for op in &p.ops {
+            match op {
+                Op::Reset(rows) => self.rows = rows.clone(),
+                Op::Insert { after, rows } => {
+                    let at = after
+                        .as_ref()
+                        .and_then(|k| self.rows.iter().position(|r| &r.key == k))
+                        .map_or(0, |i| i + 1);
+                    for (n, r) in rows.iter().enumerate() {
+                        self.rows.insert(at + n, r.clone());
+                    }
+                }
+                Op::Replace(rows) => {
+                    for r in rows {
+                        if let Some(old) = self.rows.iter_mut().find(|o| o.key == r.key) {
+                            *old = r.clone();
+                        }
+                    }
+                }
+                Op::Remove(keys) => self.rows.retain(|r| !keys.contains(&r.key)),
+            }
+        }
+        self.version = p.version;
+        let lacks = self
+            .rows
+            .iter()
+            .flat_map(|r| r.images.iter())
+            .any(|i| !self.images.contains(&i.1));
+        self.resync |= lacks;
+    }
+}
+
+/// [A] Three versions of a rows view (one agent, two, three) go out as a reset and two patches; in every order of
+/// their arrival, the editor ends on the hub's rows, through one resync when it missed one.
+#[test]
+fn every_order_deltas_then_resync_converge() {
+    let sets: Vec<_> = (1..=3)
+        .map(|n| {
+            let core = core_with(n);
+            let v = rows_view(core.model(), 226);
+            view_rows(core.model(), &v, &env(), &Cols, 0)
+        })
+        .collect();
+    assert!(
+        sets.iter().all(|(r, _)| !r.is_empty()),
+        "every version has rows"
+    );
+    assert!(
+        sets[2].0.iter().any(|r| r.text.contains("agent 3")),
+        "{:?}",
+        sets[2].0
+    );
+    let key = (1, "m".to_owned(), "gui-1".to_owned());
+    let orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    for order in orders {
+        let mut store = crate::view::Store::new(7);
+        store.env(1, env());
+        let patches: Vec<Patch> = sets
+            .iter()
+            .map(|(r, i)| store.publish(&key, r.clone(), i).expect("a patch"))
+            .collect();
+        let mut ed = Editor::default();
+        for k in order {
+            ed.apply(&patches[k]);
+        }
+        if ed.resync || ed.version != patches[2].version {
+            ed.resync = false;
+            ed.apply(&store.resync(&key, &[]).expect("a reset"));
+        }
+        assert_eq!(ed.rows, sets[2].0, "order {order:?}");
+        assert!(!ed.resync, "order {order:?}: every image held");
+    }
+}
+
+/// A map of N sessions with one rows view `m` of connection 1 on it, laid out at WIDTH.
+fn rows_map(n: u64, width: u32) -> (Arc<Map>, Inner, ViewKey) {
+    let mut core = core_with(n);
+    let v = rows_view(core.model(), width);
+    let key = ViewKey {
+        conn: 1,
+        view: "m".into(),
+    };
+    core.step(Event::View(ViewOp::Open {
+        view: key.clone(),
+        state: v.state.clone(),
+        shown: true,
+    }));
+    let mut g = Inner::default();
+    g.spaces.insert(
+        "w".into(),
+        Space {
+            roots: Vec::new(),
+            core,
+            files: BTreeMap::new(),
+        },
+    );
+    g.views.insert(key.clone(), v);
+    (Arc::new(Map::default()), g, key)
+}
+
+fn log(map: &Map) -> Vec<&'static str> {
+    map.log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// [A] A rows view gets its rows as patches for a full frame and a delta, and never a `work-map` event (a hidden one
+/// gets no stale mark either: its editor hid it).
+#[test]
+fn rows_subscriber_gets_no_work_map_event() {
+    let (map, mut g, key) = rows_map(2, 226);
+    map.send_full(&mut g, &key);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s1".into())],
+            ..Delta::default()
+        },
+    );
+    map.stale(&mut g, &key);
+    let sent = log(&map);
+    assert!(!sent.contains(&"work-map"), "{sent:?}");
+    assert_eq!(sent, ["model", "rows", "model", "rows"]);
+}
+
+/// [D] A rows view's model goes before the rows built from it, for a full frame and for a delta.
+#[test]
+fn model_goes_before_its_rows() {
+    let (map, mut g, key) = rows_map(3, 226);
+    map.send_full(&mut g, &key);
+    assert_eq!(log(&map), ["model", "rows"]);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s2".into())],
+            ..Delta::default()
+        },
+    );
+    assert_eq!(log(&map), ["model", "rows", "model", "rows"]);
+}
+
+/// [D] The map's model: a node per item the view shows, with its links, its card's rect and its flags; the chain
+/// edges among them; the team, needs-you and outline lists.
+#[test]
+fn map_model_carries_links_rects_and_lists() {
+    let (_map, g, key) = rows_map(3, 226);
+    let v = &g.views[&key];
+    let m = g.spaces["w"].core.model();
+    let l = v.layout.as_ref().expect("laid out");
+    let d = model::doc(m, l, &v.sent);
+    assert_eq!(d.nodes.len(), v.sent.len());
+    let a1 = &d.nodes["agent:s1"];
+    let fields = a1["fields"].as_array().expect("fields");
+    let rect = &l.at[&ItemId("agent:s1".into())];
+    for (name, want) in [("x", rect.x), ("y", rect.y), ("w", rect.w), ("h", rect.h)] {
+        assert!(
+            fields.contains(&json!([name, want])),
+            "{name} in {fields:?}"
+        );
+    }
+    assert_eq!(a1["kind"], "agent");
+    assert_eq!(a1["nav"]["right"], "agent:s2");
+    assert_eq!(d.lists["team"], vec!["agent:s1", "agent:s2", "agent:s3"]);
+    assert_eq!(d.descriptor["scheme"], "links");
+}
+
+/// [A] A rows view still holds a quiet reflow that would move its selection's chain; the user's own change draws.
+#[test]
+fn selected_still_holds_a_quiet_reflow() {
+    let (map, mut g, key) = rows_map(8, 500);
+    {
+        let v = g.views.get_mut(&key).expect("the view");
+        // laid out wide, now narrow: a reflow moves the cards
+        v.state.width_units = 120;
+        v.selected = Some(ItemId("agent:s8".into()));
+    }
+    assert!(map.chain_moves(&g, &key), "the reflow would move the chain");
+    map.outs(&mut g, &key, vec![CoOut::Reflow { user: false }], 0);
+    assert!(log(&map).is_empty(), "held: {:?}", log(&map));
+    map.outs(&mut g, &key, vec![CoOut::Reflow { user: true }], 0);
+    assert_eq!(log(&map), ["model", "rows"]);
+}
+
+/// [D] The Timeline's lit lanes: the sessions of the agents on the selection's chain in a shown rows view of the
+/// connection; none with nothing selected, for another connection, or while the view is hidden.
+#[test]
+fn near_is_the_selections_agents() {
+    let (_map, mut g, key) = rows_map(3, 226);
+    assert!(Map::near_in(&g, 1).is_empty(), "nothing selected");
+    g.views.get_mut(&key).expect("the view").selected = Some(ItemId("agent:s2".into()));
+    assert_eq!(Map::near_in(&g, 1), vec!["s2"]);
+    assert!(Map::near_in(&g, 2).is_empty(), "another connection");
+    g.views.get_mut(&key).expect("the view").shown = false;
+    assert!(Map::near_in(&g, 1).is_empty(), "hidden");
+}
+
+/// [D] The Detail panel's rows say the selection's edges in words, both ways, and its why-chain from the ask down;
+/// nothing selected is one line.
+#[test]
+fn detail_rows_say_the_edges() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    assert_eq!(
+        detail::lines(m, None, 0),
+        vec![("head", "Nothing is selected.".to_string(), None)]
+    );
+    // an agent with a branch below it and an ask, spec or plan above it
+    let edges = m.edges();
+    let came = |e: &vegvisir::Edge| serde_json::to_value(e.kind).ok() == Some(json!("came-from"));
+    let agent = m
+        .items()
+        .into_values()
+        .find(|it| {
+            serde_json::to_value(it.kind).ok() == Some(json!("agent"))
+                && edges.iter().any(|e| came(e) && e.from == it.id)
+                && edges.iter().any(|e| came(e) && e.to == it.id)
+        })
+        .expect("an agent with a why and a branch");
+    let lines = detail::lines(m, Some(&agent.id), 0);
+    let text: Vec<&str> = lines.iter().map(|(_, t, _)| t.as_str()).collect();
+    assert!(
+        text[0].starts_with(&format!("{} · agent", agent.label)),
+        "{text:?}"
+    );
+    for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
+        let to = m.item(&e.to).expect("its target").label;
+        assert!(
+            text.contains(&format!("  {to} — came from this").as_str()),
+            "{to} in {text:?}"
+        );
+    }
+    let parent = edges
+        .iter()
+        .filter(|e| came(e) && e.to == agent.id)
+        .map(|e| e.from.clone())
+        .min()
+        .expect("a parent");
+    let pl = m.item(&parent).expect("the parent").label;
+    assert!(
+        text.iter()
+            .any(|t| t.starts_with("  › ") && t.contains(&pl)),
+        "{pl} in {text:?}"
+    );
+    let rows = detail::rows(&lines);
+    assert_eq!(rows.len(), lines.len());
+    assert_eq!(rows[0].key, "head/0");
+    assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
+}
+
+/// [D] The golden the editor's replica is checked against (`test/unit/view-model-chain-test.el`, in the Nidhogg
+/// image; no cargo path between the repos): the map's model of the 30-agent fixture at 1600 px, as the hub sends it,
+/// and `vegvisir::Model::chain` of every item it shows. `UPDATE_VEGVISIR_GOLDEN=1` writes it; otherwise a model or
+/// chain that moved fails until it is written again.
+#[test]
+fn chain_golden_matches_vegvisir() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    let state = vegvisir::ViewState {
+        width_units: 376,
+        ..vegvisir::ViewState::default()
+    };
+    let l = vegvisir::layout::layout(m, &state, None);
+    let sent: BTreeSet<ItemId> = l.at.keys().cloned().collect();
+    let d = model::doc(m, &l, &sent);
+    let mut chains = serde_json::Map::new();
+    for id in &sent {
+        let c = m.chain(id);
+        let mut on: Vec<String> =
+            c.up.iter()
+                .chain(c.down.iter())
+                .map(|i| i.0.clone())
+                .collect();
+        on.sort();
+        chains.insert(id.0.clone(), serde_json::json!(on));
+    }
+    let golden = serde_json::json!({
+        "model": serde_json::json!({"ops": [d.reset()]}).to_string(),
+        "chains": chains,
+    });
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../test/fixtures/work-space/model-thirty.json");
+    let text = serde_json::to_string_pretty(&golden).expect("json") + "\n";
+    if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
+        std::fs::write(&path, &text).expect("write the golden");
+    }
+    let have =
+        std::fs::read_to_string(&path).expect("the golden (UPDATE_VEGVISIR_GOLDEN=1 writes it)");
+    assert!(
+        have == text,
+        "the map model or a chain moved: UPDATE_VEGVISIR_GOLDEN=1 writes the golden again"
+    );
+}

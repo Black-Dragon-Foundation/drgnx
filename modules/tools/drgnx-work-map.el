@@ -18,6 +18,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-view)
+(require 'drgnx-view-nav)
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -29,6 +30,8 @@
   (load (expand-file-name "drgnx-runners-view" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (declare-function drgnx-runners-view-dot-face "drgnx-runners-view")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work-space--show-detail "drgnx-work-space")
 (declare-function drgnx-face-glyph "drgnx-ui-kit")
 (declare-function drgnx-work-edges-geometry "drgnx-work-edges")
@@ -102,6 +105,7 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 (define-derived-mode drgnx-work-map-mode special-mode "Work map"
   "The Work space's map: layers of asks, specs, plans, agents, branches and files, and the edges between them."
+  (setq-local drgnx-view-nav-notice-method "work/map/set")  ; the rows path tells the hub the selection, trailing
   (setq-local truncate-lines t cursor-type nil
               header-line-format '("" drgnx-work-map--strip) tab-line-format '("" drgnx-work-map--lens)))
 
@@ -323,11 +327,54 @@ of which changed are the very images they were."
       (goto-char pos)
       (dolist (w (get-buffer-window-list (current-buffer) nil t)) (set-window-point w pos)))))
 
+;;;; The rows path: keys answer from the map's model in Sjá
+
+(defun drgnx-work-map--sja ()
+  "This map's instance in Sjá when its keys answer from the model (hub-built rows, not `drgnx-view-old-path'), or nil."
+  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch)))
+
+(defun drgnx-work-map--nav (verb &rest args)
+  "Move the selection by VERB and ARGS through `drgnx-view-nav'; keep `drgnx-work-map--selection' as (KIND . ID) and
+run `drgnx-work-map-select-functions' when it moved.  A broken view keeps the selection it had."
+  (let ((h (drgnx-work-map--sja)) (before drgnx-work-map--selection))
+    (let* ((id (apply #'drgnx-view-nav verb args))
+           (kind (and id (nidhogg-view-get h 'kind id)))
+           (sel (and id (cons (if (stringp kind) (intern kind) kind) id))))
+      (unless (or (equal sel before) (and (null id) (eql 2 (nidhogg-view-get h 'health))))
+        (setq drgnx-work-map--selection sel drgnx-work-map--finished nil)
+        (run-hook-with-args 'drgnx-work-map-select-functions (current-buffer)))
+      drgnx-work-map--selection)))
+
+(defun drgnx-work-map--class-index (h name)
+  "The index of class NAME in H's descriptor, or nil."
+  (cl-position name (nidhogg-view-get h 'class-names) :test #'equal))
+
+(defun drgnx-work-map--sja-search (h text)
+  "Search H's model for TEXT (nil: none) and select the first agent of the outline that matches."
+  (nidhogg-view-set h 'search text)
+  (drgnx-view-nav-class-step drgnx-view)
+  (when-let* ((text) (m (drgnx-work-map--class-index h "match"))
+              (first (seq-find (lambda (id) (eql m (nidhogg-view-get h 'class id)))
+                               (nidhogg-view-get h 'list "outline"))))
+    (drgnx-work-map--nav 'select first)))
+
+(defun drgnx-work-map--sja-chain-agents (h)
+  "The hub session ids of the team's agents on the selection's chain in H."
+  (let ((chain (drgnx-work-map--class-index h "chain")) out)
+    (dolist (id (nidhogg-view-get h 'list "team"))
+      (when (and chain (eql chain (nidhogg-view-get h 'class id)) (string-prefix-p "agent:" id))
+        (push (substring id (length "agent:")) out)))
+    (nreverse out)))
+
 (defun drgnx-work-map-select (sel)
   "Select SEL, (KIND . ID), in the current map, or nothing with nil.  The rows whose items change class (selected,
 on the chain, dimmed) are drawn again, the visible ones in this command's own redisplay; point goes to the card;
-the side panel follows; the chain's edge tiles one frame later (the timer takes the last selection of a held key)."
+the side panel follows; the chain's edge tiles one frame later (the timer takes the last selection of a held key).
+On the rows path the model in Sjá selects (`drgnx-work-map--nav')."
   (let ((state (drgnx-work-map--state)))
+    (when (drgnx-work-map--sja)
+      (setq state nil)
+      (drgnx-work-map--nav 'select (cdr sel)))
     (when (and state (not (equal sel drgnx-work-map--selection)))
       (let ((before (drgnx-work-map--classes state)))
         (setq drgnx-work-map--selection sel drgnx-work-map--finished nil)
@@ -352,12 +399,14 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 
 (defun drgnx-work-map--move (dir)
   "Move the selection in DIR; in a Work view that is not the map, that view's own move."
-  (if drgnx-work-lens-nav
-      (funcall drgnx-work-lens-nav dir)
+  (cond
+   (drgnx-work-lens-nav (funcall drgnx-work-lens-nav dir))
+   ((drgnx-work-map--sja) (drgnx-work-map--nav 'follow (symbol-name dir)))
+   (t
     (let ((state (drgnx-work-map--require-state)))
       (drgnx-work-map-select (if drgnx-work-map--selection
                                  (drgnx-work-nav-move state drgnx-work-map--selection dir)
-                               (drgnx-work-map--first))))))
+                               (drgnx-work-map--first)))))))
 
 (defun drgnx-work-map-left () "Select the previous item of this layer." (interactive) (drgnx-work-map--move 'left))
 (defun drgnx-work-map-right () "Select the next item of this layer." (interactive) (drgnx-work-map--move 'right))
@@ -367,23 +416,25 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (defun drgnx-work-map-next-agent ()
   "Select the next agent, in team order."
   (interactive)
-  (if drgnx-work-lens-nav
-      (funcall drgnx-work-lens-nav 'next-agent)
-    (let ((state (drgnx-work-map--require-state)))
-      (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection t)))))
+  (cond
+   (drgnx-work-lens-nav (funcall drgnx-work-lens-nav 'next-agent))
+   ((drgnx-work-map--sja) (drgnx-work-map--nav 'walk "team" 1))
+   (t (let ((state (drgnx-work-map--require-state)))
+        (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection t))))))
 
 (defun drgnx-work-map-previous-agent ()
   "Select the previous agent, in team order."
   (interactive)
-  (if drgnx-work-lens-nav
-      (funcall drgnx-work-lens-nav 'previous-agent)
-    (let ((state (drgnx-work-map--require-state)))
-      (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection nil)))))
+  (cond
+   (drgnx-work-lens-nav (funcall drgnx-work-lens-nav 'previous-agent))
+   ((drgnx-work-map--sja) (drgnx-work-map--nav 'walk "team" -1))
+   (t (let ((state (drgnx-work-map--require-state)))
+        (drgnx-work-map-select (drgnx-work-nav-agent state drgnx-work-map--selection nil))))))
 
 ;;;; Opening the selection
 
 (defvar drgnx-agents--sessions)
-(declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
@@ -391,20 +442,21 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (declare-function drgnx-work-code--roots "drgnx-work-code")
 
 (defun drgnx-work--open-agent (sid)
-  "Open the transcript of the hub session SID in today's Agents view (the agent panel replaces this later)."
-  (if-let* ((s (and (boundp 'drgnx-agents--sessions)
-                    (seq-find (lambda (x) (equal (drgnx-agent-session-remote x) sid)) drgnx-agents--sessions))))
-      (progn (require 'drgnx-agents-ui) (drgnx-agents-ui-transcript s))
-    (message "Work: no transcript of this agent here")))
+  "Open the panel of the hub session SID."
+  (if (fboundp 'drgnx-agent-panel-open)
+      (drgnx-agent-panel-open sid)
+    (message "Work: the agent panel is not on")))
 
 (defun drgnx-work-map--root-named (name)
   "The workspace root whose directory is called NAME, or nil."
   (let ((roots (plist-get (drgnx-work-client--view-params (drgnx-work-client--get drgnx-work-space--view)) :workspace)))
     (seq-find (lambda (r) (equal (file-name-nondirectory (directory-file-name r)) name)) (plist-get roots :roots))))
 
-(defun drgnx-work-map--open-item (state sel beside)
-  "Open the item SEL of STATE as the design's table says; BESIDE: without moving focus."
+(defun drgnx-work-map--open-item (state sel beside &optional label agents)
+  "Open the item SEL of STATE as the design's table says; BESIDE: without moving focus.  On the rows path STATE is
+nil, LABEL is the item's label and AGENTS the session ids a file opens at."
   (let* ((id (cdr sel)) (key (cadr (split-string id ":")))
+         (label (or label (plist-get (drgnx-work-client-item state id) :label)))
          (show (lambda (buffer) (if beside (display-buffer buffer) (pop-to-buffer buffer)))))
     (pcase (car sel)
       ('agent (drgnx-work--open-agent (substring id (length "agent:"))))
@@ -413,26 +465,33 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
                  (cond ((null root) (message "Work: %s is not in this workspace" (car parts)))
                        ((fboundp 'magit-status) (funcall #'magit-status root))
                        (t (funcall show (dired-noselect root))))))
-      ('file (drgnx-work-code-open-file state sel :beside beside))
+      ('file (drgnx-work-code-open-file state sel :beside beside :agents agents))
       ('machine (drgnx-work-space--show-detail (current-buffer))
-                (message "Work: %s — its queue is in the side panel" (plist-get (drgnx-work-client-item state id) :label)))
+                (message "Work: %s — its queue is in the side panel" label))
       ;; a document's key is the hub's: only a plain local file inside a root of the workspace opens, by its true name
       (_ (let ((path (seq-some (lambda (root) (drgnx-work-code-local-file key (list root)))
                                (if-let* ((v (drgnx-work-client--get drgnx-work-space--view)))
                                    (plist-get (plist-get (drgnx-work-client--view-params v) :workspace) :roots)
                                  (drgnx-work-code--roots)))))
            (if path (funcall show (find-file-noselect path))
-             (message "Work: no document is recorded for %s" (plist-get (drgnx-work-client-item state id) :label))))))))
+             (message "Work: no document is recorded for %s" label)))))))
 
 (defun drgnx-work-map-open-selection (&optional beside)
   "Open the selected item: an agent's transcript, a branch's repository, a file, a document.  BESIDE (a prefix
 argument): without moving focus."
   (interactive "P")
-  (if drgnx-work-lens-nav
-      (funcall drgnx-work-lens-nav (if beside 'open-beside 'open))
+  (cond
+   (drgnx-work-lens-nav (funcall drgnx-work-lens-nav (if beside 'open-beside 'open)))
+   ((drgnx-work-map--sja)
+    ;; the kind came with the selection; the label is read once, the chain's agents only for a file
+    (let ((h (drgnx-work-map--sja)) (sel drgnx-work-map--selection))
+      (unless sel (user-error "Nothing is selected"))
+      (drgnx-work-map--open-item nil sel beside (nidhogg-view-get h 'field "label" (cdr sel))
+                                 (and (eq (car sel) 'file) (drgnx-work-map--sja-chain-agents h)))))
+   (t
     (let ((state (drgnx-work-map--require-state)))
       (unless drgnx-work-map--selection (user-error "Nothing is selected"))
-      (drgnx-work-map--open-item state drgnx-work-map--selection beside))))
+      (drgnx-work-map--open-item state drgnx-work-map--selection beside)))))
 
 (defun drgnx-work-map-open-beside ()
   "Open the selected item beside the map, without moving focus."
@@ -779,6 +838,8 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
   "Show the outline form instead of the map, or the map again (a terminal's frame always shows the outline)."
   (interactive)
   (setq drgnx-work-map--outline (if (eq drgnx-work-map--outline t) 'off t))
+  (when-let* ((h (drgnx-work-map--sja)))          ; the model's up and down walk the outline list in that form
+    (nidhogg-view-set h 'form (if (eq drgnx-work-map--outline t) "outline" "graph")))
   (drgnx-view-touch drgnx-view))
 
 ;;;; The strip and the lens: header line and tab line, strings drawn when the frame changes
@@ -794,7 +855,25 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
                              (drgnx-work-client-ids state))))
     (append cards (mapcar (lambda (id) (cons (format "%s needs you" (plist-get (drgnx-work-client-item state id) :label))
                                              (list id)))
-                          (sort agents #'string<)))))
+                          (sort agents #'string<))
+            (drgnx-work-map--huddle-entries state))))
+
+(declare-function drgnx-agent-panel-huddle-open-records "drgnx-agent-panel-huddle")
+
+(defun drgnx-work-map--huddle-entries (state)
+  "One entry for each open huddle: its subject, jumping to the agents in it that STATE's map shows."
+  (when (fboundp 'drgnx-agent-panel-huddle-open-records)
+    (mapcar (lambda (rec)
+              (cons (format "huddle: %s" (or (plist-get rec :clash) (plist-get rec :id)))
+                    (seq-filter (lambda (id) (drgnx-work-client-item state id))
+                                (mapcar (lambda (sid) (concat "agent:" sid)) (append (plist-get rec :participants) nil)))))
+            (drgnx-agent-panel-huddle-open-records))))
+
+(defun drgnx-work-map--huddles-changed ()
+  "A huddle opened or ended: every map draws its strip again."
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode)
+      (with-current-buffer b (drgnx-work-map--refresh-strip)))))
 
 (defun drgnx-work-map--strip-string (state)
   "The needs-you strip of STATE: a chip with its jump key for each of the first nine entries, +N for the rest, and the
@@ -831,7 +910,16 @@ label face (`m' `b' `t' switch)."
   (force-mode-line-update))
 
 (defun drgnx-work-map-needs-you (n)
-  "Select the item the strip's Nth chip (g N) is about.  It selects; nothing is approved, pushed or answered."
+  "Select the item the strip's Nth chip (g N) is about.  It selects; nothing is approved, pushed or answered.  On
+the rows path, the Nth entry of the model's needs-you list."
+  (if-let* ((h (drgnx-work-map--sja)))
+      (if (nth (1- n) (nidhogg-view-get h 'list "needs-you"))
+          (progn (setq drgnx-work-map--needs-at (1- n)) (drgnx-work-map--nav 'walk-to "needs-you" (1- n)))
+        (message "Work: nothing needs you at g%d" n))
+    (drgnx-work-map--needs-you-frame n)))
+
+(defun drgnx-work-map--needs-you-frame (n)
+  "`drgnx-work-map-needs-you' N on the frame's strip (the frozen path)."
   (let* ((state (drgnx-work-map--require-state)) (entry (nth (1- n) (drgnx-work-map--needs-you state)))
          (id (and entry (seq-find (lambda (i) (drgnx-work-client-item state i)) (cdr entry)))))
     (if id
@@ -841,7 +929,9 @@ label face (`m' `b' `t' switch)."
 (defun drgnx-work-map-needs-you-here-next (&optional back)
   "Select the next (BACK: previous) thing that needs you, cycling."
   (interactive)
-  (let* ((state (drgnx-work-map--require-state)) (n (length (drgnx-work-map--needs-you state))))
+  (let* ((h (drgnx-work-map--sja))
+         (n (if h (length (nidhogg-view-get h 'list "needs-you"))
+              (length (drgnx-work-map--needs-you (drgnx-work-map--require-state))))))
     (if (zerop n)
         (message "Work: nothing needs you")
       (setq drgnx-work-map--needs-at (mod (+ drgnx-work-map--needs-at (if back -1 1)) n))
@@ -914,6 +1004,14 @@ arrow keys move inside the chain and send nothing."
 (defun drgnx-work-map-search (text)
   "Narrow the map to the items matching TEXT, dim the rest, and select the first match."
   (interactive (list (read-string "Narrow the map to: " drgnx-work-map--search)))
+  (if-let* ((h (drgnx-work-map--sja)))
+      (let ((text (and text (not (string-empty-p text)) text)))
+        (setq drgnx-work-map--search text)
+        (drgnx-work-map--sja-search h text))
+    (drgnx-work-map--search-frame text)))
+
+(defun drgnx-work-map--search-frame (text)
+  "`drgnx-work-map-search' TEXT on the frame (the frozen path)."
   (drgnx-work-map--set-search text)
   (when-let* ((state (drgnx-work-map--state)) (text (and text (not (string-empty-p text)) text))
               (first (car (seq-filter (lambda (id) (drgnx-work-map--matches-p state id))
@@ -929,7 +1027,7 @@ arrow keys move inside the chain and send nothing."
   "Clear the search; with none, clear the filters and the collapsed layers; with none of those, close the pane."
   (interactive)
   (cond ((and drgnx-work-map--search (not (string-empty-p drgnx-work-map--search)))
-         (drgnx-work-map--set-search nil))
+         (drgnx-work-map-search nil))
         ((or (plist-get drgnx-work-map--filters :focus) (plist-get drgnx-work-map--filters :overlaps)
              (plist-get drgnx-work-map--filters :finished) drgnx-work-map--collapsed)
          (setq drgnx-work-map--filters nil drgnx-work-map--collapsed nil)
@@ -1034,6 +1132,15 @@ WINDOW is not drawn yet or the rows cannot be told."
               (forward-line 1)))))
       (cons rows limit))))
 
+(defun drgnx-work-map--rect (state id)
+  "Item ID's card rect (:x :y :w :h, layout units): on the rows path the model's fields x y w h (one read each, from
+Sjá), else STATE's layout."
+  (if-let* ((h (drgnx-work-map--sja)))
+      (let ((x (nidhogg-view-get h 'field "x" id)))
+        (and x (list :x x :y (nidhogg-view-get h 'field "y" id) :w (nidhogg-view-get h 'field "w" id)
+                     :h (nidhogg-view-get h 'field "h" id))))
+    (drgnx-work-client-rect state id)))
+
 (defun drgnx-work-map--item-rects (state window rows limit)
   "Alist id → (X Y W H): the cards of STATE that WINDOW shows, at least in part, in pixels of its text area.  X and W
 are the layout's; Y and H the drawn rows' (ROWS, `drgnx-work-map--drawn-rows').  Cards whose row's y is at or below
@@ -1041,7 +1148,7 @@ LIMIT (nil: none) are left out."
   (let ((height (window-body-height window t)) (margin (drgnx-work-map--margin-px))
         (layout-rows (cdr (drgnx-work-map--index-of state))) out)
     (dolist (id (drgnx-work-client-ids state))
-      (when-let* ((rect (drgnx-work-client-rect state id)) (key (car (drgnx-work-client-rows-of state id)))
+      (when-let* ((rect (drgnx-work-map--rect state id)) (key (car (drgnx-work-client-rows-of state id)))
                   (drawn (gethash key rows)) ((or (null limit) (< (car drawn) limit))))
         (let* ((row (gethash key layout-rows)) (units (max 1 (or (plist-get row :height_units) 1)))
                (x (+ margin (drgnx-work-map--px (plist-get rect :x))))

@@ -20,7 +20,11 @@ drgnx-ratatoskr pair_timing whole_file_5000_lines_within_2_ms release
 drgnx-ratatoskr timing query_p95_at_50k_chunks release
 drgnx-ratatoskr timing query_p95_at_100k_chunks release
 drgnx-ratatoskr timing tier1_of_a_checkout_and_one_saved_file release
+drgnx-ratatoskr timing worktree_search_p95 release
+drgnx-ratatoskr lib write_tree_before_cost
+norn plugin_hooks timing_before_tool_cost_per_call release
 urdr lib a_lone_write_waits_max_wait_for_company
+verdandi timing undone_by_scan_cost_by_later_deletes
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
 drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet

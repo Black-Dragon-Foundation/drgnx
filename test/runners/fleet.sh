@@ -189,9 +189,9 @@ case "${1:-}" in
   exec) shift; i=$1; shift; exec_runner "$i" "$@" ;;
   check) shift; check "$1" ;;
   test) shift; bin=${DRGNX_FLEET_TEST_BIN:?set DRGNX_FLEET_TEST_BIN to the container-built test binary}
-        # the runner bundle the tests install into their runner roots: the sleipnir, drgnx-key and drgnx-fwd binaries
-        # beside the test's deps/
-        for b in sleipnir drgnx-key drgnx-fwd; do
+        # the runner bundle the tests install into their runner roots: the sleipnir and drgnx-key binaries and the
+        # static relay sidecar drgnx-px-<arch>-linux-musl, beside the test's deps/
+        for b in sleipnir drgnx-key "drgnx-px-$(uname -m)-linux-musl"; do
           [ ! -x "$(dirname "$bin")/../$b" ] || cp "$(dirname "$bin")/../$b" "$STATE/share/$b"
         done
         cenv=(); [ ! -f "$STATE/cloud.env" ] || cenv=(-e "$(cat "$STATE/cloud.env")")

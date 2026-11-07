@@ -89,7 +89,6 @@
 ;;;; Schema 6: the data columns are JSON
 
 (require 'drgnx-records)
-(require 'drgnx-coord-read)
 (load (expand-file-name "test/fixtures/coord-seed-fixture" drgnx-dir) nil t)   ; `drgnx-coord-card'
 
 (defun drgnx-work-db-migrate-test--load-5 (file &optional extra)
@@ -159,10 +158,12 @@ drgnx leaves it."
     ;; the readers see the old values
     (should (equal (plist-get (drgnx-work-node "commit:4f9a1c0") :sha) "4f9a1c0e"))
     (should (eq (plist-get (drgnx-work-node "task:p#1") :stale) t))
-    (should (equal (plist-get (plist-get (drgnx-coord-job "job-1") :data) :blocked) '(("job-1#2" . "blocked"))))
-    (should (eq (plist-get (plist-get (drgnx-coord-job "job-1") :data) :gate) 'review+accept))
+    (let ((job (drgnx-work-db-decode 'drgnx-records-job-data (caar (sqlite-select (drgnx-work-db-read) "select data from job where id = 'job-1'")))))
+      (should (equal (plist-get job :blocked) '(("job-1#2" . "blocked"))))
+      (should (eq (plist-get job :gate) 'review+accept)))
     (should (equal (plist-get (plist-get (drgnx-coord-card 3) :data) :key) "against-decision:1"))
-    (should (equal (plist-get (nth 9 (drgnx-coord-events)) :data) '(:root "/work/repo/" :paths ("a.el" "b.el"))))))
+    (should (equal (drgnx-work-db-decode 'drgnx-records-event-data (caar (sqlite-select (drgnx-work-db-read) "select data from event order by id limit 1 offset 9")))
+                   '(:root "/work/repo/" :paths ("a.el" "b.el"))))))
 
 (drgnx-work-db-writer-deftest drgnx-work-db/migration-6-survives-unreadable-rows ()
   ;; Review Focus 2: an unreadable object, text cut short, a symbol no schema covers

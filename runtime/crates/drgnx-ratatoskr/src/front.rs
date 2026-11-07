@@ -307,6 +307,7 @@ impl Front {
         self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.trails.gone(conn);
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
         self.core.terms.gone(conn);
@@ -698,6 +699,17 @@ impl Front {
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // a text search streaming rows to a view (`search/grep*`)
+            Params::SearchGrep(p) => crate::view::grep::start(self, &caller, p).map(|r| json!(r)),
+            Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
+            Params::SearchGrepReplace(p) => {
+                crate::view::grep::replace(self, &caller, p).map(|b| json!(b))
+            }
+            // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
+            Params::ExplorerSubscribe(p) => {
+                crate::view::explorer::subscribe(self, &caller, p).map(|r| json!(r))
+            }
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -718,8 +730,12 @@ impl Front {
             | Params::AgentsContextDrop(_)
             | Params::AgentsContextPin(_)
             | Params::AgentsCompactPreview(_)
+            | Params::AgentsConfig(_)
+            | Params::AgentsExplain(_)
             | Params::AgentsHuddleStart(_)
             | Params::AgentsHuddleGet(_)
+            | Params::AgentsGrants(_)
+            | Params::AgentsGrantsRevoke(_)
             | Params::AgentsWheelTake(_)
             | Params::AgentsWheelGive(_)
             | Params::AgentsWheelSaved(_)
@@ -809,6 +825,9 @@ impl Front {
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
             | Params::WorkMapClose(_)
+            | Params::WorkTrailSubscribe(_)
+            | Params::WorkTrailClose(_)
+            | Params::WorkBoardSubscribe(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)
@@ -823,6 +842,7 @@ impl Front {
             | Params::SearchServerPlan(_)
             | Params::SearchServerStart(_)
             | Params::SearchServerStop(_)
+            | Params::SearchSymbolAt(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),

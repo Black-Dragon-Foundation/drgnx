@@ -227,6 +227,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     });
     front.extensions.configure(&env);
     front.search.bind(&front);
+    front.core.views.bind(&front);
     if let Some(d) = front.dirs.get() {
         front
             .search
@@ -272,6 +273,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    crate::clock::spawn("trail:run", crate::work::trail::run(front.clone()));
     // the editors' buffer views follow the presence model from now on
     front.core.buffers.bind(&front);
     // an edit step's file is checked against the other worktrees' from now on
@@ -446,6 +448,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     drop(listener);
     // the hub's own sessions end with it (their rows, transcripts and queues stay for the next start)
     front.core.agents.shutdown().await;
+    // networked jobs can't run on without the hub's relay: they end now, as the next start would end them
+    front.core.exec.end_networked().await;
     // `--test-sequencer`: what it still holds is written before the connections close
     #[cfg(feature = "test-hooks")]
     if let Some(seq) = crate::sequencer::current() {

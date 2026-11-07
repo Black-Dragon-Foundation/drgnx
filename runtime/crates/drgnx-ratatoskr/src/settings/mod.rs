@@ -165,6 +165,7 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
     setting("drgnx-search-off", "bool", OnError::Strict),
     setting("drgnx-search-base", "Option<String>", OnError::Strict),
+    setting("drgnx-search-ignore-rules", "String", OnError::Strict),
     setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
     setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
     setting(
@@ -263,6 +264,9 @@ pub struct RuntimeValues {
     pub search_off: bool,
     /// The checkout a project's search base is built from (none: the main checkout). Per project.
     pub search_base: Option<String>,
+    /// Which files Quick Open, Find and the text search list: `index` (the index's filters) or `real`
+    /// ([`crate::view::files::ignore_of`]).
+    pub search_ignore_rules: String,
     /// The plugins that run, in hook order (`drgnx-agents-plugins`). A project's list replaces it
     /// ([`overrides::PER_PROJECT`]); a plugin runs only when the user approved it too ([`crate::plugins`]).
     pub agents_plugins: Vec<String>,
@@ -535,6 +539,13 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-exclude" => values.search_exclude = de(node)?,
         "drgnx-search-off" => values.search_off = de(node)?,
         "drgnx-search-base" => values.search_base = de(node)?,
+        "drgnx-search-ignore-rules" => {
+            let v: String = de(node)?;
+            if !["index", "real"].contains(&v.as_str()) {
+                return Err(Bad::at(node, None, "\"index\" or \"real\""));
+            }
+            values.search_ignore_rules = v;
+        }
         "drgnx-agents-plugins" => values.agents_plugins = de(node)?,
         "drgnx-agents-hook-rules" => {
             let v: Value = de(node)?;

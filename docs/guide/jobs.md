@@ -29,7 +29,9 @@ it does not depend on the agent that started it or on the editor, and it survive
   hour is always kept); older ones are removed, so `exec/get` and `exec/log` answer "no job" for them, while the
   job's row in the graph stays.
 - **Time box.** 1 to 86400 seconds (default 3600; a missing `timebox_s` means the default). At the end the job's process
-  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). The user's
+  group gets SIGTERM, then SIGKILL, and its status is `timed-out`. `exec/stop` ends it by hand (`stopped`). A job the
+  hub's own machinery ends (a networked container job whose relay stopped, or one the hub's stop or restart ended) is
+  `infra`; the last line of its log says why (`infra: proxy: …`). The user's
   job (not an agent's) may send `no_timebox: true` instead: it has no deadline, its row has no `timebox_s`, and only
   `exec/stop` or the hub's stop ends it (with `timebox_s` it is refused). An agent that sends `no_timebox` is refused
   with `invalid-params`, like the four fields below.
@@ -107,12 +109,23 @@ manager and the memory, pids and cpu controllers, the job is refused with the re
 user session for that (a login, or `loginctl enable-linger`); without one it would run the container with no limits.
 It has **no network of its own**
 (`--network=none`, only a loopback). When the matrix's Network cell allows it (a job you start yourself has none unless it asks), the
-job gets the one route there is: the job's own allow-list proxy, a Unix socket the hub mounts read-only into the
-container, and a small forwarder (`drgnx-fwd`, mounted read-only, next to the hub) that listens on `127.0.0.1:3128`
-inside the job and runs the command in its place. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
+job gets the one route there is: a relay sidecar (`drgnx-px`, a tiny image the hub makes from the binary next to it)
+shares the job's loopback only, listens on `127.0.0.1:3128` there and carries each connection over its stdio to the
+job's own allow-list proxy in the hub. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
 hosts on the allow-list are reached: the setting `agents-net-hosts` (an alist tier to `"host:port"` strings; the
 `packages` tier is a granted network's). Its default is `crates.io`, `index.crates.io`, `static.crates.io`,
-`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`; without `drgnx-fwd`, or if the socket cannot be made, a job that was allowed a network is refused. An Ask on the Network cell refuses the start with the matrix card. The request has no
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`. An agent's networked job may also ask for a port of
+your computer as `host.drgnx.internal:PORT` (a dev server, say): it is refused, and you get a card "Job N wants your
+port PORT". Allowing it opens that port for the job's session, its browser and its other jobs too, with the browser's
+scopes (once, this session, its plan); it applies to the job's next connection, with no restart. Each port asks once
+per job. Revoking the grant refuses the next connection; connections already open stay until they end, so end the job
+to cut them. The hub's own ports are never opened, whatever you allow. A job on a runner can't ask: its proxy is the
+runner's and has the allow-list only, so `host.drgnx.internal` is refused there. A networked job needs rootless podman 5.0 or newer; otherwise, or
+if its relay can't start (no `READY` within 10 s), a job that was allowed a network is refused with what to fix. The
+relay lives as long as the job: if it stops first (the sidecar exits, breaks the channel's rules or stops reading) the
+job ends `infra` with the sidecar's exit code and its meaning in its log (137: killed, most likely at its memory limit).
+A networked job can't outlive its hub: stopping the hub ends it, and a hub that restarts after a crash ends the ones
+it finds. An Ask on the Network cell refuses the start with the matrix card. The request has no
 other fields: `exec/start` refuses a field it does not know (a `mounts` or `privileged` is an `invalid-params` error,
 not ignored).
 
@@ -180,9 +193,9 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. Whether
 a stopped job was still a proposal is decided in the hub's one write of the stop: reject a proposal in one place while
 you approve it in another, and the approval that lands first runs and is then stopped like any job (its work resumes);
-a budget pause never turns a job you just stopped back into a paused one. In Emacs: **Start Job from Plan…** (the
-proposal, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
-Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
+a budget pause never turns a job you just stopped back into a paused one. Emacs has no job commands of its own: a
+job's proposal and everything it needs of you are cards in the [Work space](work-space.md) and the agent panel, and
+`drgnx job` starts, approves and stops it.
 
 ### From the command line
 
@@ -207,21 +220,18 @@ unknown option, a missing plan or id, a `--budget` that is not a number).
 
 ## A job in the Work space
 
-**Show Job in Work…** (`job-show`) opens the [Work space](work-space.md): the job's agents are on the map (what needs
+Open the [Work space](work-space.md): the job's agents are on the map (what needs
 you is the strip along its top, `n` and `g 1` to `g 9` select the chips), its tasks are on the Board (`b`), an agent's
 decisions and edits are in its review (`v`), and its steps are in the research trail (`r`). No window of its own opens.
-The Work cockpit and the job window before it are gone: a workbench saved with either comes back as the Work space.
 
 You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
-paused jobs are the **Jobs** source of [Notices](notices.md), so they count in the one "needs you" number (the status
-bar's, What needs you's first line, the Notices list) and each new card is a desktop notification (D-Bus on Linux;
-`osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the backends are
-[Notices](notices.md#on-the-desktop)). An `overlap` card is advice: it counts but never interrupts. When the hub cannot
-be asked or goes away the count is not shown as a number: Notices says "Jobs: not known" and why, rather than showing
-the last count. The mode-line badge of earlier releases is gone (`drgnx-job-ui-badge-mode` is now the obsolete name of
-`drgnx-job-ui-attention-mode`, and `drgnx-job-ui-notify` of `drgnx-notice-desktop`). Nothing here ever asks you
-anything. Turning `tools/jobs` off (Preferences: Modules) removes the source and its items; open job windows stay as
-they are but no longer follow the hub (the job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+paused jobs are the **Jobs** source of [Notices](notices.md) (module `tools/jobs`), so they count in the one "needs you"
+number (the status bar's, What needs you's first line, the Notices list) and each new card is a desktop notification
+(D-Bus on Linux; `osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the
+backends are [Notices](notices.md#on-the-desktop)). The status bar's `jobs` segment counts the running jobs. An
+`overlap` card is advice: it counts but never interrupts. When the hub cannot be asked or goes away the count is not
+shown as a number: Notices says "Jobs: not known" and why, rather than showing the last count. Turning `tools/jobs`
+off (Preferences: Modules) removes the source and its items. Nothing here ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
@@ -338,8 +348,8 @@ The job is **done** when every task is done (or dropped). Review the job's branc
 
 ## The merge gate
 
-`drgnx-job-merge-gate` (Customize group `drgnx`) says what a finished task needs before it is merged into
-the job's branch:
+The `gate` of the hub's `job/propose` (the default is `review`; the planning agent's proposal block can set it, there is no Emacs option) says what a finished task
+needs before it is merged into the job's branch:
 
 - `review` (the default): its reviewer's pass, as above.
 - `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
@@ -375,6 +385,10 @@ The details:
   worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
   nothing changed since the look.
 
+- **Your hooks.** After the gate cleared a task, the `before-commit` rules and plugin hooks are asked (see
+  [Plugins](plugins.md#rules-and-hooks)); one can reword the merge commit's message or hold the merge with a `hook`
+  card (Retry the merge, Dismiss and carry on, Stop the job). `at-review` hooks are asked before the reviewer starts.
+
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
 Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
 
@@ -406,8 +420,7 @@ limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktre
 not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
 against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
 `job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
-`job-cockpit-test.el` (reassign, block, the run order and Start as Job from the Work graph; the merge gate),
-`job-ui-test.el` and `test/ui/job-window-test.el` (the window; `job-ui-test.el`: the Jobs source, not known, notifications), `job-exit-test.el` (a
+`test/ui/job-window-test.el`, `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
 

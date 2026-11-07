@@ -1,0 +1,11 @@
+{"scenario": "search/files-non-git-root", "requires": ["v1", "test-hooks"], "doc": "search/files outside a repository walks the folder: .gitignore files apply (a deeper one first, ! keeps), a link is a name and is not followed, and a binary file is listed."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "q", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/plain/sub $ROOT/plain/out && cd $ROOT/plain && printf 'out/\\n*.log\\n' > .gitignore && printf '!keep.log\\n' > sub/.gitignore && echo x > a.rs && echo x > out/b.rs && echo x > c.log && echo x > sub/keep.log && printf '\\000\\001' > sub/d.bin && ln -s sub sublink"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/files", "params": {"view": "q", "root": "$ROOT/plain", "query": ""}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"query": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "q", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": [{"key": "a.rs", "text": "a.rs"}, {"key": "sublink", "text": "sublink"}, {"key": "sub/d.bin", "text": "sub/d.bin"}, {"key": "sub/keep.log", "text": "sub/keep.log"}]}]}}, "within_ms": 10000}

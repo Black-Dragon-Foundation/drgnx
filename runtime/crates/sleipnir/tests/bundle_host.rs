@@ -15,14 +15,15 @@ fn need(var: &str) -> String {
         .unwrap_or_else(|_| panic!("{var} is not set: this row runs only beside a built bundle"))
 }
 
-/// [D] Each of the bundle's binaries is static, and the forwarder starts in a musl image and runs `drgnx-key` in its
-/// place there: with no key socket mounted, drgnx-key exits 75 (not delivered), which the forwarder's exec passes on.
+/// [D] Each of the bundle's binaries is static (the relay sidecar `drgnx-px` among them), and `drgnx-key` runs in a
+/// musl image: with no key socket mounted it exits 75 (not delivered).
 #[test]
 #[ignore = "bundle"]
-fn drgnx_fwd_static_runs_in_a_foreign_libc_image() {
+fn bundle_binaries_are_static_and_run_in_a_foreign_libc_image() {
     let bundle = PathBuf::from(need("DRGNX_TEST_BUNDLE"));
     let image = need("DRGNX_TEST_FOREIGN_IMAGE");
-    for b in ["sleipnir", "drgnx-key", "drgnx-fwd"] {
+    let px = format!("drgnx-px-{}-linux-musl", std::env::consts::ARCH);
+    for b in ["sleipnir", "drgnx-key", px.as_str()] {
         let out = Command::new("file")
             .arg("-L")
             .arg(bundle.join(b))
@@ -34,21 +35,13 @@ fn drgnx_fwd_static_runs_in_a_foreign_libc_image() {
             "{b}: {text}"
         );
     }
-    let mount = |b: &str, at: &str| format!("{}:{at}:ro,Z", bundle.join(b).display());
     let out = Command::new("podman")
         .args(["run", "--rm", "--pull=never", "--network=none", "-v"])
-        .arg(mount("drgnx-fwd", "/run/drgnx/fwd"))
-        .arg("-v")
-        .arg(mount("drgnx-key", "/run/drgnx/key"))
-        .args(["--entrypoint", "/run/drgnx/fwd", &image])
-        .args([
-            "3128",
-            "/run/drgnx/proxy.sock",
-            "--",
-            "/run/drgnx/key",
-            "get",
-            "NONE",
-        ])
+        .arg(format!(
+            "{}:/run/drgnx/key:ro,Z",
+            bundle.join("drgnx-key").display()
+        ))
+        .args(["--entrypoint", "/run/drgnx/key", &image, "get", "NONE"])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);

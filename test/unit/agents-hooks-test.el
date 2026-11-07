@@ -15,7 +15,6 @@
 (require 'drgnx-agents-mirror)
 (require 'drgnx-agents-hooks)
 (require 'drgnx-records)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/notice-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-agents-hooks-test--deny
@@ -42,9 +41,6 @@
 (defun drgnx-agents-hooks-test--has-button (string)
   "Non-nil when some character of STRING is part of a text button."
   (seq-some (lambda (i) (get-text-property i 'button string)) (number-sequence 0 (1- (length string)))))
-
-(defun drgnx-agents-hooks-test--text (s)
-  (with-temp-buffer (drgnx-agents-ui-render s) (buffer-string)))
 
 ;;;; Verdict lines
 
@@ -89,79 +85,6 @@
 
 ;;;; The transcript
 
-(ert-deftest drgnx-agents-hooks/the-mirror-keeps-an-events-rows-under-the-tool-it-ran-on ()
-  (drgnx-agents-hooks-test--with-mirror m
-    (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 4 :hooks (list drgnx-agents-hooks-test--deny))))
-    (should (equal (mapcar #'car (drgnx-agent-session-hooks m)) '(4)))
-    (should (equal (nth 1 (car (drgnx-agent-session-hooks m))) "t1"))
-    ;; a later tool entry does not take the rows: the step is seen again and keeps its tool
-    (setf (drgnx-agent-session-entries m)
-          (append (drgnx-agent-session-entries m) (list '(:type tool :id "t2" :title "Read" :status "completed"))))
-    (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 4 :hooks (list drgnx-agents-hooks-test--deny))))
-    (should (equal (nth 1 (car (drgnx-agent-session-hooks m))) "t1"))
-    (let ((text (drgnx-agents-hooks-test--text m)))
-      (should (string-search "refused by deny-rm 0.1" text))
-      (should (= 1 (with-temp-buffer (insert text) (goto-char (point-min)) (how-many "refused by")))))
-    ;; a step with no hooks changes nothing
-    (let ((before (drgnx-agent-session-hooks m)))
-      (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 9)))
-      (should (eq (drgnx-agent-session-hooks m) before)))))
-
-(ert-deftest drgnx-agents-hooks/ret-on-a-verdict-line-opens-its-provenance ()
-  (drgnx-agents-hooks-test--with-mirror m
-    (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 4 :hooks (list drgnx-agents-hooks-test--deny))))
-    (let (shown)
-      (cl-letf (((symbol-function 'drgnx-agents-hooks-show-provenance) (lambda (row rec) (setq shown (list row rec)))))
-        (with-temp-buffer
-          (drgnx-agents-ui-render m)
-          (goto-char (point-min))
-          (search-forward "refused by")
-          (push-button)))
-      (should (equal (plist-get (car shown) :step) 4))
-      (should (equal (plist-get (cadr shown) :source) "plugin:deny-rm@0.1#ab12")))))
-
-(ert-deftest drgnx-agents-hooks/a-note-entry-shows-its-line-and-opens-its-hooks-provenance ()
-  (drgnx-agents-hooks-test--with-mirror m
-    (let ((row '(:point "after-edit" :step 6 :outcome "allow"
-                        :records ((:source "plugin:annotate-edit@1#aa" :verdict "annotate" :ms 4 :reason "touches the lockfile")))))
-      (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 6 :hooks (list row))))
-      (setf (drgnx-agent-session-entries m)
-            (append (drgnx-agent-session-entries m)
-                    (list '(:type note :source "plugin:annotate-edit@1#aa" :text "touches the lockfile" :step 6))))
-      (should (string-search "note by annotate-edit 1" (drgnx-agents-hooks-test--text m)))
-      (let (shown)
-        (cl-letf (((symbol-function 'drgnx-agents-hooks-show-provenance) (lambda (r rec) (setq shown (list r rec)))))
-          (with-temp-buffer (drgnx-agents-ui-render m) (goto-char (point-min)) (search-forward "note by") (push-button)))
-        (should (equal (plist-get (cadr shown) :ms) 4))))))
-
-(ert-deftest drgnx-agents-hooks/an-edit-a-hook-refused-after-the-fact-is-marked-on-its-step ()
-  (let ((s (drgnx-agents--make :name "a" :remote "h1"
-                               :entries (list '(:type tool :id "t1" :title "Edit x.el" :status "completed"
-                                                      :refused_by_hook (:hook "deny-edit-x" :reason "x.el is frozen"))))))
-    (should (string-search "refused by deny-edit-x · \"x.el is frozen\"" (drgnx-agents-hooks-test--text s)))))
-
-(ert-deftest drgnx-agents-hooks/drawing-the-transcript-never-asks-the-hub ()
-  ;; redisplay reads cached state: with every hub entry point refusing, a transcript with rows, a header and a
-  ;; breakdown still draws
-  (drgnx-agents-hooks-test--with-mirror m
-    (setf (drgnx-agent-session-hooked m) '(:unhooked ("read") :why "the agent reads without asking")
-          (drgnx-agent-session-panel m) '(:features ("context" "drop") :context (:used 10 :size 100 :parts ((:kind "files" :tokens 10)))))
-    (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 4 :hooks (list drgnx-agents-hooks-test--deny))))
-    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (error "asked the hub")))
-              ((symbol-function 'drgnx-hub-call-sync) (lambda (&rest _) (error "asked the hub")))
-              ((symbol-function 'drgnx-hub-ensure) (lambda (&rest _) (error "asked the hub"))))
-      (let ((text (drgnx-agents-hooks-test--text m)))
-        (should (string-search "not hooked: read" text))
-        (should (string-search "refused by" text))))))
-
-(ert-deftest drgnx-agents-hooks/a-new-hook-row-changes-the-tool-rows-signature ()
-  ;; the view's diff is by `eq' elements: a row that arrives must make the tool's row draw again
-  (drgnx-agents-hooks-test--with-mirror m
-    (let* ((drgnx-agents-ui--session m) (tool (car (drgnx-agent-session-entries m)))
-           (before (drgnx-agents-ui--sig tool)))
-      (drgnx-agents-mirror--event "agent-step" (list :step (list :session "h1" :seq 4 :hooks (list drgnx-agents-hooks-test--deny))))
-      (should-not (drgnx-agents-ui--same-sig-p before (drgnx-agents-ui--sig tool))))))
-
 ;;;; The header
 
 (ert-deftest drgnx-agents-hooks/the-snapshot-fills-hooked-panel-and-plugins-changed ()
@@ -178,32 +101,6 @@
       (should (drgnx-agents-hooks-context m))
       (should (drgnx-agents-hooks-offers-p m "drop"))
       (should-not (drgnx-agents-hooks-offers-p m "pin")))))
-
-(ert-deftest drgnx-agents-hooks/the-header-says-what-the-snapshot-says-and-nothing-more ()
-  (drgnx-agents-hooks-test--with-mirror m
-    (should-not (drgnx-agents-ui--header-text m))
-    (should-not (memq :header (drgnx-agents-ui--keys m)))
-    (setf (drgnx-agent-session-hooked m) '(:unhooked ("read" "fetch") :by_adapter ("edit") :why "the agent runs them itself")
-          (drgnx-agent-session-plugins-changed m) t)
-    (let ((text (substring-no-properties (drgnx-agents-ui--header-text m))))
-      (should (string-search "not hooked: read, fetch (the agent runs them itself)" text))
-      (should (string-search "hooked by the adapter: edit" text))
-      (should (string-search "plugins changed: restart the session" text))
-      (should-not (string-search "context" text)))
-    (should (eq (car (drgnx-agents-ui--keys m)) :header))))
-
-(ert-deftest drgnx-agents-hooks/the-context-percent-opens-the-breakdown-only-when-the-agent-sends-one ()
-  (drgnx-agents-hooks-test--with-mirror m
-    (setf (drgnx-agent-session-usage m) '(:used 40 :size 100))
-    ;; no breakdown: the percent is plain text, never a button; the command refuses
-    (let ((h (drgnx-agents-ui--header-text m)))
-      (should (string-search "context 40%" h))
-      (should-not (drgnx-agents-hooks-test--has-button h)))
-    (should-error (drgnx-agents-ui-context m) :type 'user-error)
-    (setf (drgnx-agent-session-panel m) '(:features ("context") :context (:used 60 :size 120 :parts ((:kind "files" :tokens 60)))))
-    (let ((h (drgnx-agents-ui--header-text m)))
-      (should (string-search "context 50%" h))                       ; the breakdown's own figures
-      (should (drgnx-agents-hooks-test--has-button h)))))
 
 ;;;; The breakdown
 

@@ -11,7 +11,6 @@
   "drgnx-ai-gateway/commit-message-goes-through-the-gateway"
   "drgnx-ai-gateway/embed-goes-through-the-gateway"
   "drgnx-ai-gateway/fim-goes-through-the-gateway"
-  "drgnx-ai-gateway/gptel-backend-points-at-the-gateway"
   "drgnx-ai-gateway/keys-changed-updates-what-is-usable"
   "drgnx-ai-gateway/the-indexer-asks-for-a-token-of-its-own"
   "drgnx-ai-gateway/usable-comes-from-keys-held"
@@ -74,6 +73,7 @@
   "drgnx-agents-editor-hub/follow-moves-with-the-agent"
   "drgnx-agents-editor-hub/follow-here-stops-on-navigation"
   "drgnx-agents-editor-hub/give-saves-without-prompting"
+  "drgnx-agents-editor-hub/start-a-huddle-from-two-rows"
   "drgnx-agents-editor-hub/give-on-a-chat-saves-nothing"
   "drgnx-agents-editor-hub/give-refused-lists-unsaved-buffers"
   "drgnx-agents-editor-hub/the-interim-save-hook-is-gone"
@@ -82,7 +82,6 @@
   "drgnx-shell-rc/a-path-with-dollar-and-quotes-sources-for-real"
   "drgnx-shell-rc/the-line-sources-cleanly"
   "drgnx-view-live/a-mark-from-a-process-filter-only-marks"
-  "drgnx-work-ui/refresh-scans-in-another-process-and-redraws"
 )
  ;; the client against Ratatoskr: CI's unit jobs set DRGNX_RATATOSKR_BIN, ratatoskr-mock beside it (Linux and macOS)
  (darwin
@@ -93,7 +92,6 @@
   "drgnx-ai-gateway/commit-message-goes-through-the-gateway"
   "drgnx-ai-gateway/embed-goes-through-the-gateway"
   "drgnx-ai-gateway/fim-goes-through-the-gateway"
-  "drgnx-ai-gateway/gptel-backend-points-at-the-gateway"
   "drgnx-ai-gateway/keys-changed-updates-what-is-usable"
   "drgnx-ai-gateway/the-indexer-asks-for-a-token-of-its-own"
   "drgnx-ai-gateway/usable-comes-from-keys-held"

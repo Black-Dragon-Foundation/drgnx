@@ -432,6 +432,7 @@ impl Worker {
             images: Vec::new(),
             styles: self.styles.take(reset),
             term,
+            model: None,
         };
         self.out.push(Out::Patch {
             patch: Box::new(patch),

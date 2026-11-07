@@ -68,37 +68,15 @@ else counts as a program of no known package. A copy of the program (no link) wi
 the same way, since drgnx cannot tell which one it came from. A command given as a path
 (`:command ("/opt/x/claude-agent-acp")`) runs exactly that program.
 
-A session's **transcript** (RET on its row; opens in the editor) shows:
-
-- what you said (`▸`; a steering message `↪`), the agent's answer, its thinking (dimmed);
-- tool calls with their status — a subagent's own tool calls indented under it;
-- the agent's plan (`☑` done, `◐` in progress, `☐` pending);
-- **what waits for you**: a permission request with its options as buttons; an edit to review;
-- the agent's slash commands (`/compact`, …) at the top;
-- "working…" with a **[Stop]** button, the queued messages (each with **[×]** to remove it; **[Deliver]** after a
-  Stop), and how the agent exited if it did (with the end of its error output).
-
-A transcript is drawn only while a window shows it, at most ten times a second: what the agent streams is added at
-the end of its answer, and only a part that changed (a tool call's status, a permission answered) is drawn again, so a
-long transcript costs no more to follow than a short one. A transcript you are not looking at draws nothing; when it
-shows again it catches up at once. Scrolled to the end, it follows what comes in; scrolled up to read, it keeps your
-place while the agent streams. `g` redraws it at once.
-
-Agents: Send to Agent (RET in a transcript) sends; Stop Agent (`C-c C-c` in a transcript, or [Stop]) cancels the
-running turn — it ends within a second, pending permission requests are answered "cancelled" (and their permission
-cards leave What needs you), pending edits rejected, and queued messages wait (Deliver Queued Messages, `C-c C-d`, sends them; Edit Queued Message changes or
-removes one before it is sent). If the agent answers the cancel late, its last words are dropped and nothing new
-is sent until that answer came — never two turns at once. Answer Agent picks an option for a pending permission. The **context** column shows how full the agent's
-context is (from the agent's `usage_update`, or usage in its answer). The **Last** column shows how long ago the
-agent last did something (`30s`, `5m`, `2h`, `3d`), as this Emacs saw it. The list updates in place: when an agent changes, or every 30
-seconds for the ages, only the lines that differ are rewritten, and each window (and the cursor) stays on its
-session even when lines move. While the list is not shown nothing is printed; it is brought up to date when you show
-it again; the 30 second timer itself runs only while the list shows. The dock's tab strip uses the header line, so the
-column titles (Name, Status, Last, …) are the list's first line, in the theme's header face. With no sessions the list
-says how to start one (*New Agent Session…*, with its key when your key profile has one, or from the palette) and, when
-the default profile is claude and its adapter is missing or too old, what Claude needs. The Agent layout
-([layouts.md](layouts.md)) puts this list on the right and the chat of the agent that
-acted last beside your file.
+A session's **panel** (RET on its row in the Agents list, Enter on its card on the Work map, `agents-panel`) shows its
+steps, what waits for you and the composer; see [agent-panel.md](agent-panel.md). It replaced the old transcript, the
+old Agents view and its hunk-by-hunk review. The **Agents list** (*Show Agents*, the dock's Agents tab) has one line for
+each session the hub runs: its name, status, how full its context is and what waits for you (queued messages,
+permissions to answer, edits to review). A line is drawn again only when its session changed; nothing is drawn while no
+window shows the list. With no sessions it says how to start one (*New Agent Session…*). The Agent layout
+([layouts.md](layouts.md)) puts this list on the right and the panel of the agent that acted last beside your file.
+Sending, Stop, queued messages, the context breakdown and answering are the panel's (*Answer Agent…* in the palette
+picks an option for a pending permission without opening it).
 
 Nothing an agent asks is ever a question in the minibuffer: the agent waits, the Agents tab says "1 to answer",
 and you answer when you look.
@@ -140,15 +118,15 @@ A step an agent asked for can be refused before you see it:
 A note a rule or hook added shows under the step. The session's `hooked` mark says which kinds of step its hooks see
 and which the agent runs without asking.
 
-**In the transcript** a hook's word is a line under the step, in theme colours: `⛔ refused by deny-rm 0.1 · "rm
+**In the panel** a hook's word is a line under the step, in theme colours: `⛔ refused by deny-rm 0.1 · "rm
 outside the worktree"`, `↻ changed by rewrite-commit-msg`, `✎ note by annotate-edit · text`, `⏳ NAME 0.1 was busy: its hook
 did not run` (a hook the plugin host had no room for, told apart from other failures), and, for a hub tool, `hooked at
 the hub's server`. Press RET on a line for its provenance: the source, version and hash, the verdict, how many
 milliseconds it took and what the hook was asked (the point, where it ran, the tool and the step). The lines come from
-what the hub already told the editor: nothing is asked while the transcript is drawn, and a step the editor was not
+what the hub already told the editor: nothing is asked while the panel is drawn, and a step the editor was not
 watching when it ran has no line (its note still shows).
 
-**The header** above the transcript says `context N%` and, when the agent sends a breakdown (an agent from the org's
+**The chips** above the steps say `context N%` and, when the agent sends a breakdown (an agent from the org's
 adapter forks does: Claude, Gemini, Kimi Code, DeepSeek Harness; Codex and others do not and show none), the figure opens the breakdown: a bar of the parts of the window
 (system, tools, files, tool output, conversation, free), each part's items, `[drop]` and `[pin]` for an item where the
 agent offers them, and `[What /compact keeps]` where it can tell (nothing is compacted by looking). The header also says
@@ -158,12 +136,8 @@ plugin after the session began (a session keeps the plugin set it started with).
 
 ## Reviewing an agent's edits
 
-When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,
-which opens the proposed change as a diff against a copy of the file (the header says if the file is outside the
-session's project). Apply the hunks you want (`C-c C-a` on a hunk — diff-mode; they go to the copy), then **Done**
-(`C-c C-c`) writes the copy to the file — a new file is created — and the agent hears the edit was made. **Reject**
-(`C-c C-k`), or closing the diff, writes nothing and tells the agent it was refused. Done refuses while the file has
-unsaved changes in Emacs. Reads (`fs/read_text_file`, also a range of lines) get the file as it is in Emacs, unsaved
+An agent's edits show as cards in the panel, where you accept or reject each hunk ([agent-panel.md](agent-panel.md)); the retired Agents view's
+diff review (Review, Done, Reject) is gone. Reads (`fs/read_text_file`, also a range of lines) get the file as it is in Emacs, unsaved
 edits included; both need absolute paths. A read is served only for a local path (never a remote, TRAMP one) and,
 when no buffer visits it, only for a regular file of at most 10 MiB (`drgnx-agents-read-max`): a FIFO or a device is
 refused, never opened. The file is read with no file name handlers: a `.gz` or `.gpg` file comes back as its bytes
@@ -487,13 +461,13 @@ anything else is only proposed, for you (and, with jobs, a reviewer) to decide.
 Messages never interrupt: an agent gets one as a new turn once it is free (not while it works, not while you have
 stopped it), and each goes queued → delivered → read → acted on. A message is only text to the agent that gets it,
 quoted and marked as coming from another agent: it never answers a permission request, never approves anything,
-never changes a setting. Your own answers and messages (a reply to a job's agent, an answer from the Work cockpit)
+never changes a setting. Your own answers and messages (a reply to a job's agent, an answer from the Work space)
 reach it as yours, unquoted: `[message from the user #N — the user's message]`, or `[message from the user #N — the
 user's answer to your question #Q]` and the question's words on a quoted line when drgnx knows which question it
 answers. No agent can send as the user. Two agents writing to each other too fast, or a full queue, holds the rest. Agents of a job
 hear about that job's new decisions (once per change); a plain chat session is never woken for them. A task an
 agent claimed is a lease, kept while the agent runs and while the task waits on you; if the agent is gone for 15
-minutes the task is free again (the Work cockpit's What needs you shows it; messages and escalations to you wait
+minutes the task is free again (the Work space's What needs you shows it; messages and escalations to you wait
 there too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
@@ -551,7 +525,7 @@ first commit, so renaming its folder changes nothing). An agent started outside 
 names of agents, unless a grant opens a project to it, and writes nothing. Things in other projects are left out of what it reads and only counted ("3 hidden"), never named.
 
 To let agents read another project, give them a grant (an agent can ask for one; the request waits for you in the
-Work cockpit): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
+Work space): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
 Grants open reading only: agents still write only into their own project. Whatever another agent wrote reaches an
 agent marked as that agent's text, as data rather than instructions. More in
 [security.md](security.md#grants).
@@ -675,7 +649,7 @@ The agent then gets four tools to report with:
 - **ask_user**: a question that waits for you, never a prompt.
 
 It also gets the messages and the decision log, like drgnx's own agents. Its reports are recorded now, and the Work
-cockpit is where they will show. **Coming with the Work cockpit** (later in this milestone): each reporting agent
+Work space is where they will show. **Coming with the Work space** (later in this milestone): each reporting agent
 shown with its name, folder and branch, the files it changed with their diff since it said hello, its test runs and
 its questions. You will answer a question there, and your answer will reach the agent as a message.
 
@@ -692,7 +666,7 @@ What an outside agent cannot do:
   messages are cut to 2,000 characters, and characters that hide or reorder text (controls, BiDi overrides) become
   spaces.
 
-**Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
+**Coming with the Work space:** an agent that does not report — no drgnx server in its config, or it never says
 hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
 **not reporting**.
 
@@ -878,7 +852,8 @@ restores code, decisions and commit and says so, and Fork sits beside it.
 The edit history (`history.db`, one per project) is part of the nightly backup, beside `work.db`: one checked copy per
 project, `backup/history-<project>.db`, replaced each night and never rotated; its 2 GiB cap per project bounds it.
 `drgnx doctor` shows the newest copy in its `history` row and warns when a copy failed. A failed history copy never
-stops the `work.db` copy.
+stops the `work.db` copy. The `edit-history` row of the doctor says when this Emacs lacks Nidhogg's change hook: the edit
+history then stays off (no revert, no pair mode) until Nidhogg is rebuilt.
 
 After a revert, a file you have open reverts quietly. A buffer with unsaved changes in a file the revert wrote is never
 touched: a notice leads to **History: Resolve Unsaved Changes**, a card showing the difference with *keep mine*,
@@ -972,17 +947,15 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
   delivery are tested by the Rust tests and the conformance rows against a real hub
   ([coordination.md](../develop/coordination.md), [hub.md](../develop/hub.md), [runtime.md](../develop/runtime.md)).
 - `test/unit/hub-client-test.el` — the editor's client of the hub: the connection, its proof, the subscription, the
-  restart notice, the traffic the cockpit and the CLI send.
+  restart notice, the traffic the editor and the CLI send.
 - `test/unit/agents-mirror-test.el`, `agents-mirror-permission-test.el` — the editor's mirror of the hub's sessions.
 - `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no
   npm, no agent): the maintained package wins wherever it is on the `PATH`, the deprecated one still runs and says so
   once with its fix, an old version, a copy instead of a link, a program of no known package, other commands left
   alone, and the doctor's fact.
-- `test/unit/agents-ui-test.el` (the transcript, the list, hunk-by-hunk review; the transcript's view: a thousand
-  chunks grow one row, a grow costs the same on a 4 kB and a 400 kB answer, a hidden transcript draws nothing, a tool's
-  status or a permission draws one row, the tail is followed and a reader scrolled up stays put),
-  `test/ui/view-ui-test.el` (typing beside a streaming transcript), `test/unit/plans-sync-test.el`.
+- `test/unit/agent-panel-test.el` (the panel, the agents list, the panel opened from a card), `test/ui/view-ui-test.el`
+  (typing beside a streaming view), `test/unit/plans-sync-test.el`.
 
 The mock agent (`test/fixtures/mock-acp.el`) is a batch Emacs whose turns are chosen by words in the prompt
 (`slow`, `stream N`, `tool`, `plan`, `subagent`, `permission`, `write PATH`, `crash`, `/compact`, `meta`: the `_meta`

@@ -19,6 +19,7 @@
 (require 'drgnx-perf-extensions)
 (require 'drgnx-perf-workloads)
 (require 'drgnx-perf-work)
+(require 'drgnx-perf-agents)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -647,57 +648,13 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                     " (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))"
                                     " (setq drgnx-perf--agent (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
                                     " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--agent) 'idle)))"
-                                    " (drgnx-agents-ui-view) t)")
+                                    " (drgnx-agent-panel-list-show) t)")
                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
                                    " (drgnx-perf--wait 15 (lambda () (not (drgnx-perf--running-p drgnx-perf--agent))))"
                                    " (drgnx-perf--send drgnx-perf--agent \"slow\") t)")
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(drgnx-perf--running-p drgnx-perf--agent)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) (drgnx-perf--hub-stop) " kill-fixture ")"))
-      ;; typing while the editor's other window shows a transcript whose running answer is 400 kB long and grows by
-      ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
-      ;; (the mock's turn is that: a first chunk of 400 kB, then five chunks every tenth of a second, 300 times; the
-      ;; run waits for the 400 kB to be in the transcript before it types)
-      ;; the mock runs a prompt past its script's last line as its own words (a turn that ends at once): one line for
-      ;; every run of a setup, both sides' warm-ups and rounds of an A/A included
-      (agent-stream :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
-                                    (format " (drgnx-perf--hub-start (make-list %d (drgnx-perf--stream)))"
-                                            (* 2 (1+ drgnx-perf-ab-min-rounds)))
-                                    " (setq drgnx-perf--stream (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
-                                    " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)))"
-                                    " t)")
-                    :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                   " (drgnx-perf--wait 40 (lambda () (not (drgnx-perf--running-p drgnx-perf--stream))))"
-                                   " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
-                                   "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
-                                   "   (select-window editor))"
-                                   ;; the hub sends entries to the editors that showed the session: the editor does it from
-                                   ;; `window-buffer-change-functions', which a run of workloads in one session may have removed
-                                   " (drgnx-agents-mirror-show (drgnx-agent-session-remote drgnx-perf--stream))"
-                                   " (drgnx-perf--send drgnx-perf--stream \"stream 1500\")"
-                                   " (drgnx-perf--wait 30 (lambda () (let ((e (car (last (drgnx-agent-session-entries drgnx-perf--stream)))))"
-                                   "   (and (eq (plist-get e :type) 'agent) (>= (drgnx-agents-entry-length e) 409600)))))"
-                                   " t)")
-                    :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
-                    :check "(drgnx-perf--running-p drgnx-perf--stream)"   ; typed while it streamed
-                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--stream)) (drgnx-perf--hub-stop)"
-                                       " (when-let* ((b (get-buffer (format \"*agent: %s*\" (drgnx-agent-session-name drgnx-perf--stream)))))"
-                                       "   (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))"
-                                       "   (kill-buffer b)) "
-                                       kill-fixture ")"))
-      ;; the same shape as agent-stream with no agent: a transcript fed from a recording (test/fixtures/day/transcript.eld) by
-      ;; a timer, at the recorded pace, through `drgnx-agents--append-text' and `drgnx-agents--changed'; it runs in
-      ;; the container, where a mock agent's turn ends before the typing does
-      (transcript-replay :setup ,(format "(progn (defvar drgnx-perf--replay-mark 0 \"Chunks fed when the keys began.\")
-                                                (drgnx-perf-replay-start \"replay\" '%S) t)" (drgnx-perf-day--read "transcript.eld"))
-                         :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                        " (let ((editor (selected-window)) (b (drgnx-perf-replay-buffer \"replay\")))"
-                                        "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
-                                        "   (select-window editor))"
-                                        " (setq drgnx-perf--replay-mark (drgnx-perf-replay-count \"replay\")) t)")
-                         :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
-                         :check "(> (drgnx-perf-replay-count \"replay\") drgnx-perf--replay-mark)"   ; typed while it streamed
-                         :teardown ,(concat "(progn (drgnx-perf-replay-stop \"replay\") " kill-fixture ")"))
       ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
@@ -828,6 +785,8 @@ error if it does not hold).  With :actions, :measure runs after the input and it
       ,@(drgnx-perf-workers-workloads)
       ;; the Work space: 30 streaming mock agents, the map shown or hidden (harness/drgnx-perf-work.el)
       ,@(drgnx-perf-work-workloads (drgnx-perf-run--visit-fixture-form) kill-fixture)
+      ;; the agents in the editor: five streaming mock agents, a 3,000-line file (harness/drgnx-perf-agents.el)
+      ,@(drgnx-perf-agents-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -985,8 +944,17 @@ under :compose (the compose probe)."
         (evil (drgnx-perf--get results 'typing-evil '(:input :p95)))
         (hidden (drgnx-perf--get results 'work-typing-hidden '(:input :p95)))
         (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95)))
-        (mirror (drgnx-perf--get results 'work-typing-mirror '(:input :p95))))
+        (agents (drgnx-perf--get results 'agents-typing '(:input :p95)))
+        (agents-none (drgnx-perf--get results 'agents-typing-none '(:input :p95)))
+        (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio))))
     (append
+     ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
+     ;; least 80 % were applied by the editor
+     (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
+       (list (format "agents-typing input p95 %s ms is %s ms over agents-typing-none's %s ms (the agents in the editor may add at most 1 ms)"
+                     (drgnx-perf--round agents) (drgnx-perf--round (- agents agents-none)) (drgnx-perf--round agents-none))))
+     (when (and (numberp ratio) (< ratio 0.80))
+       (list (format "pair-typing applied %s of the paired chat's writes; at least 0.80 are due" (drgnx-perf--round ratio))))
      (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
        (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
                      (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))
@@ -995,9 +963,7 @@ under :compose (the compose probe)."
      (when (and (numberp hidden) (numberp shown) (> (- shown hidden) 1.0))
        (list (format "work-typing-shown input p95 %s ms is %s ms over work-typing-hidden's %s ms (the map may add at most 1 ms)"
                      (drgnx-perf--round shown) (drgnx-perf--round (- shown hidden)) (drgnx-perf--round hidden))))
-     (when (and (numberp plain) (numberp mirror) (> (- mirror plain) 1.0))
-       (list (format "work-typing-mirror input p95 %s ms is %s ms over typing's %s ms (30 agents streaming may add at most 1 ms)"
-                     (drgnx-perf--round mirror) (drgnx-perf--round (- mirror plain)) (drgnx-perf--round plain)))))))
+     )))
 
 (defun drgnx-perf-run--relative-note (results)
   "A line saying the 1 ms rule was not judged, when `typing-evil' was measured without `typing' in RESULTS; else nil."
@@ -1208,19 +1174,24 @@ version and the commit, as JSON in FILE."
     (make-directory (file-name-directory (expand-file-name file)) t)
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
+(defconst drgnx-perf-run-workers-seeded
+  '(explorer-git quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old)
+  "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
+
 (defconst drgnx-perf-run-unseeded
-  `((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
+  `(,@(mapcar (lambda (w) (cons w "report-only until the combined gate pass: allocation, CPU and rows follow its first runs on the desktop island"))
+              '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     (terminal-typing . "the container image has no eat package")
     (terminal-output . "the container image has no eat package")
-    (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
-              drgnx-perf-workers-names)
+              (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
-              '(work-nav work-relayout work-typing-shown work-typing-hidden work-typing-mirror))
+              '(work-nav work-relayout work-typing-shown work-typing-hidden))
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
+    (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
@@ -1397,7 +1368,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
 (defconst drgnx-perf-day-seed "drgnx-day-1" "Seeds the order of the workloads in each steady round.")
 
 (defconst drgnx-perf-day-workloads
-  '(typing scrolling tabs explorer code-scrolling diff-scrolling replace-typing replace-retype window-switch transcript-replay)
+  '(typing scrolling tabs explorer code-scrolling diff-scrolling replace-typing replace-retype window-switch)
   "The workloads of a steady round: the container-runnable input workloads that need no package, process or git
 project the GUI image lacks (so not the mock-agent, Live, terminal, evil, popup, remote, ghost or index ones).")
 
@@ -1509,8 +1480,7 @@ against the replay server, read the repository with `vc-git', start two transcri
                              (unless (> (buffer-size dir) 0) (error "vc-git: the status is empty"))))))
         (step "streams" (lambda ()
                           (dolist (n '("day-1" "day-2"))
-                            (drgnx-perf-replay-start n chunks)
-                            (drgnx-perf-replay-buffer n)))))
+                            (drgnx-perf-replay-start n chunks)))))
       (vconcat (nreverse steps)))))
 
 (defconst drgnx-perf-day-teardown-form

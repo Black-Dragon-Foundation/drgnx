@@ -284,6 +284,70 @@ pub struct MapSubscribe {
     /// The selected item: a quiet reflow that would move its chain waits for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no
+    /// `work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows: bool,
+}
+
+/// `work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MapSubscribed {
+    Frame(MapFrame),
+    Rows(MapRows),
+}
+
+/// `work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapRows {
+    pub hub: u64,
+    pub version: u64,
+}
+
+/// One lane of a Timeline: an agent session and its label.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailLane {
+    pub session: String,
+    pub label: String,
+}
+
+/// `work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailSubscribe {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lanes: Vec<TrailLane>,
+}
+
+/// `work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailSubscribed {
+    pub hub: u64,
+}
+
+/// `work/trail/close`'s params.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailClose {
+    pub view: String,
+}
+
+/// `work/board/subscribe`'s params: one view of the connection shows the Board of the tracker's tasks (of `plans`,
+/// else every task), each card naming the agent of map view `map` that works on it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSubscribe {
+    pub view: String,
+    pub map: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<String>,
 }
 
 /// A map view's full frame: `work/map/subscribe`'s answer.
@@ -327,6 +391,9 @@ pub struct MapSet {
     /// The selection moved (a map key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Nothing is selected any more (Esc, or the selection went with no item left to take it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
 }
 
 /// `work/map/set`'s answer: the view's version after it.
@@ -440,6 +507,44 @@ fn check_presence_get(p: &PresenceGet) -> Result<(), Error> {
     }
 }
 
+/// The most lanes one Timeline holds.
+const LANES_MAX: usize = 256;
+
+fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    let name = |s: &str| !s.is_empty() && s.len() <= NAME_MAX;
+    match (&p.session, p.lanes.is_empty()) {
+        (Some(s), true) if name(s) => Ok(()),
+        (Some(_), true) => Err(invalid("session", "a session id")),
+        (None, false) if p.lanes.len() > LANES_MAX => Err(invalid("lanes", "at most 256 lanes")),
+        (None, false)
+            if p.lanes
+                .iter()
+                .all(|l| name(&l.session) && l.label.len() <= NAME_MAX) =>
+        {
+            Ok(())
+        }
+        (None, false) => Err(invalid("lanes", "lanes of a session id and a label")),
+        _ => Err(invalid("session", "one of session or lanes")),
+    }
+}
+
+fn check_trail_close(p: &TrailClose) -> Result<(), Error> {
+    check_view(&p.view)
+}
+
+/// The most plans one Board is scoped to.
+const PLANS_MAX: usize = 64;
+
+fn check_board_subscribe(p: &BoardSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    check_view(&p.map).map_err(|_| invalid("map", "a map view id of 1 to 64 bytes"))?;
+    if p.plans.len() > PLANS_MAX || p.plans.iter().any(|s| s.is_empty() || s.len() > NAME_MAX) {
+        return Err(invalid("plans", "at most 64 plan ids"));
+    }
+    Ok(())
+}
+
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
     if p.session.is_empty() || p.session.len() > NAME_MAX {
         return Err(invalid("session", "a session id"));
@@ -492,14 +597,14 @@ pub struct Hunks {
     pub diff: String,
 }
 
-/// `work/file-at`: a file as a step's snapshot had it.
+/// `work/file-at`: a file as the edit history had it after a step.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileAtParams {
     pub session: Id,
     /// Relative to the worktree.
     pub path: Bounded<String, 4096>,
-    /// The step; the newest snapshot at or before it answers.
+    /// The step; the newest record of the session at or before it answers.
     pub seq: u64,
 }
 
@@ -509,7 +614,7 @@ pub struct FileAtParams {
 pub struct FileAt {
     /// The file's bytes, base64.
     pub bytes: String,
-    /// The step whose snapshot this is.
+    /// The step of the record this is.
     pub seq: u64,
 }
 
@@ -581,9 +686,9 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_conclusions,
         ),
         method!(
-            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapFrame,
+            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapSubscribed,
             classes: [User], writes: false,
-            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
             check: check_map_subscribe,
         ),
         method!(
@@ -599,6 +704,24 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_map_close,
         ),
         method!(
+            "work/trail/subscribe", WorkTrailSubscribe(TrailSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
+            check: check_trail_subscribe,
+        ),
+        method!(
+            "work/trail/close", WorkTrailClose(TrailClose) -> bool,
+            classes: [User], writes: false,
+            doc: "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
+            check: check_trail_close,
+        ),
+        method!(
+            "work/board/subscribe", WorkBoardSubscribe(BoardSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
+            check: check_board_subscribe,
+        ),
+        method!(
             "work/files", WorkFiles(EditedFiles) -> EditedFilesList,
             classes: [User], writes: false,
             doc: "the files a session edited, with added and removed lines against its worktree's base (new files included)",
@@ -611,7 +734,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "work/file-at", WorkFileAt(FileAtParams) -> FileAt,
             classes: [User], writes: false,
-            doc: "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+            doc: "a file's bytes (base64) as the agent had it after its newest edit-history record at or before step seq",
         ),
     ]
 }

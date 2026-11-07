@@ -7,6 +7,7 @@
 //! | line | what the turn does |
 //! |---|---|
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
+//! | `tool:run CMD` | an execute call announced pending, then CMD runs in the cwd, then completed: the call lasts as long as CMD |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
 //! | `provider:edit-stream PATH OLD NEW` (Claude) | an `Edit`: the path first, then `rawInput` field by field, then completed with a `Diff` (quote an argument to keep its spaces) |
@@ -44,6 +45,9 @@
 //! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted
 //! (Codex: only the four codex-acp knows, `codex.rs`; Kimi Code: only its four, each switch told by a
 //! `current_mode_update`, `kimi.rs`).  `--start-mode MODE` (Kimi Code): sessions open in MODE, not `default`.
+//! `--config-options`: `session/set_config_option` is answered and logged as `{"config_option": {configId, value}}`;
+//! without it the method is not found, as in an older agent (`set_mode` and `set_model` are logged as `{"set_mode": ...}`
+//! and `{"set_model": ...}`).
 //! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
 //! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
 //! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
@@ -534,8 +538,20 @@ impl Agent {
                 self.fork(&id, &params)
             }
             "session/prompt" => self.prompt(&id, &params),
+            "session/set_config_option" if self.argv.iter().any(|a| a == "--config-options") => {
+                self.log(
+                    "config_option",
+                    json!({"configId": params["configId"], "value": params["value"]}),
+                );
+                reply(json!({"configOptions": []}));
+            }
+            "session/set_model" => {
+                self.log("set_model", json!({"modelId": params["modelId"]}));
+                reply(json!({}));
+            }
             "session/set_mode" => {
                 let mode = params["modeId"].as_str().unwrap_or_default();
+                self.log("set_mode", json!({"modeId": mode}));
                 let refused = self
                     .argv
                     .iter()
@@ -1000,6 +1016,22 @@ impl Agent {
                 let out = sh(&cwd, rest);
                 self.tool(sid, turn, "execute", rest, json!({"command": rest}), &out);
             }
+            // a call that runs as long as its command: pending first, then the command, then completed
+            "tool:run" => {
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": rest,
+                    "kind": "execute", "status": "pending", "rawInput": {"command": rest}}),
+                );
+                let out = sh(&cwd, rest);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+                );
+            }
             "ask:permission" => {
                 let kind = if rest.is_empty() { "execute" } else { rest };
                 let answer = self.permission(sid, turn, kind, &format!("{kind} request"));
@@ -1230,6 +1262,10 @@ impl Agent {
             self.say(sid, turn, &format!("no provider tool {what}\n"));
             return;
         };
+        if self.kind == Kind::Kimi && kimi::denied(name) {
+            self.say(sid, turn, &format!("{name}: denied by the lock\n"));
+            return;
+        }
         if asks {
             let answer = self.permission_for(sid, turn, fields, fold);
             if !answer.starts_with("allow") {

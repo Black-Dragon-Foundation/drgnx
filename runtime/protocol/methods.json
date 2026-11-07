@@ -1976,6 +1976,11 @@
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
                 "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
+                "type": "string"
               }
             ]
           },
@@ -3028,6 +3033,49 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun. A search a newer one stopped says nothing.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matches": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "query",
+          "files",
+          "matches"
+        ],
+        "title": "GrepDone",
+        "type": "object"
+      },
+      "doc": "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing",
+      "name": "search-grep-done"
+    },
+    {
+      "data": {
         "$defs": {
           "SettingScope": {
             "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
@@ -3461,6 +3509,53 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md \"The native view\nmodel\"), from version BASE to VERSION. MODEL is one JSON string, `{\"ops\": [...]}`, that the editor hands to its\nreplica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with\n`model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).",
+        "properties": {
+          "base": {
+            "description": "The version this patch applies to: 0 for the first model of a subscription.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hub": {
+            "description": "The hub's instance id, as on `view-patch`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reset": {
+            "description": "MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.",
+            "type": "boolean"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "hub",
+          "base",
+          "version",
+          "model"
+        ],
+        "title": "ViewModel",
+        "type": "object"
+      },
+      "doc": "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version",
+      "name": "view-model"
+    },
+    {
+      "data": {
         "$defs": {
           "Colour": {
             "description": "A cell colour.",
@@ -3857,6 +3952,15 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "model": {
+            "description": "The version of the view's model (`view-model`) these rows were built from; none for a view with no model.\nThe editor applies its queued models up to it before it draws these rows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "ops": {
             "items": {
@@ -4567,6 +4671,53 @@
       "classes": [
         "user"
       ],
+      "doc": "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+      "name": "agents/config",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The user's switch of a session's mode or model.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "option": {
+            "description": "`mode` or `model`.",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "value": {
+            "description": "The mode id or model id; a mode must be on the provider's lock allow-list.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "option",
+          "value"
+        ],
+        "title": "ConfigParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
       "name": "agents/context-drop",
       "params": {
@@ -4825,6 +4976,104 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
+      "name": "agents/explain",
+      "params": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "ExplainParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Fact": {
+            "additionalProperties": false,
+            "description": "One fact behind a chip: a name and what it is, in words.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).",
+        "properties": {
+          "facts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Fact"
+            },
+            "type": "array"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "Explained",
+        "type": "object"
       },
       "writes": false
     },
@@ -5564,6 +5813,175 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the Always grants the user gave a session, as the hub's ledger keeps them (revoked ones included)",
+      "name": "agents/grants",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Grant": {
+            "additionalProperties": false,
+            "description": "One \"Always\" the user gave a session, as the hub's ledger keeps it (Urdr kind `always`, written by the hub):\nthe tool step it covers (the kind of tool call and a key made of its title), the card it was answered on, when, and\nwhether the user took it back.  A revoked grant makes the hub ask again for a matching request.",
+            "properties": {
+              "at": {
+                "description": "Seconds since the epoch.",
+                "format": "double",
+                "type": "number"
+              },
+              "card": {
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "`always:SESSION:KEY`.",
+                "type": "string"
+              },
+              "key": {
+                "description": "What the grant matches: the kind and a hash of the tool call's title.",
+                "type": "string"
+              },
+              "revoked": {
+                "type": "boolean"
+              },
+              "session": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tool": {
+                "description": "The tool call's kind (`edit`, `execute`, …).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "session",
+              "tool",
+              "key",
+              "at",
+              "revoked"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/grants`: a session's Always grants, revoked ones included, oldest first.",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/$defs/Grant"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "grants"
+        ],
+        "title": "Grants",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user takes back an Always: the ledger marks it revoked, so the hub asks again for a matching request; says whether the agent's own rule is cleared or kept until it starts again, and whether a restart at the current step would clear it",
+      "name": "agents/grants/revoke",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/grants/revoke`: take back grant GRANT (its id) of session ID.",
+        "properties": {
+          "grant": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id",
+          "grant"
+        ],
+        "title": "GrantRevoke",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "AgentRule": {
+            "description": "Whether the agent's own rule is gone: `cleared` when its adapter took the grant back, `kept` when only the hub's\nledger did (the agent may still go on without asking until it starts again: a restart at the current step clears it).",
+            "enum": [
+              "cleared",
+              "kept"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The answer of `agents/grants/revoke`.",
+        "properties": {
+          "agent_rule": {
+            "$ref": "#/$defs/AgentRule"
+          },
+          "grant": {
+            "type": "string"
+          },
+          "restart": {
+            "description": "Whether a restart at the current step would clear the agent's rule (a session with steps to restart at).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "grant",
+          "agent_rule",
+          "restart"
+        ],
+        "title": "Revoked",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -10729,6 +11147,11 @@
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
                 "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
+                "type": "string"
               }
             ]
           },
@@ -10975,6 +11398,11 @@
               {
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
                 "type": "string"
               }
             ]
@@ -11365,6 +11793,11 @@
               {
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
                 "type": "string"
               }
             ]
@@ -11881,6 +12314,11 @@
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
                 "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
+                "type": "string"
               }
             ]
           },
@@ -12054,6 +12492,77 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "list the Explorer's roots and open folders for a hub-fed view on a thread: its tree model (view-model) and its rows (view-patch) to every class; ask again with the new open folders to expand or collapse; a newer listing of the view stops the old one",
+      "name": "explorer/subscribe",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`: list ROOTS, and inside them the folders of EXPANDED, for the Explorer's hub-fed VIEW: its\nmodel (a `tree` of path nodes, a folder open when it is a root or in EXPANDED) and its rows (one per entry, guides\nand chevron, the path over the row) go to every class of VIEW. Folders come first, then names in natural,\ncase-insensitive order; the names a version-control folder, `.DS_Store`, `__pycache__` and `.#…` locks never show.\nAn open folder whose only entry is a folder shares its row with it (`src/app`) unless COMPACT is false. A newer\nsubscription of the same view stops this one; ask again with the new EXPANDED to open or close a folder.",
+        "properties": {
+          "compact": {
+            "description": "Join single-folder chains on one row; default on.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "expanded": {
+            "description": "The open folders under the roots (no trailing slash), at most 10000.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "roots": {
+            "description": "The roots, 1 to 16 existing folders.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "roots"
+        ],
+        "title": "ExplorerParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`'s answer: LISTING numbers the listing.",
+        "properties": {
+          "listing": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listing"
+        ],
+        "title": "ExplorerStarted",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -14550,6 +15059,57 @@
           "token"
         ],
         "title": "UnregisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
+      "name": "git/letters",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/letters`: read ROOT's git status and give VIEW its rows (the event `view-patch`): `f:<path>` per changed\npath (a letter in its git face), `d:<folder>` per folder in SHOWN that holds a change (and the repository's own,\n`.`), and `branch`. A later call patches only what changed.",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "shown": {
+            "description": "The folders the view shows (relative to the root); no other folder gets a row.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root"
+        ],
+        "title": "LettersParams",
         "type": "object"
       },
       "result": {
@@ -26167,6 +26727,272 @@
       "classes": [
         "user"
       ],
+      "doc": "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
+      "name": "search/files",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row\nper file, keyed by its path relative to ROOT, the query's words marked. A repository's names are what git lists\n(nothing is read), elsewhere a walk that follows no link and applies `.gitignore` files; binary, large and linked\nfiles are listed. A newer query of the same view stops this one, and its rows are never sent.",
+        "properties": {
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
+          },
+          "n": {
+            "description": "How many rows, 1 to 1000; default 100.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Words, each of which a path must hold (case-insensitive); empty: every file.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "query"
+        ],
+        "title": "FilesParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/files`'s answer: QUERY numbers the query.",
+        "properties": {
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "FilesStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+      "name": "search/grep",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset\nat once, then each file's header and matches as it is complete. A newer search of the same view stops this one.",
+        "properties": {
+          "case": {
+            "description": "Match case; default off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "exclude": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Search this one file only (globs then do not apply)."
+          },
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
+          },
+          "include": {
+            "description": "Globs; each string may hold several, comma-separated.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "regexp": {
+            "description": "TEXT is a regular expression.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "The replacement the rows preview (old struck out, new beside it); a regexp search's `\\1` are the groups.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "text": {
+            "type": "string"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          },
+          "word": {
+            "description": "Whole words only.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "text"
+        ],
+        "title": "GrepParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).",
+        "properties": {
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "GrepStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+      "name": "search/grep-replace",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep-replace`: VIEW's rows preview REPLACE now (no new search).",
+        "properties": {
+          "replace": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "replace"
+        ],
+        "title": "GrepReplaceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "start or rebuild a project's index; now overrides the battery gate",
       "name": "search/index",
       "params": {
@@ -27103,6 +27929,64 @@
           "watch"
         ],
         "title": "StatusAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the name of the innermost symbol a file (read from disk) defines around a line, from Hrafn's outline; none outside every symbol",
+      "name": "search/symbol-at",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/symbol-at`: the name of the innermost symbol that FILE (relative to ROOT, read from disk) defines around\nLINE, from Hrafn's outline of it; what the editor's agent line shows for a buffer that is saved.",
+        "properties": {
+          "file": {
+            "description": "Relative to ROOT, inside it.",
+            "type": "string"
+          },
+          "line": {
+            "description": "From 1.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "file",
+          "line"
+        ],
+        "title": "SymbolAtParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/symbol-at`'s answer: NAME is absent when no symbol holds the line (or the file is not read: missing, larger\nthan 2 MB).",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "SymbolAt",
         "type": "object"
       },
       "writes": false
@@ -30111,6 +30995,7 @@
           },
           "tz": {
             "default": "",
+            "description": "The editor's offset from UTC, `+HHMM` as `%z` prints it (the trail's times); anything else is UTC.",
             "type": "string"
           },
           "view": {
@@ -30250,16 +31135,21 @@
       "classes": [
         "user"
       ],
-      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
+      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset; with model, its replica of the view's model is not: answered by a view-model reset",
       "name": "view/resync",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`.",
+        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's\nreplica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.",
         "properties": {
           "class": {
+            "default": "",
             "type": "string"
           },
+          "model": {
+            "type": "boolean"
+          },
           "version": {
+            "default": 0,
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -30269,9 +31159,7 @@
           }
         },
         "required": [
-          "view",
-          "class",
-          "version"
+          "view"
         ],
         "title": "ViewResync",
         "type": "object"
@@ -30280,6 +31168,56 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
+      "name": "work/board/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/board/subscribe`'s params: one view of the connection shows the Board of the tracker's tasks (of `plans`,\nelse every task), each card naming the agent of map view `map` that works on it.",
+        "properties": {
+          "map": {
+            "type": "string"
+          },
+          "plans": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "map"
+        ],
+        "title": "BoardSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
       },
       "writes": false
     },
@@ -30454,7 +31392,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+      "doc": "a file's bytes (base64) as the agent had it after its newest edit-history record at or before step seq",
       "name": "work/file-at",
       "params": {
         "$defs": {
@@ -30467,7 +31405,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/file-at`: a file as a step's snapshot had it.",
+        "description": "`work/file-at`: a file as the edit history had it after a step.",
         "properties": {
           "path": {
             "description": "Relative to the worktree.",
@@ -30475,7 +31413,7 @@
             "type": "string"
           },
           "seq": {
-            "description": "The step; the newest snapshot at or before it answers.",
+            "description": "The step; the newest record of the session at or before it answers.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -30502,7 +31440,7 @@
             "type": "string"
           },
           "seq": {
-            "description": "The step whose snapshot this is.",
+            "description": "The step of the record this is.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -30731,6 +31669,10 @@
         "additionalProperties": false,
         "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
         "properties": {
+          "clear": {
+            "description": "Nothing is selected any more (Esc, or the selection went with no item left to take it).",
+            "type": "boolean"
+          },
           "collapsed": {
             "items": {
               "format": "uint8",
@@ -30818,7 +31760,7 @@
       "classes": [
         "user"
       ],
-      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
       "name": "work/map/subscribe",
       "params": {
         "$defs": {
@@ -30901,6 +31843,10 @@
               "overlaps": false
             }
           },
+          "rows": {
+            "description": "Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no\n`work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.",
+            "type": "boolean"
+          },
           "selected": {
             "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
             "type": [
@@ -30930,49 +31876,182 @@
         "type": "object"
       },
       "result": {
+        "$defs": {
+          "MapFrame": {
+            "additionalProperties": false,
+            "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+            "properties": {
+              "chips": {
+                "default": [],
+                "description": "The mission chips (the machines' load).",
+                "items": true,
+                "type": "array"
+              },
+              "edges": {
+                "default": [],
+                "description": "The edges between them.",
+                "items": true,
+                "type": "array"
+              },
+              "items": {
+                "default": [],
+                "description": "The items the view shows, each with its kind, label, flags and card fields.",
+                "items": true,
+                "type": "array"
+              },
+              "layout": {
+                "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
+              },
+              "needs_you": {
+                "default": [],
+                "description": "The needs-you strip.",
+                "items": true,
+                "type": "array"
+              },
+              "version": {
+                "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "version",
+              "layout"
+            ],
+            "type": "object"
+          },
+          "MapRows": {
+            "additionalProperties": false,
+            "description": "`work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.",
+            "properties": {
+              "hub": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "hub",
+              "version"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MapFrame"
+          },
+          {
+            "$ref": "#/$defs/MapRows"
+          }
+        ],
+        "description": "`work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.",
+        "title": "MapSubscribed"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
+      "name": "work/trail/close",
+      "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+        "description": "`work/trail/close`'s params.",
         "properties": {
-          "chips": {
-            "default": [],
-            "description": "The mission chips (the machines' load).",
-            "items": true,
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "TrailClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
+      "name": "work/trail/subscribe",
+      "params": {
+        "$defs": {
+          "TrailLane": {
+            "additionalProperties": false,
+            "description": "One lane of a Timeline: an agent session and its label.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.",
+        "properties": {
+          "lanes": {
+            "items": {
+              "$ref": "#/$defs/TrailLane"
+            },
             "type": "array"
           },
-          "edges": {
-            "default": [],
-            "description": "The edges between them.",
-            "items": true,
-            "type": "array"
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
-          "items": {
-            "default": [],
-            "description": "The items the view shows, each with its kind, label, flags and card fields.",
-            "items": true,
-            "type": "array"
-          },
-          "layout": {
-            "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
-          },
-          "needs_you": {
-            "default": [],
-            "description": "The needs-you strip.",
-            "items": true,
-            "type": "array"
-          },
-          "version": {
-            "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "TrailSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "version",
-          "layout"
+          "hub"
         ],
-        "title": "MapFrame",
+        "title": "TrailSubscribed",
         "type": "object"
       },
       "writes": false

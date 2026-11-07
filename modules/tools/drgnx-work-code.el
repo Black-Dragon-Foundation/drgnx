@@ -18,7 +18,6 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-file)
-(require 'drgnx-coord-read)
 (require 'drgnx-work-client)
 (require 'diff-mode)
 
@@ -66,6 +65,12 @@ NAME: `find-file' of NAME follows its links again, with handlers on."
          (not (find-file-name-handler true 'insert-file-contents))
          (seq-some (lambda (d) (drgnx-file-inside-p true d)) dirs)
          true)))
+
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
+                                                                  #x2028 #x2029))
+  "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
+controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
 
 (defun drgnx-work-code-one-line (s)
   "S, words of an agent's or the hub's (a path, a hunk's header), on one line: its control and bidi characters are
@@ -222,7 +227,7 @@ anything else (it is the hub's word) is passed over.  The buffer, when the hub a
 chain, else the most recent one's; at the top with \"file only\" when no line is known.  Returns the buffer when the hub
 answered at once."
   (pcase-let ((`(,repo ,rel) (or (drgnx-work-code--file-item (cdr sel)) (user-error "Not a file"))))
-    (let ((sids (or agents (drgnx-work-code--chain-sids state sel))))
+    (let ((sids (or agents (and state (drgnx-work-code--chain-sids state sel)))))  ; no STATE: the map's rows path
       (drgnx-work-code--open-paths (drgnx-work-code--paths repo rel sids) sids beside))))
 
 ;;;; The files picker

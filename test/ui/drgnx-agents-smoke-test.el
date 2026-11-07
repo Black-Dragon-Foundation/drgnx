@@ -21,7 +21,7 @@
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (defconst drgnx-agents-smoke--fixture "test/fixtures/recordings/smoke-mock"
   "The repository's recording of the script made from the mocks, relative to the checkout.")

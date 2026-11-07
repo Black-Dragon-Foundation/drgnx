@@ -42,9 +42,7 @@ mod on {
                 return Ok(r.clone());
             }
             let queue = crate::exec::queue(f)?;
-            let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .ok_or_else(|| error(ErrorCode::Internal, "runners: XDG_RUNTIME_DIR is not set"))?;
+            let runtime_dir = link_dir(std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))?;
             let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
                 .map(|s| s.trim().to_string())
                 .unwrap_or_default();
@@ -71,6 +69,37 @@ mod on {
                 .get_or_init(|| Arc::new(Registry::new(cfg)))
                 .clone())
         }
+    }
+
+    /// Where the runners' ssh masters keep their sockets: under the runtime folder, whose paths must stay inside a Unix
+    /// socket's 108 bytes with the runner's name and ssh's own suffix (~65 bytes) after them. A longer one (or none)
+    /// gives a private folder under the temporary one, as the hub's own socket does.
+    pub(super) fn link_dir(run: Option<PathBuf>) -> Result<PathBuf, Error> {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        if let Some(r) = run.filter(|r| r.as_os_str().len() <= 24) {
+            return Ok(r);
+        }
+        let dir =
+            std::env::temp_dir().join(format!("drgnx-hub-{}", rustix::process::getuid().as_raw()));
+        let fail = |e: std::io::Error| {
+            error(
+                ErrorCode::Internal,
+                format!("runners: {}: {e}", dir.display()),
+            )
+        };
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(&dir)
+            .map_err(fail)?;
+        let m = std::fs::symlink_metadata(&dir).map_err(fail)?;
+        if !m.is_dir() || m.uid() != rustix::process::getuid().as_raw() || m.mode() & 0o077 != 0 {
+            return Err(error(
+                ErrorCode::Internal,
+                format!("runners: {} is not a private folder of ours", dir.display()),
+            ));
+        }
+        Ok(dir)
     }
 
     /// Where the built bundles are: `DRGNX_RUNNER_BUNDLES`, else `bundle/` beside the hub's own build folder
@@ -101,7 +130,27 @@ mod on {
             };
             reg.connect_all().await;
             super::changed(&f).await;
+            reg.redial_lost().await;
         });
+    }
+}
+
+#[cfg(all(test, unix, not(target_os = "android")))]
+mod link_dir_tests {
+    use super::on::link_dir;
+    use std::path::PathBuf;
+
+    // [D] pure
+    #[test]
+    fn a_long_runtime_folder_gets_a_short_private_one_and_a_short_one_stays() {
+        assert_eq!(
+            link_dir(Some("/run/user/1000".into())).unwrap(),
+            PathBuf::from("/run/user/1000")
+        );
+        let long = PathBuf::from("/tmp/a-runtime-folder-far-too-long-for-ssh-sockets");
+        let d = link_dir(Some(long.clone())).unwrap();
+        assert_ne!(d, long);
+        assert!(d.as_os_str().len() <= 24, "{d:?}");
     }
 }
 

@@ -191,7 +191,11 @@ root is itself; a file in a linked worktree lands at its relative path in the ma
 
 (defun drgnx-agents-editor-here--segment ()
   "The `agents-here' segment: the marks of the agents in this project."
-  drgnx-agents-editor-here--status)
+  (let ((huddles (and (fboundp 'drgnx-agent-panel-huddle-open-count) (drgnx-agent-panel-huddle-open-count))))
+    (if (and huddles (> huddles 0))
+        (concat drgnx-agents-editor-here--status (and drgnx-agents-editor-here--status " ")
+                (format "huddle %d" huddles))
+      drgnx-agents-editor-here--status)))
 
 ;;;; Who is here
 
@@ -261,6 +265,41 @@ named yet (no ordinal) is not listed."
         (drgnx-agent-panel-open sid)
       (user-error "The agent panel is not loaded"))))
 
+(defvar-local drgnx-agents-here--marks nil "The sessions marked in the list (by `m'), for a huddle.")
+(declare-function drgnx-agent-panel-huddle-open-thread "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-open-count "drgnx-agent-panel-huddle")
+
+(defun drgnx-agents-here-mark ()
+  "Mark or unmark the agent on the row at point; two marked agents can meet in a huddle (`h')."
+  (interactive)
+  (let ((sid (car (drgnx-agents-here--row-at-point))))
+    (setq drgnx-agents-here--marks
+          (if (member sid drgnx-agents-here--marks) (remove sid drgnx-agents-here--marks)
+            (append drgnx-agents-here--marks (list sid))))
+    (message "Marked: %s" (if drgnx-agents-here--marks (string-join drgnx-agents-here--marks ", ") "none"))))
+
+(defun drgnx-agents-editor-here-huddle (a b)
+  "Open a huddle between sessions A and B: the hub asks for your yes first if the matrix says so; the thread opens."
+  (drgnx-hub-call "agents/huddle/start" (list :sessions (vector a b))
+                  (lambda (r err)
+                    (cond (err (message "agents/huddle/start: %s" err))
+                          ((fboundp 'drgnx-agent-panel-huddle-open-thread) (drgnx-agent-panel-huddle-open-thread r))))))
+
+(defun drgnx-agents-here-huddle ()
+  "Start a huddle between the two marked agents."
+  (interactive)
+  (let ((marks (seq-filter (lambda (s) (member s drgnx-agents-here--marks)) (mapcar #'car drgnx-agents-here--rows))))
+    (unless (= (length marks) 2) (user-error "Mark two agents with m first"))
+    (drgnx-agents-editor-here-huddle (car marks) (cadr marks))))
+
+(defun drgnx-agents-editor-here-huddle-command ()
+  "Start a huddle: choose the two agents working in this project."
+  (interactive)
+  (let* ((names (mapcar (lambda (r) (cons (drgnx-agents-editor-here--name (car r)) (car r))) drgnx-agents-editor-here--rows))
+         (a (completing-read "Huddle, first agent: " names nil t))
+         (b (completing-read "Second agent: " (seq-remove (lambda (n) (equal (car n) a)) names) nil t)))
+    (drgnx-agents-editor-here-huddle (cdr (assoc a names)) (cdr (assoc b names)))))
+
 (defun drgnx-agents-here-quit ()
   "Close the list."
   (interactive)
@@ -301,10 +340,10 @@ named yet (no ordinal) is not listed."
 ;;;; Setup
 
 (defun drgnx-agents-editor-here--bar-list (left)
-  "LEFT, the status bar's left segments, with `agents-here' straight after `agents'."
-  (if (or (memq 'agents-here left) (not (memq 'agents left)))
+  "LEFT, the status bar's left segments, with `agents-here' straight after `jobs'."
+  (if (or (memq 'agents-here left) (not (memq 'jobs left)))
       left
-    (let (out) (dolist (s left) (push s out) (when (eq s 'agents) (push 'agents-here out))) (nreverse out))))
+    (let (out) (dolist (s left) (push s out) (when (eq s 'jobs) (push 'agents-here out))) (nreverse out))))
 
 (defun drgnx-agents-editor-here-setup ()
   "Cache the workspace's presence and show it.  Called by the module's setup."
@@ -317,10 +356,15 @@ named yet (no ordinal) is not listed."
   (drgnx-command-define 'agents-here :category "Agents" :title "Who Is Here"
                         :command #'drgnx-agents-editor-here
                         :doc "The agents working in this project; RET follows the one you choose")
+  (drgnx-command-define 'agents-huddle :category "Agents" :title "Start a Huddle"
+                        :command #'drgnx-agents-editor-here-huddle-command
+                        :doc "Two agents state their positions about a clash, and you decide")
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-agents-here-mode 'popup))
   (pcase-dolist (`(,id ,title ,fn ,doc)
                  '((agents-here-follow "Follow the Agent on the Row" drgnx-agents-here-follow "Follow the agent on this row of the list")
                    (agents-here-panel "Open the Agent's Panel from the Row" drgnx-agents-here-panel "Open the panel of the agent on this row")
+                   (agents-here-mark "Mark the Agent on the Row" drgnx-agents-here-mark "Mark or unmark the agent on this row for a huddle")
+                   (agents-here-huddle "Huddle the Marked Agents" drgnx-agents-here-huddle "Start a huddle between the two marked agents")
                    (agents-here-quit "Close Who Is Here" drgnx-agents-here-quit "Close the list of the agents here")))
     (drgnx-command-define id :category "Agents" :title title :command fn :doc doc
                           :map 'drgnx-agents-here-mode-map :when (lambda () (derived-mode-p 'drgnx-agents-here-mode))))

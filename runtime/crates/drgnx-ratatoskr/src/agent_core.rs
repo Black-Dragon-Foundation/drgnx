@@ -65,6 +65,8 @@ pub struct Core {
     pub presence: std::sync::Arc<crate::work::presence::Live>,
     /// The Work map's views and the model behind them ([`crate::work::map`]).
     pub map: std::sync::Arc<crate::work::map::Map>,
+    /// The trail and Timeline views ([`crate::work::trail`]).
+    pub trails: crate::work::trail::Trails,
     /// The editors' buffer views: the agents in each watched buffer ([`crate::editor`]).
     pub buffers: std::sync::Arc<crate::editor::Buffers>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
@@ -121,11 +123,17 @@ pub async fn serve(
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::AgentsContextDrop(p) => answer(agents::session::panel::context_drop(f, c, p).await),
         Params::AgentsContextPin(p) => answer(agents::session::panel::context_pin(f, c, p).await),
+        Params::AgentsConfig(p) => answer(agents::session::panel::config(f, c, p).await),
+        Params::AgentsExplain(p) => answer(agents::session::panel::explain(f, c, p).await),
         Params::AgentsCompactPreview(p) => {
             answer(agents::session::panel::compact_preview(f, c, p).await)
         }
         Params::AgentsHuddleStart(p) => answer(crate::runner::huddle::start(f, c, p).await),
         Params::AgentsHuddleGet(p) => answer(crate::runner::huddle::get(f, c, p).await),
+        Params::AgentsGrants(p) => answer(f.core.agents.grants(c, p.id.as_str())),
+        Params::AgentsGrantsRevoke(p) => {
+            answer(f.core.agents.revoke_grant(c, p.id.as_str(), &p.grant).await)
+        }
         Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
         Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
         Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),
@@ -213,6 +221,9 @@ pub async fn serve(
         Params::WorkMapSubscribe(p) => answer(work::map::subscribe(f, c, p).await),
         Params::WorkMapSet(p) => answer(work::map::set(f, c, p)),
         Params::WorkMapClose(p) => answer(work::map::close(f, c, p)),
+        Params::WorkTrailSubscribe(p) => answer(work::trail::subscribe(f, c, p).await),
+        Params::WorkTrailClose(p) => answer(work::trail::close(f, c, p)),
+        Params::WorkBoardSubscribe(p) => answer(work::trail::board_subscribe(f, c, p).await),
         Params::WorkFiles(p) => answer(work::edits::files(f, c, p).await),
         Params::WorkHunks(p) => answer(work::edits::hunks(f, c, p).await),
         Params::WorkFileAt(p) => answer(work::edits::file_at(f, c, p).await),
