@@ -912,7 +912,9 @@ Fedora's `chromium-headless` (the headless shell) and the full `chromium`. Each 
 `data:` page and an `http-serve` page; a raw CDP client of the test then checks that `Target.exposeDevToolsProtocol` is
 refused, that a download lands in the browser's own `downloads/` with its `Browser.downloadProgress` event and the
 broker's `Download`, and that a page the agent left paused (`waitForDebuggerOnStart`) loads once the agent's websocket
-closes. It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
+closes, and that a worker which attached paused under a session runs once that session is detached without being told
+to (what the broker relies on for a target that attaches under a session the agent already left: it records it as
+closing and sends it nothing). It prints whether the hub's `Target.attachToBrowserTarget` worked on that Chromium, or the fallback ran.
 
 It runs only with `DRGNX_TEST_REAL_BROWSER=1`, in the browser test image (`test/container/browser/Containerfile`: the
 image the Rust tests run in, plus Chromium, Node and Playwright MCP pinned in `/opt/pw-mcp`), with `ratatoskr-mock`
