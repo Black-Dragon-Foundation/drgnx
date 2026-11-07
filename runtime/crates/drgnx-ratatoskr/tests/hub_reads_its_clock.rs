@@ -163,8 +163,8 @@ const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     ("agents/wake.rs", 1, "a job end's wake"),
     (
         "agents/session.rs",
-        6,
-        "a session's run, turns, steps and permission asks",
+        5,
+        "a session's run, turns and permission asks",
     ),
     ("runner/tick.rs", 2, "a plan task's start and fallback"),
     ("runner/review.rs", 1, "a plan review's work"),

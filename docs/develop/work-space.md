@@ -194,30 +194,32 @@ worktree the hub makes branched from: its repository, the branch, the commit, an
   branch that points at the commit, or, among several, the run's own `job/<run>` for a tree `job/<run>-<task>`. It never
   defaults to `main`, and when it cannot tell the branch is empty.
 - The tree is `timeline::snapshot::take_base`: the worktree as it is when made, kept as `refs/drgnx/base/<hash>` in its
-  shadow repository (a prune leaves it). `snapshot::numstat(root, worktree, from_tree, to_tree)` counts the lines
-  between two trees there, and marks a file not in the first as new (`untracked`); it runs git in the shadow
-  repository only, so it works with the worktree gone and never runs git in an agent's tree.
+  shadow repository (a prune leaves it). The edited-file counts no longer read it: they come from the edit history (below).
 - A session in a folder the hub made no tree for (a docs agent in the org folder) gets a row at its start, from the
   folder's head (`bases::session_started`); folders under `<state>/hub/runs` record their own.
 - `bases::ancestry_of(rows, roots)` and `bases::ancestry(front, workspace)` answer "based on" pairs of
   `BranchRef {repo, branch}` for the workspace's roots, computed from the rows when asked.
 
-### Edited files, counts and hunks (interim)
+### Edited files, counts and hunks
 
-`work::edits` answers three user methods from snapshots alone, until the edit history serves them (their shapes stay):
+`work::edits` answers three user methods from the edit history (`history::views`): the worktree's branch `wt/<id>` in
+the project's `history.db`, its documents against the branch's base commit (`History::hunks` from record 0, each
+document as first stored). The agent's folder is never asked.
 
-- `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: the session's newest step snapshot
-  tree against the worktree's `base_tree`, through `snapshot::numstat`. Step snapshots are written with `add -A`, so a
-  file the agent created is in the tree and comes back `untracked: true`. No snapshot yet: an empty list. `read_at` is
-  not filled yet.
-- `work/hunks {session, path} -> {diff}`: the unified diff of one path between the same two trees
-  (`snapshot::patch`), empty before the first snapshot.
-- `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) in the newest snapshot at or before
-  step `seq`; `seq` is the step that snapshot belongs to. A missing path or a path leaving the worktree is
+- `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: per changed file the lines added and
+  removed (`Hub::edits_against_base`); `untracked` is a file the base commit lacks. No branch yet: an empty list.
+  `read_at` is not filled yet. Text files only: binary, large, generated and lock files are whole-file versions the
+  document store does not hold, so they are not listed.
+- `work/hunks {session, path} -> {diff}`: the unified diff of one path, base text to current (`Hub::diff_against_base`),
+  empty when it changed nothing.
+- `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) after the session's newest record at or
+  before step `seq` (`Hub::file_at_step`, which reads the records' cause); a file the session never touched is the base
+  commit's. `seq` is that record's step, 0 before the session's first. A missing path or a path leaving the worktree is
   `invalid-params`.
 
 Only sessions the hub holds are served. `edits::changed(front, session)` gives the same counts to the map's `Changed`
-fact, after every step that took a snapshot (`Map::edited`, from the step-close path). Git runs in the shadow repository only, never in an agent's tree.
+fact, after every step that took a snapshot (`Map::edited`, from the step-close path). The buffer view's gutter
+(`changed_lines`) and the three-way projection (`base_of`) still read the step snapshots.
 
 ### Live specs
 
@@ -692,8 +694,7 @@ in every mirrored worktree of the same repository (found from the `.git` file), 
 given a node: the hub has no way to add one for a selection yet.
 
 `work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
-hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
-it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
+hub's diff against the worktree's recorded base (the edit history's branch against its base). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
 derives from `drgnx-work-hunk-mode` (also a trail step's hunk): a read-only `special-mode` coloured from its text with
 `diff-mode`'s faces, standing in `/`. It is no `diff-mode` buffer on purpose: `diff-mode` reads the file names in the
 diff with file name handlers on (syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files
