@@ -159,13 +159,13 @@
         (drgnx-view--fit-memo (make-hash-table :test #'equal)))
     (should (equal "abc…" (drgnx-view-fit "abcdefgh" 40)))
     (should (equal "ab" (drgnx-view-fit "ab" 40))))
-  ;; the Board, the map and the timeline's lane labels fit through it (the map's old name is only an alias)
+  ;; the Board, the map and the timeline's lane labels fit through it, and the map's old name is gone (no alias)
   (dolist (f '("drgnx-work-board.el" "drgnx-work-map.el" "drgnx-work-trail.el"))
     (with-temp-buffer
       (insert-file-contents (expand-file-name (concat "modules/tools/" f) drgnx-dir))
       (should (search-forward "(drgnx-view-fit " nil t))
       (goto-char (point-min))
-      (should-not (re-search-forward "(drgnx-work-map--fit " nil t)))))
+      (should-not (re-search-forward "drgnx-work-map--fit\\_>" nil t)))))
 
 ;;;; Every order
 

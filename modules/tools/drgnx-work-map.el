@@ -132,9 +132,6 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 (defun drgnx-work-map--margin-px () (round (* drgnx-work-map--margin (drgnx-work-map--scale))))
 
-(define-obsolete-function-alias 'drgnx-work-map--fit #'drgnx-view-fit "0.6"
-  "Moved to `drgnx-view-fit' (the Board, the map and the timeline share it); goes with the map's old path.")
-
 ;;;; The rows of a layout
 
 (defvar drgnx-work-map--index (make-hash-table :test #'eq :weakness 'key)
