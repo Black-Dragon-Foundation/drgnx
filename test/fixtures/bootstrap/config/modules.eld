@@ -2,5 +2,5 @@
 (:version 1 :disabled
 	  (extra/blame extra/booster extra/completion extra/debug
 		       extra/format extra/guides extra/hunks
-		       extra/jump extra/keycast extra/llm extra/magit
+		       extra/jump extra/keycast extra/magit
 		       extra/mc extra/undo extra/wgrep extra/windows))

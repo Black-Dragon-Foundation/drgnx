@@ -2,7 +2,7 @@
 ;; test-class: cond
 ;; The Search view lists 10k matches; a replacement typed into its Replace field patches the rows in place, in
 ;; slices, the visible ones first, and the jank guard sees no window move it did not own.  The git repository is a
-;; temp dir.  (A transcript streaming from a hub session while keys are typed is the perf scenario `agent-stream'.)
+;; temp dir.  (A transcript streaming from a hub session while keys are typed is a perf scenario of the agent panel.)
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-uitest)

@@ -128,6 +128,10 @@ pub async fn serve(
         }
         Params::AgentsHuddleStart(p) => answer(crate::runner::huddle::start(f, c, p).await),
         Params::AgentsHuddleGet(p) => answer(crate::runner::huddle::get(f, c, p).await),
+        Params::AgentsGrants(p) => answer(f.core.agents.grants(c, p.id.as_str())),
+        Params::AgentsGrantsRevoke(p) => {
+            answer(f.core.agents.revoke_grant(c, p.id.as_str(), &p.grant).await)
+        }
         Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
         Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
         Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),

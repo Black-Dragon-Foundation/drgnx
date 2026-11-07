@@ -38,8 +38,9 @@
 (declare-function drgnx-replace--bar-clear "drgnx-replace")
 (declare-function drgnx-agents-sessions "drgnx-agents")
 (declare-function drgnx-agent-session-status "drgnx-agents")
-(declare-function drgnx-agents-ui-last-active "drgnx-agents-ui")
-(declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-list-last-active "drgnx-agent-panel-list")
+(declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
+(declare-function drgnx-agent-session-remote "drgnx-agents")
 (defvar drgnx-wb--areas)
 (defvar drgnx-large-file-open)          ; core/drgnx-large-file.el: bound around the restore's visits
 
@@ -221,14 +222,14 @@ since); the layouts that name SHAPE keep it and arrange as `one' while it is gon
 (defun drgnx-layouts--current-agent ()
   "The running agent session that acted last (the newest on a tie), or nil."
   (when (fboundp 'drgnx-agents-sessions)
-    (let ((at (lambda (s) (or (and (fboundp 'drgnx-agents-ui-last-active) (drgnx-agents-ui-last-active s)) 0))))
+    (let ((at (lambda (s) (or (and (fboundp 'drgnx-agent-panel-list-last-active) (drgnx-agent-panel-list-last-active s)) 0))))
       (car (sort (seq-remove (lambda (s) (eq (drgnx-agent-session-status s) 'exited)) (drgnx-agents-sessions))
                  (lambda (a b) (> (funcall at a) (funcall at b))))))))
 
 (defun drgnx-layouts--agent-buffer ()
-  "The current agent's transcript, else a buffer that says how to start one."
-  (if-let* ((s (drgnx-layouts--current-agent)) ((fboundp 'drgnx-agents-ui-transcript-buffer)))
-      (drgnx-agents-ui-transcript-buffer s)
+  "The current agent's panel, else a buffer that says how to start one."
+  (if-let* ((s (drgnx-layouts--current-agent)) ((fboundp 'drgnx-agent-panel-buffer)) (id (drgnx-agent-session-remote s)))
+      (drgnx-agent-panel-buffer id)
     (with-current-buffer (get-buffer-create "*drgnx: no agent*")
       (unless (derived-mode-p 'special-mode) (special-mode))
       (let ((inhibit-read-only t))

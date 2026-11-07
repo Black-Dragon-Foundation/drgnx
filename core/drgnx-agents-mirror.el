@@ -327,15 +327,9 @@ different connections, so the fetch waits): the entries between the two wait (`-
     (drgnx-agents-mirror--entries-call "agents/entries/unsubscribe" id)))
 
 (defun drgnx-agents-mirror--shown-ids ()
-  "The hub ids of the sessions whose transcripts a window shows now."
-  (let (ids)
-    (walk-windows
-     (lambda (w)
-       (let ((s (and (boundp 'drgnx-agents-ui--session) (buffer-local-value 'drgnx-agents-ui--session (window-buffer w)))))
-         (when (and (drgnx-agent-session-p s) (drgnx-agent-session-remote s))
-           (cl-pushnew (drgnx-agent-session-remote s) ids :test #'equal))))
-     'never t)
-    ids))
+  "The hub ids of the sessions whose transcripts a window shows now.  The panel keeps its own subscription, so
+no window shows a mirrored transcript."
+  nil)
 
 (defun drgnx-agents-mirror--windows-changed (&optional _frame)
   "`window-buffer-change-functions': show the sessions whose transcripts a window now shows, hide those none does."

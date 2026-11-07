@@ -11,6 +11,8 @@
   "agents/explain": ["user"],
   "agents/follow": ["user"],
   "agents/get": ["user"],
+  "agents/grants": ["user"],
+  "agents/grants/revoke": ["user"],
   "agents/huddle/get": ["user"],
   "agents/huddle/start": ["user"],
   "agents/kill": ["user"],

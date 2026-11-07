@@ -274,5 +274,40 @@
       (should (string-search "Board" (substring-no-properties (drgnx-work-map--lens-string))))
       (should (string-search "Timeline" (substring-no-properties (drgnx-work-map--lens-string)))))))
 
+;;;; Open huddles on the map
+
+(load (expand-file-name "modules/tools/drgnx-agent-panel-huddle" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-work-detail" drgnx-dir) nil t)
+(declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
+(declare-function drgnx-work-map--needs-you "drgnx-work-map")
+(declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
+(defvar drgnx-agent-panel-huddle--open)
+(defvar drgnx-work-map--selection)
+
+(defun drgnx-work-rows-test--huddle (state)
+  (list :huddle (list :id "huddle:1" :clash "src/session.rs" :participants (vector "a1" "a2") :state state)))
+
+(ert-deftest drgnx-work-rows/an-open-huddle-is-a-needs-you-strip-entry ()
+  (let ((state (drgnx-work-rows-test--state)))
+    (unwind-protect
+        (progn
+          (should-not (assoc "huddle: src/session.rs" (drgnx-work-map--needs-you state)))
+          (drgnx-agent-panel-huddle--event "huddle" (drgnx-work-rows-test--huddle "open"))
+          (should (equal '("agent:a1" "agent:a2") (cdr (assoc "huddle: src/session.rs" (drgnx-work-map--needs-you state)))))
+          (should (string-search "huddle: src/session.rs" (substring-no-properties (drgnx-work-map--strip-string state))))
+          (drgnx-agent-panel-huddle--event "huddle" (drgnx-work-rows-test--huddle "decided"))
+          (should-not (assoc "huddle: src/session.rs" (drgnx-work-map--needs-you state))))
+      (clrhash drgnx-agent-panel-huddle--open))))
+
+(ert-deftest drgnx-work-rows/h-on-an-overlapping-agent-starts-a-huddle ()
+  (let ((state (drgnx-work-rows-test--state)) (drgnx-work-map--selection '(agent . "agent:a1")) calls)
+    (cl-letf (((symbol-function 'drgnx-work-map--require-state) (lambda () state))
+              ((symbol-function 'drgnx-agents-editor-here-huddle) (lambda (a b) (push (list a b) calls))))
+      (drgnx-work-huddle-overlap)
+      (should (equal '(("a1" "a2")) calls))
+      (should (string-search "H huddle" (drgnx-work-detail-text state '(agent . "agent:a1"))))
+      (setq drgnx-work-map--selection '(machine . "machine:desktop"))
+      (should-error (drgnx-work-huddle-overlap) :type 'user-error))))
+
 (provide 'work-rows-test)
 ;;; work-rows-test.el ends here

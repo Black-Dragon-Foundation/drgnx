@@ -162,13 +162,13 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
   again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
   your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
-  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  messages, embeddings all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
   again on every reconnect and keeps it in memory only. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
   waits.
 - **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
   Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
-  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
-  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, and
+  nothing the editor sends carries it but that one hand-over. Until a hub
   runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
   usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
   key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands

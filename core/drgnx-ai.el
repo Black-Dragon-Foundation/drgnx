@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; One registry for every AI feature — ghost text, inline edit, chat (gptel), embeddings, agents.  Providers are
+;; One registry for every AI feature — ghost text, inline edit, chat, embeddings, agents.  Providers are
 ;; presets for OpenRouter and the local runners (settings/runtime-defaults.el), plus the user's (the setting
 ;; `drgnx-ai-providers', in settings.el); roles (complete, edit, chat, embed, agent) are fallback chains of
 ;; (PROVIDER . MODEL): the user's `drgnx-ai-roles' and the project's (.drgnx/ai.eld, a config file: read-only, 64 KiB).
@@ -651,58 +651,6 @@ error (`drgnx-settings-refused', a `user-error') says so."
   (let ((roles (copy-alist (default-value 'drgnx-ai-roles))))
     (setf (alist-get role roles) chain)
     (drgnx-settings-defaults-save 'drgnx-ai-roles roles)))
-
-;;;; gptel (the chat UI) from the registry
-
-(declare-function gptel-make-openai "gptel-openai")
-(declare-function gptel-make-ollama "gptel-ollama")
-(defvar gptel-backend)
-(defvar gptel-model)
-
-(defun drgnx-ai-gptel-spec (id model)
-  "How to make provider ID's gptel backend for MODEL: (FUNCTION NAME . ARGS).  A provider with a key is the hub's
-gateway, and gptel's key is the editor token, a function asked when gptel sends, never a stored string; a keyless one
-is asked directly."
-  (let* ((p (drgnx-ai-provider id))
-         (gateway (and (drgnx-ai-gateway-p id) (drgnx-ai-gateway-credentials)))   ; signals when the hub has no token yet
-         (u (url-generic-parse-url (if gateway (format "%s/p/%s" (string-remove-suffix "/" (car gateway)) id) (plist-get p :url))))
-         (host (if (url-portspec u) (format "%s:%d" (url-host u) (url-portspec u)) (url-host u)))
-         (path (string-remove-suffix "/" (or (url-filename u) "")))
-         (name (or (plist-get p :name) (symbol-name id))))
-    (pcase (plist-get p :kind)
-      ('ollama (list 'gptel-make-ollama name :host host :protocol (url-type u) :models (list (intern model)) :stream t))
-      (kind (append (list 'gptel-make-openai name :host host :protocol (url-type u)
-                          :endpoint (concat (if (eq kind 'llamacpp) (concat path "/v1") path) "/chat/completions")
-                          :models (list (intern model)) :stream t)
-                    (and gateway (list :key (lambda () (cdr (drgnx-ai-gateway-credentials t))))))))))
-
-(defvar drgnx-ai--gptel-ours nil "The gptel backend drgnx made last.")
-(defvar gptel--openai)
-(defvar gptel-api-key)
-
-(defun drgnx-ai-gptel-maybe-configure (usable-p)
-  "Point gptel at the `chat' role's first provider USABLE-P accepts — unless the user chose a backend of their
-own (only gptel's default, none, or the one drgnx made is replaced; gptel's default with a `gptel-api-key' the
-user set is theirs).  Returns the step, or nil."
-  (when (or (not (boundp 'gptel-backend)) (null gptel-backend) (eq gptel-backend drgnx-ai--gptel-ours)
-            (and (boundp 'gptel--openai) (eq gptel-backend gptel--openai)
-                 ;; gptel's own default for the key is a function that asks auth-source: nobody's choice
-                 (or (not (boundp 'gptel-api-key)) (null gptel-api-key)
-                     (eq gptel-api-key 'gptel-api-key-from-auth-source))))
-    (when-let* ((step (drgnx-ai-gptel-configure usable-p)))
-      (setq drgnx-ai--gptel-ours gptel-backend)
-      step)))
-
-(defun drgnx-ai-gptel-configure (usable-p)
-  "Point gptel at the first provider of the `chat' role USABLE-P accepts.  Returns it, or nil."
-  (when-let* ((step (seq-find (lambda (s) (funcall usable-p (car s))) (drgnx-ai-role 'chat)))
-              ;; the gateway's address comes with the hub's token: not yet (nil), and gptel is set up when it arrives
-              (spec (condition-case nil (drgnx-ai-gptel-spec (car step) (cdr step)) (drgnx-ai-gateway-unavailable nil))))
-    ;; `gptel' alone does not load the backend makers (they are autoloads, absent without package.el)
-    (unless (fboundp (car spec)) (require (if (eq (car spec) 'gptel-make-ollama) 'gptel-ollama 'gptel-openai)))
-    (setq gptel-backend (apply (car spec) (cdr spec))
-          gptel-model (intern (cdr step)))
-    step))
 
 (provide 'drgnx-ai)
 ;;; drgnx-ai.el ends here

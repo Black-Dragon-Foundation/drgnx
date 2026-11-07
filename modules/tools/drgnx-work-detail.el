@@ -194,7 +194,7 @@ to nil when none is.  Nothing signals."
                     ("edits" (if here-from (format "edits %s" other) (format "edited by %s" other)))
                     ("reads" (if here-from (format "reads %s" other) (format "read by %s" other)))
                     ("runs-on" (if here-from (format "runs on %s" other) (format "%s runs on this" other)))
-                    ("overlap" (format "overlaps with %s" other))
+                    ("overlap" (format "overlaps with %s · H huddle" other))
                     ("manages" (if here-from (format "manages %s" other) (format "managed by %s" other)))
                     (_ (format "%s: %s" kind other)))
                   out)))))
@@ -231,6 +231,27 @@ for a machine, or nil when there are none."
               (if (and running waiting) "\n" "")
               (if waiting (concat "waiting\n" (mapconcat #'identity (nreverse waiting) "\n")) "")
               "\n  l live log"))))
+
+(declare-function drgnx-work-map--require-state "drgnx-work-map")
+(declare-function drgnx-agents-editor-here-huddle "drgnx-agents-editor-here")
+
+(defun drgnx-work-huddle-overlap ()
+  "Start a huddle between the selected agent and the one its overlap edge points at (a choice when it has several)."
+  (interactive)
+  (let* ((state (drgnx-work-map--require-state)) (id (cdr drgnx-work-map--selection))
+         (others (and id (equal (car drgnx-work-map--selection) 'agent)
+                      (delq nil (mapcar (lambda (e)
+                                          (and (equal (plist-get e :kind) "overlap")
+                                               (let ((o (cond ((equal (plist-get e :from) id) (plist-get e :to))
+                                                              ((equal (plist-get e :to) id) (plist-get e :from)))))
+                                                 (and o (string-prefix-p "agent:" o) o))))
+                                        (drgnx-work-client-edges state)))))
+         (other (cond ((null others) (user-error "This agent has no overlap with another agent"))
+                      ((cdr others) (let ((names (mapcar (lambda (o) (cons (drgnx-work-detail--label state o) o)) others)))
+                                      (cdr (assoc (completing-read "Huddle with: " names nil t) names))))
+                      (t (car others)))))
+    (unless (fboundp 'drgnx-agents-editor-here-huddle) (user-error "Agents in the editor is not loaded"))
+    (drgnx-agents-editor-here-huddle (substring id (length "agent:")) (substring other (length "agent:")))))
 
 (defun drgnx-work-detail-sections (state sel &optional finished)
   "The side panel's sections for SEL in STATE: an alist (KEY . TEXT) of :head :why :touches :conclusions :actions.

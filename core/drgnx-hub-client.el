@@ -856,7 +856,7 @@ said, or `:unknown' before the hub answered.  Never a key.")
 
 (defvar drgnx-hub-editor-token-hook nil
   "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
-gateway's address (gptel's backend) can be set up.")
+gateway's address can be set up.")
 
 (defun drgnx-hub--keys-note ()
   "The hub said which keys it holds (`drgnx-hub--keys-held'): each is one it had (`drgnx-hub--keys-had'), and its

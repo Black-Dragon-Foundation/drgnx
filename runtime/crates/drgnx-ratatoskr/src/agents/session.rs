@@ -979,6 +979,8 @@ pub struct Session {
     /// Its provider proxy on `proxy.sock`: dropped when its agent's process ends.
     net: Mutex<Option<super::net::SessionNet>>,
     next_request: AtomicU64,
+    /// The Always grants the user gave this session ([`super::grants`]).
+    grants: super::grants::Ledger,
     /// The hub's running jobs: a session whose turn ends while one of its own runs waits for it.
     live: Arc<crate::exec::Live>,
     /// Waits refused since the turn began (a running job's `job_result`/`job_log`, a sleep loop).
@@ -2396,6 +2398,7 @@ fn assemble(
         gateway: Mutex::new(l.gateway.clone()),
         net: Mutex::new(l.net),
         next_request: AtomicU64::new(1),
+        grants: super::grants::Ledger::default(),
         live: front.core.exec.live(),
         wait_refusals: AtomicU32::new(0),
         closed: AtomicBool::new(false),
@@ -4435,7 +4438,13 @@ impl Session {
                 .await;
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
-                Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
+                // a revoked Always makes the hub ask again, whatever the matrix says
+                Gate::Allow
+                    if pick_allow(&options).is_some()
+                        && !s.grants.revoked_covers(req.get("toolCall")) =>
+                {
+                    reply(resp, pick_allow(&options))
+                }
                 gate => {
                     // held for the user: an edit it asks for is pending meanwhile
                     s.feed_pending(&req).await;
@@ -4447,6 +4456,44 @@ impl Session {
                 }
             }
         });
+    }
+
+    /// The user gave this session an Always on a request for TOOL: the ledger and the hub's record of it.
+    async fn record_always(&self, tool: Option<Value>, card: Option<i64>) {
+        let g = self.grants.record(&self.id, tool.as_ref(), card, now());
+        self.save_grant(&g).await;
+    }
+
+    /// Grant G as a record `always:<session>:<key>`, written as the hub.
+    async fn save_grant(&self, g: &runstav::methods::agents::Grant) {
+        let Ok(data) = serde_json::to_value(g) else {
+            return;
+        };
+        let name = g.id.strip_prefix("always:").unwrap_or(&g.id).to_owned();
+        let meta = urdr::graph::TxMeta::new("hub", urdr::graph::Class::System, "agents/grants");
+        let _ = self
+            .writer
+            .db
+            .write(meta, move |tx| {
+                norn::write::always::put(tx, &name, data).map(|_| ())
+            })
+            .await;
+    }
+
+    /// The Always grants of this session, revoked ones too.
+    pub fn grants(&self) -> Vec<runstav::methods::agents::Grant> {
+        self.grants.list()
+    }
+
+    /// Take grant ID back (`agents/grants/revoke`): the hub asks again for a matching request from now on.
+    pub async fn revoke_grant(&self, id: &str) -> Result<runstav::methods::agents::Revoked, Error> {
+        let live = !self.closed.load(Ordering::Relaxed);
+        let (g, out) = self
+            .grants
+            .revoke(id, live)
+            .map_err(|e| invalid("grant", &e))?;
+        self.save_grant(&g).await;
+        Ok(out)
     }
 
     /// A request the user answers: it waits in the snapshot, under CARD's id when the matrix asked through one.  When
@@ -4519,6 +4566,22 @@ impl Session {
         request: &RequestId,
         option: Option<&str>,
     ) -> Result<bool, Error> {
+        // an Always the user gives is written down: the agent keeps the rule, the hub keeps the ledger
+        let always = {
+            let st = lock(&self.state);
+            st.permissions.iter().find(|p| p.is(request)).and_then(|p| {
+                option
+                    .filter(|o| {
+                        p.options
+                            .iter()
+                            .any(|(id, k)| id == o && k == "allow_always")
+                    })
+                    .map(|_| (p.public.tool.clone(), p.card))
+            })
+        };
+        if let Some((tool, card)) = always {
+            self.record_always(tool, card).await;
+        }
         let (card, allow) = {
             let mut st = lock(&self.state);
             let at = st

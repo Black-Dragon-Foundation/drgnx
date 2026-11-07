@@ -28,7 +28,7 @@
 (declare-function drgnx-diff-mode "drgnx-diff")
 (declare-function drgnx-review-mode "drgnx-review")
 (declare-function drgnx-prs-mode "drgnx-prs")
-(declare-function drgnx-agents-list-mode "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-list-mode "drgnx-agent-panel-list")
 (declare-function drgnx-onboard-mode "drgnx-onboard")
 
 (defvar drgnx-modal-panels-test--calls nil "What the stubbed commands ran, newest first.")
@@ -225,7 +225,7 @@
           (let ((b (drgnx-modal-panels-test--rows-buffer (car cell) (cdr cell))))
             (unwind-protect (check b) (kill-buffer b))))
         ;; Agents list, PRs, Welcome: tabulated-list panels
-        (dolist (cell '(("agents" . drgnx-agents-list-mode) ("prs" . drgnx-prs-mode) ("welcome" . drgnx-onboard-mode)))
+        (dolist (cell '(("agents" . drgnx-agent-panel-list-mode) ("prs" . drgnx-prs-mode) ("welcome" . drgnx-onboard-mode)))
           (let ((b (drgnx-modal-panels-test--table-buffer (car cell) (cdr cell))))
             (unwind-protect (check b) (kill-buffer b)))))
       (should-not bad))))

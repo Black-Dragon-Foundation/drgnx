@@ -275,12 +275,18 @@ already have is used as it is."
   (when-let* ((d drgnx-agents-follow--last)) (drgnx-agents-follow--moved d))
   (drgnx-agents-follow--header))
 
+(declare-function drgnx-agent-panel-huddle-of "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-open-thread "drgnx-agent-panel-huddle")
+
 (defun drgnx-agents-follow-panel ()
-  "Open the followed agent's panel."
+  "Open the followed agent's panel, or the huddle it is in when one is open (a conflict range's hover says so)."
   (interactive)
   (unless drgnx-agents-follow--session (user-error "Not following an agent"))
   (if (fboundp 'drgnx-agent-panel-open)
-      (drgnx-agent-panel-open drgnx-agents-follow--session)
+      (if-let* ((rec (and (fboundp 'drgnx-agent-panel-huddle-of)
+                          (drgnx-agent-panel-huddle-of drgnx-agents-follow--session))))
+          (drgnx-agent-panel-huddle-open-thread rec)
+        (drgnx-agent-panel-open drgnx-agents-follow--session))
     (user-error "The agent panel is not loaded")))
 
 (defun drgnx-agents-follow--session-at-point ()

@@ -10,7 +10,6 @@
     ("extra/drgnx-wgrep" extra/wgrep (wgrep) (search-edit-results search-apply-edits))
     ("extra/drgnx-hunks" extra/hunks (diff-hl) (git-hunk-show git-hunk-revert git-hunk-stage))
     ("extra/drgnx-keycast" extra/keycast (keycast) (view-keycast))
-    ("extra/drgnx-llm" extra/llm (gptel) (llm-menu llm-send))
     ("extra/drgnx-magit" extra/magit (magit) (scm-view))
     ("extra/drgnx-completion" extra/completion (vertico orderless marginalia corfu) ()))
   "FILE MODULE PACKAGES COMMANDS.")
@@ -50,9 +49,7 @@
                                                                            (regexp-quote (symbol-name pkg))))))
                                            (nth 2 m)))
                             drgnx-extras-test--modules))
-  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]"))))
-        ;; extra/llm points gptel at the `chat' role's OpenRouter step (a key: a fake one, never sent)
-        (process-environment (cons "OPENROUTER_API_KEY=sk-or-fake" process-environment)))
+  (let ((load-path (append load-path (seq-filter #'file-directory-p (directory-files drgnx-extras-test--elpa t "\\`[^.]")))))
     (drgnx-test-with-modules (mapcar #'cadr drgnx-extras-test--modules) :strict t
                              (pcase-dolist (`(,_ ,mod ,_ ,cmds) drgnx-extras-test--modules)
                                (should (equal (list mod (plist-get (alist-get mod (drgnx-modules-report)) :status)) (list mod 'ok)))
@@ -82,3 +79,16 @@
     (drgnx-module-define 'test/late :doc "l" :stage 'idle :setup #'ignore)
     (drgnx-modules-run 'idle)
     (should (equal seen '(idle)))))
+
+(ert-deftest drgnx-modules/no-module-requires-gptel ()
+  ;; the agent panel replaced the chat UI: no shipped Lisp, module package list or lock row names gptel
+  (let (hits)
+    (dolist (dir '("core" "modules"))
+      (dolist (f (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents f)
+          (when (re-search-forward "gptel" nil t) (push (file-relative-name f drgnx-dir) hits)))))
+    (should (equal nil (sort hits #'string<)))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "etc/drgnx.lock.eld" drgnx-dir))
+      (should-not (re-search-forward "gptel" nil t)))))

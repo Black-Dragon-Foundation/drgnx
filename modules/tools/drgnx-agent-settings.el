@@ -45,7 +45,9 @@
 (defvar drgnx-wb--owned)                ; drgnx-wb.el: windows the running code may move from a timer
 (defvar drgnx-agents-use-gateway)       ; drgnx-agents.el
 (defvar drgnx-ai-gateway-kinds)         ; drgnx-ai.el
-(defvar drgnx-agents-ui--session)       ; drgnx-agents-ui.el: the session of a transcript buffer
+(defvar drgnx-agent-panel--session)      ; drgnx-agent-panel.el: the hub id of a panel's session
+(declare-function drgnx-agent-session-remote "drgnx-agents")
+(declare-function drgnx-agents-sessions "drgnx-agents")
 
 (defface drgnx-agent-settings-heading '((t :inherit bold)) "Headings of an agent settings page." :group 'drgnx)
 (defface drgnx-agent-settings-dim '((t :inherit shadow)) "Details on an agent settings page." :group 'drgnx)
@@ -663,10 +665,12 @@ the page's open and Refresh come here: what an edit changes is re-read at once (
           ((string-match-p "kimi" program) 'kimi))))
 
 (defun drgnx-agent-settings--session-at-point ()
-  "The agent session of this transcript, or of this row of the Agents list, or nil."
-  (cond ((and (derived-mode-p 'tabulated-list-mode) (fboundp 'drgnx-agent-session-p))
-         (let ((id (tabulated-list-get-id))) (and (drgnx-agent-session-p id) id)))
-        ((bound-and-true-p drgnx-agents-ui--session))))
+  "The agent session of this panel, or of this row of the Agents list, or nil."
+  (cond ((derived-mode-p 'drgnx-agent-panel-list-mode)
+         (when-let* ((id (get-text-property (line-beginning-position) 'drgnx-agent-panel-list-id)))
+           (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) id)) (drgnx-agents-sessions))))
+        ((bound-and-true-p drgnx-agent-panel--session)
+         (seq-find (lambda (s) (equal (drgnx-agent-session-remote s) drgnx-agent-panel--session)) (drgnx-agents-sessions)))))
 
 (defun drgnx-agent-settings--of-session (session)
   "(KIND ROOT) for SESSION, or nil when its profile is not one of the four agents."
@@ -1058,7 +1062,7 @@ for every OpenRouter route, saved in settings.el; it applies through drgnx's gat
   (drgnx-command-define 'agent-settings :category "Agents" :title "Settings" :command #'drgnx-agent-settings
                         :doc "An agent's routes, MCP servers, hooks and skills: Claude Code, Codex, Gemini, Kimi Code")
   (drgnx-command-define 'agent-settings-here :category "Agents" :title "Settings of This Agent"
-                        :command #'drgnx-agent-settings-here :map '(drgnx-agents-ui . drgnx-agents-list-mode-map)
+                        :command #'drgnx-agent-settings-here :map '(drgnx-agent-panel-list . drgnx-agent-panel-list-mode-map)
                         :doc "The settings page of the session's agent, for its project"
                         :when #'drgnx-agent-settings--session-at-point)
   (pcase-dolist (`(,id ,title ,fn ,doc)

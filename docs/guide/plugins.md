@@ -272,7 +272,7 @@ Claude a hook can annotate or deny but never change.
 - **Hook verdicts with provenance.** A refused step shows the rule or hook that refused it, with each source's verdict
   and time, and the notes under the step. A step an agent made itself and a hook denied afterwards is marked refused by
   hook.
-- **Context breakdown.** The palette command `Context Breakdown…` shows what fills an agent's context, for an agent
+- **Context breakdown.** The agent panel's context chip (`i` on it) shows what fills an agent's context, for an agent
   that reports it (below). Where the agent can drop or pin an item, the entries say so; where it cannot, they are plain
   text.
 - **Plugins page.** `Plugins…`, as above. The page's keys: `a` approve, `d` disable, `p` turn on or off in this

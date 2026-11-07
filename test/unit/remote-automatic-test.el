@@ -25,7 +25,6 @@
 (load (expand-file-name "modules/editor/drgnx-sticky" drgnx-dir) nil t)
 (load (expand-file-name "modules/extra/drgnx-hunks" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-ai-ui" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
 
 (defconst drgnx-remote-auto--elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa"))
   "The user's ELPA, read-only, where diff-hl is when installed.")
@@ -425,49 +424,6 @@ buffer is not affected."
   "Does a buffer visit NAME?  (Looks at the buffers' names only: `find-buffer-visiting' would send.)"
   (cl-some (lambda (b) (equal (buffer-file-name b) name)) (buffer-list)))
 
-(defun drgnx-remote-auto--agent-review (cwd path)
-  "Open the review of an edit the agent proposes for PATH in a session at CWD.  (BUFFER ANSWERS): the review
-buffer, or nil; what the agent was told through the hub: (ITEM nil REJECT)."
-  (let* ((answers nil)
-         (s (drgnx-agents--make :name "auto-remote" :cwd cwd :remote "s-auto"))
-         (item (list :id 5 :path path :content "x\n")))
-    (setf (drgnx-agent-session-reviews s) (list item))
-    (setq drgnx-tramp-mock-sends 0)
-    (cl-letf (((symbol-function 'drgnx-hub-call)
-               (lambda (method params &rest _)
-                 (when (equal method "agents/do")
-                   (push (list (plist-get params :item) nil (plist-get params :reject)) answers)))))
-      (let ((b (condition-case nil (drgnx-agents-ui-review s item) (user-error nil))))
-        (list b answers (drgnx-agent-session-reviews s))))))
-
-(defun drgnx-remote-auto--close-review (b)
-  "Close the review buffer B without telling anyone (no agent is listening)."
-  (when (buffer-live-p b)
-    (with-current-buffer b
-      (when drgnx-agents-ui--review (drgnx-agents-ui--review-cleanup (nth 2 drgnx-agents-ui--review)))
-      (setq drgnx-agents-ui--review nil))
-    (kill-buffer b)))
-
-(ert-deftest drgnx-remote/agent-edit-review-never-reaches-a-remote-from-a-local-session ()
-  "A local session's agent proposes a change to a remote name: the review does not open, the remote is not touched,
-and the agent is told the change was rejected."
-  (drgnx-remote-auto--with
-    (pcase-let ((`(,b ,answers ,left) (drgnx-remote-auto--agent-review ldir (concat root "app.py"))))
-      (unwind-protect
-          (progn
-            (should-not b)
-            (drgnx-remote-auto--none 'agent-review)
-            (should (equal (mapcar #'car answers) '(5)))
-            (should (nth 2 (car answers)))             ; the error: rejected
-            (should-not left))
-        (drgnx-remote-auto--close-review b)))))
-
-(ert-deftest drgnx-remote/agent-edit-review-opens-for-a-remote-session ()
-  "The session's folder is remote (the user started it there): the review of a file under it opens."
-  (drgnx-remote-auto--with
-    (pcase-let ((`(,b ,_answers ,_left) (drgnx-remote-auto--agent-review root (concat root "app.py"))))
-      (unwind-protect (should b)
-        (drgnx-remote-auto--close-review b)))))
 
 ;; AI review links: the Sources buttons of an Ask the Codebase answer
 (defun drgnx-remote-auto--source-button (file root)

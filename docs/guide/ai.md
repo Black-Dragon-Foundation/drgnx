@@ -77,7 +77,7 @@ asked from a timer, hook or in batch.
 |---|---|---|
 | `complete` | ghost-text completion (fill in the middle) | Ollama `qwen2.5-coder:1.5b` (fits next to TEI on a 6 GB GPU) |
 | `edit` | inline edit | OpenRouter `openrouter/auto`, then Ollama `qwen2.5-coder:7b` |
-| `chat` | chat (gptel), Ask the Codebase | as `edit` |
+| `chat` | Ask the Codebase | as `edit` |
 | `embed` | semantic search (embeddings: a vector per text, scaled to length 1) | TEI |
 | `agent` | Claude Code on OpenRouter, through the agent gateway ([agents.md](agents.md)) | OpenRouter, with the model the agent asks for |
 
@@ -191,13 +191,6 @@ ones the probe found running, remote ones with their key. Then it asks for a mod
 reported. It makes one test call. Only if that answers is the choice kept: at the head of the role's chain in
 `drgnx-ai-roles` (in `settings.el`), with the previous providers behind it as fallbacks. A key is never written there.
 
-## Chat (gptel)
-
-With module `extra/llm` (gptel installed), gptel's backend comes from the `chat` role: its first provider that can
-be asked. drgnx sets it up again whenever a probe finishes. A backend you set yourself is never replaced, and neither is
-gptel's default ChatGPT backend once you have set your own `gptel-api-key`. gptel asks for the key only when it
-sends.
-
 ## Detection, fallback and the doctor
 
 drgnx asks the local providers whether they run — every address at once, one second each, in the background,
@@ -228,7 +221,7 @@ never opens auth-source), and whether the GPU has room for the completion model 
 ## Where requests go
 
 Every request to a provider **with a key** (OpenRouter, Anthropic, … — chat, completion, edits, commit messages,
-embeddings, the search index, gptel) goes to the hub's gateway on this machine, `http://127.0.0.1:PORT/p/PROVIDER/…`,
+embeddings, the search index) goes to the hub's gateway on this machine, `http://127.0.0.1:PORT/p/PROVIDER/…`,
 with a token of your editor's own (`Authorization: Bearer …`). The hub adds the provider's key and passes the answer
 back, streaming included; the editor's requests carry no key. A provider **without** a key (a local Ollama, llama.cpp,
 TEI) is asked directly, as before. The fallback along a role's list is still the editor's: the gateway passes one
@@ -243,7 +236,6 @@ provider through per request.
   connects; a key found by a command you run (Keychain, keyring, `.authinfo`) is handed over by that command, once.
 - **The code search** ([search.md](search.md)) runs in the hub: its built-in model needs no provider, and the servers it
   embeds through (TEI, Ollama) are reached through the same gateway, so each request is counted.
-- **gptel** gets a backend at the gateway (`/p/PROVIDER/chat/completions`) once the hub gave your editor its token.
 
 ## Keys
 
@@ -433,11 +425,10 @@ recorded lines unused. The details, and the steps of the smoke run you start you
 - `test/unit/ai-test.el` (providers, roles, keys, agent environments), `test/unit/ai-client-test.el` (requests,
   fallback with every reason, cancel, probes, the doctor's check), `test/unit/ai-ghost-test.el` (ghost text, accept,
   the Tab arbiter), `test/unit/ai-edit-test.el` (the review, hunk by hunk), `test/unit/modal-ai-test.el` (ghost text
-  and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose,
-  gptel), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
+  and Edit with AI's selection under Vim keys, with the real evil in its own Emacs, and unchanged without them), `test/unit/ai-ask-test.el` (Ask, Choose), `test/unit/ai-onboard-test.el` (the onboarding step; setting up Ollama, LM Studio and OpenRouter with fake
   `brew`, `ollama`, `lms`, `sysctl` and `security`; the room on a Mac and the models for it).
 - `test/unit/ai-keys-test.el` (binary) — after AI: Load Keys hands a key to the hub the editor holds none (its key
-  table, auth-source's cache, gptel, what it sends), the environment is left as it was, and chat, completion,
+  table, auth-source's cache, what it sends), the environment is left as it was, and chat, completion,
   embeddings and the commit message still work through the hub.
 - `test/unit/agents-profiles-test.el` — Kimi and DeepSeek profiles: gateway environments (a token, never a key), the
   OpenRouter model chain, the missing-key message, routes on the Claude page, the runner unsetting the keys.

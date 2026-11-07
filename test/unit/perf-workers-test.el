@@ -51,15 +51,6 @@ Emacs (each form is read and evaluated here), `nidhogg-workers-apply' records."
                                               :measure "(list :x 1)" :repeat 1)))
     (should (equal (reverse perf-workers-test--order) '((apply "+nidhogg-workers-framing") (setup))))))
 
-(ert-deftest drgnx-perf-workers/agent-stream-has-a-turn-for-every-run ()
-  "The mock agent runs the n-th line of its script for the n-th prompt, and a prompt past the last line runs its own
-words (a two-chunk turn that ends at once, so the run's check, typed while it streamed, fails).  One mock serves a
-setup's runs: in an A/A both sides' warm-ups and rounds, `drgnx-perf-ab-min-rounds' each.  Pattern D: the setup form."
-  (let* ((spec (cdr (assq 'agent-stream (drgnx-perf-run--workloads))))
-         (setup (plist-get spec :setup)))
-    (should (string-match "(make-list \\([0-9]+\\) (drgnx-perf--stream))" setup))
-    (should (>= (string-to-number (match-string 1 setup)) (* 2 (1+ drgnx-perf-ab-min-rounds))))))
-
 (ert-deftest drgnx-perf-workers/worker-wait-is-judged ()
   ;; Nidhogg's phase-ms: symbol keys, worker-wait by reason.  The probe gives numbers only (worker-wait's total and
   ;; each reason), :wait-ms sums treesit-wait and worker-wait, and the A/B judges worker-wait like a phase
@@ -213,7 +204,7 @@ form and a digest, and a setup form that reads."
           (should (plist-get (nthcdr 3 r) :report-only))
           (should (memq (plist-get (nthcdr 3 r) :report-only) '(ot2 ot3 ot4 ot5 ot6 ot8))))))
     ;; the existing workloads are still there, unchanged in kind
-    (dolist (n '(agent-stream terminal-output live-view)) (should (assq n ws)))))
+    (dolist (n '(terminal-output live-view)) (should (assq n ws)))))
 
 ;;;; Task 8 fixes: the workloads' own correctness
 

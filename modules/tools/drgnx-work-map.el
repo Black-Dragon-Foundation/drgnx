@@ -383,7 +383,7 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 ;;;; Opening the selection
 
 (defvar drgnx-agents--sessions)
-(declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
@@ -391,11 +391,10 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (declare-function drgnx-work-code--roots "drgnx-work-code")
 
 (defun drgnx-work--open-agent (sid)
-  "Open the transcript of the hub session SID in today's Agents view (the agent panel replaces this later)."
-  (if-let* ((s (and (boundp 'drgnx-agents--sessions)
-                    (seq-find (lambda (x) (equal (drgnx-agent-session-remote x) sid)) drgnx-agents--sessions))))
-      (progn (require 'drgnx-agents-ui) (drgnx-agents-ui-transcript s))
-    (message "Work: no transcript of this agent here")))
+  "Open the panel of the hub session SID."
+  (if (fboundp 'drgnx-agent-panel-open)
+      (drgnx-agent-panel-open sid)
+    (message "Work: the agent panel is not on")))
 
 (defun drgnx-work-map--root-named (name)
   "The workspace root whose directory is called NAME, or nil."
@@ -794,7 +793,25 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
                              (drgnx-work-client-ids state))))
     (append cards (mapcar (lambda (id) (cons (format "%s needs you" (plist-get (drgnx-work-client-item state id) :label))
                                              (list id)))
-                          (sort agents #'string<)))))
+                          (sort agents #'string<))
+            (drgnx-work-map--huddle-entries state))))
+
+(declare-function drgnx-agent-panel-huddle-open-records "drgnx-agent-panel-huddle")
+
+(defun drgnx-work-map--huddle-entries (state)
+  "One entry for each open huddle: its subject, jumping to the agents in it that STATE's map shows."
+  (when (fboundp 'drgnx-agent-panel-huddle-open-records)
+    (mapcar (lambda (rec)
+              (cons (format "huddle: %s" (or (plist-get rec :clash) (plist-get rec :id)))
+                    (seq-filter (lambda (id) (drgnx-work-client-item state id))
+                                (mapcar (lambda (sid) (concat "agent:" sid)) (append (plist-get rec :participants) nil)))))
+            (drgnx-agent-panel-huddle-open-records))))
+
+(defun drgnx-work-map--huddles-changed ()
+  "A huddle opened or ended: every map draws its strip again."
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode)
+      (with-current-buffer b (drgnx-work-map--refresh-strip)))))
 
 (defun drgnx-work-map--strip-string (state)
   "The needs-you strip of STATE: a chip with its jump key for each of the first nine entries, +N for the rest, and the

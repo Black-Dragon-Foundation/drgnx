@@ -44,8 +44,6 @@
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-rename :what rename-file :why "a user's file: the Explorer" :until never)
  (:file "wb/drgnx-explorer.el" :fn drgnx-explorer-paste :what rename-file :why "a user's file: the Explorer" :until never)
  (:file "modules/lang/drgnx-markdown.el" :fn drgnx-markdown--draw :what write-region :why "a temporary file: a diagram's source for the renderer" :until never)
- (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui--review-open :what with-temp-file :why "a temporary file: the review copy agents-ui opens" :until never)
- (:file "modules/tools/drgnx-agents-ui.el" :fn drgnx-agents-ui-review-done :what write-region :why "a user's file: agents-ui writes" :until never)
  (:file "modules/tools/drgnx-ai-ui.el" :fn drgnx-ai--edit-review :what write-region :why "a temporary file: a diff copy" :until never)
  (:file "core/drgnx-sandbox-vc.el" :fn drgnx-sandbox-vc--read :what read-site :why "its own lock protocol: the VC guard's folder list (sandbox/folders.eld)" :until never)
  (:file "core/drgnx-sandbox-vc.el" :fn drgnx-sandbox-vc--write :what write-region :why "its own lock protocol: the VC guard's folder list (sandbox/folders.eld)" :until never)

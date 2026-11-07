@@ -120,7 +120,7 @@
   :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
-    (dolist (f '(drgnx-job drgnx-agents-ui)) (require f)))
+    (dolist (f '(drgnx-job drgnx-agents-session)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
@@ -140,7 +140,7 @@
         (unwind-protect
             (progn
               ;; a durable session and its mirror: the agents UI starts it, the mirror drives it
-              (cl-letf (((symbol-function 'drgnx-agents-ui--cwd) (lambda () root))) (drgnx-agents-ui-new-durable "mock"))
+              (cl-letf (((symbol-function 'drgnx-agents-session--cwd) (lambda () root))) (drgnx-agents-session-new-durable "mock"))
               (let ((m (drgnx-hub-client-test--wait (lambda () (seq-find #'drgnx-agent-session-remote drgnx-agents--sessions))
                                                     "the mirror")))
                 (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")

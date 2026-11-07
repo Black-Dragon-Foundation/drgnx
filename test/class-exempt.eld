@@ -6,7 +6,6 @@
 ;; drgnx-lint/no-stale-exempt-rows fails a row whose file is gone (remove the row when the file goes);
 ;; drgnx-lint/every-test-has-a-class fails a file with neither a class line nor a row.
 (
- ("test/unit/agents-ui-test.el" :why "frozen UI: the agent panel and the Work space replace it")
  ("test/unit/mod-review-test.el" :why "frozen UI: the agent panel and the Work space replace it")
  ("test/unit/compat-gryphn-test.el" :off t :why "gryphn is dead")
 )

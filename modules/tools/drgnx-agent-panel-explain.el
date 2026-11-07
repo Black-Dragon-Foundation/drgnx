@@ -31,20 +31,30 @@
 (defconst drgnx-agent-panel-explain-items '(context cost mode model waiting mcp)
   "The chips `agents/explain' has facts for.")
 
-(defvar-local drgnx-agent-panel--always nil
-  "The requests answered Always in this panel, newest first: plists (:tool the tool call's id, :title).")
+(defvar-local drgnx-agent-panel--grants nil
+  "The session's Always grants as the hub's ledger last told (`agents/grants'): plists (:id :tool :title :revoked …).")
+
+(defvar drgnx-agent-panel--entries)
+(defvar drgnx-agent-panel--steps)
+(declare-function drgnx-history-fork-here "drgnx-history-revert")
 
 ;;;; Under a step
 
 (defun drgnx-agent-panel-explain--button (text action)
   (make-text-button (copy-sequence text) nil 'action (lambda (_) (funcall action)) 'follow-link t))
 
+(defun drgnx-agent-panel-explain--live-p (grant)
+  "Whether GRANT, a ledger row, is not revoked (the hub's false decodes as nil or :false)."
+  (let ((r (plist-get grant :revoked))) (or (null r) (eq r :false))))
+
 (defun drgnx-agent-panel-explain--always-of (e)
-  "The Always records that allowed tool entry E."
-  (seq-filter (lambda (a) (if (plist-get a :tool)
-                              (equal (plist-get a :tool) (plist-get e :id))
-                            (equal (plist-get a :title) (plist-get e :title))))
-              drgnx-agent-panel--always))
+  "The hub's Always grants that cover tool entry E: its tool kind (when both say one) and title are the grant's."
+  (seq-filter (lambda (g)
+                (and (drgnx-agent-panel-explain--live-p g)
+                     (equal (plist-get g :title) (plist-get e :title))
+                     (or (null (plist-get e :kind)) (null (plist-get g :tool))
+                         (equal (format "%s" (plist-get e :kind)) (plist-get g :tool)))))
+              drgnx-agent-panel--grants))
 
 (defun drgnx-agent-panel-explain-step-lines (e)
   "The lines under tool entry E: the hooks' verdicts on its step (a button each, its provenance) and the Always that
@@ -64,24 +74,58 @@ allowed it.  Empty when there is nothing to say."
      (and (drgnx-agent-panel-explain--always-of e)
           (propertize "    allowed by your Always · V revokes\n" 'face 'drgnx-agent-panel-subtle)))))
 
-(defun drgnx-agent-panel-explain-note-always (request)
-  "REQUEST, a permission request, was answered Always: the step it belongs to says so."
-  (let ((tool (plist-get request :tool)))
-    (push (list :tool (and (consp tool) (or (plist-get tool :id) (plist-get tool :toolCallId)))
-                :title (plist-get request :title))
-          drgnx-agent-panel--always)))
+(defun drgnx-agent-panel-explain--redraw-tools ()
+  "Draw the tool rows again: their Always lines changed."
+  (when (and (drgnx-view-p drgnx-view) (hash-table-p drgnx-agent-panel--entries))
+    (drgnx-view-dirty drgnx-view (let (keys) (maphash (lambda (i _) (push (list :e i) keys)) drgnx-agent-panel--entries) keys))))
+
+(defun drgnx-agent-panel-explain-take-grants (result)
+  "The hub's answer RESULT of `agents/grants': the ledger the Always lines read."
+  (setq drgnx-agent-panel--grants (append (plist-get result :grants) nil))
+  (drgnx-agent-panel-explain--redraw-tools))
+
+(defun drgnx-agent-panel-explain-load-grants ()
+  "Ask the hub for this session's Always grants; the lines under the steps follow its answer."
+  (let ((buffer (current-buffer)))
+    (drgnx-agent-panel--ask "agents/grants" (list :id drgnx-agent-panel--session)
+                            (lambda (r err)
+                              (unless err
+                                (when (buffer-live-p buffer)
+                                  (with-current-buffer buffer (drgnx-agent-panel-explain-take-grants r))))))))
+
+(defun drgnx-agent-panel-explain-note-always (_request)
+  "A request was answered Always: the hub wrote the grant down, so ask for the ledger."
+  (drgnx-agent-panel-explain-load-grants))
+
+(defun drgnx-agent-panel--latest-step ()
+  "The sequence number of the newest step this panel holds, or nil."
+  (let (top) (maphash (lambda (seq _) (when (or (null top) (> seq top)) (setq top seq))) drgnx-agent-panel--steps) top))
 
 (defun drgnx-agent-panel-revoke-always ()
-  "Forget the Always that allowed the step at point.  The agent keeps its own rule until it starts again; the panel
-stops saying the step was allowed by it."
+  "Take back the Always that allowed the step at point, through the hub: it asks again for the step from now on.  The
+agent keeps its own rule until it starts again, so you choose whether to restart it at its latest step as well (a new
+agent from there; asked once, here, never in an answer)."
   (interactive)
   (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
          (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key))))
-         (mine (and e (drgnx-agent-panel-explain--always-of e))))
-    (unless mine (user-error "This step was not allowed by an Always"))
-    (setq drgnx-agent-panel--always (seq-remove (lambda (a) (memq a mine)) drgnx-agent-panel--always))
-    (drgnx-view-dirty drgnx-view (list key))
-    (message "Always forgotten here; the agent keeps its own rule until it restarts")))
+         (mine (and e (drgnx-agent-panel-explain--always-of e)))
+         (session drgnx-agent-panel--session) (buffer (current-buffer)))
+    (unless mine (user-error "The hub has no Always for this step"))
+    (let* ((keep "Take back, keep running") (restart "Take back and restart at the latest step")
+           (choice (completing-read "Always: " (list keep restart) nil t nil nil keep))
+           (seq (drgnx-agent-panel--latest-step)))
+      (when (and (equal choice restart) (null seq)) (user-error "No step to restart at yet"))
+      (dolist (g mine)
+        (drgnx-agent-panel--ask "agents/grants/revoke" (list :id session :grant (plist-get g :id))
+                                (lambda (r err)
+                                  (if err (message "agents/grants/revoke: %s" err)
+                                    (message "Always taken back: the hub asks again%s"
+                                             (if (equal (plist-get r :agent_rule) "kept") "; the agent keeps its own rule until it restarts" ""))
+                                    (when (buffer-live-p buffer)
+                                      (with-current-buffer buffer (drgnx-agent-panel-explain-load-grants)))))))
+      (when (equal choice restart)
+        (require 'drgnx-history-revert)
+        (drgnx-history-fork-here session seq)))))
 
 ;;;; Chip popups
 
