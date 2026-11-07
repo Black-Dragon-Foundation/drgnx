@@ -1335,3 +1335,15 @@ this test are not passed on."
           (let ((drgnx-run-ert--audit-child-env '("DRGNX_TEST_AUDIT=1" "DRGNX_TEST_AUDIT_FAIL=1")))
             (should (stringp (drgnx-test-run-isolated file "iso/")))))
       (delete-directory tmp t))))
+
+(ert-deftest drgnx-run-ert/a-missing-nidhogg-primitive-fails-a-strict-run ()
+  ;; a test that needs a Nidhogg primitive skips without it, and fails instead under DRGNX_NIDHOGG_STRICT=1 (a run on
+  ;; Nidhogg's integration line, where a skip would hide a stale or missing build); present, it runs either way
+  (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT" process-environment)))
+    (should (eq (car (should-error (drgnx-test-require-nidhogg nil "nidhogg-no-such-primitive"))) 'ert-test-skipped))
+    (should-not (drgnx-test-require-nidhogg t "nidhogg-no-such-primitive")))
+  (let ((process-environment (cons "DRGNX_NIDHOGG_STRICT=1" process-environment)))
+    (let ((err (should-error (drgnx-test-require-nidhogg nil "nidhogg-no-such-primitive"))))
+      (should (eq (car err) 'ert-test-failed))
+      (should (string-search "nidhogg-no-such-primitive" (format "%S" (cdr err)))))
+    (should-not (drgnx-test-require-nidhogg t "nidhogg-no-such-primitive"))))
