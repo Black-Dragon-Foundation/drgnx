@@ -643,6 +643,19 @@ fn selected_still_holds_a_quiet_reflow() {
     assert_eq!(log(&map), ["model", "rows"]);
 }
 
+/// [D] The Timeline's lit lanes: the sessions of the agents on the selection's chain in a shown rows view of the
+/// connection; none with nothing selected, for another connection, or while the view is hidden.
+#[test]
+fn near_is_the_selections_agents() {
+    let (_map, mut g, key) = rows_map(3, 226);
+    assert!(Map::near_in(&g, 1).is_empty(), "nothing selected");
+    g.views.get_mut(&key).expect("the view").selected = Some(ItemId("agent:s2".into()));
+    assert_eq!(Map::near_in(&g, 1), vec!["s2"]);
+    assert!(Map::near_in(&g, 2).is_empty(), "another connection");
+    g.views.get_mut(&key).expect("the view").shown = false;
+    assert!(Map::near_in(&g, 1).is_empty(), "hidden");
+}
+
 /// [D] The Detail panel's rows say the selection's edges in words, both ways, and its why-chain from the ask down;
 /// nothing selected is one line.
 #[test]

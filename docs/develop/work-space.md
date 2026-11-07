@@ -712,6 +712,17 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
   `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
   (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
   `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
+- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`; the buffers are attached to
+  `work/trail/subscribe` with the render offload's Lisp switch) the keys go through the replica
+  (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name (`next-agent`/`previous-agent` are
+  `down`/`up`; the trail ignores them), open reads the selected node's fields once (`drgnx-work-trail--model-step`:
+  a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`, `conclusion-kind` and `label`). A selected
+  conclusion lights the steps it rests on through the model's chain class. `drgnx-work-timeline-rows-attached` makes
+  the Timeline's lit lanes the model's list `near` (in `drgnx-work-chain`); the hub sends that list again when the map's
+  selection moves, and the queue's timer applies it and runs the class step (`drgnx-view-model--reclass`). Steering
+  reads the selected step's `session`. Paging a trail back past its 500-step window (the model's `steps` list answers
+  `more`) waits for `view/window` (deferred). Tests: `test/unit/work-trail-nav-test.el`, Rust
+  `trail_model_windows_past_500`, `timeline_model_links_lanes`, `near_is_the_selections_agents`.
 - **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
   view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.
   Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not

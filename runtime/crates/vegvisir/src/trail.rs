@@ -184,7 +184,12 @@ pub fn trail_rows(steps: &[Step], concs: &[Conclusion], env: &Env, zone: Zone) -
             b.push(&format!(" {d}"), None);
         }
         let end = b.pos();
-        b.prop(0, end, "drgnx-work-step", Value::from(s.id));
+        b.prop(0, end, "drgnx-work-step", Value::from(s.id)).prop(
+            0,
+            end,
+            "drgnx-work-id",
+            Value::from(format!("step:{}", s.id)),
+        );
         out.push(b.finish());
         for c in concs.iter().filter(|c| c.step == Some(s.id)) {
             out.extend(conclusion_rows(c));
@@ -235,7 +240,13 @@ fn conclusion_rows(c: &Conclusion) -> Vec<Row> {
                     "drgnx-card-bottom"
                 },
             )
-            .prop(0, end, "drgnx-work-conclusion", Value::from(c.n));
+            .prop(0, end, "drgnx-work-conclusion", Value::from(c.n))
+            .prop(
+                0,
+                end,
+                "drgnx-work-id",
+                Value::from(format!("conc:{}", c.n)),
+            );
             b.finish()
         })
         .collect()
@@ -301,6 +312,13 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
         let mut b = RowBuilder::new(format!("lane:{}", lane.id));
         let label = drgnx_rows::fit::fit(m, "ui", &lane.label, 130.0 + drgnx_rows::fit::SLACK);
         b.push(&label, Some("drgnx-work-label"));
+        let end = b.pos();
+        b.prop(
+            0,
+            end,
+            "drgnx-work-id",
+            Value::from(format!("lane:{}", lane.id)),
+        );
         let mut steps: Vec<&Step> = lane.steps.iter().collect();
         steps.sort_by_key(|s| (s.seq, s.id));
         for s in steps {
@@ -310,12 +328,19 @@ pub fn timeline_rows(lanes: &[Lane], env: &Env, m: &dyn Measure, zone: Zone) -> 
             let at = b.pos();
             // the segment: one char, displayed as the space up to its end
             b.stop(140 + x + w);
-            b.face(at, at + 1, seg_face(kind(s))).prop(
-                at,
-                at + 1,
-                "drgnx-work-step",
-                Value::from(vec![Value::from(lane.id.clone()), Value::from(s.seq)]),
-            );
+            b.face(at, at + 1, seg_face(kind(s)))
+                .prop(
+                    at,
+                    at + 1,
+                    "drgnx-work-step",
+                    Value::from(vec![Value::from(lane.id.clone()), Value::from(s.seq)]),
+                )
+                .prop(
+                    at,
+                    at + 1,
+                    "drgnx-work-id",
+                    Value::from(format!("step:{}:{}", lane.id, s.seq)),
+                );
         }
         out.push(b.finish());
     }

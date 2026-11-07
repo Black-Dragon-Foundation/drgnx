@@ -1603,7 +1603,17 @@ and asks for a reset; `too-large' drops it (the view keeps what it holds)."
 which arms this again for what is left."
   (when-let* ((state (gethash view drgnx-view-model--views)) (q (drgnx-view-model-queue state)))
     (when (> (car (car q)) (drgnx-view-model-named state))
-      (drgnx-view-model--apply state t))))
+      (drgnx-view-model--apply state t)
+      (drgnx-view-model--reclass view))))
+
+(defun drgnx-view-model--reclass (view)
+  "VIEW's buffers take the classes a model no row patch named changed (a list another view's selection lit): no
+draw follows it to run the class step."
+  (when (fboundp 'drgnx-view-nav-class-step)
+    (maphash (lambda (pair buffer)
+               (when (and (equal (car pair) view) (buffer-live-p buffer))
+                 (with-current-buffer buffer (drgnx-view-nav-class-step drgnx-view))))
+             drgnx-view-patch--buffers)))
 
 (defun drgnx-view-model--named (patch-state n reset)
   "A row patch applied in PATCH-STATE's buffer named model N (RESET: a reset of the rows): its draw applies up to N."

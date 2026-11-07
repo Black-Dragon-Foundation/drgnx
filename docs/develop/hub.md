@@ -2082,6 +2082,18 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
   inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
   the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
+- **Model** (`work::trail::model`, the editor's replica; "The native view model"). Before the rows, each refresh sends
+  the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
+  `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
+  chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
+  when its first step is not its first (`from` = that step's seq − 1). A Timeline: `lane:SESSION` (kind `lane`) and
+  `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
+  the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
+  (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
+  of the connection's shown rows map views reaches (`Map::near`: the agents and subagents on its chain). A
+  `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
+  (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
+  query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
 
 ### The follow feed
 

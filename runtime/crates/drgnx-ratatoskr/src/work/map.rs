@@ -1241,6 +1241,41 @@ impl Map {
         }
     }
 
+    /// The sessions whose Timeline lanes the selection of connection CONN's shown rows map views lights: the agents
+    /// and subagents on its chain, the selection's own included (a subagent stands for its session).
+    pub fn near(&self, conn: u64) -> Vec<String> {
+        Self::near_in(&lock(&self.inner), conn)
+    }
+
+    fn near_in(g: &Inner, conn: u64) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, v) in g
+            .views
+            .iter()
+            .filter(|(k, v)| k.conn == conn && v.rows && v.shown)
+        {
+            let (Some(sel), Some(sp)) = (v.selected.as_ref(), g.spaces.get(&v.space)) else {
+                continue;
+            };
+            let m = sp.core.model();
+            let c = m.chain(sel);
+            for id in std::iter::once(sel).chain(&c.up).chain(&c.down) {
+                let agent = m
+                    .item(id)
+                    .is_some_and(|it| matches!(it.kind, Kind::Agent | Kind::Subagent));
+                let sid =
+                    id.0.strip_prefix("agent:")
+                        .and_then(|r| r.split('/').next());
+                if let Some(sid) = sid.filter(|_| agent)
+                    && !out.iter().any(|s| s == sid)
+                {
+                    out.push(sid.to_owned());
+                }
+            }
+        }
+        out
+    }
+
     /// An env of (connection, view, class) K3 arrived: a rows map view of that name lays out again at its classes'
     /// width when it changed (as the user's own change, at once), else draws again for it.
     pub fn view_env(self: &Arc<Self>, f: &Front, k3: &crate::view::Key) {
@@ -1523,6 +1558,10 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         {
             f_map.publish(sp, v, &key);
         }
+    }
+    if moved {
+        // the Timelines of this connection light the lanes the new selection reaches
+        f.core.trails.map_moved(c.conn_id);
     }
     Ok(MapVersion {
         version: g.views.get(&key).map_or(0, |v| v.version),

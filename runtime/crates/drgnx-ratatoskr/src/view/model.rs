@@ -10,21 +10,27 @@ use std::collections::{BTreeMap, BTreeSet};
 pub type Edge = (String, String, String);
 
 /// A view's model as its builder makes it: the descriptor, each node (its wire object, `id` included), the edges and
-/// the lists.
+/// the lists; a list named in `windows` is a window `(total, from)` of a longer one (design §2.5).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Doc {
     pub descriptor: Value,
     pub nodes: BTreeMap<String, Value>,
     pub edges: BTreeSet<Edge>,
     pub lists: BTreeMap<String, Vec<String>>,
+    pub windows: BTreeMap<String, (usize, usize)>,
 }
 
 fn edges_json<'a>(edges: impl Iterator<Item = &'a Edge>) -> Value {
     Value::Array(edges.map(|(a, b, k)| json!([a, b, k])).collect())
 }
 
-fn list_json(name: &str, ids: &[String]) -> Value {
-    json!({"name": name, "ids": ids})
+fn list_json(name: &str, ids: &[String], window: Option<&(usize, usize)>) -> Value {
+    let mut l = json!({"name": name, "ids": ids});
+    if let Some((total, from)) = window {
+        l["total"] = json!(total);
+        l["from"] = json!(from);
+    }
+    l
 }
 
 impl Doc {
@@ -34,7 +40,7 @@ impl Doc {
             "descriptor": self.descriptor,
             "nodes": self.nodes.values().collect::<Vec<_>>(),
             "edges": edges_json(self.edges.iter()),
-            "lists": self.lists.iter().map(|(n, ids)| list_json(n, ids)).collect::<Vec<_>>(),
+            "lists": self.lists.iter().map(|(n, ids)| list_json(n, ids, self.windows.get(n))).collect::<Vec<_>>(),
         }})
     }
 
@@ -70,12 +76,13 @@ impl Doc {
             ops.push(json!({"edges": {"add": edges_json(new_edges.into_iter())}}));
         }
         for (name, ids) in &self.lists {
-            if old.lists.get(name) != Some(ids) {
-                ops.push(json!({ "list": list_json(name, ids) }));
+            let window = self.windows.get(name);
+            if old.lists.get(name) != Some(ids) || old.windows.get(name) != window {
+                ops.push(json!({ "list": list_json(name, ids, window) }));
             }
         }
         for name in old.lists.keys().filter(|n| !self.lists.contains_key(*n)) {
-            ops.push(json!({ "list": list_json(name, &[]) }));
+            ops.push(json!({ "list": list_json(name, &[], None) }));
         }
         ops
     }
