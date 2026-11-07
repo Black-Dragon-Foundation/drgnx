@@ -227,6 +227,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     });
     front.extensions.configure(&env);
     front.search.bind(&front);
+    front.core.views.bind(&front);
     if let Some(d) = front.dirs.get() {
         front
             .search

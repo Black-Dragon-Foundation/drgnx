@@ -13,6 +13,7 @@ pub mod exec;
 pub mod extensions;
 pub mod forecast;
 pub mod gateway;
+pub mod git;
 pub mod graph;
 pub mod history;
 pub mod hub;
@@ -274,6 +275,9 @@ params! {
     SearchEmbedders(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
+    GitLetters(git::LettersParams),
+    SearchGrep(search::GrepParams),
+    SearchGrepReplace(search::GrepReplaceParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),
     SearchServerStop(search::ServerKindParams),
@@ -343,6 +347,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(view::methods());
     v.extend(editor::methods());
     v.extend(search::methods());
+    v.extend(git::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());

@@ -2991,6 +2991,7 @@ dependencies = [
  "inotify",
  "libc",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -485,7 +485,7 @@ const CREDENTIAL_CODE_EXTS: [&str; 12] = [
 ];
 
 /// A basename that looks like a key, certificate or secret; never indexed, whatever the configuration says.
-fn sensitive_name(path: &str) -> bool {
+pub(crate) fn sensitive_name(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
     const SUFFIXES: [&str; 10] = [
         ".pem",

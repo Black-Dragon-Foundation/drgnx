@@ -10,6 +10,7 @@ pub mod door;
 pub mod eval;
 pub mod files;
 pub mod fresh;
+pub mod grep;
 pub mod index;
 pub mod overlay;
 pub mod query;

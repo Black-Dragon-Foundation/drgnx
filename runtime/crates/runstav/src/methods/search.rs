@@ -337,6 +337,78 @@ pub struct ServerStopped {
     pub stopped: bool,
 }
 
+/// Which files a text search looks in (the `search.ignore-rules` setting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GrepIgnore {
+    /// The index's filters: no dot paths, no secret-looking names.
+    Index,
+    /// Only what `.gitignore` files and the globs name.
+    Real,
+}
+
+/// `search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset
+/// at once, then each file's header and matches as it is complete. A newer search of the same view stops this one.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepParams {
+    /// The hub-fed view that shows the rows (`view/env`).
+    pub view: String,
+    pub root: AbsPath,
+    pub text: String,
+    /// Search this one file only (globs then do not apply).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<AbsPath>,
+    /// Match case; default off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case: Option<bool>,
+    /// Whole words only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<bool>,
+    /// TEXT is a regular expression.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regexp: Option<bool>,
+    /// Globs; each string may hold several, comma-separated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
+    /// Default `index`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<GrepIgnore>,
+    /// The replacement the rows preview (old struck out, new beside it); a regexp search's `\1` are the groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replace: Option<String>,
+}
+
+/// `search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepStarted {
+    pub query: u64,
+}
+
+/// `search/grep-replace`: VIEW's rows preview REPLACE now (no new search).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepReplaceParams {
+    pub view: String,
+    pub replace: String,
+}
+
+/// `search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
+/// run. A search a newer one stopped says nothing.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepDone {
+    pub view: String,
+    pub query: u64,
+    pub files: u64,
+    pub matches: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -363,6 +435,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/model-download", SearchModelDownload(DownloadParams) -> Started,
             classes: [User], writes: true,
             doc: "download the built-in model after the user agreed to its size; nothing downloads without this consent",
+        ),
+        method!(
+            "search/grep", SearchGrep(GrepParams) -> GrepStarted,
+            classes: [User], writes: false,
+            doc: "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+        ),
+        method!(
+            "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
+            classes: [User], writes: false,
+            doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
         ),
         method!(
             "search/typing", SearchTyping(Empty) -> Empty,
