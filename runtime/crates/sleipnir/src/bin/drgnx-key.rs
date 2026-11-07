@@ -6,7 +6,8 @@
 //! drgnx-key get NAME                 one key on stdout, for a tool that reads it from a pipe
 //! ```
 //!
-//! Keys come from the job helper's socket, `/run/drgnx/key.sock` in a container (`DRGNX_KEY_SOCK` names another).
+//! Keys come from the job's relay sidecar, the abstract socket `@drgnx-key` in the network namespace the job shares
+//! with it, which carries each request to the job helper (`DRGNX_KEY_SOCK` names another: `@NAME` or a path).
 //! A request waits for its key up to 60 s; when it never comes the helper records it and `drgnx-key` exits 75, which
 //! the job's result reads as `infra: key not delivered`. Nothing is written to a file, and the values go only into the
 //! environment of the command `exec` starts.
@@ -19,7 +20,7 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-const SOCKET: &str = "/run/drgnx/key.sock";
+const SOCKET: &str = "@drgnx-key";
 /// The helper answers by 60 s; past that (and a margin) the helper is gone.
 const WAIT: Duration = Duration::from_secs(65);
 const NOT_DELIVERED: u8 = 75;
@@ -37,10 +38,28 @@ fn socket() -> OsString {
     std::env::var_os("DRGNX_KEY_SOCK").unwrap_or_else(|| SOCKET.into())
 }
 
+/// Connects to SOCK: `@NAME` is an abstract name (Linux), anything else a path.
+fn connect(sock: &std::ffi::OsStr) -> io::Result<UnixStream> {
+    use std::os::unix::ffi::OsStrExt;
+    match sock.as_bytes().strip_prefix(b"@") {
+        #[cfg(target_os = "linux")]
+        Some(name) => {
+            use std::os::linux::net::SocketAddrExt;
+            UnixStream::connect_addr(&std::os::unix::net::SocketAddr::from_abstract_name(name)?)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "abstract sockets are Linux's",
+        )),
+        None => UnixStream::connect(sock),
+    }
+}
+
 /// Key NAME's bytes from the helper.
 fn fetch(name: &str) -> Result<Vec<u8>, Fail> {
     let sock = socket();
-    let mut s = UnixStream::connect(&sock).map_err(|e| {
+    let mut s = connect(&sock).map_err(|e| {
         Fail::NotDelivered(format!("the key socket {}: {e}", sock.to_string_lossy()))
     })?;
     let _ = s.set_read_timeout(Some(WAIT));

@@ -6,6 +6,11 @@
 //! driven through `AsyncFd`; stdout carries frames only, logs go to stderr through a buffer that drops lines rather
 //! than block. A reset stream, or any end of the channel, closes its job sockets with `SO_LINGER {on, 0}`, so the job
 //! sees a reset, not a clean end.
+//!
+//! With `--keys NAME` (a keyed job) it also binds the abstract Unix socket `@NAME` in its network namespace, which its
+//! job shares, before its `READY`, and opens a key stream for each connection there (a failed bind exits 2: whatever
+//! took the name first is never served). It has no core dump: `RLIMIT_CORE` 1 (a piped `core_pattern` writes no core
+//! for that value) and `PR_SET_DUMPABLE` 0, set before anything else.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -17,8 +22,8 @@ use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf, ReadHalf, WriteHalf};
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, UnixListener, UnixStream};
 
 use crate::frame::Frame;
 use crate::mux::{MAX_SOURCES, Side};
@@ -44,6 +49,8 @@ pub const SOCKET_BUFFER: libc::c_int = 64 * 1024;
 pub struct Args {
     pub listen: SocketAddr,
     pub job_ip: IpAddr,
+    /// The abstract socket name of the job's keys (`drgnx-key`); none: the job has no keys.
+    pub keys: Option<String>,
     /// Test only: log every frame.
     #[cfg(feature = "test-hooks")]
     pub log_frames: bool,
@@ -52,10 +59,11 @@ pub struct Args {
     pub panic_on_beat: bool,
 }
 
-/// `--listen <ip:port> --job-ip <ip>`.
+/// `--listen <ip:port> --job-ip <ip> [--keys NAME]`.
 pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
     let mut listen = None;
     let mut job_ip = None;
+    let mut keys = None;
     #[cfg(feature = "test-hooks")]
     let (mut log_frames, mut panic_on_beat) = (false, false);
     let mut it = args.into_iter();
@@ -81,6 +89,18 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
                         .map_err(|_| format!("--job-ip: not an address: {v}"))?,
                 );
             }
+            "--keys" => {
+                let v = value("--keys")?;
+                if v.is_empty()
+                    || v.len() > 64
+                    || !v
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+                {
+                    return Err(format!("--keys: not a plain name: {v}"));
+                }
+                keys = Some(v);
+            }
             #[cfg(feature = "test-hooks")]
             "--test-log-frames" => log_frames = true,
             #[cfg(feature = "test-hooks")]
@@ -91,6 +111,7 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Args, String> {
     Ok(Args {
         listen: listen.ok_or("--listen is required")?,
         job_ip: job_ip.ok_or("--job-ip is required")?,
+        keys,
         #[cfg(feature = "test-hooks")]
         log_frames,
         #[cfg(feature = "test-hooks")]
@@ -118,6 +139,10 @@ pub fn main(args: Vec<OsString>) -> i32 {
             concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n").as_bytes(),
         );
         return 0;
+    }
+    if let Err(e) = no_core_dump() {
+        write_now(2, format!("drgnx-px: no core dump: {e}\n").as_bytes());
+        return EXIT_SETUP;
     }
     let args = match parse_args(args) {
         Ok(a) => a,
@@ -168,6 +193,17 @@ async fn relay(args: &Args, log: &Log) -> i32 {
             return EXIT_BIND;
         }
     };
+    // the keys' name is ours before READY, so nothing in the namespace takes it after
+    let keys = match &args.keys {
+        None => None,
+        Some(name) => match listen_abstract(name) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                log.line(&format!("can't listen on @{name}: {e}"));
+                return EXIT_BIND;
+            }
+        },
+    };
     let (stdin, stdout) = match (Pipe::new(0), Pipe::new(1)) {
         (Ok(i), Ok(o)) => (i, o),
         (Err(e), _) | (_, Err(e)) => {
@@ -178,6 +214,7 @@ async fn relay(args: &Args, log: &Log) -> i32 {
     let stderr = Pipe::new(2).ok();
     let mut cfg = Config::new(Side::Sidecar);
     cfg.beat_limit = Some(BEAT_LIMIT);
+    cfg.keys = keys.is_some();
     #[cfg(feature = "test-hooks")]
     {
         cfg.log_frames = args.log_frames;
@@ -188,6 +225,7 @@ async fn relay(args: &Args, log: &Log) -> i32 {
         listener,
         bound,
         args.job_ip,
+        keys,
         stdin,
         stdout,
         stderr,
@@ -199,8 +237,9 @@ async fn relay(args: &Args, log: &Log) -> i32 {
 }
 
 /// The sidecar's channel over `input` and `output`: `READY` naming `bound`, then the job's connections from `job_ip` on
-/// `listener`, with the log written to `log_out` as it fills. Returns how the channel ended. The binary runs it on its
-/// own fds 0, 1 and 2; the small-pipe tests on pipes of their own.
+/// `listener` (and, keyed, each connection on `keys` as a key stream), with the log written to `log_out` as it fills.
+/// Returns how the channel ended. The binary runs it on its own fds 0, 1 and 2; the small-pipe tests on pipes of their
+/// own.
 #[allow(
     clippy::too_many_arguments,
     reason = "the binary's one call and the tests'"
@@ -210,12 +249,13 @@ pub async fn serve(
     listener: TcpListener,
     bound: SocketAddr,
     job_ip: IpAddr,
+    keys: Option<UnixListener>,
     input: impl AsyncRead + Unpin,
     output: impl AsyncWrite + Unpin,
     log_out: Option<impl AsyncWrite + Unpin>,
     log: Log,
 ) -> End {
-    let shell: Shell<TcpStream> = Shell::new(cfg, log.clone());
+    let shell: Shell<Conn> = Shell::new(cfg, log.clone());
     shell.send(Frame::ready(bound));
     let drain = async {
         if let Some(e) = log_out {
@@ -223,15 +263,82 @@ pub async fn serve(
         }
         std::future::pending::<()>().await
     };
+    let key_loop = async {
+        match &keys {
+            Some(k) => key_accept_loop(&shell, k).await,
+            None => std::future::pending::<()>().await,
+        }
+    };
     tokio::select! {
         e = shell.run(input, output) => e,
         () = accept_loop(&shell, &listener, job_ip) => unreachable!("the accept loop never returns"),
+        () = key_loop => unreachable!("the key loop never returns"),
         () = drain => unreachable!("the log drain never returns"),
     }
 }
 
+/// Accepts the job's key connections while there is room, each a key stream; never returns.
+async fn key_accept_loop(shell: &Shell<Conn>, listener: &UnixListener) {
+    loop {
+        shell.room().await;
+        let sock = match listener.accept().await {
+            Ok((s, _)) => s,
+            Err(e) => {
+                shell.log().line(&format!("accept @keys: {e}"));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        match shell.open_local_key(Conn::Unix(sock)) {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    std::future::pending::<()>().await
+}
+
+/// Binds the abstract Unix socket `@NAME` (Linux: in this network namespace, no file, no permissions).
+pub fn listen_abstract(name: &str) -> io::Result<UnixListener> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::linux::net::SocketAddrExt;
+        let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes())?;
+        let l = std::os::unix::net::UnixListener::bind_addr(&addr)?;
+        l.set_nonblocking(true)?;
+        UnixListener::from_std(l)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = name;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "abstract sockets are Linux's",
+        ))
+    }
+}
+
+/// No core dump of this process: `RLIMIT_CORE` 1, which a piped `core_pattern` (systemd-coredump) honours where it
+/// ignores 0, and `PR_SET_DUMPABLE` 0.
+pub fn no_core_dump() -> io::Result<()> {
+    let one = libc::rlimit {
+        rlim_cur: 1,
+        rlim_max: 1,
+    };
+    // SAFETY: plain setrlimit/prctl calls with constant arguments
+    unsafe {
+        if libc::setrlimit(libc::RLIMIT_CORE, &one) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        #[cfg(target_os = "linux")]
+        if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Accepts the job's connections while there is room; never returns.
-async fn accept_loop(shell: &Shell<TcpStream>, listener: &TcpListener, job_ip: IpAddr) {
+async fn accept_loop(shell: &Shell<Conn>, listener: &TcpListener, job_ip: IpAddr) {
     let mut foreign: HashSet<IpAddr> = HashSet::new();
     loop {
         shell.room().await;
@@ -250,7 +357,7 @@ async fn accept_loop(shell: &Shell<TcpStream>, listener: &TcpListener, job_ip: I
             drop(sock);
             continue;
         }
-        match shell.open_local(sock) {
+        match shell.open_local(Conn::Tcp(sock)) {
             Ok(Some(_)) => {}
             Ok(None) | Err(_) => break,
         }
@@ -296,19 +403,32 @@ fn setsockopt<T>(fd: RawFd, level: libc::c_int, opt: libc::c_int, value: &T) -> 
     }
 }
 
-/// A job socket: on an abort it is closed with `SO_LINGER {on, 0}` (through a duplicate of its fd, which the abort
-/// owns), so the job sees `ECONNRESET`. The halves are `tokio::io::split`'s, whose write half sends no `FIN` when
-/// dropped (`into_split`'s does, and the job would read a clean end before the reset); the down task shuts it down
-/// itself at the stream's `FIN`.
-impl Consumer for TcpStream {
-    type R = ReadHalf<TcpStream>;
-    type W = WriteHalf<TcpStream>;
+/// A job's connection: to the relay port, or to the keys' name.
+pub enum Conn {
+    Tcp(TcpStream),
+    Unix(UnixStream),
+}
+
+/// A job socket: on an abort a TCP one is closed with `SO_LINGER {on, 0}` (through a duplicate of its fd, which the
+/// abort owns), so the job sees `ECONNRESET`; a key connection is just closed. The halves are `tokio::io::split`'s,
+/// whose write half sends no `FIN` when dropped (`into_split`'s does, and the job would read a clean end before the
+/// reset); the down task shuts it down itself at the stream's `FIN`.
+impl Consumer for Conn {
+    type R = Box<dyn AsyncRead + Unpin + Send>;
+    type W = Box<dyn AsyncWrite + Unpin + Send>;
     fn split(self) -> (Self::R, Self::W, Abort) {
+        let tcp = match self {
+            Conn::Tcp(t) => t,
+            Conn::Unix(u) => {
+                let (r, w) = tokio::io::split(u);
+                return (Box::new(r), Box::new(w), Box::new(|| {}));
+            }
+        };
         // SAFETY: dup of a live socket fd; the result is ours alone.
-        let dup = unsafe { libc::fcntl(self.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        let dup = unsafe { libc::fcntl(tcp.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
         // SAFETY: a fresh fd from fcntl, owned by nothing else.
         let dup = (dup >= 0).then(|| unsafe { OwnedFd::from_raw_fd(dup) });
-        let (r, w) = tokio::io::split(self);
+        let (r, w) = tokio::io::split(tcp);
         let abort: Abort = Box::new(move || {
             if let Some(fd) = dup {
                 let linger = libc::linger {
@@ -318,7 +438,7 @@ impl Consumer for TcpStream {
                 let _ = setsockopt(fd.as_raw_fd(), libc::SOL_SOCKET, libc::SO_LINGER, &linger);
             }
         });
-        (r, w, abort)
+        (Box::new(r), Box::new(w), abort)
     }
 }
 

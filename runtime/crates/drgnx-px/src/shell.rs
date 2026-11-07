@@ -8,7 +8,9 @@
 //!    `LocalData` up to the stream's credit; both aborted when the stream is dropped;
 //! 4. the state behind a `std::sync::Mutex`, never held across an `.await`;
 //! 5. logs through [`Log`], a bounded buffer that drops lines when full and never blocks;
-//! 6. on any end of the channel every stream still there is aborted (on the sidecar its job socket is reset).
+//! 6. on any end of the channel every stream still there is aborted (on the sidecar its job socket is reset);
+//! 7. every buffer that held a stream's bytes (read, decoded, queued, encoded) is zeroed once used, so a key's value
+//!    (a key stream's answer) leaves no copy behind in the channel's memory.
 //!
 //! A write that makes no progress for the stall limit ends the channel; on the sidecar so does the heartbeat's loss.
 
@@ -23,6 +25,7 @@ use tokio::io::{
 use tokio::sync::Notify;
 use tokio::task::AbortHandle;
 use tokio::time::Instant;
+use zeroize::Zeroize;
 
 use crate::frame::{Decoder, Frame, HEADER, Kind, MAX_DATA, MAX_STREAMS, encode};
 use crate::mux::{In, Mux, Out, Side, StreamViolation};
@@ -112,6 +115,8 @@ pub struct Config {
     pub stall: Duration,
     /// The heartbeat limit (the sidecar's [`BEAT_LIMIT`]; none on the owner, which sends the beats).
     pub beat_limit: Option<Duration>,
+    /// The job has keys: key streams are allowed (both ends; a key stream on an unkeyed channel ends it).
+    pub keys: bool,
     /// Test only: log every frame read and written.
     #[cfg(feature = "test-hooks")]
     pub log_frames: bool,
@@ -126,6 +131,7 @@ impl Config {
             side,
             stall: STALL,
             beat_limit: None,
+            keys: false,
             #[cfg(feature = "test-hooks")]
             log_frames: false,
             #[cfg(feature = "test-hooks")]
@@ -204,6 +210,7 @@ impl Log {
 }
 
 type NewStream<C> = Box<dyn FnMut(u32) -> Option<C> + Send>;
+type NewKeyStream<C> = Box<dyn FnMut(u32) -> Option<C> + Send>;
 type OnEvent = Box<dyn FnMut(&Out) + Send>;
 
 /// One end of the channel.
@@ -237,6 +244,7 @@ struct State<C> {
     last_beat: Instant,
     writing_since: Option<Instant>,
     new_stream: Option<NewStream<C>>,
+    new_key_stream: Option<NewKeyStream<C>>,
     on_event: Option<OnEvent>,
 }
 
@@ -273,19 +281,24 @@ impl<C: Consumer> Shell<C> {
     pub fn new(cfg: Config, log: Log) -> Self {
         let now = Instant::now();
         let side = cfg.side;
+        let mut mux = Mux::new(side);
+        if cfg.keys {
+            mux.allow_keys();
+        }
         Shell {
             inner: Arc::new(Inner {
                 cfg,
                 log,
                 started: now,
                 state: Mutex::new(State {
-                    mux: Mux::new(side),
+                    mux,
                     pending: Pending::new(side),
                     streams: HashMap::new(),
                     end: None,
                     last_beat: now,
                     writing_since: None,
                     new_stream: None,
+                    new_key_stream: None,
                     on_event: None,
                 }),
                 writer: Notify::new(),
@@ -303,6 +316,12 @@ impl<C: Consumer> Shell<C> {
     /// it must not block.
     pub fn on_new_stream(&self, f: impl FnMut(u32) -> Option<C> + Send + 'static) {
         self.lock().new_stream = Some(Box::new(f));
+    }
+
+    /// The owner's hook for a key stream the peer opened (a keyed channel only): its consumer, or `None` to reset it.
+    /// Called by the reader: it must not block.
+    pub fn on_new_key_stream(&self, f: impl FnMut(u32) -> Option<C> + Send + 'static) {
+        self.lock().new_key_stream = Some(Box::new(f));
     }
 
     /// The hook for `Out::Event` and `Out::EventsCounted`. Called by the reader: it must not block.
@@ -343,11 +362,20 @@ impl<C: Consumer> Shell<C> {
     /// Opens a stream for a consumer this end accepted (the sidecar): its id, or `None` when the ids are used up
     /// (the channel then ends with [`End::IdsUsedUp`]).
     pub fn open_local(&self, c: C) -> Result<Option<u32>, End> {
+        self.open_local_as(c, In::LocalOpen)
+    }
+
+    /// Opens a key stream for a connection the sidecar accepted on its key listener; as [`Shell::open_local`].
+    pub fn open_local_key(&self, c: C) -> Result<Option<u32>, End> {
+        self.open_local_as(c, In::LocalOpenKey)
+    }
+
+    fn open_local_as(&self, c: C, ev: In) -> Result<Option<u32>, End> {
         let mut st = self.lock();
         if let Some(e) = &st.end {
             return Err(e.clone());
         }
-        let outs = match st.mux.step(In::LocalOpen) {
+        let outs = match st.mux.step(ev) {
             Ok(outs) => outs,
             Err(v) => {
                 let e = End::Violation(v.to_string());
@@ -430,7 +458,9 @@ impl<C: Consumer> Shell<C> {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return End::Io(format!("reading the channel: {e}")),
             };
-            let frames = match dec.push(&buf[..n]) {
+            let frames = dec.push(&buf[..n]);
+            buf[..n].zeroize();
+            let frames = match frames {
                 Ok(frames) => frames,
                 Err(v) => return End::Violation(v.to_string()),
             };
@@ -481,7 +511,7 @@ impl<C: Consumer> Shell<C> {
                     Err(v) => return End::Violation(v.to_string()),
                 }
             };
-            let Some(f) = next else {
+            let Some(mut f) = next else {
                 if let Err(e) = output.flush().await {
                     return End::Io(format!("writing the channel: {e}"));
                 }
@@ -490,6 +520,7 @@ impl<C: Consumer> Shell<C> {
             };
             buf.clear();
             encode(&f, &mut buf);
+            f.payload.zeroize();
             #[cfg(feature = "test-hooks")]
             if self.inner.cfg.log_frames {
                 self.inner.log.line(&format!(
@@ -509,6 +540,7 @@ impl<C: Consumer> Shell<C> {
                     Err(e) => return End::Io(format!("writing the channel: {e}")),
                 }
             }
+            buf.zeroize();
             self.lock().writing_since = None;
         }
     }
@@ -554,8 +586,12 @@ impl<C: Consumer> Shell<C> {
                     st.pending.push(f);
                     self.inner.writer.notify_one();
                 }
-                Out::NewStream { stream } => {
-                    let c = st.new_stream.as_mut().and_then(|hook| hook(stream));
+                Out::NewStream { stream } | Out::NewKeyStream { stream } => {
+                    let c = if matches!(o, Out::NewKeyStream { .. }) {
+                        st.new_key_stream.as_mut().and_then(|hook| hook(stream))
+                    } else {
+                        st.new_stream.as_mut().and_then(|hook| hook(stream))
+                    };
                     match c {
                         Some(c) => self.attach(st, stream, c),
                         None => match st.mux.step(In::LocalReset { stream }) {
@@ -653,9 +689,11 @@ async fn down_task<C: Consumer>(shell: Shell<C>, id: u32, mut w: C::W, wake: Arc
                 shell.task_done(id);
                 return;
             }
-            Next::Chunk(b) => {
+            Next::Chunk(mut b) => {
                 let n = b.len() as u32;
-                if w.write_all(&b).await.is_err() {
+                let wrote = w.write_all(&b).await;
+                b.zeroize();
+                if wrote.is_err() {
                     shell.local(In::LocalReset { stream: id });
                     return;
                 }
@@ -686,10 +724,11 @@ async fn up_task<C: Consumer>(shell: Shell<C>, id: u32, mut r: C::R, wake: Arc<N
                 shell.task_done(id);
                 return;
             }
-            Ok(n) => shell.local(In::LocalData {
-                stream: id,
-                bytes: buf[..n].to_vec(),
-            }),
+            Ok(n) => {
+                let bytes = buf[..n].to_vec();
+                buf[..n].zeroize();
+                shell.local(In::LocalData { stream: id, bytes });
+            }
             Err(_) => {
                 shell.local(In::LocalReset { stream: id });
                 return;
