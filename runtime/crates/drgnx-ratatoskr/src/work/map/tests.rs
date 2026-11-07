@@ -642,3 +642,50 @@ fn selected_still_holds_a_quiet_reflow() {
     map.outs(&mut g, &key, vec![CoOut::Reflow { user: true }], 0);
     assert_eq!(log(&map), ["model", "rows"]);
 }
+
+/// [D] The golden the editor's replica is checked against (`test/unit/view-model-chain-test.el`, in the Nidhogg
+/// image; no cargo path between the repos): the map's model of the 30-agent fixture at 1600 px, as the hub sends it,
+/// and `vegvisir::Model::chain` of every item it shows. `UPDATE_VEGVISIR_GOLDEN=1` writes it; otherwise a model or
+/// chain that moved fails until it is written again.
+#[test]
+fn chain_golden_matches_vegvisir() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    let state = vegvisir::ViewState {
+        width_units: 376,
+        ..vegvisir::ViewState::default()
+    };
+    let l = vegvisir::layout::layout(m, &state, None);
+    let sent: BTreeSet<ItemId> = l.at.keys().cloned().collect();
+    let d = model::doc(m, &l, &sent);
+    let mut chains = serde_json::Map::new();
+    for id in &sent {
+        let c = m.chain(id);
+        let mut on: Vec<String> =
+            c.up.iter()
+                .chain(c.down.iter())
+                .map(|i| i.0.clone())
+                .collect();
+        on.sort();
+        chains.insert(id.0.clone(), serde_json::json!(on));
+    }
+    let golden = serde_json::json!({
+        "model": serde_json::json!({"ops": [d.reset()]}).to_string(),
+        "chains": chains,
+    });
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../test/fixtures/work-space/model-thirty.json");
+    let text = serde_json::to_string_pretty(&golden).expect("json") + "\n";
+    if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
+        std::fs::write(&path, &text).expect("write the golden");
+    }
+    let have =
+        std::fs::read_to_string(&path).expect("the golden (UPDATE_VEGVISIR_GOLDEN=1 writes it)");
+    assert!(
+        have == text,
+        "the map model or a chain moved: UPDATE_VEGVISIR_GOLDEN=1 writes the golden again"
+    );
+}

@@ -1294,7 +1294,8 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   (ids (make-hash-table :test #'equal))         ; node id → the keys of the rendered rows that hold its span
   (spans (make-hash-table :test #'equal))       ; node id → the overlays of its class (drgnx-view-nav.el)
   class-faces                                   ; the faces by class index, made by the class step; nil: again
-  (resyncs 0) (refits 0) (measures 0))          ; counters, for tests and the perf lab
+  (resyncs 0) (refits 0) (measures 0)           ; counters, for tests and the perf lab
+  (classed 0))                                  ; the class step's overlays made and deleted (the perf lab's)
 
 (defvar-local drgnx-view-patch nil "This buffer's hub-fed (view, class), or nil.")
 
@@ -1494,6 +1495,7 @@ already."
 (declare-function nidhogg-view-apply "nidhogg-views" (view hub version model))
 (declare-function nidhogg-view-open "nidhogg-views" (view &optional group))
 (declare-function nidhogg-view-close "nidhogg-views" (h))
+(declare-function drgnx-notice-clear "drgnx-notice" (source &optional id))
 (declare-function nidhogg-view-hub-lost "nidhogg-views" ())
 
 (defconst drgnx-view-model-queue-max 64
@@ -1645,7 +1647,9 @@ drawn."
                drgnx-view-patch--buffers))
     (unless other
       (remhash view drgnx-view-model--views)
-      (drgnx-timer-cancel (cons 'drgnx-view-model view)))))
+      (drgnx-timer-cancel (cons 'drgnx-view-model view))
+      ;; the view is closed in Sjá with its last instance: a broken one starts whole when opened again
+      (when (fboundp 'drgnx-notice-clear) (drgnx-notice-clear 'render (cons 'view-broken view))))))
 
 ;;;; Rendering a stored row
 

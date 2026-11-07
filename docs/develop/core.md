@@ -2059,8 +2059,9 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
-- **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts one notice
-  (`drgnx-notify`) that its keys stopped; `drgnx doctor` says more.
+- **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
+  condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
+  clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view--call`.
 - Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
 

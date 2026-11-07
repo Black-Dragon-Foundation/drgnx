@@ -230,6 +230,11 @@ navigation had:
   agent's subagents after it, in start order), `needs-you` (each strip entry's first shown item: the cards by id, then
   the agents that need you with no card).
 
+The replica's chain is checked against the hub's: `work::map::tests::chain_golden_matches_vegvisir` writes
+`test/fixtures/work-space/model-thirty.json` (the map's model of the 30-agent fixture at 1600 px and
+`vegvisir::Model::chain` of every item; `UPDATE_VEGVISIR_GOLDEN=1`), and `test/unit/view-model-chain-test.el`, in the
+Nidhogg image, selects each item in Sjá and checks that the nodes it classes `chain` are exactly that chain.
+
 An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
 `tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
 `tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved

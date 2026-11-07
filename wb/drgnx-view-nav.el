@@ -92,8 +92,9 @@ model (`drgnx-view-patch-class-faces')."
 
 (defun drgnx-view-nav--put-class (view id class)
   "Show node ID in CLASS (an index, or nil: none) over its spans; its old overlays go."
-  (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
-    (mapc #'delete-overlay (gethash id table))
+  (let* ((state drgnx-view-patch) (table (drgnx-view-patch-spans state)) (old (gethash id table)))
+    (mapc #'delete-overlay old)
+    (cl-incf (drgnx-view-patch-classed state) (length old))
     (remhash id table)
     (when-let* ((face (drgnx-view-nav--face-of class)))
       (let (ovs)
@@ -102,11 +103,12 @@ model (`drgnx-view-patch-class-faces')."
             (overlay-put ov 'face face)
             (overlay-put ov 'priority 10)
             (push ov ovs)))
+        (cl-incf (drgnx-view-patch-classed state) (length ovs))
         (when ovs (puthash id ovs table))))))
 
 (defun drgnx-view-nav-class-step (view &optional keys)
   "The class step of VIEW, in its buffer: the nodes whose class changed in Sjá get it on their spans; with KEYS (rows a
-draw replaced), every node drawn in them gets its current class again.  Empty overlays go."
+draw replaced), every node drawn in them gets its current class again and the overlays left empty go."
   (when-let* ((h (drgnx-view-patch-handle drgnx-view-patch)))
     (let ((changes (nidhogg-view-get h 'classes)) (done (make-hash-table :test #'equal)) (i 0))
       (while (< i (length changes))
@@ -119,14 +121,15 @@ draw replaced), every node drawn in them gets its current class again.  Empty ov
           (maphash (lambda (id rows)
                      (when (and (not (gethash id done)) (cl-some (lambda (k) (gethash k keyset)) rows))
                        (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id))))
-                   ids)))
-      (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
-        (maphash (lambda (id ovs)
-                   (let ((live (cl-remove-if (lambda (o)
-                                               (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
-                                             ovs)))
-                     (if live (puthash id live table) (remhash id table))))
-                 table)))))
+                   ids)
+          ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text)
+          (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
+            (maphash (lambda (id ovs)
+                       (let ((live (cl-remove-if (lambda (o)
+                                                   (when (= (overlay-start o) (overlay-end o)) (delete-overlay o) t))
+                                                 ovs)))
+                         (if live (puthash id live table) (remhash id table))))
+                     table)))))))
 
 ;;;; Point, the notice, the broken view
 
@@ -156,8 +159,10 @@ draw replaced), every node drawn in them gets its current class again.  Empty ov
   (when (eql 2 (nidhogg-view-get h 'health))
     (unless drgnx-view-nav--said-broken
       (setq drgnx-view-nav--said-broken t)
-      (drgnx-notify 'wb 'warn "this view's keys stopped: its model broke twice (drgnx doctor says more)"
-                    :id (cons 'view-broken (drgnx-view-patch-view drgnx-view-patch))))
+      ;; a condition while the view is broken: the doctor's `views' row fails on it; closing the view clears it
+      (drgnx-notify 'render 'fail (format "the view %s stopped: its model broke twice" (drgnx-view-patch-view drgnx-view-patch))
+                    :id (cons 'view-broken (drgnx-view-patch-view drgnx-view-patch)) :life 'condition
+                    :fix "close its buffer and open it again"))
     t))
 
 ;;;; The one entry point
