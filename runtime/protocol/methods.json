@@ -26339,6 +26339,33 @@
             ],
             "type": "object"
           },
+          "ProjectWatch": {
+            "additionalProperties": false,
+            "description": "One project's file watches.",
+            "properties": {
+              "error": {
+                "description": "Why the project runs unwatched (the watch budget is spent, or the watcher could not start); none: it is watched.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "root": {
+                "type": "string"
+              },
+              "watched": {
+                "description": "Directories under watch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "root",
+              "watched"
+            ],
+            "type": "object"
+          },
           "ProviderWarning": {
             "additionalProperties": false,
             "description": "A warning about one provider (a keyed one whose key travels in clear text).",
@@ -26563,6 +26590,31 @@
             ],
             "type": "object"
           },
+          "WatchStatus": {
+            "additionalProperties": false,
+            "description": "`status.watch`: the inotify budget and each open project's watches.",
+            "properties": {
+              "max_user_watches": {
+                "description": "`fs.inotify.max_user_watches` (none off Linux or when unreadable).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "projects": {
+                "items": {
+                  "$ref": "#/$defs/ProjectWatch"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "projects"
+            ],
+            "type": "object"
+          },
           "WriterState": {
             "description": "Whether the front's writer can write work.db: a schema-7 file the hub made or migrated (`not-ready` while the\nmigration waits or after it failed, `read-only` for a newer file).",
             "enum": [
@@ -26739,6 +26791,17 @@
               }
             ],
             "description": "The front's writer (none from a Lisp hub)."
+          },
+          "watch": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WatchStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hrafn's file watches: what is watched and which projects run unwatched (none from a Lisp hub)."
           }
         },
         "required": [

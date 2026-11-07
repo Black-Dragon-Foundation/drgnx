@@ -1164,7 +1164,13 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
 - **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
   due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
-  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. A project without watches diffs the blobs at query time
+  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. It watches only what can be indexed: one non-recursive
+  watch per directory git does not ignore (one `ls-files --others --ignored --directory` at open; `target/` and
+  `.claude/worktrees/` get none), a directory created later is checked with `check-ignore` and added with the files
+  already in it, and of the gitdir only itself and `refs/`, never `objects/`. When the user's inotify budget is spent
+  (`ENOSPC`) the watches already added are dropped and the project runs unwatched, never silently: the state is in
+  `status.watch` (`{max_user_watches, projects: [{root, watched, error?}]}`), the hub logs it, and `doctor` prints a
+  `watch:` line per unwatched project. A project without watches diffs the blobs at query time
   (`fresh::diff`, at most 2,000 differences named).
 - **The device (`hrafn_embed::device`).** A cached choice whose key (model, `ENGINE_VERSION`, each adapter's name and
   driver) matches; on battery the CPU path with nothing measured or cached; otherwise the first adapter of `order`

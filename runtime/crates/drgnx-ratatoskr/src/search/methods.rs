@@ -59,7 +59,12 @@ struct Open {
     /// The models that fill it: a different set is another project.
     sig: String,
     _watch: Option<hrafn::NotifyWatch>,
+    /// Keeps the entry of `Hub::watches` alive as long as the project is open.
+    _watch_state: Arc<Mutex<hrafn::WatchState>>,
 }
+
+/// `max_user_watches`: the user's inotify budget.
+const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 
 type Projects = Arc<tokio::sync::Mutex<HashMap<String, Open>>>;
 
@@ -70,6 +75,8 @@ pub struct Hub {
     dirs: OnceLock<Dirs>,
     search: OnceLock<Search>,
     projects: Projects,
+    /// Each open project's watch state, for `status.watch` (a closed project's entry dies with its watcher).
+    watches: Mutex<Vec<(PathBuf, Weak<Mutex<hrafn::WatchState>>)>>,
     download: Arc<Mutex<Download>>,
 }
 
@@ -225,6 +232,30 @@ impl Hub {
         self.search.get()?.builtin()
     }
 
+    /// `status.watch`: the inotify budget and each open project's watches.
+    pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
+        use runstav::methods::hub::{ProjectWatch, WatchStatus};
+        let mut projects = Vec::new();
+        if let Ok(mut rows) = self.watches.lock() {
+            rows.retain(|(_, w)| w.strong_count() > 0);
+            for (root, w) in rows.iter() {
+                if let Some(s) = w.upgrade().and_then(|s| s.lock().ok().map(|s| s.clone())) {
+                    projects.push(ProjectWatch {
+                        root: root.to_string_lossy().into_owned(),
+                        watched: s.watched as u64,
+                        error: s.error,
+                    });
+                }
+            }
+        }
+        WatchStatus {
+            max_user_watches: std::fs::read_to_string(MAX_USER_WATCHES)
+                .ok()
+                .and_then(|t| t.trim().parse().ok()),
+            projects,
+        }
+    }
+
     fn dirs(&self) -> Result<&Dirs, Error> {
         self.dirs
             .get()
@@ -350,9 +381,31 @@ impl Hub {
             .await
             .map_err(project_error)?,
         );
-        let watch = hrafn::NotifyWatch::new(&real, &real.join(".git")).ok();
-        if let Some(wt) = &watch {
-            project.watch(wt);
+        let (wr, wg) = (real.clone(), real.join(".git"));
+        let watch = crate::clock::blocking(move || hrafn::NotifyWatch::new(&wr, &wg))
+            .await
+            .map_err(internal)?;
+        let (watch, state) = match watch {
+            Ok(wt) => {
+                project.watch(&wt);
+                let state = wt.shared_state();
+                (Some(wt), state)
+            }
+            Err(e) => {
+                tracing::warn!("search: no file watch for {}: {e}", real.display());
+                let state = hrafn::WatchState {
+                    watched: 0,
+                    error: Some(format!("the watcher could not start: {e}")),
+                };
+                (None, Arc::new(Mutex::new(state)))
+            }
+        };
+        if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
+            tracing::warn!("search: {} runs unwatched: {e}", real.display());
+        }
+        if let Ok(mut rows) = self.watches.lock() {
+            rows.retain(|(_, w)| w.strong_count() > 0);
+            rows.push((real.clone(), Arc::downgrade(&state)));
         }
         project.start_tier2();
         let weak = Arc::downgrade(&project);
@@ -372,6 +425,7 @@ impl Hub {
                 project: project.clone(),
                 sig,
                 _watch: watch,
+                _watch_state: state,
             },
         );
         Ok(project)
