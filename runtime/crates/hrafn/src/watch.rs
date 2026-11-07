@@ -521,7 +521,7 @@ mod inotify_backend {
     use super::host::{Adder, Walker, ignored_dirs, settle};
     use super::{AddError, Router, TreeSpec, Watch, WatchEvent, WatchState};
     use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask, Watches};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::OsStr;
     use std::os::fd::AsRawFd;
     use std::path::{Path, PathBuf};
@@ -595,7 +595,9 @@ mod inotify_backend {
     struct Shared {
         watches: Mutex<Watches>,
         by_id: Mutex<HashMap<i32, PathBuf>>,
-        by_path: Mutex<HashMap<PathBuf, WatchDescriptor>>,
+        /// Each watched directory: its watch and the trees that hold it (one inotify watch per directory, however many
+        /// trees want it; it goes when the last of them lets go).
+        by_path: Mutex<HashMap<PathBuf, (WatchDescriptor, HashSet<String>)>>,
         trees: Mutex<Vec<Tree>>,
         router: Mutex<Router>,
         state: Arc<Mutex<WatchState>>,
@@ -607,23 +609,35 @@ mod inotify_backend {
         walker: Walker<Hook>,
     }
 
-    /// The walker's door onto the shared inotify instance.
-    struct Hook(Arc<Shared>);
+    /// The walker's door onto the shared inotify instance, for the tree KEY.
+    struct Hook(Arc<Shared>, String);
 
     impl Adder for Hook {
         fn add(&mut self, dir: &Path) -> Result<(), AddError> {
             let s = &self.0;
+            let mut by_path = lock(&s.by_path);
+            if let Some((_, users)) = by_path.get_mut(dir) {
+                users.insert(self.1.clone());
+                return Ok(());
+            }
             let wd = lock(&s.watches)
                 .add(dir, MASK)
                 .map_err(|e| map_add_error(&e, dir))?;
             lock(&s.by_id).insert(wd.get_watch_descriptor_id(), dir.to_path_buf());
-            lock(&s.by_path).insert(dir.to_path_buf(), wd);
+            by_path.insert(dir.to_path_buf(), (wd, HashSet::from([self.1.clone()])));
             Ok(())
         }
 
         fn remove(&mut self, dir: &Path) {
             let s = &self.0;
-            if let Some(wd) = lock(&s.by_path).remove(dir) {
+            let mut by_path = lock(&s.by_path);
+            let Some((_, users)) = by_path.get_mut(dir) else {
+                return;
+            };
+            users.remove(&self.1);
+            if users.is_empty()
+                && let Some((wd, _)) = by_path.remove(dir)
+            {
                 lock(&s.by_id).remove(&wd.get_watch_descriptor_id());
                 let _ = lock(&s.watches).remove(wd);
             }
@@ -717,7 +731,7 @@ mod inotify_backend {
                     .is_some_and(|rel| crate::files::is_ignored_dir(&root, rel))
             });
             let mut walker = Walker::new(
-                Hook(self.shared.clone()),
+                Hook(self.shared.clone(), spec.key.clone()),
                 &spec.root,
                 &spec.gitdir,
                 &ignored,
@@ -1385,6 +1399,33 @@ mod inotify_tests {
             rel: "new/b.rs".into(),
         };
         skuld::wait_until("the file in it", 10, || {
+            (rx.try_recv().ok().as_ref() == Some(&want)).then_some(())
+        });
+    }
+
+    // pattern: D
+    #[test]
+    fn a_shared_directory_keeps_its_watch_until_the_last_tree_drops_it() {
+        let t = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(t.path()).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        let wt = InotifyWatch::new(&root.join(".git")).unwrap();
+        let rx = wt.events();
+        wt.add_tree(TreeSpec::main(&root)).unwrap();
+        // a second tree whose root is the directory main also watches
+        let inner = TreeSpec {
+            key: "b".into(),
+            root: root.join("shared"),
+            gitdir: root.join("shared/.git"),
+        };
+        wt.add_tree(inner).unwrap();
+        wt.remove_tree("b");
+        std::fs::write(root.join("shared/f.rs"), "x").unwrap();
+        let want = WatchEvent::File {
+            tree: MAIN_TREE.into(),
+            rel: "shared/f.rs".into(),
+        };
+        skuld::wait_until("main still hears the shared directory", 10, || {
             (rx.try_recv().ok().as_ref() == Some(&want)).then_some(())
         });
     }
