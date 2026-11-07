@@ -6627,7 +6627,7 @@ mod tests {
             call_end: None,
             diffs: Vec::new(),
             cell: Some(cell.clone()),
-            cell: Some(cell.clone()),
+            before: None,
         })
         .unwrap();
         // the step is announced though its row is lost
