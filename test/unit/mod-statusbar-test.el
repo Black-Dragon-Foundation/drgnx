@@ -1149,6 +1149,16 @@ names), again only when the cache learns of a root or the buffer's file changes.
      (unwind-protect (progn ,@body)
        (drgnx-timer-cancel 'statusbar-refresh))))
 
+(ert-deftest drgnx-statusbar/a-refresh-with-the-bar-off-schedules-nothing ()
+  ;; a module that tells the bar of a change (jobs, agents) while the bar is off left a timer nobody cancels
+  (drgnx-statusbar-test--state
+    (let ((drgnx-statusbar-mode nil) (before (drgnx-epoch 'statusbar)))
+      (drgnx-timer-cancel 'statusbar-refresh)
+      (drgnx-statusbar-refresh t)
+      (should-not (drgnx-timer-active-p 'statusbar-refresh))
+      (should (/= before (drgnx-epoch 'statusbar)))       ; the change is still noted
+      (should drgnx-statusbar--redraw-wanted))))
+
 (defun drgnx-statusbar-test--seg (id)
   "The plain text segment ID says now (nil when it says nothing)."
   (when-let* ((s (funcall (plist-get (gethash id drgnx-statusbar--segments) :fn)))) (substring-no-properties s)))
@@ -1453,7 +1463,8 @@ own cache), evil's state tag, other entries of `mode-line-misc-info'; each chang
   (drgnx-statusbar-test--with
     (drgnx-statusbar-test--state
       (drgnx-statusbar--define-defaults)
-      (let ((calls 0) (drgnx-statusbar-test--refreshes 0))
+      (let ((calls 0) (drgnx-statusbar-test--refreshes 0)
+            (drgnx-statusbar-mode t))                       ; a bar to draw: with none, a refresh schedules nothing
         (advice-add 'drgnx-statusbar--refresh-now :around #'drgnx-statusbar-test--mark-refresh)
         (unwind-protect
             (drgnx-test-with-clock ()                         ; the debounce is a layer timer: virtual time
