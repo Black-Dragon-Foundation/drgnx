@@ -313,8 +313,12 @@ impl ExecSpec {
     fn forseti_spec(&self, id: &str, memory: &str) -> forseti::JobSpec {
         let mut s = queue::blank_spec(id);
         s.command = self.argv.clone();
-        s.cwd = self.cwd.clone();
         s.tree = self.worktree.clone().unwrap_or_else(|| self.cwd.clone());
+        // a runner mounts its own checkout of the tree: it is told the folder inside it, never this machine's path
+        s.cwd = match self.cwd.strip_prefix(&s.tree) {
+            Ok(inside) if !inside.as_os_str().is_empty() => inside.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
         s.timeout_s = self.time_box().map_or(0, |t| t.as_secs());
         s.mem_mib.max =
             mem_mib(self.user.memory_max.as_deref().unwrap_or(memory)).max(s.mem_mib.min);
