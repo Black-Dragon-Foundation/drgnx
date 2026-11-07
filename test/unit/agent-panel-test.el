@@ -412,5 +412,24 @@ unanswered, and panel \"s1\" as `buf'."
         (should (string-match-p "3 checkpoints" text))
         (should-not (string-match-p "checkpoints ·" text))))))
 
+(ert-deftest drgnx-agent-panel/an-applied-history-reloads-the-step-rows ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (asked cb)
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method params callback &rest _) (push (cons method params) asked) (setq cb callback) 1)))
+          (drgnx-agent-panel--event "history/applied" (list :op 9 :paths ["a.el"] :worktree "/w"))
+          ;; one reload per event, of this panel's session, over the steps it holds
+          (should (equal (length asked) 1))
+          (should (equal (car (car asked)) "timeline/get"))
+          (should (equal (plist-get (cdr (car asked)) :id) "s1"))
+          (funcall cb (list :steps (vector (list :seq 4 :revertible :json-false :undone_by 11)
+                                           (list :seq 5 :revertible t)))
+                   nil))
+        (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
+          (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))
+          (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines))))))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
