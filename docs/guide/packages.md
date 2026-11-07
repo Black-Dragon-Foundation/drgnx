@@ -304,7 +304,7 @@ After a sync, upgrade or rollback that worked, the settings index of the install
 
 `drgnx sync`, `upgrade` and `rollback` take `--progress FILE`: FILE is replaced, by rename, with one JSON object (at
 most 1 KiB) at each step, so a reader always finds a whole one — `start` (with the queue's `tickets` for
-`--pending`), `plan`, `download`, `unpack` and `byte` per package (`pkg`, `i` of `n`), `swap`, `lock`, `native` per
+`--pending`), `plan`, `download` (for an archive package; for a Git package when its clone is made or fetched, with `pkg` and `cached` only), `unpack` and `byte` per package (`pkg`, `i` of `n`), `swap`, `lock`, `native` per
 file (`pkg`, `i` of `n`), and `done` (`ok`, `generation`, `warnings`, `error`). The `plan` comes before anything is
 downloaded and before every swap: `{"step":"plan","seq":1,"generation":7,"replaces":["magit-4.1"],"removes":["eat-0.9"],"adds":["forge-0.5"]}`
 — the package directories the swap takes away (generation N holds their copies) and the ones it brings. It also goes
