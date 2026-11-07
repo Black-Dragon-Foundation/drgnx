@@ -28,6 +28,12 @@ a function called once the agents run (a follow window, a panel)."
          (setq drgnx-perf--agents-module
                (eq 'ok (plist-get (cdr (assq 'tools/agents-in-editor (drgnx-modules-report))) :status)))
          (drgnx-modules-set-enabled 'tools/agents-in-editor module)
+         ;; the module is an idle-stage one: its setup must have run before the agents start, not at the first idle
+         ;; moment of the typing (the premise's timeline put the followed agent's turn ending there)
+         (when module
+           (drgnx-modules-run 'idle)
+           (unless (eq 'ok (plist-get (cdr (assq 'tools/agents-in-editor (drgnx-modules-report))) :status))
+             (error "The module tools/agents-in-editor is not running")))
          (drgnx-agents-five-start drgnx-perf--hub-bin pair)
          (drgnx-agents-five-visit)
          (when extra (funcall extra))
