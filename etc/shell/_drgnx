@@ -17,6 +17,9 @@ commands=(
   'rollback:the packages of an earlier generation'
   'generations:list the package generations'
   'lock:the package lock'
+  'extensions:the catalog of the archives'"'"' packages'
+  'record:record the outside ends of a run'
+  'replay:run drgnx with a recording backing the outside ends'
   'bisect:find the module that breaks'
   'service-unit:print the systemd user unit'
   'onboard:set drgnx up'
@@ -75,7 +78,21 @@ case $cmd in
       '--bootstrap[drgnx bootstrap on a fresh Fedora container]' '--fedora[Fedora release for --bootstrap]:release:(45)' \
       '*:image:(debian-trixie ubuntu-26.04 fedora-45 archlinux)' ;;
   sync)
-    _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' ;;
+    _arguments '--offline[from the lock and the cache]' '--seed[copy another elpa first]:directory:_files -/' '--prune[remove packages the manifest no longer needs]' '--dry-run[with --prune: only list them]' \
+      '*--add[install packages and mark them as yours]:package:' '*--remove[remove packages]:package:' \
+      '--pending[run the Extensions view'"'"'s queue]' '--wait[wait for a running sync]' '--progress[JSON steps for the editor]:file:_files' ;;
+  upgrade)
+    _arguments '*--only[upgrade only these]:package:' '--stage[fetch and check into the cache only]' '--staged[install what was staged]' \
+      '--progress[JSON steps for the editor]:file:_files' ;;
+  rollback)
+    _arguments '--progress[JSON steps for the editor]:file:_files' '1:generation:' ;;
+  extensions)
+    _arguments '1:action:(refresh fetch-readme)' '--progress[JSON steps for the editor]:file:_files' ;;
+  record)
+    _arguments '1:action:(start stop lint export)' '--cap-usd[spending cap]:dollars:' '--cap-weekly[weekly cap]:percent:' \
+      '--max-minutes[time cap]:minutes:' '--to[export into this folder]:directory:_files -/' '*:name:' ;;
+  replay)
+    _arguments '--speed[0, 1 or N times]:speed:' '--strict[refuse what the recording lacks]' '1:recording:_files' ;;
   lease)
     _arguments '--wait[seconds to wait for a slot]:seconds' '1:class:(light heavy exclusive status)' ;;
   lock)
