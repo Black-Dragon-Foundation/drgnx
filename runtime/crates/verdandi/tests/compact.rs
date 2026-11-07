@@ -298,3 +298,32 @@ fn doctor_names_what_pins_size() {
     assert!(f.h.size().unwrap() > pins.iter().map(|p| p.bytes).max().unwrap());
     let _ = ub;
 }
+
+#[test]
+fn the_cap_is_two_gibibytes() {
+    assert_eq!(verdandi::compact::DEFAULT_CAP, 2_147_483_648);
+}
+
+#[test]
+fn size_is_whole_pages() {
+    let f = fx();
+    let s = f.h.size().unwrap();
+    // SQLite's default 4096-byte pages; a fresh history holds several
+    assert_eq!(s % 4096, 0, "{s}");
+    assert!(s >= 4 * 4096, "{s}");
+}
+
+#[test]
+fn a_cut_at_the_limit_is_not_made_twice() {
+    let mut f = fx();
+    f.step(Kind::Edits, f.user, "a\n");
+    let r2 = f.step(Kind::Edits, f.user, "b\n");
+    f.h.anchor(f.doc, f.br, 1, Side::Right, "review").unwrap();
+    pile(&mut f);
+    assert_eq!(f.h.compact(0, f.user, 9.0).unwrap().cuts, 1);
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(r2));
+    // the anchor still pins the cut at r2: nothing newer may be cut, and r2 itself is done
+    let again = f.h.compact(0, f.user, 10.0).unwrap();
+    assert_eq!(again.cuts, 0);
+    assert_eq!(f.h.cut(f.doc, f.br).unwrap(), Some(r2));
+}
