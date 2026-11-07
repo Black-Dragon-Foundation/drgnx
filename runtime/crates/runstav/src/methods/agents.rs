@@ -385,6 +385,51 @@ pub struct CompactPreview {
     pub note: Option<Bounded<String, 1024>>,
 }
 
+/// The user's switch of a session's mode or model.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ConfigParams {
+    pub id: Id,
+    /// `mode` or `model`.
+    pub option: Bounded<String, 32>,
+    /// The mode id or model id; a mode must be on the provider's lock allow-list.
+    pub value: Bounded<String, 256>,
+}
+
+/// What `agents/explain` explains: a chip of the agent panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExplainItem {
+    Context,
+    Cost,
+    Mode,
+    Model,
+    Waiting,
+    Mcp,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ExplainParams {
+    pub id: Id,
+    pub item: ExplainItem,
+}
+
+/// One fact behind a chip: a name and what it is, in words.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fact {
+    pub name: String,
+    pub value: String,
+}
+
+/// The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Explained {
+    pub item: ExplainItem,
+    #[serde(default, deserialize_with = "null_as_empty")]
+    pub facts: Vec<Fact>,
+}
+
 /// The tool kinds a session's `before-tool` hooks and rules subscribe to, by how each reaches them: through the
 /// permission seam (the lock makes the agent ask), through the adapter's `_drgnx/before_tool`, or not at all (the
 /// agent runs them without asking). Fixed at the session's start; never faked.
@@ -783,6 +828,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/context-pin", AgentsContextPin(ContextPinParams) -> bool,
             classes: [User], writes: false,
             doc: "the agent pins or unpins an item of its context (`_drgnx/context/pin`, 10 s); an agent without the `pin` feature: invalid-params",
+        ),
+        method!(
+            "agents/config", AgentsConfig(ConfigParams) -> bool,
+            classes: [User], writes: true,
+            doc: "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+        ),
+        method!(
+            "agents/explain", AgentsExplain(ExplainParams) -> Explained,
+            classes: [User], writes: false,
+            doc: "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
         ),
         method!(
             "agents/compact-preview", AgentsCompactPreview(ById) -> CompactPreview,

@@ -102,6 +102,10 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
 
+(declare-function drgnx-agent-panel-explain-setup "drgnx-agent-panel-explain")
+(declare-function drgnx-agent-panel-huddle-setup "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-composer-keys "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-redraw "drgnx-agent-panel-composer")
 (declare-function drgnx-agent-panel-composer-setup "drgnx-agent-panel-composer")
@@ -124,6 +128,10 @@ to its top.  The hub gives at most 50."
   (load (expand-file-name "drgnx-agent-panel-cards" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-composer)
   (load (expand-file-name "drgnx-agent-panel-composer" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-panel-explain)
+  (load (expand-file-name "drgnx-agent-panel-explain" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-agent-panel-huddle)
+  (load (expand-file-name "drgnx-agent-panel-huddle" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-agent-panel-steps)
   (load (expand-file-name "drgnx-agent-panel-steps" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
@@ -536,12 +544,16 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
   (drgnx-module-hook 'window-buffer-change-functions panel-windows (frame) (drgnx-agent-panel-sync-windows frame))
   (drgnx-agent-panel-steps-setup)
   (drgnx-agent-panel-composer-setup)
+  (drgnx-agent-panel-explain-setup)
+  (drgnx-agent-panel-huddle-setup)
+  (drgnx-module-hook 'drgnx-hub-event-functions huddle-event (event data) (drgnx-agent-panel-huddle--event event data))
   (drgnx-agent-panel-cards-setup)
   (drgnx-agent-panel-sync-windows))
 
 (defun drgnx-agent-panel--teardown ()
   "Every panel gives its subscription back and goes."
   (drgnx-agent-panel-steps-teardown)
+  (drgnx-agent-panel-huddle-teardown)
   (dolist (b (drgnx-agent-panel-buffers)) (kill-buffer b)))
 
 (defun drgnx-agent-panel-toggle ()

@@ -671,6 +671,8 @@ impl Front {
             | Params::AgentsContextDrop(_)
             | Params::AgentsContextPin(_)
             | Params::AgentsCompactPreview(_)
+            | Params::AgentsConfig(_)
+            | Params::AgentsExplain(_)
             | Params::AgentsHuddleStart(_)
             | Params::AgentsHuddleGet(_)
             | Params::AgentsWheelTake(_)
