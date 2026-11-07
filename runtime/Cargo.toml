@@ -38,6 +38,7 @@ tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-bash = "0.25"
 notify = "8"
+inotify = { version = "0.11", default-features = false }
 # verdandi's documents (the edit history; agent system part 4's spike chose it): public API only, pinned, moved on purpose
 loro = { version = "=1.17.1", default-features = false }
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }

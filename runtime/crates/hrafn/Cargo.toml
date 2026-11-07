@@ -10,11 +10,10 @@ publish = false
 [features]
 # The host-side doors (git CLI, file watcher) behind the `Git` and `Watch` traits.
 default = ["host"]
-host = ["dep:notify"]
+host = ["dep:notify", "dep:inotify", "dep:libc"]
 
 [dependencies]
 eitri = { path = "../eitri", version = "0.1.0" }
-notify = { workspace = true, optional = true }
 urdr = { path = "../urdr", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
@@ -25,6 +24,14 @@ tree-sitter-elisp.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-c.workspace = true
 tree-sitter-bash.workspace = true
+
+# inotify directly on Linux and Android (a mask of our own, no IN_OPEN); notify's FSEvents on macOS
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+inotify = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { workspace = true, optional = true }
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }  # every order of the settle core

@@ -58,7 +58,7 @@ struct Open {
     project: Arc<Project>,
     /// The models that fill it: a different set is another project.
     sig: String,
-    _watch: Option<hrafn::NotifyWatch>,
+    _watch: Arc<hrafn::ProjectWatch>,
     /// Keeps the entry of `Hub::watches` alive as long as the project is open.
     _watch_state: Arc<Mutex<hrafn::WatchState>>,
 }
@@ -381,25 +381,25 @@ impl Hub {
             .await
             .map_err(project_error)?,
         );
-        let (wr, wg) = (real.clone(), real.join(".git"));
-        let watch = crate::clock::blocking(move || hrafn::NotifyWatch::new(&wr, &wg))
+        let common = real.join(".git");
+        let watch = Arc::new(hrafn::ProjectWatch::new(move || {
+            hrafn::HostWatch::new(&common).map(|w| Arc::new(w) as Arc<dyn hrafn::Watch>)
+        }));
+        let (w2, main) = (watch.clone(), hrafn::TreeSpec::main(&real));
+        let added = crate::clock::blocking(move || w2.add_tree(main))
             .await
             .map_err(internal)?;
-        let (watch, state) = match watch {
-            Ok(wt) => {
-                project.watch(&wt);
-                let state = wt.shared_state();
-                (Some(wt), state)
-            }
-            Err(e) => {
-                tracing::warn!("search: no file watch for {}: {e}", real.display());
-                let state = hrafn::WatchState {
-                    watched: 0,
-                    error: Some(format!("the watcher could not start: {e}")),
-                };
-                (None, Arc::new(Mutex::new(state)))
-            }
-        };
+        if watch.is_up() {
+            project.watch(watch.clone());
+        }
+        let state = hrafn::Watch::shared_state(&*watch);
+        if let Err(e) = added
+            && let Ok(mut s) = state.lock()
+            && s.error.is_none()
+        {
+            tracing::warn!("search: no file watch for {}: {e}", real.display());
+            s.error = Some(e.to_string());
+        }
         if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
             tracing::warn!("search: {} runs unwatched: {e}", real.display());
         }
