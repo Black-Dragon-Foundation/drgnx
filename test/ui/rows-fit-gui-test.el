@@ -180,3 +180,39 @@ that class fills it again."
         (drgnx-rows-demo-settle b "the new class's reset")
         (should (equal "row a\nrow b\n" (drgnx-rows-demo-text b)))
         (should (member (drgnx-view-patch-class (drgnx-rows-demo-state b)) (drgnx-view-env-classes drgnx-rows-demo-view)))))))
+
+(ert-deftest drgnx-ui-rows-fit/two-frames-two-classes ()
+  "Two real GUI classes in one session: the view's buffer shown in a second frame whose default font is twice the
+first's (scale 2: the container cannot change `frame-scale-factor').  The editor sends one env per class, the hub
+starts each class with its own reset (the second fitted to twice the size), and the buffer keeps the one fit it
+holds: the class it was paired with, never stale."
+  (skip-unless (display-graphic-p))
+  (drgnx-rows-demo-with
+    (let* ((b (drgnx-rows-demo-open)) (resets nil)
+           (count (lambda (event data)
+                    (when (and (equal event "view-patch") (drgnx-view-patch--reset-p data))
+                      (push (plist-get data :class) resets))))
+           (frame (make-frame '((width . 60) (height . 10))))
+           (px (aref (font-info (face-font 'default)) 2)))
+      (unwind-protect
+          (progn
+            (add-hook 'drgnx-hub-event-functions count)
+            (drgnx-rows-demo-feed nil nil '(("label" "The quick brown fox jumps over the lazy dog" 160)))
+            (drgnx-rows-demo-settle b)
+            (let ((paired (drgnx-view-patch-class (drgnx-rows-demo-state b))))
+              (set-face-attribute 'default frame :font (font-spec :family "Inter" :size (* 2 px)))
+              (set-window-buffer (frame-root-window frame) b)
+              (drgnx-test-wait (lambda () (eq t (frame-visible-p frame))) :secs 10 :what "the second frame shown")
+              (drgnx-view-env-update drgnx-rows-demo-view)
+              (drgnx-test-wait (lambda () (= 2 (length (delete-dups (copy-sequence resets))))) :secs 15
+                               :what "a reset for each class")
+              (let ((classes (drgnx-view-env-classes drgnx-rows-demo-view)))
+                (should (= 2 (length classes)))
+                (should (member paired classes)))
+              (drgnx-rows-demo-settle b)
+              (let ((s (drgnx-rows-demo-state b)))
+                (should (equal paired (drgnx-view-patch-class s)))
+                (should-not (drgnx-view-patch-stale s)))
+              (should (string-prefix-p "The quick" (drgnx-rows-demo-text b)))))
+        (remove-hook 'drgnx-hub-event-functions count)
+        (delete-frame frame)))))

@@ -2008,6 +2008,8 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   selected row moves the selection to the next row, else the previous, else none.
 - `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
   pass that compares the two.
+- **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
+  hub, but holds the rows of the class it is paired with; both frames show that fit.
 - **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
   its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
   class's first reset.
@@ -2016,8 +2018,8 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   later areas to call for their views: a look change mid-stream, two classes, a face override after a patch, a dropped
   patch and a lost image, a hub restart (the hub's process killed and a new one started: the view dims, the new
   instance starts it with a reset, an old instance's late patch is dropped; `drgnx-rows-demo-restart-hub`)
-  (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height` and
-  `text-scale` (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
+  (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height`,
+  `text-scale` and two GUI frames at font sizes 1x and 2x (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
 
 ## Modal core (`drgnx-modal.el`)
 
