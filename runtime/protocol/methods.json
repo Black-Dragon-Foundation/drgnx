@@ -11927,6 +11927,77 @@
     },
     {
       "classes": [
+        "user"
+      ],
+      "doc": "list the Explorer's roots and open folders for a hub-fed view on a thread: its tree model (view-model) and its rows (view-patch) to every class; ask again with the new open folders to expand or collapse; a newer listing of the view stops the old one",
+      "name": "explorer/subscribe",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`: list ROOTS, and inside them the folders of EXPANDED, for the Explorer's hub-fed VIEW: its\nmodel (a `tree` of path nodes, a folder open when it is a root or in EXPANDED) and its rows (one per entry, guides\nand chevron, the path over the row) go to every class of VIEW. Folders come first, then names in natural,\ncase-insensitive order; the names a version-control folder, `.DS_Store`, `__pycache__` and `.#…` locks never show.\nAn open folder whose only entry is a folder shares its row with it (`src/app`) unless COMPACT is false. A newer\nsubscription of the same view stops this one; ask again with the new EXPANDED to open or close a folder.",
+        "properties": {
+          "compact": {
+            "description": "Join single-folder chains on one row; default on.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "expanded": {
+            "description": "The open folders under the roots (no trailing slash), at most 10000.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "roots": {
+            "description": "The roots, 1 to 16 existing folders.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "roots"
+        ],
+        "title": "ExplorerParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`'s answer: LISTING numbers the listing.",
+        "properties": {
+          "listing": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listing"
+        ],
+        "title": "ExplorerStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
         "user",
         "agent"
       ],

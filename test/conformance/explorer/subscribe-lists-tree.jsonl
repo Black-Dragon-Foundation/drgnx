@@ -1,0 +1,20 @@
+{"scenario": "explorer/subscribe-lists-tree", "requires": ["v1"], "doc": "explorer/subscribe lists a root for a hub-fed view: its tree model (a reset), then one row per entry (folders first, natural order, .git left out, the path as the key) to the class the editor sent a view/env for; asked again with a folder open, the model and rows that change go out on top (a single-folder chain joined on one row); a missing root is refused."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "x", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/ex/src/app $ROOT/ex/.git $ROOT/ex/lib && echo x > $ROOT/ex/file10 && echo x > $ROOT/ex/file2 && echo x > $ROOT/ex/src/app/main.rs"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"listing": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "model": 1, "ops": [{"reset": [{"key": "$ROOT/ex", "text": "▾ EX"}, {"key": "$ROOT/ex/lib", "text": "▸ lib"}, {"key": "$ROOT/ex/src", "text": "▸ src"}, {"key": "$ROOT/ex/file2", "text": "  file2"}, {"key": "$ROOT/ex/file10", "text": "  file10"}]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"], "expanded": ["$ROOT/ex/src"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"listing": "$number"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 1, "version": 2, "env_epoch": 1, "model": 2}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/resync", "params": {"view": "x", "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "ops": [{"reset": [{"key": "$ROOT/ex"}, {"key": "$ROOT/ex/lib"}, {"key": "$ROOT/ex/src/app", "text": "▸ src/app"}, {"key": "$ROOT/ex/file2"}, {"key": "$ROOT/ex/file10"}]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/missing"]}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params"}}}

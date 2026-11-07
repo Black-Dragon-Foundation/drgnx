@@ -2068,6 +2068,14 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view--call`.
 - Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
   a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
+- **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
+  folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
+  expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
+  folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
+  visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
+  A key first selects the row at point (a click moved it). The folder watches stay the Explorer's: an event asks the
+  hub again, as do Refresh and a reveal (which opens the file's folders). Find, icons, git letters and multi-select are
+  drawn only off this path, so the Explorer does not attach itself yet. Tests: `test/unit/explorer-rows-nav-test.el`.
 
 ## Modal core (`drgnx-modal.el`)
 

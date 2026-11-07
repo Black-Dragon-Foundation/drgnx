@@ -1368,6 +1368,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
@@ -2191,8 +2192,8 @@ All of it is in memory only.
   a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
   `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
   outstanding per (view, class).
-- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
-  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
+  class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 - **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
@@ -2315,6 +2316,28 @@ and the ranking are `hrafn::rank`).
   A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
   `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
   typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
+
+### The Explorer's listing as a tree (`explorer/subscribe`)
+
+The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
+
+- `explorer/subscribe {view, roots, expanded?, compact?}` stops the view's earlier listing and answers `{listing}`. A
+  thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
+  trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
+  listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
+  without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
+  folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
+  `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
+  the last folder); the chain ends at the first closed folder, which is not read.
+- **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
+  or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
+  fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
+  pre-order; past 20,000 it is a window of the first ones (the rows hold every entry).
+- **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
+  spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
+  control character as `^X`; the path is the `drgnx-work-id` over the whole row.
+- The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
 
 ### The symbol at a line (`search/symbol-at`)
 

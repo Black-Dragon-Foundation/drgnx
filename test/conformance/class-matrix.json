@@ -62,6 +62,7 @@
   "exec/log": ["user"],
   "exec/start": ["user"],
   "exec/stop": ["user"],
+  "explorer/subscribe": ["user"],
   "extensions/details": ["user", "agent"],
   "extensions/modules": ["user"],
   "extensions/rows": ["user"],
