@@ -40,6 +40,8 @@
         (agents-panel-output-search "/")
         (agents-panel-output-open "O")
         (agents-panel-output-more "n")
+        (agents-panel-revert-here "R")
+        (agents-panel-fork-here "F")
         (agents-new :none "the Agents tab and transcripts; the palette")
         (agents-new-durable :none "the palette")
         (agents-send :none "the Agents tab and transcripts; the palette")

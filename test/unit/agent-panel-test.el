@@ -16,6 +16,10 @@
 (declare-function drgnx-agent-panel--take-steps "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-toggle "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
+(declare-function drgnx-history-revert-to-here "drgnx-history-revert")
+(declare-function drgnx-forecast-line "drgnx-forecast")
 
 (defvar drgnx-agent-panel-test--calls nil)
 
@@ -347,6 +351,66 @@ unanswered, and panel \"s1\" as `buf'."
         (let ((shown (drgnx-agent-panel-test--text buf)))
           (should (string-match-p "c$" shown))
           (should-not (string-match-p "hidden" shown)))))))
+
+;;;; Task 39: checkpoints (revert and fork at a step)
+
+(defun drgnx-agent-panel-test--with-steps ()
+  "Feed buf two tool entries on steps 4 (revertible) and 5 (undone by record 9, not revertible)."
+  (drgnx-agent-panel--take-steps (list (list :seq 4 :revertible t) (list :seq 5 :revertible :json-false :undone_by 9)))
+  (drgnx-agent-panel--take-entries
+   (list (list 0 (drgnx-agent-panel-test--tool "t1" "Edit a.el" "completed" :step 4))
+         (list 1 (drgnx-agent-panel-test--tool "t2" "Edit b.el" "completed" :step 5)))))
+
+(ert-deftest drgnx-agent-panel/revert-here-calls-the-history ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (called)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (s q) (setq called (list s q)))))
+          (drgnx-agent-panel-revert-here)
+          (should (equal called '("s1" 4))))
+        ;; a step with no history record is refused, and so is a row that is not a step
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 1)))
+                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (&rest _) (error "must not be called"))))
+          (should-error (drgnx-agent-panel-revert-here) :type 'user-error))
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:strip))))
+          (should-error (drgnx-agent-panel-revert-here) :type 'user-error))))))
+
+(ert-deftest drgnx-agent-panel/fork-here-shows-the-forecast-line ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (prompt fork)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'drgnx-forecast-line) (lambda (_) "about $0.40 and 6 min"))
+                  ((symbol-function 'drgnx-hub-call-sync)
+                   (lambda (method params &rest _)
+                     (if (equal method "history/fork") (progn (setq fork params) (list :id "s2")) (list :cost 0.4))))
+                  ((symbol-function 'read-string) (lambda (p &rest _) (setq prompt p) "try again")))
+          (drgnx-agent-panel-fork-here)
+          (should (string-match-p "step 4" prompt))
+          (should (string-match-p "about \\$0.40 and 6 min" prompt))
+          (should (equal (list (plist-get fork :session) (plist-get fork :seq) (plist-get fork :message))
+                         '("s1" 4 "try again"))))))))
+
+(ert-deftest drgnx-agent-panel/undone-steps-are-marked ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
+        (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines)))
+        (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))))))
+
+(ert-deftest drgnx-agent-panel/checkpoints-chip-names-the-restore-level ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3 :restore_level "message"))
+      (should (string-match-p "3 checkpoints · message" (drgnx-agent-panel-test--text buf)))
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "3 checkpoints" text))
+        (should-not (string-match-p "checkpoints ·" text))))))
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
