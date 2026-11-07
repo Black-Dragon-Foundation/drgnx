@@ -8,7 +8,8 @@
 ;; the plan the map's selection stands in (or plans, for a spec or an ask), else it shows every task.  Switching views
 ;; keeps the selection: each view shows the nearest thing it can represent (design 8.2), by pure functions of the
 ;; map's cached frame and the board's cards, so a switch never waits on the hub.  The tasks themselves are asked of
-;; the hub (`tasks/find', `plans/get') and asked again when the map's frame changes.
+;; the hub (`tasks/find', `plans/get') and asked again when the map's frame changes.  On the rows path the hub builds
+;; the Board (`work/board/subscribe'): its rows, and a model of its own whose selection is the Board's alone.
 ;; Loaded by tools/work-space (drgnx-work-space.el); defines no module.  See docs/develop/work-space.md.
 
 ;;; Code:
@@ -16,6 +17,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-view)
+(require 'drgnx-view-nav)
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -23,6 +25,8 @@
   (load (expand-file-name "drgnx-work-detail" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work-timeline-open "drgnx-work-trail")
 (declare-function drgnx-work-timeline-buffers "drgnx-work-trail")
 (declare-function drgnx-work--open-agent "drgnx-work-map")
@@ -208,15 +212,61 @@ sideways to the nearest column that has cards, at the same height or the last ca
                         (drgnx-work-board--set-cards buffer gen acc))))))
 
 (defun drgnx-work-board-refresh (&optional buffer)
-  "Ask the hub for BUFFER's tasks (default: the current board) again; the board draws them when they come."
+  "Ask the hub for BUFFER's tasks (default: the current board) again; the board draws them when they come.  On the
+rows path the hub reads them and sends the Board's model and rows (`drgnx-work-board--subscribe')."
   (let ((buffer (or buffer (current-buffer))))
     (with-current-buffer buffer
-      (let ((gen (cl-incf drgnx-work-board--gen)) (plans drgnx-work-board--plans))
-        (condition-case nil
-            (if plans
-                (drgnx-work-board--fetch-plans buffer gen plans nil)
-              (drgnx-work-board--fetch-all buffer gen nil nil 0))
-          (error nil))))))
+      (if (drgnx-work-board--rows-p)
+          (drgnx-work-board--subscribe)
+        (let ((gen (cl-incf drgnx-work-board--gen)) (plans drgnx-work-board--plans))
+          (condition-case nil
+              (if plans
+                  (drgnx-work-board--fetch-plans buffer gen plans nil)
+                (drgnx-work-board--fetch-all buffer gen nil nil 0))
+            (error nil)))))))
+
+;;;; On the rows path: the hub's Board with a model of its own (Sjá)
+;; The Board's cards are the hub's rows and its keys answer from its own model (`work/board/subscribe'): a card node
+;; per task with the `board' form's links, the lists `cards' and `team'.  Its selection is its own: it neither follows
+;; the map's nor moves it (the map's model holds no tracker tasks).
+
+(defun drgnx-work-board--rows-p ()
+  "Whether this board is a hub-fed view with its model in Sjá (the rows path)."
+  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
+
+(defun drgnx-work-board--rows-view (map-buffer)
+  "The hub's Board view beside MAP-BUFFER's map view, (VIEW . CLASS), when the map is on the rows path, else nil."
+  (with-current-buffer map-buffer
+    (when-let* ((state (and (not drgnx-view-old-path) drgnx-view-patch)))
+      (cons (concat (drgnx-view-patch-view state) "/board") (drgnx-view-patch-class state)))))
+
+(defun drgnx-work-board--subscribe ()
+  "Ask the hub for this board's view: the tasks of its plans (else every task), with its map's agents on them."
+  (when (buffer-live-p drgnx-work-board--map)
+    (condition-case nil
+        (drgnx-hub-call "work/board/subscribe"
+                        (list :view (drgnx-view-patch-view drgnx-view-patch)
+                              :map (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch drgnx-work-board--map))
+                              :plans (vconcat drgnx-work-board--plans))
+                        #'ignore)
+      (error nil))))
+
+(defun drgnx-work-board-rows-attached ()
+  "The board is a hub-fed view on the rows path: up, down, left and right take the `board' form's links."
+  (nidhogg-view-set (drgnx-view-patch-handle drgnx-view-patch) 'form "board"))
+
+(defun drgnx-work-board--rows-nav (dir)
+  "DIR of the lens on the rows path, answered from the Board's model: a move follows the `board' form's link, the
+agent keys walk the list `team', open opens the selected card's agent."
+  (pcase dir
+    ((or 'left 'right 'up 'down) (drgnx-view-nav 'follow (symbol-name dir)))
+    ('next-agent (drgnx-view-nav 'walk "team" 1))
+    ('previous-agent (drgnx-view-nav 'walk "team" -1))
+    ((or 'open 'open-beside)
+     (if-let* ((agent (and (drgnx-view-nav-selection) (drgnx-view-nav-field "agent"))))
+         (drgnx-work--open-agent (substring agent (length "agent:")))
+       (message "Work: no agent works on this task"))))
+  t)
 
 ;;;; Rows
 
@@ -316,7 +366,13 @@ sideways to the nearest column that has cards, at the same height or the last ca
 
 (defun drgnx-work-board--nav (dir)
   "A key of the lens in the board: DIR is `left' `right' `up' `down' `next-agent' `previous-agent' `open' or
-`open-beside'."
+`open-beside'.  On the rows path the Board's model says where (`drgnx-work-board--rows-nav')."
+  (if (drgnx-work-board--rows-p)
+      (drgnx-work-board--rows-nav dir)
+    (drgnx-work-board--nav-old dir)))
+
+(defun drgnx-work-board--nav-old (dir)
+  "`drgnx-work-board--nav' off the rows path."
   (let ((cols (drgnx-work-board-columns-of drgnx-work-board--cards)))
     (pcase dir
       ((or 'left 'right 'up 'down)
@@ -347,12 +403,17 @@ sideways to the nearest column that has cards, at the same height or the last ca
 (defun drgnx-work-board-open (map-buffer)
   "The board of MAP-BUFFER, made when there is none: its card, lit cards and plans follow the map's selection (design 8.2).
 Returns the buffer; it asks the hub for the tasks and does not show itself."
-  (let ((buffer (get-buffer-create (drgnx-work-board--name map-buffer))))
+  (let ((buffer (get-buffer-create (drgnx-work-board--name map-buffer)))
+        (rows (drgnx-work-board--rows-view map-buffer)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-work-board-mode)
         (drgnx-work-board-mode)
         (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
-        (drgnx-view-attach 'work-board))
+        (if rows
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+                   (require 'drgnx-view-env)
+                   (drgnx-view-env-register (car rows) buffer))
+          (drgnx-view-attach 'work-board)))
       (setq drgnx-work-board--map map-buffer drgnx-work-lens--map map-buffer)
       (let* ((state (drgnx-work-map--state map-buffer))
              (sel (buffer-local-value 'drgnx-work-map--selection map-buffer))
@@ -361,7 +422,7 @@ Returns the buffer; it asks the hub for the tasks and does not show itself."
               drgnx-work-board--card (plist-get what :card)
               drgnx-work-board--lit (plist-get what :lit)))
       (setq drgnx-work-map--lens (drgnx-work-lens-string 'board))
-      (drgnx-view-touch drgnx-view)
+      (if rows (drgnx-work-board-rows-attached) (drgnx-view-touch drgnx-view))
       (drgnx-work-board-refresh buffer))
     buffer))
 
@@ -385,7 +446,8 @@ Returns the buffer; it asks the hub for the tasks and does not show itself."
 selected on the board becomes the map's selection (its agent, else its plan)."
   (let ((map (drgnx-work-lens-map-buffer)))
     (when-let* ((sel (cond
-                      ((derived-mode-p 'drgnx-work-board-mode)
+                      ;; on the rows path the Board's selection is its own (`drgnx-work-board--rows-p')
+                      ((and (derived-mode-p 'drgnx-work-board-mode) (not (drgnx-work-board--rows-p)))
                        (when-let* ((state (drgnx-work-board--state)) (id drgnx-work-board--card))
                          (drgnx-work-board-to-selection state drgnx-work-board--cards id)))
                       ((derived-mode-p 'drgnx-work-timeline-mode)

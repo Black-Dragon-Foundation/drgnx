@@ -63,7 +63,7 @@ fn streams_rows_per_file() {
         let ms = (0..n)
             .map(|i| m(file, i + 1, "x ", "needle", " y"))
             .collect();
-        let p = greps
+        let (_, p) = greps
             .with(CONN, "s", id, |run| {
                 batch_patches(&mut s, CONN, "s", run, file.into(), ms)
             })
@@ -95,6 +95,105 @@ fn streams_rows_per_file() {
         )
     );
     assert_eq!(rows[0].text, "[x] b.txt  sub/");
+}
+
+/// [D] Each file's batch sends the model first: a `tree` of the files in the rows' order, each open, its matches as
+/// children with what Replace writes from; the rows it names carry the node ids, and a later batch is a diff.
+#[test]
+fn grep_model_is_a_tree_of_files_and_matches() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let (model, p) = greps
+        .with(CONN, "s", id, |run| {
+            batch_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                "/r/a.txt".into(),
+                vec![m("/r/a.txt", 3, "let ", "needle", ";")],
+            )
+        })
+        .unwrap();
+    let model = model.expect("the first batch's model");
+    assert!(model.reset);
+    assert_eq!(p[0].model, Some(model.version), "the rows name the model");
+    let v: Value = serde_json::from_str(&model.model).unwrap();
+    let reset = &v["ops"][0]["reset"];
+    assert_eq!(reset["descriptor"]["scheme"], "tree");
+    assert_eq!(reset["descriptor"]["flags"], json!(["expanded"]));
+    assert_eq!(
+        reset["lists"],
+        json!([{"name": "order", "ids": ["f:/r/a.txt", "m:/r/a.txt:3:4"]}])
+    );
+    let nodes = reset["nodes"].as_array().unwrap();
+    let file = nodes.iter().find(|n| n["id"] == "f:/r/a.txt").unwrap();
+    assert_eq!((&file["kind"], &file["flags"]), (&json!("file"), &json!(1)));
+    let hit = nodes.iter().find(|n| n["id"] == "m:/r/a.txt:3:4").unwrap();
+    assert_eq!(hit["parent"], "f:/r/a.txt");
+    assert_eq!(
+        hit["fields"],
+        json!([
+            ["label", "let needle;"],
+            ["file", "/r/a.txt"],
+            ["line", 3],
+            ["col", 4],
+            ["end", 10],
+            ["text", "needle"]
+        ])
+    );
+    let Op::Insert { rows, .. } = &p[0].ops[0] else {
+        panic!("{:?}", p[0].ops)
+    };
+    let ids: Vec<&Value> = rows
+        .iter()
+        .map(|r| &r.props.iter().find(|p| p.2 == "drgnx-work-id").unwrap().3)
+        .collect();
+    assert_eq!(ids, [&json!("f:/r/a.txt"), &json!("m:/r/a.txt:3:4")]);
+    // the next file: a diff, not a reset
+    let (model, _) = greps
+        .with(CONN, "s", id, |run| {
+            batch_patches(
+                &mut s,
+                CONN,
+                "s",
+                run,
+                "/r/b.txt".into(),
+                vec![m("/r/b.txt", 1, "", "needle", "")],
+            )
+        })
+        .unwrap();
+    assert!(!model.expect("the second batch's model").reset);
+}
+
+/// [D] Past its window the model holds the first entries, its list `order` a window of all of them (Sjá takes no
+/// longer list unwindowed).
+#[test]
+fn grep_model_windows_a_long_search() {
+    let files = vec![
+        (
+            "/r/a.txt".to_owned(),
+            (1..=3)
+                .map(|l| m("/r/a.txt", l, "", "needle", ""))
+                .collect(),
+        ),
+        (
+            "/r/b.txt".to_owned(),
+            vec![m("/r/b.txt", 1, "", "needle", "")],
+        ),
+    ];
+    let d = grep_doc_in(&files, 3);
+    assert_eq!(
+        d.lists["order"],
+        ["f:/r/a.txt", "m:/r/a.txt:1:0", "m:/r/a.txt:2:0"]
+    );
+    assert_eq!(d.nodes.len(), 3);
+    assert_eq!(d.windows.get("order"), Some(&(6, 0)));
+    let all = grep_doc_in(&files, 6);
+    assert_eq!(all.lists["order"].len(), 6);
+    assert!(all.windows.is_empty(), "no window when everything fits");
 }
 
 #[test]
@@ -194,7 +293,7 @@ fn an_env_after_rows_gets_all_of_them_as_a_reset() {
     start_patches(&mut s, CONN, "s");
     // a new epoch: the next patch of the class is a reset of every row so far
     s.env(CONN, env("gui-1", 2));
-    let p = greps
+    let (_, p) = greps
         .with(CONN, "s", id, |run| {
             batch_patches(
                 &mut s,

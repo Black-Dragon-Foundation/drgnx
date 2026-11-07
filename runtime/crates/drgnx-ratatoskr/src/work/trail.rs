@@ -1,15 +1,27 @@
 //! The trail and the Timeline as rows (`work/trail/subscribe`): one session's steps with its conclusions among them,
 //! or a lane per agent session, built here (`vegvisir::trail`) and sent per display class as `view-patch`
 //! (`docs/develop/hub.md`, "The trail and the Timeline"). Read again from the timeline and the conclusions store after
-//! each write and each closed step; each class gets only the rows that changed.
+//! each write and each closed step; each class gets only the rows that changed. Before the rows, the view's model
+//! (`model`) for the editor's replica; a Timeline's model again (from what was last read) when the map's selection
+//! moves, for the lanes it lights.
+//!
+//! The Board (`work/board/subscribe`) is a view of the same kind: the tracker's tasks (`tasks/find`, or `plans/get` of
+//! its plans) as cards with the agents of a map view on them (`board`), its own model and rows, read again after each
+//! write like a trail.
+
+mod board;
+mod model;
 
 use crate::dispatch::Caller;
 use crate::front::Front;
+use runstav::methods::Params;
+use runstav::methods::plans::{ByPlan, PlanView};
+use runstav::methods::tasks::{FindParams, TaskList};
 use runstav::methods::timeline::{Step as WireStep, TimelineParams};
 use runstav::methods::view::ViewEnv;
 use runstav::methods::work::{
-    Conclusion as WireConclusion, ConclusionsParams, TrailClose, TrailLane, TrailSubscribe,
-    TrailSubscribed,
+    BoardSubscribe, Conclusion as WireConclusion, ConclusionsParams, TrailClose, TrailLane,
+    TrailSubscribe, TrailSubscribed,
 };
 use runstav::registry::Class;
 use runstav::wire::Error;
@@ -26,18 +38,23 @@ const STEPS: u32 = 500;
 enum Sub {
     Trail(String),
     Timeline(Vec<TrailLane>),
+    /// A Board: map view, plans.
+    Board(String, Vec<String>),
 }
 
 /// What a view's rows are built from, read once per refresh for every class.
 enum Data {
     Trail(Vec<trail::Step>, Vec<trail::Conclusion>),
     Timeline(Vec<trail::Lane>),
+    Board(Vec<board::Card>),
 }
 
 /// The trail and Timeline views of every connection, keyed (connection, view).
 #[derive(Default)]
 pub struct Trails {
     views: Mutex<BTreeMap<(u64, String), Sub>>,
+    /// What each view was last built from.
+    data: Mutex<BTreeMap<(u64, String), Arc<Data>>>,
     front: OnceLock<Weak<Front>>,
     /// One refresh at a time, so a view's patches go out in the order its data was read.
     busy: tokio::sync::Mutex<()>,
@@ -51,6 +68,30 @@ impl Trails {
     /// Connection CONN is gone: its views with it.
     pub fn gone(&self, conn: u64) {
         lock(&self.views).retain(|k, _| k.0 != conn);
+        lock(&self.data).retain(|k, _| k.0 != conn);
+    }
+
+    /// The selection of a map view of connection CONN moved: its Timelines' models again, for the lanes it lights
+    /// (their rows stay).
+    pub fn map_moved(&self, conn: u64) {
+        let Some(f) = self.front.get().and_then(Weak::upgrade) else {
+            return;
+        };
+        crate::clock::spawn("trail:near", async move {
+            let trails = &f.core.trails;
+            let _one = trails.busy.lock().await;
+            let near = f.core.map.near(conn);
+            let mine: Vec<((u64, String), Arc<Data>)> = lock(&trails.data)
+                .iter()
+                .filter(|(k, d)| k.0 == conn && matches!(***d, Data::Timeline(_)))
+                .map(|(k, d)| (k.clone(), d.clone()))
+                .collect();
+            for (key, data) in mine {
+                f.core
+                    .views
+                    .publish_model(&f, key.0, &key.1, doc_of(&data, &near));
+            }
+        });
     }
 
     /// An env of (connection, view, class) K3 arrived: a trail or Timeline view of that name draws again.
@@ -86,13 +127,32 @@ impl Trails {
                 }
                 Data::Timeline(out)
             }
+            Sub::Board(map, plans) => Data::Board(board_cards(f, key.0, &map, &plans).await),
         };
+        let data = Arc::new(data);
+        lock(&self.data).insert(key.clone(), data.clone());
+        let near = match *data {
+            Data::Timeline(_) => f.core.map.near(key.0),
+            Data::Trail(..) | Data::Board(_) => Vec::new(),
+        };
+        f.core
+            .views
+            .publish_model(f, key.0, &key.1, doc_of(&data, &near));
         for class in f.core.views.classes(key.0, &key.1) {
             let k3 = (key.0, key.1.clone(), class);
             f.core
                 .views
                 .publish_built(f, &k3, |env, fonts| (rows(&data, env, fonts), Vec::new()));
         }
+    }
+}
+
+/// DATA's model, the lanes of the sessions NEAR lit.
+fn doc_of(data: &Data, near: &[String]) -> crate::view::model::Doc {
+    match data {
+        Data::Trail(steps, concs) => model::trail_doc(steps, concs),
+        Data::Timeline(lanes) => model::timeline_doc(lanes, near),
+        Data::Board(cards) => board::board_doc(cards),
     }
 }
 
@@ -104,7 +164,83 @@ fn rows(data: &Data, env: &ViewEnv, fonts: &dyn drgnx_rows::fit::Measure) -> Vec
     match data {
         Data::Trail(steps, concs) => trail::trail_rows(steps, concs, &renv, zone),
         Data::Timeline(lanes) => trail::timeline_rows(lanes, &renv, fonts, zone),
+        Data::Board(cards) => board::board_rows(cards, env),
     }
+}
+
+/// The most pages of `tasks/find` an unscoped Board reads (50 tasks a page).
+const BOARD_PAGES: usize = 4;
+
+/// The Board's cards: the tasks of PLANS (each `plans/get`), else every task (`tasks/find`, up to [`BOARD_PAGES`]
+/// pages), each with the agent of connection CONN's map view MAP working on it (by the task's title, as the map's
+/// agents carry it). A read that fails leaves its cards out.
+async fn board_cards(f: &Front, conn: u64, map: &str, plans: &[String]) -> Vec<board::Card> {
+    let caller = hub_caller();
+    let mut cards = Vec::new();
+    if plans.is_empty() {
+        let mut cursor: Option<u64> = None;
+        for _ in 0..BOARD_PAGES {
+            let Ok(p) = serde_json::from_value::<FindParams>(json!({"cursor": cursor})) else {
+                break;
+            };
+            let Ok(Ok(v)) = crate::graph::serve(
+                &f.writer,
+                &f.tools,
+                f.dirs.get(),
+                &caller,
+                Params::TasksFind(p),
+            )
+            .await
+            else {
+                break;
+            };
+            let Ok(list) = serde_json::from_value::<TaskList>(v) else {
+                break;
+            };
+            cards.extend(list.tasks.iter().map(|t| board::Card {
+                id: t["id"].as_str().unwrap_or_default().to_owned(),
+                title: t["title"].as_str().unwrap_or_default().to_owned(),
+                status: t["status"].as_str().unwrap_or_default().to_owned(),
+                ..board::Card::default()
+            }));
+            cursor = list.cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+    } else {
+        for plan in plans {
+            let Ok(p) = serde_json::from_value::<ByPlan>(json!({"plan": plan})) else {
+                continue;
+            };
+            let Ok(view): Result<PlanView, _> =
+                crate::runner::effects::plans_get(f, &caller, p).await
+            else {
+                continue;
+            };
+            cards.extend(view.tasks.iter().map(|t| board::Card {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                status: t.status.clone(),
+                plan: Some(plan.clone()),
+                progress: (!t.steps.is_empty()).then(|| {
+                    (
+                        t.steps.iter().filter(|s| s.done).count() as u32,
+                        t.steps.len() as u32,
+                    )
+                }),
+                agent: None,
+            }));
+        }
+    }
+    let agents = f.core.map.agents_of(conn, map);
+    for c in &mut cards {
+        c.agent = agents
+            .iter()
+            .find(|(task, ..)| *task == c.title)
+            .map(|(_, id, label)| (id.clone(), label.clone()));
+    }
+    cards
 }
 
 /// The caller the trail reads the store as.
@@ -193,6 +329,23 @@ pub async fn subscribe(f: &Front, c: &Caller, p: TrailSubscribe) -> Result<Trail
     };
     let key = (c.conn_id, p.view);
     lock(&f.core.trails.views).insert(key.clone(), sub);
+    f.core.views.model_restart(key.0, &key.1);
+    f.core.trails.refresh(f, &key).await;
+    Ok(TrailSubscribed {
+        hub: f.core.views.hub(),
+    })
+}
+
+/// `work/board/subscribe`: VIEW of CALLER's connection shows the Board (the tasks of `plans`, else every task, with
+/// the agents of map view `map`); its model and rows go out as a trail's do, before the answer.
+pub async fn board_subscribe(
+    f: &Front,
+    c: &Caller,
+    p: BoardSubscribe,
+) -> Result<TrailSubscribed, Error> {
+    let key = (c.conn_id, p.view);
+    lock(&f.core.trails.views).insert(key.clone(), Sub::Board(p.map, p.plans));
+    f.core.views.model_restart(key.0, &key.1);
     f.core.trails.refresh(f, &key).await;
     Ok(TrailSubscribed {
         hub: f.core.views.hub(),
@@ -201,9 +354,9 @@ pub async fn subscribe(f: &Front, c: &Caller, p: TrailSubscribe) -> Result<Trail
 
 /// `work/trail/close`: VIEW of CALLER's connection ends.
 pub fn close(f: &Front, c: &Caller, p: TrailClose) -> Result<bool, Error> {
-    Ok(lock(&f.core.trails.views)
-        .remove(&(c.conn_id, p.view))
-        .is_some())
+    let key = (c.conn_id, p.view);
+    lock(&f.core.trails.data).remove(&key);
+    Ok(lock(&f.core.trails.views).remove(&key).is_some())
 }
 
 /// The trails' background: every view read again after each write (coalesced) and each closed step.

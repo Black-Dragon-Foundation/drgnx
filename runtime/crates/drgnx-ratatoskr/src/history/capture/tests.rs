@@ -297,6 +297,35 @@ fn lockfile_goes_to_snapshot_class() {
     assert_eq!(f.hub.with(|h| h.count("doc").unwrap()), 0);
 }
 
+/// A file over the text cap is not read, but each change of it is a version of its own (they used to share one key,
+/// so only the first was ever recorded).
+#[test]
+fn a_big_file_has_a_version_per_change() {
+    let f = fixture(&[("big.bin", "x\n")]);
+    let path = f.repo.path().join("big.bin");
+    let write = |fill: u8, len: usize, secs: u64| {
+        std::fs::write(&path, vec![fill; len]).unwrap();
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 + secs);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    };
+    let big = (5 << 20) + 1;
+    write(b'a', big, 0);
+    let one = f.hub.on_disk_change(&f.tree, "big.bin", 11.0).unwrap();
+    write(b'b', big, 10);
+    let two = f.hub.on_disk_change(&f.tree, "big.bin", 12.0).unwrap();
+    write(b'b', big + 1, 10);
+    let three = f.hub.on_disk_change(&f.tree, "big.bin", 13.0).unwrap();
+    for (n, v) in [&one, &two, &three].into_iter().enumerate() {
+        assert_eq!(v.len(), 1, "change {n}");
+        assert_eq!(v[0].class, Class::Snapshot);
+    }
+}
+
 #[test]
 fn agent_mv_is_a_rename_record() {
     let f = fixture(&[("a.txt", "one\ntwo\n")]);

@@ -1,4 +1,5 @@
-//! The span revert against git's 3-way merge, in 10,000 seeded cases (the spike's property, through the history's
+//! The span revert against git's 3-way merge, in 2,000 seeded cases (10,000 with `DRGNX_PROP_CASES=10000`, the
+//! combined pass's run; the seeds are the same, so a failing seed is the same in both) (the spike's property, through the history's
 //! own records and a reload of each document from its rows).  A 40-line file in 8 blocks of 5; the agent edits lines
 //! of 1 to 3 blocks (a new line, a deleted line, 3 characters replaced) in one record; then the user edits lines of
 //! other blocks, and in about a fifth of the cases types inside or deletes from the agent's new text.  Keep mine must
@@ -9,7 +10,14 @@
 use crate::store::{BranchKind, Cause, History, Kind, Record};
 use crate::{Change, Mode, PeerId};
 
-const CASES: u64 = 10_000;
+/// How many seeds run: 2,000 (about half a minute), or `DRGNX_PROP_CASES`.
+fn cases() -> u64 {
+    std::env::var("DRGNX_PROP_CASES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000)
+}
+
 const BLOCKS: usize = 8;
 
 /// xorshift64*: the cases are seeded, the same on every run.
@@ -146,7 +154,8 @@ fn keep_mine_equals_threeway_outside_hunks() {
     let mut h = History::open_fast(dir.path()).unwrap();
     let (mut equal, mut conflicted, mut overlap_cases) = (0, 0, 0);
     let mut misses = Vec::new();
-    for seed in 0..CASES {
+    let cases = cases();
+    for seed in 0..cases {
         let mut rng = Rng::new(seed);
         let want_overlap = rng.chance(40);
         let base = base_text(&mut rng);
@@ -251,7 +260,7 @@ fn keep_mine_equals_threeway_outside_hunks() {
         "git's 3-way conflicted where no edit overlapped"
     );
     assert!(
-        overlap_cases > 1_000 && equal > 5_000,
+        overlap_cases > cases / 10 && equal > cases / 2,
         "{overlap_cases} overlaps, {equal} equal"
     );
 }

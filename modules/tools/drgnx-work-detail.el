@@ -327,15 +327,29 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
 (drgnx-view-define 'work-detail :render #'drgnx-work-detail--render :sync #'drgnx-work-detail--sync
                    :key-test 'eq :slice drgnx-view-slice)
 
+(declare-function drgnx-view-env-register "drgnx-view-env")
+
+(defun drgnx-work-detail--rows-view (map-buffer)
+  "The hub's Detail view beside MAP-BUFFER's map view, when the map is on the rows path, else nil."
+  (with-current-buffer map-buffer
+    (when-let* ((state (and (not drgnx-view-old-path) drgnx-view-patch)))
+      (cons (concat (drgnx-view-patch-view state) "/detail") (drgnx-view-patch-class state)))))
+
 (defun drgnx-work-detail-buffer (map-buffer)
-  "The side panel's buffer for MAP-BUFFER, made when there is none."
-  (let ((buffer (get-buffer-create (format "*drgnx work detail: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))))
+  "The side panel's buffer for MAP-BUFFER, made when there is none.  On the rows path its rows are the hub's (the view
+VIEW/detail beside the map's VIEW), following the map's selection there; else drawn here from the frame."
+  (let ((buffer (get-buffer-create (format "*drgnx work detail: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*"))))
+        (rows (drgnx-work-detail--rows-view map-buffer)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-work-detail-mode)
         (drgnx-work-detail-mode)
-        (drgnx-view-attach 'work-detail))
+        (if rows
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+                   (require 'drgnx-view-env)
+                   (drgnx-view-env-register (car rows) buffer))
+          (drgnx-view-attach 'work-detail)))
       (setq drgnx-work-detail--map map-buffer)
-      (drgnx-view-touch drgnx-view))
+      (unless rows (drgnx-view-touch drgnx-view)))
     buffer))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -367,9 +381,11 @@ Press it again for what came since."
   (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-detail-mode)) (buffer-list)))
 
 (defun drgnx-work-detail-update (map-buffer)
-  "The selection of MAP-BUFFER changed: its panel (when it has one) is drawn again."
+  "The selection of MAP-BUFFER changed: its panel (when it has one) is drawn again.  A panel on the rows path is
+the hub's: it follows the selection there, so nothing is drawn here."
   (dolist (b (drgnx-work-detail-buffers))
-    (when (eq (buffer-local-value 'drgnx-work-detail--map b) map-buffer)
+    (when (and (eq (buffer-local-value 'drgnx-work-detail--map b) map-buffer)
+               (not (buffer-local-value 'drgnx-view-patch b)))
       (with-current-buffer b (drgnx-view-touch drgnx-view)))))
 
 (provide 'drgnx-work-detail)

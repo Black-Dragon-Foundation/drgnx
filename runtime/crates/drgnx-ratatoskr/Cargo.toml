@@ -65,6 +65,7 @@ runstav = { path = "../runstav", version = "0.1.0" }
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
 draugr = { path = "../draugr", version = "0.1.0" }
+drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
 saga = { path = "../saga", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }
@@ -132,6 +133,8 @@ openssh.workspace = true
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+# `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
+vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)

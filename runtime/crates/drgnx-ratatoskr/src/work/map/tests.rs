@@ -581,7 +581,49 @@ fn rows_subscriber_gets_no_work_map_event() {
     map.stale(&mut g, &key);
     let sent = log(&map);
     assert!(!sent.contains(&"work-map"), "{sent:?}");
-    assert_eq!(sent, ["rows", "rows"]);
+    assert_eq!(sent, ["model", "rows", "model", "rows"]);
+}
+
+/// [D] A rows view's model goes before the rows built from it, for a full frame and for a delta.
+#[test]
+fn model_goes_before_its_rows() {
+    let (map, mut g, key) = rows_map(3, 226);
+    map.send_full(&mut g, &key);
+    assert_eq!(log(&map), ["model", "rows"]);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s2".into())],
+            ..Delta::default()
+        },
+    );
+    assert_eq!(log(&map), ["model", "rows", "model", "rows"]);
+}
+
+/// [D] The map's model: a node per item the view shows, with its links, its card's rect and its flags; the chain
+/// edges among them; the team, needs-you and outline lists.
+#[test]
+fn map_model_carries_links_rects_and_lists() {
+    let (_map, g, key) = rows_map(3, 226);
+    let v = &g.views[&key];
+    let m = g.spaces["w"].core.model();
+    let l = v.layout.as_ref().expect("laid out");
+    let d = model::doc(m, l, &v.sent);
+    assert_eq!(d.nodes.len(), v.sent.len());
+    let a1 = &d.nodes["agent:s1"];
+    let fields = a1["fields"].as_array().expect("fields");
+    let rect = &l.at[&ItemId("agent:s1".into())];
+    for (name, want) in [("x", rect.x), ("y", rect.y), ("w", rect.w), ("h", rect.h)] {
+        assert!(
+            fields.contains(&json!([name, want])),
+            "{name} in {fields:?}"
+        );
+    }
+    assert_eq!(a1["kind"], "agent");
+    assert_eq!(a1["nav"]["right"], "agent:s2");
+    assert_eq!(d.lists["team"], vec!["agent:s1", "agent:s2", "agent:s3"]);
+    assert_eq!(d.descriptor["scheme"], "links");
 }
 
 /// [A] A rows view still holds a quiet reflow that would move its selection's chain; the user's own change draws.
@@ -598,5 +640,121 @@ fn selected_still_holds_a_quiet_reflow() {
     map.outs(&mut g, &key, vec![CoOut::Reflow { user: false }], 0);
     assert!(log(&map).is_empty(), "held: {:?}", log(&map));
     map.outs(&mut g, &key, vec![CoOut::Reflow { user: true }], 0);
-    assert_eq!(log(&map), ["rows"]);
+    assert_eq!(log(&map), ["model", "rows"]);
+}
+
+/// [D] The Timeline's lit lanes: the sessions of the agents on the selection's chain in a shown rows view of the
+/// connection; none with nothing selected, for another connection, or while the view is hidden.
+#[test]
+fn near_is_the_selections_agents() {
+    let (_map, mut g, key) = rows_map(3, 226);
+    assert!(Map::near_in(&g, 1).is_empty(), "nothing selected");
+    g.views.get_mut(&key).expect("the view").selected = Some(ItemId("agent:s2".into()));
+    assert_eq!(Map::near_in(&g, 1), vec!["s2"]);
+    assert!(Map::near_in(&g, 2).is_empty(), "another connection");
+    g.views.get_mut(&key).expect("the view").shown = false;
+    assert!(Map::near_in(&g, 1).is_empty(), "hidden");
+}
+
+/// [D] The Detail panel's rows say the selection's edges in words, both ways, and its why-chain from the ask down;
+/// nothing selected is one line.
+#[test]
+fn detail_rows_say_the_edges() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    assert_eq!(
+        detail::lines(m, None, 0),
+        vec![("head", "Nothing is selected.".to_string(), None)]
+    );
+    // an agent with a branch below it and an ask, spec or plan above it
+    let edges = m.edges();
+    let came = |e: &vegvisir::Edge| serde_json::to_value(e.kind).ok() == Some(json!("came-from"));
+    let agent = m
+        .items()
+        .into_values()
+        .find(|it| {
+            serde_json::to_value(it.kind).ok() == Some(json!("agent"))
+                && edges.iter().any(|e| came(e) && e.from == it.id)
+                && edges.iter().any(|e| came(e) && e.to == it.id)
+        })
+        .expect("an agent with a why and a branch");
+    let lines = detail::lines(m, Some(&agent.id), 0);
+    let text: Vec<&str> = lines.iter().map(|(_, t, _)| t.as_str()).collect();
+    assert!(
+        text[0].starts_with(&format!("{} · agent", agent.label)),
+        "{text:?}"
+    );
+    for e in edges.iter().filter(|e| came(e) && e.from == agent.id) {
+        let to = m.item(&e.to).expect("its target").label;
+        assert!(
+            text.contains(&format!("  {to} — came from this").as_str()),
+            "{to} in {text:?}"
+        );
+    }
+    let parent = edges
+        .iter()
+        .filter(|e| came(e) && e.to == agent.id)
+        .map(|e| e.from.clone())
+        .min()
+        .expect("a parent");
+    let pl = m.item(&parent).expect("the parent").label;
+    assert!(
+        text.iter()
+            .any(|t| t.starts_with("  › ") && t.contains(&pl)),
+        "{pl} in {text:?}"
+    );
+    let rows = detail::rows(&lines);
+    assert_eq!(rows.len(), lines.len());
+    assert_eq!(rows[0].key, "head/0");
+    assert_eq!(detail::map_of(&detail::view_of("w-1")), Some("w-1"));
+}
+
+/// [D] The golden the editor's replica is checked against (`test/unit/view-model-chain-test.el`, in the Nidhogg
+/// image; no cargo path between the repos): the map's model of the 30-agent fixture at 1600 px, as the hub sends it,
+/// and `vegvisir::Model::chain` of every item it shows. `UPDATE_VEGVISIR_GOLDEN=1` writes it; otherwise a model or
+/// chain that moved fails until it is written again.
+#[test]
+fn chain_golden_matches_vegvisir() {
+    let mut core = vegvisir::Core::new();
+    for e in vegvisir::fixture::thirty() {
+        core.step(e);
+    }
+    let m = core.model();
+    let state = vegvisir::ViewState {
+        width_units: 376,
+        ..vegvisir::ViewState::default()
+    };
+    let l = vegvisir::layout::layout(m, &state, None);
+    let sent: BTreeSet<ItemId> = l.at.keys().cloned().collect();
+    let d = model::doc(m, &l, &sent);
+    let mut chains = serde_json::Map::new();
+    for id in &sent {
+        let c = m.chain(id);
+        let mut on: Vec<String> =
+            c.up.iter()
+                .chain(c.down.iter())
+                .map(|i| i.0.clone())
+                .collect();
+        on.sort();
+        chains.insert(id.0.clone(), serde_json::json!(on));
+    }
+    let golden = serde_json::json!({
+        "model": serde_json::json!({"ops": [d.reset()]}).to_string(),
+        "chains": chains,
+    });
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../test/fixtures/work-space/model-thirty.json");
+    let text = serde_json::to_string_pretty(&golden).expect("json") + "\n";
+    if std::env::var_os("UPDATE_VEGVISIR_GOLDEN").is_some() {
+        std::fs::write(&path, &text).expect("write the golden");
+    }
+    let have =
+        std::fs::read_to_string(&path).expect("the golden (UPDATE_VEGVISIR_GOLDEN=1 writes it)");
+    assert!(
+        have == text,
+        "the map model or a chain moved: UPDATE_VEGVISIR_GOLDEN=1 writes the golden again"
+    );
 }

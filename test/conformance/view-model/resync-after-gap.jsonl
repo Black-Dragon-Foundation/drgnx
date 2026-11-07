@@ -1,0 +1,17 @@
+{"scenario": "view-model/resync-after-gap", "requires": ["v1", "test-hooks"], "doc": "An editor whose replica cannot take a model (a gap) asks view/resync with model: the answer is a view-model reset of what the hub last sent, the next version (base the one before), the same model as the subscribe's reset; a resync of a view with no model sends nothing. Pattern B: each answer and event is the gate."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$capture:hub", "base": 0, "version": 1, "model": "$capture:first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "view/resync", "params": {"view": "m", "model": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$hub", "base": 1, "version": 2, "reset": true, "model": "$first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/resync", "params": {"view": "nothing-here", "model": true}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": false}}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["view-model"]}

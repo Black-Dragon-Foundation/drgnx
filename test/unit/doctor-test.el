@@ -8,7 +8,7 @@
 
 (defun drgnx-doctor-test--facts (&rest kv)
   (append kv (list :version "31.1" :nidhogg "31.1-nidhogg.1" :native-available t :native-compiles t :treesit t
-                   :gui 'pgtk :git t :sqlite t
+                   :gui 'pgtk :git t :sqlite t :view-model t
                    ;; a healthy Ratatoskr, so a test about something else sees no failure from it
                    :ratatoskr '(:binary "/data/bin/ratatoskr" :head "abc1234" :emacs-sqlite "3.53.0"
                                         :report (:binary (:commit "abc1234" :test_hooks nil)
@@ -51,6 +51,15 @@
 
 (ert-deftest drgnx-doctor/facts-name-nidhogg ()
   (should (equal (plist-get (drgnx-doctor-facts) :nidhogg) (bound-and-true-p nidhogg-version))))
+
+(ert-deftest drgnx-doctor/edit-history-hook ()
+  (should-not (drgnx-doctor-check 'edit-history (drgnx-doctor-test--facts)))   ; not asked: no row
+  (should (eq 'ok (drgnx-doctor-test--status 'edit-history (drgnx-doctor-test--facts :history-hook t))))
+  (let ((r (drgnx-doctor-check 'edit-history (drgnx-doctor-test--facts :history-hook nil))))
+    (should (eq 'warn (car r)))
+    (should (string-search "edit history stays off" (nth 1 r)))
+    (should (string-search "installer" (nth 2 r))))
+  (should (plist-member (drgnx-doctor-facts) :history-hook)))
 
 (ert-deftest drgnx-doctor/fedora-release ()
   (should-not (drgnx-doctor-check 'fedora-release (drgnx-doctor-test--facts :fedora-release nil)))
@@ -1009,6 +1018,21 @@ AGE seconds ago (default WRITTEN).  The pid in the data is NAME's number."
     (should (equal (plist-get (alist-get 'display-rules drgnx-doctor--checks) :doc)
                    "Buffers are placed by drgnx's rules"))
     (should-not (alist-get 'wb drgnx-doctor--checks))))
+
+(ert-deftest drgnx-doctor/view-model-needs-sja ()
+  "Pattern D: an Emacs without `nidhogg-view--call' fails the view-model row; with it, ok."
+  (should (eq (drgnx-doctor-test--status 'view-model (drgnx-doctor-test--facts :view-model nil)) 'fail))
+  (should (eq (drgnx-doctor-test--status 'view-model (drgnx-doctor-test--facts :view-model t)) 'ok)))
+
+(ert-deftest drgnx-doctor/views-fail-while-one-is-broken ()
+  "Pattern D: the `views' row is what the session's render notices say: a broken view (a fail condition) fails it."
+  (drgnx-doctor-test--with-notices
+    (setq live '(4242))
+    (drgnx-doctor-test--session "4242" 5 (list (drgnx-doctor-test--note 'render 'fail "the view work-map stopped: its model broke twice"
+                                                                        "close its buffer and open it again")))
+    (let ((r (drgnx-doctor-check 'views (list :notices (drgnx-doctor--notices)))))
+      (should (eq (car r) 'fail))
+      (should (string-search "work-map stopped" (nth 1 r))))))
 
 (ert-deftest drgnx-doctor/key-problems-and-key-conflicts-are-separate ()
   (drgnx-doctor-test--with-notices

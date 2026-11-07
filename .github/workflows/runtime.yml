@@ -157,7 +157,7 @@ jobs:
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       - run: cargo fmt --check
       - if: ${{ !cancelled() }}
-        run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks -- -D warnings
       # The pinned model files the tests run the built-in model from (they fail without DRGNX_TEST_MODELS), beside the
       # checkout, not in it (the tests that list a checkout would find them): one cache for Linux and macOS, kept by
       # the list's hash; models.sh checks each restored file's sum and fetches what is missing from Hugging Face at its
@@ -195,7 +195,7 @@ jobs:
       - if: ${{ !cancelled() }}
         env:
           DRGNX_TEST_ADAPTER: llvmpipe
-        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks
+        run: cargo test --locked --no-fail-fast --workspace --features drgnx-ratatoskr/test-hooks,drgnx-px/test-hooks
       # the test-hooks binary and the harness for the steps below
       # (+ gleipnir-probe and gleipnir-escape, the escape suite's two binaries: glibc builds, so the same ones run on a VM)
       - id: build
@@ -570,15 +570,15 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
-      # + the forwarder a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir) and
-      # beside the hub, where the hub looks for it
+      # + the relay sidecar a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir)
+      # and beside the hub under the name the hub looks for (drgnx_px::image::binary_for)
       - id: build
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
           rustup target add x86_64-unknown-linux-musl
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
-          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
-      # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the forwarder's target dir
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
+      # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the same musl target dir
       - if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
       # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the
@@ -611,6 +611,12 @@ jobs:
           img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
           DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
             cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
+      # the sidecar's tar imported by podman, and the image run (the bundle above holds drgnx-px-<arch>-linux-musl)
+      - name: the relay sidecar's image runs
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          DRGNX_TEST_PX_DIR="$PWD/runtime/target/bundle/x86_64" \
+            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib -- --ignored an_imported_image_runs_px
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -986,6 +992,16 @@ jobs:
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      # the relay sidecar of a networked container job is a Linux binary: build-only here (no podman machine to run it in).
+      # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does
+      - name: the relay sidecar cross-builds (Linux musl, no C toolchain)
+        if: ${{ !cancelled() }}
+        run: |
+          arch=$(uname -m); [ "$arch" = arm64 ] && arch=aarch64
+          rustup target add "$arch-unknown-linux-musl"
+          l=$(printf '%s' "$arch-unknown-linux-musl" | tr 'a-z-' 'A-Z_')
+          env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
+            cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
       # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
       # tarball is checked against them on every use); main saves it once per pin, every run restores it
       - id: nidhogg-tarball

@@ -214,6 +214,32 @@ The card text is the editor's (`drgnx-work-map-row-text`), so the rows of the fi
 search stay the editor's: the inserter puts them over the rows by `drgnx-work-id`. The runner icons are the default
 glyphs of `drgnx-face-glyphs`.
 
+### Keys and the native view model (`vegvisir::nav`)
+
+The editor answers the map's keys from a replica of the map's model (Sjá, in Nidhogg), never from the hub. The hub
+sends, with each shown item, where each arrow goes from it; `vegvisir::nav` computes those links over the frame (the
+items a view shows, their places in its layout, and the chain edges among them), with the rules the editor's own
+navigation had:
+
+- `left`/`right`: the neighbours along the item's layer in reading order (by top, then left), stopping at its ends.
+- `up`: the nearest (least vertical, then horizontal distance from the card's centre, then id) of what it came from
+  above it; when none of those has a place (a missing level, or a collapsed layer), the nearest of its ancestors on the
+  lowest layer above. `down`: the nearest of what it touches below it.
+- `then`: where the selection goes when the item goes: the last of everything it came from, by layer then id.
+- The lists the walking keys follow: `outline` (the agents by plan rank, start order, id), `team` (the outline with each
+  agent's subagents after it, in start order), `needs-you` (each strip entry's first shown item: the cards by id, then
+  the agents that need you with no card).
+
+The replica's chain is checked against the hub's: `work::map::tests::chain_golden_matches_vegvisir` writes
+`test/fixtures/work-space/model-thirty.json` (the map's model of the 30-agent fixture at 1600 px and
+`vegvisir::Model::chain` of every item; `UPDATE_VEGVISIR_GOLDEN=1`), and `test/unit/view-model-chain-test.el`, in the
+Nidhogg image, selects each item in Sjá and checks that the nodes it classes `chain` are exactly that chain.
+
+An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
+`tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
+`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved
+fails until the golden is recorded again.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
@@ -559,9 +585,26 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
   later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
   has left.
+- **On the rows path** (a map whose rows the hub builds: `drgnx-view-patch` with an instance in Sjá, and not
+  `drgnx-view-old-path`) every key is one line through `drgnx-view-nav` (docs/develop/core.md, "Keys through the
+  model"), and the frame's functions above are the frozen path. `drgnx-work-map--nav` keeps `drgnx-work-map--selection`
+  as `(KIND . ID)` (the kind read from the model with the selection) and runs `drgnx-work-map-select-functions` when it
+  moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
+  next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
+  model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
+  `O` sets the model's form, so up and down walk `outline`. Open reads the label once; a file opens at the team's
+  agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
+  `test/unit/work-map-nav-test.el`.
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
+  - On the rows path (Sjá) the panel is the hub's: `drgnx-work-detail-buffer` attaches it as the hub-fed view
+    `VIEW/detail` in the map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from
+    the map's model and the view's selection (head, why, touches, conclusions, a machine's queue, actions; one row
+    per line, keyed `SECTION/N`, a job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and
+    when the panel's env arrives. `drgnx-work-detail-update` draws nothing here for such a panel: the selection
+    reaches the hub as the map's `work/map/set`. Tests: `detail_rows_say_the_edges` (Rust),
+    `drgnx-work-detail/rows-follow-the-selection`.
 
 ### The strip, the lens, the filters, search and Esc
 
@@ -649,6 +692,13 @@ card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every t
 `drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
 works on a card when its `task` field names the card's id.
 
+On the rows path (the map is a hub-fed view `VIEW`) the Board is the hub-fed view `VIEW/board` in the map's class:
+`drgnx-work-board-refresh` asks `work/board/subscribe {view, map, plans}` instead of the tasks (docs/develop/hub.md,
+"The Board"), and the hub sends its model and rows. Its keys answer from its own model (`drgnx-work-board--rows-nav`:
+the `board` form's links, `team` for the agent keys, the card's `agent` field to open). Its selection is its own: it
+neither follows the map's nor moves it, and switching back to the map selects nothing there (a decision of 2026-11-08:
+the map's model holds no tracker tasks, so the Board is not an instance in the map's selection group).
+
 ### The Timeline and the trail
 
 `modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;
@@ -675,6 +725,17 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
   `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
   (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
   `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
+- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`; the buffers are attached to
+  `work/trail/subscribe` with the render offload's Lisp switch) the keys go through the replica
+  (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name (`next-agent`/`previous-agent` are
+  `down`/`up`; the trail ignores them), open reads the selected node's fields once (`drgnx-work-trail--model-step`:
+  a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`, `conclusion-kind` and `label`). A selected
+  conclusion lights the steps it rests on through the model's chain class. `drgnx-work-timeline-rows-attached` makes
+  the Timeline's lit lanes the model's list `near` (in `drgnx-work-chain`); the hub sends that list again when the map's
+  selection moves, and the queue's timer applies it and runs the class step (`drgnx-view-model--reclass`). Steering
+  reads the selected step's `session`. Paging a trail back past its 500-step window (the model's `steps` list answers
+  `more`) waits for `view/window` (deferred). Tests: `test/unit/work-trail-nav-test.el`, Rust
+  `trail_model_windows_past_500`, `timeline_model_links_lanes`, `near_is_the_selections_agents`.
 - **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
   view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.
   Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not

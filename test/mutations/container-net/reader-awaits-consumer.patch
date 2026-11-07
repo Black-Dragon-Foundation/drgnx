@@ -1,0 +1,19 @@
+Target: test drgnx-px both_directions_saturated_through_small_pipes_finish
+The relay shell's reader awaits each stream's consumer inline (it reads on only once every delivered byte was taken)
+instead of queueing: one stream whose consumer stops reading stops the whole channel. Both small-pipe tests
+(runtime/crates/drgnx-px/tests/small_pipes.rs) time out under it.
+
+diff --git a/runtime/crates/drgnx-px/src/shell.rs b/runtime/crates/drgnx-px/src/shell.rs
+--- a/runtime/crates/drgnx-px/src/shell.rs
++++ b/runtime/crates/drgnx-px/src/shell.rs
+@@ -419,6 +419,10 @@ impl<C: Consumer> Shell<C> {
+         let mut dec = Decoder::new();
+         let mut buf = vec![0u8; 64 * 1024];
+         loop {
++            // mutation: the reader waits for every stream's consumer to take what it delivered before reading on
++            while self.lock().streams.values().any(|c| !c.queue.is_empty()) {
++                tokio::task::yield_now().await;
++            }
+             let n = match input.read(&mut buf).await {
+                 Ok(0) => {
+                     if dec.buffered() > 0 {

@@ -57,7 +57,9 @@ What `add` does, in order, and stops at the first thing that is wrong:
    says so and names the command: `drgnx build runner-bundle --arch aarch64`.
 3. Asks the runner about the host. It **refuses the machine drgnx itself runs on** (it already runs jobs as `local`),
    and a host that lacks something a runner needs: a systemd user manager, cgroup v2 with the memory, pids and cpu
-   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, git. The refusal
+   controllers delegated to you and podman on the systemd cgroup manager, rootless podman 5 or newer, git, and, on an
+   SELinux host, a policy that lets a keyed job's key socket be created as a container's (`container_t`; the stock
+   container-selinux allows it). The refusal
    lists **everything** that is missing, each with what to run there to fix it.
 4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
    caps.
@@ -169,7 +171,7 @@ If the runner's disk gets low (below 20 GB, or 10 % of the runner folder's disk)
 started is stopped and ends as "disk", not as a failure.
 
 **The runner bundle.** drgnx copies three small programs to a runner: `sleipnir` (the runner itself), `drgnx-key` and
-`drgnx-fwd` (the job's way to the proxy). They are built static, so they start on any Linux and in any image.
+`drgnx-px` (the relay sidecar, the job's way to the proxy). They are built static, so they start on any Linux and in any image.
 `install.sh` builds them for this machine's processor; for a runner of the other kind, run
 `drgnx build runner-bundle --arch aarch64` (or `x86_64`).
 
@@ -280,7 +282,7 @@ time-out, a preemption or an eviction never is.
 
 **Two strikes in a row, or two within an hour, bench the runner**: no job is placed there, and the runner list shows
 `benched: REASON (HH:MM, HH:MM)`, the reason of the strike that benched it and the times of its last two (UTC). Every
-5 minutes the hub checks each runner: its probe and the runner contract, a canary `true` in its image under the job
+5 minutes the hub checks each runner: its probe and the runner contract (the key socket's SELinux check among them), a canary `true` in its image under the job
 caps, its free disk above the floor, and its clock within 2 s of this machine's. A pass brings a benched runner back
 with no strikes; a failure is one more strike. `drgnx runner unbench NAME` brings it back at once.
 

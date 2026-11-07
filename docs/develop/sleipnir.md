@@ -85,12 +85,26 @@ start time, job, reserve, current, expiry), written by rename, mode 0600 in a 07
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
-jobs (`exec/container.rs` calls it with `RunnerArgs::local()`) and by the runners. It is pure and builds on every
+jobs (`exec/container.rs` calls it with `RunnerArgs::local(owner_tag)`) and by the runners. It is pure and builds on every
 target, so a hub on macOS uses it too. Fixed for every job: `--rm`, `--pull=never`, `--userns=keep-id`,
 `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the pids, memory and CPU limits,
 `--memory-swap` equal to `--memory`, `--oom-score-adj=1000`, `--cgroup-conf=memory.oom.group=1`, `--network=none`, a
-digest-pinned image from the allow-list, and the command after the image, where podman reads no options. A granted
-network is the proxy socket and `drgnx-fwd`, mounted read-only, as the entrypoint ([gleipnir.md](gleipnir.md)).
+digest-pinned image from the allow-list, and the command after the image, where podman reads no options. Every job container
+carries its owner's labels (`drgnx.owner=<tag>` on a hub, `drgnx.runner=<hub id>` on a runner, and `drgnx.job=<id>`), so
+a sweep finds exactly its own; `RunnerArgs.job_labels` turns them off. A granted network (`Caps.proxy`, a `JobNet`
+naming the job's sidecar) replaces `--network=none` with `--network=container:<sidecar>`: the job shares the relay
+sidecar's loopback-only network namespace, and gets the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`,
+`https_proxy` = `http://127.0.0.1:3128`; `NO_PROXY`, `no_proxy` = `localhost,127.0.0.1,::1`) and nothing else: no mount,
+no `--dns`, no `--sysctl net.*` (crun refuses them in a joined namespace), no entrypoint. `argv` refuses a sidecar that
+is not the one `net_names` gives this job.
+
+`net_names(ra, job)` gives the sidecar's name, `drgnx-px-<tag>-<job>` on a hub and `<prefix>-px-<job>` on a runner (a
+runner prefix that could reach the hub's `drgnx-job-` or `drgnx-px-` names, or another runner's `…-px-` sidecars, is
+refused), and the labels. `sidecar_argv(names, ra, image)` is the sidecar's line: `run -i --rm --pull=never
+--log-driver=none --detach-keys= --user 65534:65534`, no capabilities, read-only, 32 pids, `128m` memory and swap, one
+CPU, `--network=none`, never `-t` (a tty would rewrite the frames' bytes), and `--listen 127.0.0.1:3128 --job-ip
+127.0.0.1` after the image. `--detach-keys=` stays: podman scans a piped stdin for its detach sequence, and a match
+would close the channel. The sidecar runs in podman's default user namespace (no `keep-id`).
 
 On a runner (`RunnerArgs::runner(prefix, hub_id, slice)`) the container is named `<prefix>-<id>`, labelled
 `drgnx.runner=<hub id>` (the runner removes only containers with both), and placed with `--cgroup-parent=<job slice>`:
@@ -103,15 +117,18 @@ exactly this set (`RunnerMounts`), nothing else:
 | the slot's target dir | `/target` (`CARGO_TARGET_DIR`) | `rw,Z` |
 | each cache the suite declares | its own absolute path, never under `/work`, `/target`, `/tmp` or `/run/drgnx` | `rw,Z` |
 | the key socket and `drgnx-key` | `/run/drgnx/key.sock`, `/run/drgnx/key` | `ro,Z` |
-| the proxy socket and `drgnx-fwd` (a granted network) | `/run/drgnx/proxy.sock`, `/run/drgnx/fwd` | `ro,Z` |
 
 A keyed job (`KeyMounts.vars`, each `(key name, variable)`) runs as `drgnx-key exec NAME=VAR… -- CMD`: `drgnx-key` is
-the entrypoint, or, with network, the forwarder's command (`drgnx-fwd PORT SOCKET -- /run/drgnx/key exec … -- CMD`).
+the entrypoint, with or without network.
 The argv names the keys and variables only; a name or variable that isn't plain is refused. The job's request has no
 field to put anything around the command.
 
 `check_limits(podman, env, limit)` asks `podman info` and refuses container jobs unless the caps hold (cgroup v2, the
-systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half.
+systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half. It answers the parsed
+`podman info`, which `linux::netcheck::net_ready(info)` reads for a networked job: podman 5.0 or newer and rootless
+(on macOS, the machine's podman; its rootless connection is checked where the hub picks it), each refusal in the
+design's words ("Networked container jobs need podman 5.0 or newer; this host has `4.9.4`.", "drgnx runs containers
+rootless; this podman is rootful."). A job without network never runs it.
 
 ## The executor
 
@@ -215,7 +232,24 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   and no other process of the user can read its memory or `/proc` files;
 - serves the job's keys on `D/key.sock` and takes them from `serve` on `D/helper.sock` (both 0600, this user only;
   "Keys" below);
-- with `--hub-allow`, runs Gleipnir's CONNECT proxy on `D/proxy.sock` with the hub's allow-list (`helper::net`). An
+- on an SELinux host (`selinux` in `/sys/kernel/security/lsm` and selinuxfs mounted; an AppArmor host is neither),
+  creates `D/key.sock` with the context `<its own SELinux user>:system_r:container_t:s0` (k1, `helper::selinux`): a
+  keyed job runs `container_t` with its own categories (its argv pins the type, `--security-opt
+  label=type:container_t`), the stock policy lets `container_t` connect to a `container_t` socket, and the `:Z` mount's
+  categories keep every other job off it. The context is per thread and inherited, so it is written to
+  `/proc/thread-self/attr/sockcreate`, the socket bound, the empty reset written and read back on a throwaway thread
+  of its own, never a pool thread; a reset that fails or reads back non-empty refuses the job and removes the socket.
+  No libselinux. `drgnx doctor`'s `key sockets:` line runs the create half on the hub's host (bind labelled, read the
+  socket's `security.selinux` back, expect `container_t`), and `serve`'s `probe-result` carries the same check, run in
+  the runner folder, as `key_socket` (why a keyed job would be refused; the hub's runner check and `runner add` fail on
+  it, as on `check_limits`). The `#[ignore = "selinux"]` rows in `tests/runner_host_helper.rs` (`selinux::`) run on
+  the VM gate: a keyed job reads its key, another job's categories are refused, the peer is `container_t`;
+- with `--hub-allow`, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the `job.json`'s
+  `helper.sidecar_argv`, named `helper.net.sidecar`, `<prefix>-px-<id>`), waits for its `READY` before its own `ready`
+  line, and runs Gleipnir's CONNECT proxy on the relay's streams (`Listener::Streams`, `max_conns` 128) with the hub's
+  allow-list. A relay that ends before the job writes `kill_reason` `infra: proxy: <reason>` (the sidecar's exit code
+  and its meaning, its last stderr line), removes the job's container, then stops the sidecar; at the job's end the
+  helper removes the job's container before the sidecar. An
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
   refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
   `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
@@ -251,16 +285,17 @@ A key reaches a job without touching disk (design 6.6):
 5. Podman's argv, its stored config and `podman inspect` show the names only. Neither `podman run --env` nor podman
    secrets are used: both end up in podman's stored config or in files.
 
-`serve` gives every keyed job its own copy of the bundle's `drgnx-key` (and a networked one its own `drgnx-fwd`) in
-its attempt folder, since each container relabels what it mounts (`Z`).
+`serve` gives every keyed job its own copy of the bundle's `drgnx-key` in its attempt folder, since each container
+relabels what it mounts (`Z`). A networked job's sidecar image is imported from the bundle's
+`drgnx-px-<arch>-linux-musl` (tagged by content) when `serve` launches it; under Q8 `serve` creates no network.
 
 ## The runner bundle
 
-`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and `drgnx-fwd` static (Rust's
+`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and the relay sidecar `drgnx-px` (kept in the bundle as `drgnx-px-<arch>-linux-musl`) static (Rust's
 self-contained musl targets, release) into `runtime/target/bundle/<arch>/`, and checks each with `file`. The host's
 architecture is the default; `install.sh` builds that one, and CI's container lane builds both. `tests/bundle_host.rs`
-(`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) runs the bundle's
-forwarder and `drgnx-key` in an image of another libc.
+(`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) checks each binary
+is static and runs `drgnx-key` in an image of another libc.
 
 ### `result.json` (`linux::result`)
 
@@ -525,7 +560,7 @@ does not parse.
 | Frame | Direction | Fields |
 |---|---|---|
 | `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
-| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
+| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), why a keyed job would be refused (`key_socket`, k1), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
@@ -565,8 +600,8 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 |---|---|
 | `attempt.json` | the hub id, the `JobRef` with its nonce, the spec, priority, grant and expected figures, the bundle its job-exec runs from, its unit |
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
-| `helper.sock`, `key.sock`, `proxy.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
-| `drgnx-key`, `drgnx-fwd`, `net-allow`, `key-use.sent` | the job's own copies of the bundle's binaries, the hub's allow-list, the `key-use` lines sent |
+| `helper.sock`, `key.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
+| `drgnx-key`, `net-allow`, `key-use.sent` | the job's own copy of the bundle's `drgnx-key`, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
 | `tree/` | a synced job that writes its tree: its private copy of the slot |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
@@ -611,7 +646,7 @@ unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its 
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one
 with `net_hosts` its proxy, the hosts written to `net-allow` and checked first ("The job helper", "Keys"). What can't
 start (no image, a parser it doesn't know, an allow-list entry that is never reached, a bundle without `drgnx-key` or
-`drgnx-fwd`, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
+`drgnx-px` for a networked job, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
 run another way. `key` frames go to the helper ("Keys"), and the helper's `key-use` lines come back as `key-use`
 frames. The pins go into the job's caps (`Caps.pins`, as a local container job's come from
 `drgnx-sandbox-proxy-pinned-addresses`); the job helper's proxy doesn't pin by them yet.
@@ -633,7 +668,9 @@ resizing, above).
 **The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
 (`serve::cleanup::plan`, pure):
 
-- containers named `<prefix>-<id>` labelled `drgnx.runner=<hub id>` whose attempt doesn't run;
+- containers of its prefix labelled `drgnx.runner=<hub id>` whose `drgnx.job` attempt doesn't run, the job's
+  container (`<prefix>-<id>`) before its relay sidecar (`<prefix>-px-<id>`): `linux::podman::leftovers`, the sweep the
+  hub shares, over `podman ps -a --format json` (a running job's sidecar stays);
 - this hub's ended units (named in its own attempt records) still loaded;
 - this hub's job folders, collected or older than 24 h, whose attempt doesn't run;
 - bundles put there before its own that no process runs from and no running attempt (of any hub) started from (a

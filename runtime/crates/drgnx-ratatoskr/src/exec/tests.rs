@@ -27,11 +27,21 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
 /// checkout, so the hub's absolute path would name a folder that does not exist there.
 #[test]
 fn a_runner_is_told_the_jobs_folder_inside_its_tree() {
-    let user = spec(Starter::User, Path::new("/p/proj"), "true", Duration::from_secs(5));
+    let user = spec(
+        Starter::User,
+        Path::new("/p/proj"),
+        "true",
+        Duration::from_secs(5),
+    );
     let f = user.forseti_spec("x1", "1G");
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), ".".into()));
 
-    let mut deep = spec(Starter::User, Path::new("/p/proj/crates/x"), "true", Duration::from_secs(5));
+    let mut deep = spec(
+        Starter::User,
+        Path::new("/p/proj/crates/x"),
+        "true",
+        Duration::from_secs(5),
+    );
     deep.worktree = Some("/p/proj".into());
     let f = deep.forseti_spec("x2", "1G");
     assert_eq!((f.tree, f.cwd), ("/p/proj".into(), "crates/x".into()));
@@ -265,6 +275,7 @@ fn a_job_whose_process_is_gone_is_lost() {
         queued: false,
         machine: None,
         priority: None,
+        relay: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -456,6 +467,7 @@ fn a_job_without_a_time_box_has_no_deadline() {
         queued: false,
         machine: None,
         priority: None,
+        relay: None,
     };
     // the timer path has nothing to wait for
     assert_eq!(meta.time_left(), None);
@@ -958,7 +970,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         net_hosts: vec![],
         pins: vec![],
     };
-    let a: Vec<String> = container::argv(&req, &caps)
+    let a: Vec<String> = container::argv(&req, &caps, "0a1b2c3d")
         .unwrap()
         .into_iter()
         .map(|s| s.to_string_lossy().into_owned())
@@ -970,7 +982,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
     let w = a.iter().position(|s| s == "-w").unwrap();
     assert!(a[w + 1].ends_with("/crates/x"), "{}", a[w + 1]);
     req.subdir = "".into();
-    assert!(container::argv(&req, &caps).is_ok());
+    assert!(container::argv(&req, &caps, "0a1b2c3d").is_ok());
 }
 
 /// S6: an agent's job that finds the machine full is recorded as queued and answered at once; it starts when the slot
@@ -1055,6 +1067,7 @@ async fn a_queued_job_can_be_stopped_and_survives_a_restart() {
         queued: true,
         machine: None,
         priority: None,
+        relay: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&spec(
@@ -1141,6 +1154,7 @@ async fn a_queued_pending_json_is_read_once() {
         queued: true,
         machine: None,
         priority: None,
+        relay: None,
     };
     std::fs::write(dir.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
     let pending = Pending::of(&agents(d.path(), "echo older"));
@@ -1320,4 +1334,201 @@ async fn waiting_for_a_process_ends_with_the_process() {
     )
     .await
     .expect("a reused pid is gone at once");
+}
+
+// ---- networked container jobs: the relay sidecar (container-net, Task 8) ----
+
+/// A `podman info` that enforces the caps, is 5.x and rootless (`VERSION` and `ROOTLESS` stand in).
+fn info_net(version: &str, rootless: bool) -> String {
+    format!(
+        "if [ \"$1\" = info ]; then echo '{{\"version\":{{\"Version\":\"{version}\"}},\"host\":{{\"cgroupVersion\":\"v2\",\
+         \"cgroupManager\":\"systemd\",\"cgroupControllers\":[\"cpu\",\"memory\",\"pids\"],\
+         \"security\":{{\"rootless\":{rootless}}}}}}}'; exit 0; fi\n"
+    )
+}
+
+/// A stand-in podman for networked jobs in D: `info` per INFO; images exist; `rm` is recorded in `D/ran`; the sidecar's
+/// `run -i` sends its READY (from `D/ready`) and then reads until its stdin closes, or (with `D/die`) exits 4 at once;
+/// the job's `run` sleeps.  Answers the hooks with it and a relay binary folder.
+fn net_hooks(d: &Path, info: &str) -> Hooks {
+    use std::os::unix::fs::PermissionsExt;
+    let mut ready = Vec::new();
+    drgnx_px::frame::encode(&drgnx_px::frame::Frame::ready(net::LISTEN), &mut ready);
+    std::fs::write(d.join("ready"), ready).unwrap();
+    let px = d.join("px");
+    std::fs::create_dir_all(&px).unwrap();
+    for arch in ["amd64", "arm64"] {
+        std::fs::write(drgnx_px::image::binary_for(&px, arch), b"px").unwrap();
+    }
+    let fake = d.join("podman");
+    let d = d.display();
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) for a in \"$@\"; do n=$a; done; echo \"rm $n\" >> {d}/ran; exit 0 ;;\nesac\n\
+             if [ \"$2\" = -i ]; then cat {d}/ready; [ -f {d}/die ] && {{ echo 'drgnx-px: bad frame' >&2; exit 4; }}\n\
+             while IFS= read -r _; do :; done; exit 0; fi\nexec sleep 30\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Hooks {
+        podman: Some(fake),
+        px_dir: Some(px),
+        ..hooks()
+    }
+}
+
+fn net_spec(cwd: &Path) -> ExecSpec {
+    let mut s = container_spec(cwd);
+    s.container.as_mut().unwrap().net = Some(NetCell::ProviderAndPackages);
+    s
+}
+
+fn ran(d: &Path) -> Vec<String> {
+    std::fs::read_to_string(d.join("ran"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// S9: a graceful stop ends the networked job `infra: proxy` ("the hub stopped"), its container removed before its
+/// sidecar; the plain job runs on.
+#[tokio::test]
+async fn a_graceful_stop_ends_networked_jobs() {
+    let d = tempfile::tempdir().unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        net_hooks(d.path(), &info_net("5.4.2", true)),
+    );
+    let networked = r.start(net_spec(d.path())).await.unwrap();
+    let plain = r.start(container_spec(d.path())).await.unwrap();
+    let relay = r.inner.get().unwrap().meta(&networked).unwrap().relay;
+    let sidecar = relay.expect("the networked job's meta names its sidecar");
+    assert!(r.inner.get().unwrap().meta(&plain).unwrap().relay.is_none());
+    r.end_networked().await;
+    let row = ended(&r, &networked).await;
+    assert_eq!(row.status, ExecStatus::Infra);
+    let log = std::fs::read_to_string(d.path().join("exec").join(&networked).join("log")).unwrap();
+    assert!(log.contains("infra: proxy: the hub stopped"), "{log}");
+    let job = container::name_of(&networked).unwrap();
+    let rm = ran(d.path());
+    let (j, s) = (
+        rm.iter().position(|l| *l == format!("rm {job}")),
+        rm.iter().position(|l| *l == format!("rm {sidecar}")),
+    );
+    assert!(
+        j.is_some() && s.is_some() && j < s,
+        "the job's container goes first: {rm:?}"
+    );
+    assert_eq!(r.get(&plain).unwrap().status, ExecStatus::Running);
+    assert!(!rm.iter().any(|l| l.ends_with(&plain)), "{rm:?}");
+    r.stop(&plain).await.unwrap();
+}
+
+/// N3: a sidecar that exits ends its job `infra: proxy`, the text naming its exit code, its meaning and its stderr.
+#[tokio::test]
+async fn a_sidecar_exit_ends_the_job_infra() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("die"), "").unwrap();
+    let r = Runner::default();
+    r.open(
+        d.path().join("exec"),
+        net_hooks(d.path(), &info_net("5.4.2", true)),
+    );
+    let id = r.start(net_spec(d.path())).await.unwrap();
+    let row = ended(&r, &id).await;
+    assert_eq!(row.status, ExecStatus::Infra);
+    let log = std::fs::read_to_string(d.path().join("exec").join(&id).join("log")).unwrap();
+    assert!(log.contains("exited 4: the channel broke a rule"), "{log}");
+    assert!(log.contains("bad frame"), "{log}");
+}
+
+/// Design §6 through the job's start: a podman before 5.0 and a rootful one each refuse with the fix, and no job runs.
+#[tokio::test]
+async fn a_refused_check_names_the_fix() {
+    for (info, want) in [
+        (info_net("4.9.3", true), "podman 5.0 or newer"),
+        (info_net("5.4.2", false), "this podman is rootful"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let r = Runner::default();
+        r.open(d.path().join("exec"), net_hooks(d.path(), &info));
+        let e = r.start(net_spec(d.path())).await.unwrap_err();
+        assert!(e.message.contains(want), "{}", e.message);
+        assert!(r.list(None, true).is_empty());
+    }
+}
+
+fn running_meta(id: &str, relay: Option<&str>, pid: i32, start_time: Option<u64>) -> Meta {
+    Meta {
+        id: id.into(),
+        session: None,
+        kind: "container".into(),
+        argv: vec!["make".into()],
+        cwd: "/".into(),
+        started: now(),
+        timebox_s: Some(60),
+        deadline: Some(now() + 60.0),
+        unit: None,
+        pid: Some(pid),
+        start_time,
+        entity: None,
+        image: Some("tools".into()),
+        name: None,
+        queued: false,
+        machine: Some(queue::LOCAL.into()),
+        priority: None,
+        relay: relay.map(str::to_string),
+    }
+}
+
+/// B3 (Review Focus 4): of two unended jobs, the one with a relay is ended `infra: proxy` with the restart reason and
+/// its container removed; the one without is adopted.
+#[test]
+fn reattach_ends_a_networked_job() {
+    let d = tempfile::tempdir().unwrap();
+    let hooks = net_hooks(d.path(), &info_net("5.4.2", true));
+    let mut adopted = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let pid = adopted.id() as i32;
+    let start = draugr::start_time(pid).ok();
+    for m in [
+        running_meta("xnet", Some("drgnx-px-00000000-xnet"), pid, start),
+        running_meta("xplain", None, pid, start),
+    ] {
+        let dir = d.path().join("exec").join(&m.id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("meta.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+    }
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let r = Runner::default();
+        r.open(d.path().join("exec"), hooks);
+        let row = ended(&r, "xnet").await;
+        assert_eq!(row.status, ExecStatus::Infra);
+        let log = std::fs::read_to_string(d.path().join("exec/xnet/log")).unwrap_or_default();
+        assert!(log.contains(net::HUB_RESTARTED), "{log}");
+        assert!(
+            ran(d.path()).contains(&"rm drgnx-job-xnet".to_string()),
+            "{:?}",
+            ran(d.path())
+        );
+        assert_eq!(r.get("xplain").unwrap().status, ExecStatus::Running);
+    });
+    let _ = adopted.kill();
+    let _ = adopted.wait();
+}
+
+/// A meta written before `relay` existed reads, as a job without one.
+#[test]
+fn meta_without_relay_still_reads() {
+    let mut v = serde_json::to_value(running_meta("xold", None, 1, None)).unwrap();
+    v.as_object_mut().unwrap().remove("relay");
+    let m: Meta = serde_json::from_value(v).unwrap();
+    assert_eq!(m.relay, None);
 }

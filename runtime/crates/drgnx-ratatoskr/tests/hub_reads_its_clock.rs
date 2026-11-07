@@ -134,7 +134,16 @@ const RAW_SPAWN: &[&str] = &["tokio::spawn(", "tokio::task::spawn("];
 const RAW_SPAWNS: &[(&str, usize, &str)] = &[
     // never write to a client
     ("budget.rs", 1, "saves the budgets"),
-    ("exec/container.rs", 1, "drains the proxy's asks"),
+    (
+        "exec/hostgrants.rs",
+        1,
+        "drains the proxy's asks of a job no session started",
+    ),
+    (
+        "exec/net.rs",
+        3,
+        "the relay sidecar's channel, its log and its reports",
+    ),
     (
         "gateway.rs",
         2,

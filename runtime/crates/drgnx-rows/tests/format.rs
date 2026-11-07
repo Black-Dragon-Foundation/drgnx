@@ -90,6 +90,7 @@ fn ids_never_appear_as_object_keys() {
             Op::Remove(vec!["row-2".into()]),
         ],
         images: [(img, "<svg/>".into())].into_iter().collect(),
+        model: None,
     };
     let v = serde_json::to_value(&p).unwrap();
     let mut found = BTreeSet::new();
