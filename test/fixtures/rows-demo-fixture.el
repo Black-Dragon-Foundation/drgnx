@@ -26,6 +26,8 @@
 
 (defvar drgnx-rows-demo--buffers nil "The buffers `drgnx-rows-demo-open' made, killed after BODY.")
 
+(defvar drgnx-rows-demo--hubs nil "The hubs `drgnx-rows-demo-restart-hub' started, ended after BODY.")
+
 (defun drgnx-rows-demo--bin ()
   "The hub: DRGNX_RATATOSKR_BIN, else the checkout's own build (a GUI session does not inherit the variable), or nil."
   (or (getenv "DRGNX_RATATOSKR_BIN")
@@ -43,10 +45,15 @@
          (drgnx-view-patch--buffers (make-hash-table :test #'equal)) (drgnx-view-patch--hooked nil)
          (drgnx-view-env--views (make-hash-table :test #'equal)) (drgnx-view-env--sent (make-hash-table :test #'equal))
          (drgnx-view-env--glyphs (make-hash-table :test #'equal)) (drgnx-view-env--hooked nil)
-         (drgnx-rows-demo--buffers nil))
+         (drgnx-rows-demo--buffers nil) (drgnx-rows-demo--hubs nil))
      (unwind-protect
          (drgnx-test-with-ratatoskr root
            (unwind-protect (save-window-excursion ,@body)
+             (dolist (h drgnx-rows-demo--hubs)
+               (when (process-live-p h) (signal-process h 'term))
+               (ignore-errors (drgnx-test-wait (lambda () (not (process-live-p h))) :secs 10 :what "a restarted hub ends"))
+               (when (process-live-p h) (signal-process h 'kill))
+               (when (buffer-live-p (process-buffer h)) (kill-buffer (process-buffer h))))
              (drgnx-view-env-teardown)
              (drgnx-view-patch-teardown)
              (dolist (b drgnx-rows-demo--buffers)
@@ -114,6 +121,27 @@ then draw it.  WHAT names the wait."
                      :secs 15 :what (or what "the hub's patches applied")))
   (with-current-buffer buffer (drgnx-view-draw-now drgnx-view))
   buffer)
+
+(defun drgnx-rows-demo-restart-hub ()
+  "End the hub (its process: a crash, not a shutdown), wait for this Emacs to see it gone, start a new one on the
+same runtime dir and connect again; return once `drgnx-hub-connected-functions' ran for the new hub."
+  (let* ((old (or (car drgnx-rows-demo--hubs) drgnx-test-ratatoskr-process)) (up nil)
+         (mark (lambda () (setq up t))))
+    (signal-process old 'kill)
+    (drgnx-test-wait (lambda () (not (process-live-p old))) :secs 10 :what "the old hub gone")
+    (drgnx-test-wait (lambda () (not (process-live-p drgnx-hub--events))) :secs 10 :what "the subscription closed")
+    (let ((new (make-process :name "ratatoskr-restarted" :noquery t :connection-type 'pipe
+                             :buffer (generate-new-buffer " *ratatoskr restarted*")
+                             :command (list (getenv "DRGNX_RATATOSKR_BIN") "serve" "--foreground"
+                                            "--parent-pid" (number-to-string (emacs-pid))))))
+      (push new drgnx-rows-demo--hubs)
+      (drgnx-test-wait #'drgnx-hub-running-p :secs 30 :what "the new hub answers a ping")
+      (add-hook 'drgnx-hub-connected-functions mark)
+      (unwind-protect
+          (progn (drgnx-hub-connect)
+                 (drgnx-test-wait (lambda () (and up (process-live-p drgnx-hub--events))) :secs 30
+                                  :what "subscribed to the new hub"))
+        (remove-hook 'drgnx-hub-connected-functions mark)))))
 
 (defun drgnx-rows-demo-text (buffer)
   (with-current-buffer buffer (buffer-substring-no-properties (point-min) (point-max))))

@@ -361,3 +361,43 @@ the hub's reset brings the view back: the rows, and the image."
         (should (= 2 (drgnx-view-patch-resyncs s)))
         (should (gethash id (drgnx-view-patch-images s)))
         (should (equal " three\n" (drgnx-rows-demo-text b)))))))
+
+(ert-deftest drgnx-view-rows/hub-restart-resets-first-and-never-applies-the-old-hub ()
+  "A hub restart: the view dims and forgets its version; the new hub (a new instance id), once the env is sent again
+and the view resubscribed, starts it with a reset, and a resync after works on it.  A patch of the old hub that
+arrives after that reset is dropped."
+  (drgnx-rows-demo-with
+    (let* ((b (drgnx-rows-demo-open "c")) (old-patches nil)
+           (keep (lambda (event data) (when (equal event "view-patch") (push data old-patches))))
+           ;; the view's reconnect: its env again, then its rows asked for (what `drgnx-view-env' and the view's
+           ;; RESUBSCRIBE do on `drgnx-hub-connected-functions')
+           (resubscribe (lambda ()
+                          (drgnx-rows-demo-env "c" 1)
+                          (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "new" 2)))))
+      (add-hook 'drgnx-hub-event-functions keep)
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "old" 2))
+      (drgnx-rows-demo-settle b)
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "old+" 3))
+      (drgnx-rows-demo-settle b)
+      (remove-hook 'drgnx-hub-event-functions keep)
+      (let* ((s (drgnx-rows-demo-state b)) (old-hub (drgnx-view-patch-hub s)) (stale (car old-patches)))
+        (should (= 2 (length old-patches)))
+        (drgnx-rows-demo-restart-hub)
+        ;; the subscription closed: dimmed, version and hub forgotten, keys still work
+        (should (drgnx-view-patch-stale s))
+        (should-not (drgnx-view-patch-version s))
+        (funcall resubscribe)
+        (drgnx-rows-demo-settle b "the new hub's reset")
+        (should-not (eql old-hub (drgnx-view-patch-hub s)))
+        (should (= 1 (drgnx-view-patch-version s)))
+        (should-not (drgnx-view-patch-stale s))
+        (should (equal "new 0\nnew 1\n" (drgnx-rows-demo-text b)))
+        ;; the old hub's last patch, late: dropped, nothing asked
+        (should (eq 'drop (drgnx-view-apply-patch stale)))
+        (should (= 0 (drgnx-view-patch-resyncs s)))
+        ;; a patch lost on the new hub: one resync, answered by its reset
+        (setf (drgnx-view-patch-version s) 0)
+        (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "newer" 2))
+        (drgnx-rows-demo-settle b "the new hub's resync answered")
+        (should (= 1 (drgnx-view-patch-resyncs s)))
+        (should (equal "newer 0\nnewer 1\n" (drgnx-rows-demo-text b)))))))

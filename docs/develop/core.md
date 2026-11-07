@@ -2014,7 +2014,9 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
 - **The rule rows** run on the fixture view `rows-demo` (`test/fixtures/rows-demo-fixture.el`: a real hub, a
   test-hooks build, whose `__test_view_rows` gives the rows; `drgnx-rows-demo-with`, `-open`, `-feed`, `-settle`), for
   later areas to call for their views: a look change mid-stream, two classes, a face override after a patch, a dropped
-  patch and a lost image (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height` and
+  patch and a lost image, a hub restart (the hub's process killed and a new one started: the view dims, the new
+  instance starts it with a reset, an old instance's late patch is dropped; `drgnx-rows-demo-restart-hub`)
+  (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height` and
   `text-scale` (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
 
 ## Modal core (`drgnx-modal.el`)
