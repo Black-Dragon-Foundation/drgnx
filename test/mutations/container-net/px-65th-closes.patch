@@ -2,18 +2,18 @@ Target: row container-net/the-65th-connection-waits
 The sidecar accepts past the cap and closes the 65th connection at once instead of waiting for room.
 
 diff --git a/runtime/crates/drgnx-px/src/sidecar.rs b/runtime/crates/drgnx-px/src/sidecar.rs
-index 667f496d..b71a80c5 100644
+index b2f18af..7ea6ecf 100644
 --- a/runtime/crates/drgnx-px/src/sidecar.rs
 +++ b/runtime/crates/drgnx-px/src/sidecar.rs
-@@ -234,7 +234,6 @@ pub async fn serve(
- async fn accept_loop(shell: &Shell<TcpStream>, listener: &TcpListener, job_ip: IpAddr) {
+@@ -341,7 +341,6 @@ pub fn no_core_dump() -> io::Result<()> {
+ async fn accept_loop(shell: &Shell<Conn>, listener: &TcpListener, job_ip: IpAddr) {
      let mut foreign: HashSet<IpAddr> = HashSet::new();
      loop {
 -        shell.room().await;
          let (sock, peer) = match accept(listener).await {
              Ok(x) => x,
              Err(e) => {
-@@ -243,6 +242,10 @@ async fn accept_loop(shell: &Shell<TcpStream>, listener: &TcpListener, job_ip: I
+@@ -350,6 +349,10 @@ async fn accept_loop(shell: &Shell<Conn>, listener: &TcpListener, job_ip: IpAddr
                  continue;
              }
          };
