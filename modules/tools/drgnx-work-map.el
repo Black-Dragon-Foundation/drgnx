@@ -135,32 +135,6 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 
 (defun drgnx-work-map--margin-px () (round (* drgnx-work-map--margin (drgnx-work-map--scale))))
 
-(defun drgnx-work-map--width (s)
-  "The width of S in pixels (in a terminal, 8 per column)."
-  (if (display-graphic-p) (string-pixel-width s) (* 8 (string-width s))))
-
-(defvar drgnx-work-map--fit-memo (make-hash-table :test #'equal)
-  "(TEXT . PIXELS) → TEXT cut to PIXELS, so `string-pixel-width' runs once per label.  Emptied when it holds 4000
-entries (a theme, font or scale change makes the rows draw again anyway).")
-
-(defun drgnx-work-map--fit (text px)
-  "TEXT cut at the end, with an ellipsis, to be at most PX pixels wide.  Memoised by text and width."
-  (let ((key (cons text px)))
-    (or (gethash key drgnx-work-map--fit-memo)
-        (progn
-          (when (> (hash-table-count drgnx-work-map--fit-memo) 4000) (clrhash drgnx-work-map--fit-memo))
-          (puthash key
-                   (if (<= (drgnx-work-map--width text) px)
-                       text
-                     (let ((lo 0) (hi (length text)))
-                       (while (< lo hi)
-                         (let ((mid (/ (+ lo hi 1) 2)))
-                           (if (<= (drgnx-work-map--width (concat (substring text 0 mid) "…")) px)
-                               (setq lo mid)
-                             (setq hi (1- mid)))))
-                       (concat (substring text 0 lo) "…")))
-                   drgnx-work-map--fit-memo)))))
-
 ;;;; The rows of a layout
 
 (defvar drgnx-work-map--index (make-hash-table :test #'eq :weakness 'key)
@@ -622,7 +596,7 @@ epoch; default the present), or \"job · NAME · waiting\" while it has no machi
       (let* ((left (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (plist-get rect :x))))
              (right (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))))
              (face (drgnx-work-map--card-face n i)) (class (drgnx-work-map--class state id))
-             (text (copy-sequence (drgnx-work-map--fit (nth i lines) (- right left 10)))))
+             (text (copy-sequence (drgnx-view-fit (nth i lines) (- right left 10)))))
         ;; the box face under the text's own faces; the selection's class over both: text properties, not overlays,
         ;; so a row drawn again has them
         (add-face-text-property 0 (length text) face t text)
@@ -676,7 +650,7 @@ row's cards with the lanes that pass through them."
                                                       (drgnx-work-edges-colours)))))
         (dotimes (line n)
           (push (concat (if (and (= line 0) (not (string-empty-p label)))
-                            (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
+                            (propertize (drgnx-view-fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
                           "")
                         (if lanes
                             ;; the cards and the lanes in order of their columns; a sort that copies: an in-place

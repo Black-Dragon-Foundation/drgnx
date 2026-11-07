@@ -29,7 +29,6 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function drgnx-work--open-agent "drgnx-work-map")
 (declare-function drgnx-work-map--card-face "drgnx-work-map")
-(declare-function drgnx-work-map--fit "drgnx-work-map")
 (declare-function drgnx-work-map--state "drgnx-work-map")
 (declare-function drgnx-work-map--field "drgnx-work-map")
 (declare-function drgnx-work-map--outline-ids "drgnx-work-map")
@@ -623,7 +622,7 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
 (defun drgnx-work-timeline--lane-text (lane)
   (let* ((state (drgnx-work-map--state drgnx-work-lens--map)) (item (and state (drgnx-work-client-item state lane)))
          (range (drgnx-work-timeline--range))
-         (label (drgnx-work-map--fit (or (plist-get item :label) lane) 130))
+         (label (drgnx-view-fit (or (plist-get item :label) lane) 130))
          (face (and (member lane drgnx-work-timeline--lit) 'drgnx-work-chain)))
     (concat (propertize label 'face (or face 'drgnx-work-label))
             (mapconcat

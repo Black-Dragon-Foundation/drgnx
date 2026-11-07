@@ -77,6 +77,8 @@ pub struct Core {
     pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
     pub say: crate::say::Say,
+    /// The editors' view environments and the rows each (view, class) was sent ([`crate::view`]).
+    pub views: crate::view::Views,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {

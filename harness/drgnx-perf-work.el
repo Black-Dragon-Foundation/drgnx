@@ -400,10 +400,72 @@ appended (each with its draw)."
       t))
   "The trail workload's session side.")
 
+(defconst drgnx-perf-work--view-patch-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view)
+      (defvar drgnx-perf--vp-buf nil "The hub-fed view's buffer.")
+      (defun drgnx-perf--vp-row (agent line version)
+        "Row LINE of AGENT's card at VERSION, shaped like a Work map card line: runs, an item id, two stops, an image."
+        (let ((text (format "agent %02d line %d: editing core/drgnx-file-%d.el v%d" agent line line version)))
+          (list :key (format "agent:%02d/%d" agent line) :text (concat " " text " " " 3 files")
+                :runs (vector (vector 1 9 "bold") (vector 9 (+ 1 (length text)) "shadow")
+                              (vector (+ 3 (length text)) (+ 10 (length text)) "drgnx-work-label"))
+                :props (vector (vector 0 (+ 10 (length text)) "drgnx-work-id" (format "agent:%02d" agent)))
+                :stops (vector (vector (+ 1 (length text)) 360) (vector (+ 2 (length text)) 420))
+                :images (vector (vector 0 (format "%016x-1" agent) "*")))))
+      (defun drgnx-perf--vp-json (ops base version images)
+        (json-serialize (list :view "work-map" :class "gui" :hub 7 :base base :version version :env_epoch 1
+                              :ops (vconcat ops) :images (vconcat images))))
+      (defun drgnx-perf--vp-parse (json)
+        (json-parse-string json :object-type 'plist :array-type 'list :null-object nil :false-object nil))
+      (defun drgnx-perf--vp-up ()
+        "A hub-fed view of 30 agents' cards (five rows each), its reset applied and drawn."
+        (setq drgnx-perf--vp-buf (get-buffer-create " *perf view-patch*"))
+        (switch-to-buffer drgnx-perf--vp-buf)
+        (drgnx-view-patch-attach "work-map" "gui" :epoch 1)
+        (let (rows images)
+          (dotimes (a 30)
+            (push (vector (format "%016x-1" a) "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"/>") images)
+            (dotimes (l 5) (push (drgnx-perf--vp-row a l 0) rows)))
+          (drgnx-view-apply-patch
+           (drgnx-perf--vp-parse (drgnx-perf--vp-json (list (list :reset (vconcat (nreverse rows)))) 0 1 images))))
+        (drgnx-view-draw-now drgnx-view)
+        t)
+      (defun drgnx-perf--vp-bytes (before after)
+        "Bytes allocated between two `memory-use-counts' readings (conses and floats 16, vector cells 8, symbols 48,
+string chars 1, intervals 56, strings 32)."
+        (let ((d (cl-mapcar #'- after before)))
+          (+ (* 16 (nth 0 d)) (* 16 (nth 1 d)) (* 8 (nth 2 d)) (* 48 (nth 3 d)) (nth 4 d) (* 56 (nth 5 d)) (* 32 (nth 6 d)))))
+      (defun drgnx-perf--vp-measure ()
+        "(:alloc STATS :draw_kb STATS :slices N :rows N): 100 patches, each replacing one row of every agent (30 rows),
+parsed from JSON, applied and drawn.  :alloc is the objects the parse, the apply and the draw made; :draw_kb the kB
+the draw alone made."
+        (with-current-buffer drgnx-perf--vp-buf
+          (let ((view drgnx-view) (version 1) allocs draws)
+            (dotimes (i 100)
+              (let* ((rows (let (r) (dotimes (a 30) (push (drgnx-perf--vp-row a (% i 5) (1+ i)) r)) (nreverse r)))
+                     (json (drgnx-perf--vp-json (list (list :replace (vconcat rows))) version (1+ version) nil))
+                     (a0 (drgnx-perf--alloc-sum)))
+                (drgnx-view-apply-patch (drgnx-perf--vp-parse json))
+                (let ((m0 (memory-use-counts)))
+                  (drgnx-view-draw-now view)
+                  (push (/ (drgnx-perf--vp-bytes m0 (memory-use-counts)) 1024.0) draws))
+                (push (- (drgnx-perf--alloc-sum) a0) allocs)
+                (setq version (1+ version))))
+            (unless (= version 101) (error "Premise: %d patches applied, not 100" (1- version)))
+            (list :alloc (drgnx-perf-stats allocs) :draw_kb (mapcar #'drgnx-perf--round2 (drgnx-perf-stats draws))
+                  :slices (plist-get (drgnx-view-stats view) :slices) :rows (drgnx-view-row-count view)))))
+      (defun drgnx-perf--vp-down ()
+        (when (buffer-live-p drgnx-perf--vp-buf) (kill-buffer drgnx-perf--vp-buf))
+        (setq drgnx-perf--vp-buf nil))
+      t))
+  "The `view-patch' workload's session side: no hub, a synthetic patch stream.")
+
 (defun drgnx-perf-work-workloads (visit kill-fixture)
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
-`work-typing-shown', `work-typing-hidden', `work-typing-mirror' and `work-trail'."
+`work-typing-shown', `work-typing-hidden', `work-typing-mirror', `view-patch' and `work-trail'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -443,6 +505,10 @@ fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster'
       (work-typing-mirror :setup ,(funcall up t "(drgnx-perf--work-transcript)")
                           :each ,(funcall typing-each)
                           :actions ,typing :check ,typing-check :teardown ,down)
+      ;; inserting a hub-built row patch shaped like a 30-agent Work map update (report-only; docs/develop/perf.md)
+      (view-patch :setup ,(concat "(progn " drgnx-perf-work--view-patch-form " (drgnx-perf--vp-up))")
+                  :measure "(drgnx-perf--vp-measure)"
+                  :teardown "(progn (drgnx-perf--vp-down) t)")
       (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
                   :each "(progn (drgnx-perf--trail-premise) t)"
                   :measure "(drgnx-perf--trail-measure)"

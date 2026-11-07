@@ -1958,6 +1958,72 @@ on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-on
 `garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
 owner decides when to collect.
 
+### Hub-fed views: the env (`wb/drgnx-view-env.el`)
+
+A view whose rows the hub builds (docs/develop/hub.md, "Rows") registers its buffer with
+`(drgnx-view-env-register VIEW BUFFER RESUBSCRIBE)`. The module then tells the hub, by `view/env` on the subscribed
+connection, what it needs to fit and colour the rows: per display class the buffer shows in (display kind, scale and
+the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping), the fonts per role
+(`ui`, `code`, `card`: file, size, ascent, descent, average and space widths), the cell, `width_px` (the narrowest
+live window of the class: one buffer holds one fit), the palette roles the SVG writer colours from (read from faces,
+through `core/drgnx-color.el`), the terminal's width table, the time zone and reduced motion.
+
+- **The epoch is the editor's:** one counter per (view, class), one more for every env whose look changed. A width
+  change alone keeps it, so the hub answers a resize with `replace`s, never a reset. `drgnx-view-env-epoch` reads it.
+- **One message per kind of change.** A theme change sends each (view, class) one env (`enable-theme-functions`,
+  `disable-theme-functions`); a resize is debounced through `drgnx-timer-debounce` (0.1 s idle: never inside a follow); `text-scale` in the view's
+  buffer makes a new class, and the class it left is forgotten.
+- **Reconnect:** on `drgnx-hub-connected-functions` every live (view, class)'s env is sent again, then the view's
+  RESUBSCRIBE runs: a restarted hub holds no env and builds nothing until then.
+- **Glyph asks:** the hub's `view-glyphs` (chars its font file lacks, or a role with no file) is answered with
+  `view/glyphs`, each (font, char) measured once in the view's buffer and cached (at most 4096, then emptied).
+- **Owners:** the global hooks come with the first registered view and go with the last; a view is forgotten with
+  its buffer (`kill-buffer-hook`) or by `drgnx-view-env-unregister`, and the owning module's teardown calls
+  `drgnx-view-env-teardown`.
+
+### Hub-fed views: inserting the hub's patches
+
+`(drgnx-view-patch-attach VIEW CLASS :buffer B :start S :epoch E)` makes a buffer show the hub-built rows of one
+(view, display class): a view of the type `drgnx-view-rows`, whose rows are stored by key as the `view-patch` events
+carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub-fed buffer lives) only stores rows
+and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
+Hub-fed views do not call `drgnx-view-sync-rows`.
+
+- **The rules**, in order (`drgnx-view-patch--decide`, pure; `drgnx-view-patch--accept` keeps the books, tested in
+  every order of arrival, disconnect, reconnect, env and selection): a patch whose `hub` is not the last reset's, or
+  before the pair's first reset, is dropped, and so is a reset of that hub that is not newer; an epoch behind the one
+  this editor sent (`drgnx-view-patch-env-sent`, called by `drgnx-view-env`) is held (at most 64) and the view dims
+  without a layout change; a reset at the current epoch drops every held patch; a `base` older than the version is
+  dropped silently; a newer `base`, or a row naming an image the view lacks, sends `view/resync`, at most one
+  outstanding. On `drgnx-hub-disconnect-functions` every hub-fed view dims (`drgnx-view-stale`; keys still work) and
+  forgets its version and hub.
+- **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
+  properties only `drgnx-` ones and `drgnx-view-patch-props` (`intern-soft`, never `intern`). A stop's placeholder
+  character shows one shared `(space :align-to (PX))` per PX; an image's shows the image (an id-keyed cache, at most
+  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline.
+- **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
+  segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
+  reported by `view/measured`, after which the hub fits that string by the editor's width.
+- **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
+  at 4000). The Work map, the Board and the timeline's lane labels use it too.
+- **Selection, dimming and the stale shade** are the view's own state, put back by PATCHED after every draw over the
+  rows by key; `drgnx-view-patch-select` draws the selection at once, so it wins over a queued patch. A removed
+  selected row moves the selection to the next row, else the previous, else none.
+- `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
+  pass that compares the two.
+- **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
+  hub, but holds the rows of the class it is paired with; both frames show that fit.
+- **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
+  its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
+  class's first reset.
+- **The rule rows** run on the fixture view `rows-demo` (`test/fixtures/rows-demo-fixture.el`: a real hub, a
+  test-hooks build, whose `__test_view_rows` gives the rows; `drgnx-rows-demo-with`, `-open`, `-feed`, `-settle`), for
+  later areas to call for their views: a look change mid-stream, two classes, a face override after a patch, a dropped
+  patch and a lost image, a hub restart (the hub's process killed and a new one started: the view dims, the new
+  instance starts it with a reset, an old instance's late patch is dropped; `drgnx-rows-demo-restart-hub`)
+  (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height`,
+  `text-scale` and two GUI frames at font sizes 1x and 2x (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

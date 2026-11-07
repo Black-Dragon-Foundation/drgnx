@@ -307,6 +307,7 @@ impl Front {
         self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.views.gone(conn);
         self.core.buffers.gone(conn);
     }
 
@@ -643,6 +644,12 @@ impl Front {
                 conn: s.conn,
                 files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
             }))),
+            // hub-built rows (`view/*`)
+            Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
+            Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
+            Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
+            Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
+            Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)

@@ -1488,6 +1488,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/close` | user | `{view: string}` | `boolean` | no |
+| `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
@@ -2066,6 +2071,96 @@ brings the session back: `session/resume` when the agent advertises it, else `se
 history, and the transcript is not used), else the row stays for the next start. The transcript and the queue are
 read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions: a running
 turn delays the restart, an idle session does not.
+
+## Rows
+
+A hub-fed view gets finished rows from the hub and only inserts them (`wb/drgnx-view.el`'s inserter). The format,
+its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O, no clock, no platform dependency:
+it builds for Android too).
+
+- **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
+  [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
+  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out.
+- **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
+  `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
+- **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
+  keywords. An image id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  epoch (a theme change) never reuses an old tile.
+- **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
+  class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
+  `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
+  images the rows name that the editor may not hold yet.
+
+### The wire: envs, patches, resyncs (`view`)
+
+The hub keeps, per (connection, view, display class), the env the editor sent, the version and rows it last sent,
+and the images that editor holds (`view::Store`, pure, tested in every order of envs, rows, resyncs and restarts).
+All of it is in memory only.
+
+- **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
+  `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
+  view; a connection's views end with it.
+- **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
+
+**The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
+
+- **The epoch is the editor's.** It numbers each (view, class)'s env, one more for every change of its look (fonts,
+  scale, palette, display, widths, zone, motion); a width change alone keeps it. The hub echoes it as `env_epoch` on
+  every patch and owns no epoch counter.
+- **The hub owns `version`.** A patch's `base` is the version it applies to; `version` is one more.
+- **The hub's instance id `hub`** is drawn at its start (a random number below 2^53) and is on every patch. The editor
+  drops a patch whose `hub` is not its last reset's, and anything for a (view, class) before that pair's first reset.
+- **The first patch per (view, class)** after a `view/env` with a new epoch (or the first env) is a `reset`; a
+  `view/env` with the same epoch is answered by what changed (a resize: `replace`s of the rows whose fit changed).
+- **No env, no rows:** a hub with no env for a (view, class) builds nothing for it. A restarted hub holds none until
+  the editor sends its envs again (`drgnx-hub-connected-functions`), so its first patch is a reset with a new `hub`.
+- **Held and stale patches** (the editor's side). A patch with an epoch behind the editor's is held and the view dims;
+  a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
+  `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
+  outstanding per (view, class).
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
+  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
+  literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
+  callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
+  colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
+  never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
+  carries.
+
+### Fitting: text to a pixel width
+
+A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
+hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
+with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
+
+- **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
+  written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
+  Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
+  advance rounded to whole pixels (largest error 4.0 px; the fractional sum's was 16.4 px, as Emacs places glyphs on
+  whole pixels). The error must stay within the slack.
+- **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
+  (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
+  names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
+- **What the font lacks, the editor answers.** A char with no glyph, or a role with no font file (as `font-info`
+  often has on macOS), is asked of the editor once per (role, char) in `view-glyphs`; its `view/glyphs` answers are
+  kept and the rows built again. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+- **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
+  (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
+- **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
+  fits per class: `__test_view_rows`' `labels`): Latin, ligatures, a ZWJ
+  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. No
+  segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
+  Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
+  are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not
+  failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
+- **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
+  (`tty_widths`).
 
 ## Sessions and their sockets
 
