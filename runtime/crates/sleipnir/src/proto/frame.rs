@@ -289,10 +289,6 @@ pub enum Frame {
         /// Why container jobs can't be capped here (`check_limits`), if they can't.
         #[serde(default)]
         limits: Option<String>,
-        /// Why a keyed container job would be refused here: the key socket's SELinux self-check
-        /// (`helper::selinux::self_check`) failed. None when it passed or SELinux is off.
-        #[serde(default)]
-        key_socket: Option<String>,
         #[serde(default)]
         features: Vec<String>,
     },

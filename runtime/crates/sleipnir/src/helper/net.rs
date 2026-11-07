@@ -6,10 +6,18 @@
 //! `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is refused, and
 //! the proxy itself connects only to public addresses, so a listed name that resolves to `169.254.x` is refused at
 //! connect time too. No name is pinned.
+//!
+//! The relay carries a keyed job's keys too ([`KeyServer`]): every keyed job has a sidecar, networked or not (an
+//! unnetworked one's proxy has an empty allow-list), and its key streams are answered from the helper's store.
 
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+
+use drgnx_px::owner::{AnswerFuture, KeyAnswer, KeySource};
+
+use super::keys::{self, KeyStore};
 
 use gleipnir::net::host::{Host, Target, is_public, parse_target};
 use gleipnir::net::proxy::{self, Listener, ProxyConfig, ProxyEvent, Resolver, SystemResolver};
@@ -84,6 +92,37 @@ pub fn start_proxy(
     h
 }
 
+/// A keyed job's key streams, answered from the helper's store ([`keys::answer`]) on the blocking pool, since a
+/// request waits for its key.
+pub struct KeyServer {
+    pub store: Arc<KeyStore>,
+    pub dir: PathBuf,
+    pub wait: Duration,
+}
+
+impl KeyAnswer for keys::Answer {
+    fn bytes(&self) -> &[u8] {
+        keys::Answer::bytes(self)
+    }
+}
+
+impl KeySource for KeyServer {
+    fn answer(&self, request: &str) -> AnswerFuture {
+        let (store, dir, wait, req) = (
+            self.store.clone(),
+            self.dir.clone(),
+            self.wait,
+            request.to_string(),
+        );
+        Box::pin(async move {
+            let a = tokio::task::spawn_blocking(move || keys::answer(&store, &dir, wait, &req))
+                .await
+                .unwrap_or_else(|_| keys::Answer::Text(b"no the helper failed\n".to_vec()));
+            Box::new(a) as Box<dyn KeyAnswer>
+        })
+    }
+}
+
 /// A job's relay in its helper: the sidecar, the channel and the proxy on their own runtime. The helper starts it
 /// before its `ready` line and ends it ([`Relay::end`]) when the job has ended.
 pub struct Relay {
@@ -112,14 +151,16 @@ async fn take_down(
 
 impl Relay {
     /// Starts the sidecar (`podman` with SIDECAR_ARGV, named NAME), waits for its `READY`, and puts the proxy for
-    /// ALLOW on its streams. When the channel ends before the job, the job (CONTAINER) is ended `infra: proxy` with the
-    /// reason in DIR's `kill_reason`, the container removed before the sidecar.
+    /// ALLOW on its streams, and KEYS (a keyed job) on its key streams. When the channel ends before the job, the job
+    /// (CONTAINER) is ended `infra: proxy` with the reason in DIR's `kill_reason`, the container removed before the
+    /// sidecar.
     pub fn start(
         dir: &Path,
         allow: Vec<Target>,
         sidecar_argv: &[String],
         name: &str,
         container: Option<String>,
+        keys: Option<Arc<dyn KeySource>>,
     ) -> Result<Relay, String> {
         use drgnx_px::owner;
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -155,15 +196,27 @@ impl Relay {
             let log = drgnx_px::shell::Log::default();
             let drained = log.clone();
             tokio::spawn(async move { drained.drain_to(tokio::io::stderr()).await });
-            let mut channel = tokio::spawn(owner::run(
-                out,
-                inp,
-                streams_tx,
-                events_tx,
-                owner::BEAT,
-                drgnx_px::shell::STALL,
-                log,
-            ));
+            let mut channel = match keys {
+                Some(k) => tokio::spawn(owner::run_keyed(
+                    out,
+                    inp,
+                    streams_tx,
+                    k,
+                    events_tx,
+                    owner::BEAT,
+                    drgnx_px::shell::STALL,
+                    log,
+                )),
+                None => tokio::spawn(owner::run(
+                    out,
+                    inp,
+                    streams_tx,
+                    events_tx,
+                    owner::BEAT,
+                    drgnx_px::shell::STALL,
+                    log,
+                )),
+            };
             Ok(tokio::spawn(async move {
                 let _proxy = proxy;
                 tokio::select! {

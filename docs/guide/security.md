@@ -499,9 +499,10 @@ project).
   (`drgnx: infra: proxy: …`): the sidecar exited (its code and what it means; 137 is most likely its memory limit),
   broke the channel's rules, or stopped reading; the hub stopped; or a hub that restarted found it running. A port of
   your computer is reached only as `host.drgnx.internal:PORT` and only after you allow it on a card (the next section);
-  the hub's own ports never, whatever you allow. On SELinux hosts nothing is to be set up: the job's network needs no
-  socket rule, and a runner job's key socket is created as a container's (`container_t`; `drgnx doctor`'s
-  `key sockets:` line checks that this host's policy allows it). The shape was checked on Fedora 45 with SELinux
+  the hub's own ports never, whatever you allow. On SELinux hosts nothing is to be set up: the job's network and its
+  keys need no socket, file or policy rule, for an unconfined user and a confined `staff_u` one alike (a keyed job
+  reads its keys through its own sidecar, on a name that exists only in the job's network namespace). A confined
+  `user_u` can't run rootless containers at all (no user namespaces), so it can't be a runner yet. The shape was checked on Fedora 45 with SELinux
   enforcing; Ubuntu (AppArmor) is CI's lane; RHEL and openSUSE are expected to work, unverified. **macOS** (podman machine) is expected to work, unverified: the relay crosses the
   machine over podman's SSH connection (about 170 MB/s into the job and 87 MB/s back on the test VM, before gvproxy),
   a machine restart ends running networked jobs, the machine's SSH and REST ports are never opened by a grant, and

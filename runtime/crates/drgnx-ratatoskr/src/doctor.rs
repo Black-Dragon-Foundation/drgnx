@@ -177,12 +177,6 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
             )
         })
     ));
-    #[cfg(target_os = "linux")]
-    {
-        v["key_socket"] = json!(key_socket_verdict(sleipnir::helper::selinux::self_check(
-            &std::env::temp_dir()
-        )));
-    }
     let values =
         crate::settings::Settings::load(&paths::config_dir(env), &crate::settings::Kv::default())
             .values;
@@ -209,18 +203,6 @@ pub fn container_net_verdict(info: Option<Result<Value, String>>) -> String {
             Ok(()) => "ok (rootless podman 5.0 or newer)".into(),
             Err(e) => e,
         },
-    }
-}
-
-/// k1's create half on this host: a keyed job's socket labelled `container_t` (S3), read back.
-pub fn key_socket_verdict(check: Result<Option<String>, String>) -> String {
-    match check {
-        Ok(None) => "ok (no SELinux: the key socket needs no label)".into(),
-        Ok(Some(label)) => format!("ok (SELinux: the key socket is created {label})"),
-        Err(e) => format!(
-            "keyed container jobs would be refused: this host's SELinux policy did not let a socket be created \
-             container_t: {e}"
-        ),
     }
 }
 
@@ -743,9 +725,6 @@ fn text(v: &Value, sandbox: &Check) -> String {
         "\nnetworked container jobs: {}",
         t(&v["container_net"])
     ));
-    if !v["key_socket"].is_null() {
-        out.push_str(&format!("\nkey sockets: {}", t(&v["key_socket"])));
-    }
     out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
     out
@@ -828,18 +807,6 @@ mod tests {
         let ok = json!({"version": {"Version": "5.4.2"}, "host": {"security": {"rootless": true}}});
         assert!(container_net_verdict(Some(Ok(ok))).starts_with("ok"));
         assert!(container_net_verdict(None).contains("no podman"));
-    }
-
-    #[test]
-    fn doctor_names_the_key_socket_check() {
-        assert!(key_socket_verdict(Ok(None)).starts_with("ok (no SELinux"));
-        let ok = key_socket_verdict(Ok(Some("unconfined_u:system_r:container_t:s0".into())));
-        assert!(ok.contains("container_t"), "{ok}");
-        let bad = key_socket_verdict(Err("EACCES".into()));
-        assert!(
-            bad.starts_with("keyed container jobs would be refused"),
-            "{bad}"
-        );
     }
 
     #[test]

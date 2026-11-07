@@ -5,26 +5,28 @@
 //!   `ok` or `no WHY`. Only the names the job's spec lists are taken.
 //! - The helper holds each value in a [`Locked`] buffer: an anonymous mapping, `mlock`ed and left out of core dumps,
 //!   zeroed and unmapped when it goes.
-//! - `drgnx-key` asks on `D/key.sock` (mounted at `/run/drgnx/key.sock`): `get NAME\n`. The answer is `ok LEN\n` and
-//!   the bytes, `no WHY`, or, when the key hasn't come within [`KEY_WAIT`], `timeout`, after the helper has recorded the
-//!   request in `D/key-timeout`; job-exec reads that record as `infra: key not delivered`. Each delivered read is a
-//!   line in `D/key-use` (the name and the time, never the value), which `serve` sends up as `key-use` frames.
+//! - `drgnx-key` asks on `@drgnx-key`, an abstract socket of the job's relay sidecar in the network namespace the job
+//!   joins; the sidecar carries each connection to the helper as a key stream (docs/develop/drgnx-px.md, "Key
+//!   streams"), and [`answer`] answers its one request line, `get NAME`: `ok LEN\n` and the bytes, `no WHY`, or, when
+//!   the key hasn't come within [`KEY_WAIT`], `timeout`, after the helper has recorded the request in `D/key-timeout`;
+//!   job-exec reads that record as `infra: key not delivered`. Each answered read is a line in `D/key-use` (the name
+//!   and the time, never the value), which `serve` sends up as `key-use` frames.
+//! - An `ok` answer is built in a [`Locked`] buffer and written to the channel from there; the relay's own copies of
+//!   it (one frame) are zeroed once written (`drgnx_px::shell`).
 //!
-//! The same store and sockets serve a keyed job that stays on the hub's machine.
+//! The same store and relay serve a keyed job that stays on the hub's machine.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use zeroize::Zeroize;
 
-/// The socket `drgnx-key` asks on, in the attempt's folder.
-pub const KEY_SOCK: &str = "key.sock";
 /// The socket `serve` hands keys over, in the attempt's folder.
 pub const HELPER_SOCK: &str = "helper.sock";
 /// The record of key requests that timed out (one name per line).
@@ -38,7 +40,7 @@ pub const NOT_DELIVERED: i32 = 75;
 /// The largest key value taken.
 pub const MAX_KEY: usize = 64 << 10;
 /// The longest request line.
-const MAX_LINE: u64 = 512;
+pub const MAX_LINE: u64 = 512;
 
 /// A key name: what the job spec lists and `drgnx-key` asks for (letters, digits, `_`, `-`, `.`; at most 128).
 pub fn plain_name(n: &str) -> bool {
@@ -95,6 +97,23 @@ impl Locked {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), l.ptr, bytes.len());
         }
         l.len = bytes.len();
+        Ok(l)
+    }
+
+    /// A locked buffer holding PARTS one after another: a message built around a key without an unlocked copy.
+    pub fn concat(parts: &[&[u8]]) -> io::Result<Locked> {
+        let len: usize = parts.iter().map(|p| p.len()).sum();
+        let mut l = Locked::new(&[])?;
+        if len > l.cap {
+            l = Locked::new(&vec![0u8; len])?;
+        }
+        let mut at = 0;
+        for p in parts {
+            // SAFETY: at + p.len() ≤ len ≤ cap bytes of our live mapping
+            unsafe { std::ptr::copy_nonoverlapping(p.as_ptr(), l.ptr.add(at), p.len()) };
+            at += p.len();
+        }
+        l.len = len;
         Ok(l)
     }
 
@@ -215,12 +234,8 @@ impl KeyStore {
 }
 
 /// Binds the socket NAME in DIR, mode 0600, at once: bound under a temporary name and renamed, so whoever sees it
-/// can connect.  With CTX (the key socket on an SELinux host, k1) the socket is created with that context
-/// ([`super::selinux::bind_labelled`]).
-pub fn bind(dir: &Path, name: &str, ctx: Option<&str>) -> io::Result<UnixListener> {
-    if let Some(c) = ctx {
-        return super::selinux::bind_labelled(dir, name, c, Path::new(super::selinux::SOCKCREATE));
-    }
+/// can connect.
+pub fn bind(dir: &Path, name: &str) -> io::Result<UnixListener> {
     let tmp = dir.join(format!(".{name}.tmp"));
     let _ = fs::remove_file(&tmp);
     let l = UnixListener::bind(&tmp)?;
@@ -298,49 +313,50 @@ fn take_key(s: UnixStream, store: &KeyStore) {
     };
 }
 
-/// Serves STORE's keys to the job on L, one thread per request; a request waits up to WAIT. The records go in DIR.
-pub fn serve_job(l: UnixListener, store: Arc<KeyStore>, dir: PathBuf, wait: Duration) {
-    std::thread::spawn(move || {
-        for s in l.incoming().flatten() {
-            let (store, dir) = (store.clone(), dir.clone());
-            std::thread::spawn(move || give_key(s, &store, &dir, wait));
-        }
-    });
+/// What a key request is answered: the key, in locked memory, or a line of text.
+pub enum Answer {
+    /// `ok LEN\n` and the value.
+    Key(Locked),
+    /// `no WHY\n` or `timeout\n`.
+    Text(Vec<u8>),
 }
 
-fn give_key(s: UnixStream, store: &KeyStore, dir: &Path, wait: Duration) {
-    if !same_user(&s) {
-        return;
+impl Answer {
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Answer::Key(l) => l.bytes(),
+            Answer::Text(t) => t,
+        }
     }
-    let Ok(mut w) = s.try_clone() else { return };
-    let mut r = BufReader::new(s);
-    let Ok(req) = line(&mut r) else { return };
+}
+
+/// Answers one request line REQ (without its newline) from STORE, waiting up to WAIT for the key; the records go in
+/// DIR. Blocks while it waits.
+pub fn answer(store: &KeyStore, dir: &Path, wait: Duration, req: &str) -> Answer {
     let Some(name) = req.strip_prefix("get ").filter(|n| plain_name(n)) else {
-        let _ = w.write_all(b"no not `get NAME`\n");
-        return;
+        return Answer::Text(b"no not `get NAME`\n".to_vec());
     };
-    let sent = store.with(name, wait, |v| {
-        let mut msg = format!("ok {}\n", v.len()).into_bytes();
-        msg.extend_from_slice(v);
-        let r = w.write_all(&msg);
-        msg.zeroize();
-        r
+    let built = store.with(name, wait, |v| {
+        Locked::concat(&[format!("ok {}\n", v.len()).as_bytes(), v])
     });
-    match sent {
-        Ok(Ok(())) => {
+    match built {
+        Ok(Ok(l)) => {
             let _ = append(
                 &dir.join(KEY_USE),
                 &format!("{}\n", serde_json::json!({"name": name, "at": now_s()})),
             );
+            Answer::Key(l)
         }
-        Ok(Err(_)) => {}
+        Ok(Err(e)) => {
+            Answer::Text(format!("no key {name}: memory that can't be locked: {e}\n").into_bytes())
+        }
         Err(Miss::NotListed) => {
-            let _ = w.write_all(format!("no the job doesn't name the key {name}\n").as_bytes());
+            Answer::Text(format!("no the job doesn't name the key {name}\n").into_bytes())
         }
         Err(Miss::TimedOut) => {
             // recorded first: by the time drgnx-key exits 75, the record that classifies it is there
             let _ = append(&dir.join(KEY_TIMEOUT), &format!("{name}\n"));
-            let _ = w.write_all(b"timeout\n");
+            Answer::Text(b"timeout\n".to_vec())
         }
     }
 }
@@ -427,6 +443,38 @@ mod tests {
         let l = Locked::new(b"another").unwrap();
         drop(l);
         assert_eq!(probe::last_zeroed(), Some(true));
+    }
+
+    /// [D] A request is answered `ok LEN` and the value in locked memory, recorded by name only; an unlisted name, a
+    /// malformed line and a key that never came are answered in text, the last recorded as a timeout.
+    #[test]
+    fn requests_are_answered_from_locked_memory() {
+        let d = tempfile::tempdir().unwrap();
+        let s = KeyStore::new(vec!["A".into(), "B".into()]);
+        s.put("A", b"secret-a").unwrap();
+        let a = answer(&s, d.path(), Duration::ZERO, "get A");
+        assert!(matches!(a, Answer::Key(_)));
+        assert_eq!(a.bytes(), b"ok 8\nsecret-a");
+        let uses = fs::read_to_string(d.path().join(KEY_USE)).unwrap();
+        assert!(uses.contains("\"A\"") && !uses.contains("secret"), "{uses}");
+        for (req, want) in [
+            ("get C", "no the job doesn't name the key C\n"),
+            ("get", "no not `get NAME`\n"),
+            ("get A B", "no not `get NAME`\n"),
+            ("put A", "no not `get NAME`\n"),
+            ("get B", "timeout\n"),
+        ] {
+            assert_eq!(
+                String::from_utf8_lossy(answer(&s, d.path(), Duration::ZERO, req).bytes()),
+                want,
+                "{req}"
+            );
+        }
+        assert_eq!(timed_out(d.path()), ["B"]);
+        let big = vec![7u8; 9000];
+        let l = Locked::concat(&[b"ok 9000\n", &big]).unwrap();
+        assert_eq!(&l.bytes()[..8], b"ok 9000\n");
+        assert_eq!(&l.bytes()[8..], &big[..]);
     }
 
     /// [D] Only the names the spec lists are taken or served; a missing key times out, a listed one is served.

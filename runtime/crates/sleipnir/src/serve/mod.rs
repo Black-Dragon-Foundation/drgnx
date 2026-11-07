@@ -21,7 +21,7 @@ pub mod admit;
 pub mod attempts;
 pub mod cleanup;
 
-use crate::helper::keys::{self as helper_keys, HELPER_SOCK, KEY_SOCK, KEY_USE};
+use crate::helper::keys::{self as helper_keys, HELPER_SOCK, KEY_USE};
 use crate::linux::jobexec::HelperSpec;
 use crate::linux::jobexec::{self, JobExec};
 use crate::linux::parse::Parser;
@@ -252,9 +252,10 @@ fn net_helper(
     ra: &RunnerArgs,
     id: &str,
     image: &str,
+    keyed: bool,
 ) -> Result<(podman::JobNet, Vec<String>), String> {
     let names = podman::net_names(ra, id).map_err(|r| r.message)?;
-    let argv = podman::sidecar_argv(&names, ra, image)
+    let argv = podman::sidecar_argv(&names, ra, image, keyed)
         .map_err(|r| r.message)?
         .into_iter()
         .map(|a| {
@@ -589,13 +590,10 @@ impl<W: Write> Serve<W> {
         } else {
             vec![]
         };
-        // k1's create half where the key sockets are made: under the runner folder
-        let key_socket = crate::helper::selinux::self_check(&self.probe.folder).err();
         self.send(&Frame::ProbeResult {
             facts,
             missing,
             limits,
-            key_socket,
             features,
         })
     }
@@ -1134,7 +1132,6 @@ impl<W: Write> Serve<W> {
             None
         } else {
             Some(podman::KeyMounts {
-                socket: dir.join(KEY_SOCK),
                 helper: own_copy("drgnx-key")?,
                 vars: meta
                     .spec
@@ -1163,10 +1160,12 @@ impl<W: Write> Serve<W> {
         slices::ensure_tree(SLICE_ROOT, self.cfg.profile)?;
         let slice = slices::job_slice(SLICE_ROOT, id)?;
         let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
-        // a networked job's relay: the sidecar's image from the bundle's binary, its name and its argv for the helper
-        let relay = match &hub_allow {
-            None => None,
-            Some(_) => Some(net_helper(&ra, id, &self.px_image()?)?),
+        // a networked or keyed job's relay: the sidecar's image from the bundle's binary, its name and its argv for the
+        // helper (a keyed job reads its keys through it)
+        let relay = if hub_allow.is_none() && keys.is_none() {
+            None
+        } else {
+            Some(net_helper(&ra, id, &self.px_image()?, keys.is_some())?)
         };
         let proxy = relay.as_ref().map(|r| r.0.clone());
         let caps = Caps {
@@ -2041,8 +2040,12 @@ mod net_tests {
     #[test]
     fn job_json_names_the_sidecar() {
         let ra = RunnerArgs::runner("run", "hub1", "drgnx-runner-work-x1a.slice");
-        let (net, argv) = net_helper(&ra, "x1a", "localhost/drgnx-px:0011aabb").unwrap();
+        let (net, argv) = net_helper(&ra, "x1a", "localhost/drgnx-px:0011aabb", false).unwrap();
         assert_eq!(net.sidecar, "run-px-x1a");
+        assert!(!argv.iter().any(|a| a == "--keys"), "{argv:?}");
+        // a keyed job's sidecar listens for its keys too
+        let (_, keyed) = net_helper(&ra, "x1a", "localhost/drgnx-px:0011aabb", true).unwrap();
+        assert_eq!(keyed[keyed.len() - 2..], ["--keys", "drgnx-key"]);
         assert_eq!(&argv[..2], ["run", "-i"]);
         assert!(
             argv.contains(&"run-px-x1a".to_string())

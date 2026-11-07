@@ -126,7 +126,6 @@ mod tests {
                 }),
                 missing: vec![],
                 limits: Some("no controllers".into()),
-                key_socket: Some("the socket came out user_tmp_t".into()),
                 features: vec!["podman".into()],
             },
             Frame::Ready {
