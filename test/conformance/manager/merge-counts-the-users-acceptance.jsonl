@@ -1,0 +1,28 @@
+{"scenario": "manager/merge-counts-the-users-acceptance", "requires": ["v1", "test-hooks"], "doc": "[C] A worker the manager started is registered with its worktree, so the files the user accepted count at the merge gate: the manager's merge of its branch goes through into the integration branch."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/repo"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/role", "params": {"id": "$sid", "role": "manager"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 30000}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$SOCKET_DIR/s/$sid/mcp.sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "agent_start", "arguments": {"profile": "mock-claude"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$capture:wk", "session": {"role": "worker", "parent": "$sid"}}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $STATE/hub/runs/$sid && TD=$(ls -d $STATE/hub/runs/$sid/w*) && echo work > $TD/note.txt && git -C $TD add note.txt && git -C $TD -c user.name=t -c user.email=t@t commit -q -m work && BLOB=$(git -C $TD rev-parse HEAD:note.txt) && HASH=$(printf ':000000 100644 0000000000000000000000000000000000000000 %s A\\tnote.txt' $BLOB | sha256sum | cut -d' ' -f1) && printf '{\"b\":\"job/%s-%s\",\"h\":\"%s\",\"w\":\"%s\"}' $sid $(basename $TD) $HASH $TD > $ROOT/b.json"], "expect_code": 0}
+{"do": "capture_file", "path": "$ROOT/b.json", "capture": "hash", "json_path": "h"}
+{"do": "capture_file", "path": "$ROOT/b.json", "capture": "br", "json_path": "b"}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "review/mark", "params": {"agent": "$wk", "path": "note.txt", "state": "accepted", "hash": "$hash", "event": {"kind": "accept", "summary": "accepted note.txt"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "merge", "arguments": {"branch": "$br"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "$string"}], "isError": "$absent"}}, "within_ms": 60000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(git -C $ROOT/repo rev-list --count job/$sid)\" = 3"], "expect_code": 0}

@@ -216,6 +216,8 @@ params! {
     AgentsContextDrop(agents::ContextDropParams),
     AgentsContextPin(agents::ContextPinParams),
     AgentsCompactPreview(agents::ById),
+    AgentsConfig(agents::ConfigParams),
+    AgentsExplain(agents::ExplainParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),

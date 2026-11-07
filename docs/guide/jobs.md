@@ -375,6 +375,10 @@ The details:
   worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
   nothing changed since the look.
 
+- **Your hooks.** After the gate cleared a task, the `before-commit` rules and plugin hooks are asked (see
+  [Plugins](plugins.md#rules-and-hooks)); one can reword the merge commit's message or hold the merge with a `hook`
+  card (Retry the merge, Dismiss and carry on, Stop the job). `at-review` hooks are asked before the reviewer starts.
+
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
 Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
 

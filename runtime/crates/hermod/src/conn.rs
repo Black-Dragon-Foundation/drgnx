@@ -293,6 +293,32 @@ impl Conn {
         .map(drop)
     }
 
+    /// Set the session's config option CONFIG_ID (`mode`, `model`, …) to VALUE.  An agent without the method answers
+    /// `-32601` ([`Error::Rpc`]); the caller falls back to [`Conn::set_mode`] or [`Conn::set_model`].
+    pub async fn set_config_option(
+        &self,
+        sid: &SessionId,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), Error> {
+        self.typed::<Value>(
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": config_id, "value": value}),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Switch the session's model (`session/set_model`).
+    pub async fn set_model(&self, sid: &SessionId, model: &str) -> Result<(), Error> {
+        self.typed::<Value>(
+            "session/set_model",
+            json!({"sessionId": sid, "modelId": model}),
+        )
+        .await
+        .map(drop)
+    }
+
     /// Run one turn.  No deadline: the turn ends by the agent's answer, [`Conn::cancel`] or the child's exit.
     pub async fn prompt(
         &self,

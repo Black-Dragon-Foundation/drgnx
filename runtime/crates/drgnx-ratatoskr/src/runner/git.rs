@@ -532,6 +532,16 @@ impl HubGit {
     /// Merge exactly the tip the gate checked into the tree at JOB_TREE (`merge --no-ff`).  A branch that moved
     /// since the check, or one the gate did not clear, is refused; a conflict is aborted and listed.
     pub async fn merge(&self, job_tree: &Path, tree: &TaskTree) -> Result<MergeOutcome, GitError> {
+        self.merge_with(job_tree, tree, None).await
+    }
+
+    /// [`Self::merge`] with MESSAGE as the merge commit's message (a `before-commit` hook's change).
+    pub async fn merge_with(
+        &self,
+        job_tree: &Path,
+        tree: &TaskTree,
+        message: Option<&str>,
+    ) -> Result<MergeOutcome, GitError> {
         let branch_ref = format!("refs/heads/{}", tree.branch);
         let now = self
             .git_in(job_tree, &["rev-parse", "--verify", &branch_ref])
@@ -546,7 +556,7 @@ impl HubGit {
             }
             _ => return Err(err("merge", "the gate has not cleared this task")),
         }
-        let msg = format!("Merge {}", tree.branch);
+        let msg = message.map_or_else(|| format!("Merge {}", tree.branch), str::to_owned);
         let r = self
             .git_in(
                 job_tree,
@@ -934,8 +944,9 @@ impl RunGit for HubGit {
         &'a self,
         job_tree: &'a Path,
         tree: &'a TaskTree,
+        message: Option<&'a str>,
     ) -> GitFuture<'a, MergeOutcome> {
-        Box::pin(HubGit::merge(self, job_tree, tree))
+        Box::pin(HubGit::merge_with(self, job_tree, tree, message))
     }
 }
 
