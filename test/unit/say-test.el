@@ -101,7 +101,10 @@ scripted planning agent) routed for implement and docs, a git repository in `rep
         (drgnx-test-deliver-all)
         (should (equal status "running"))
         (should (cdr again))                     ; the planning stopped
-        (should-not (drgnx-say-test--notice))))))
+        (should-not (drgnx-say-test--notice)))
+      ;; the job the approval started ends with the test: it leaves nothing running at the hub's teardown
+      (should-not (cdr (drgnx-say-test--ask "job/stop" (list :id job))))
+      (drgnx-test-deliver-all))))
 
 (ert-deftest drgnx-say/reject-stops-the-job ()
   (drgnx-say-test--with
