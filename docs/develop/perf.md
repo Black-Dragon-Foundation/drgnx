@@ -698,12 +698,14 @@ Tests: `test/unit/perf-workers-test.el`.
 
 ### The workers' workloads
 
-Twelve workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
+Sixteen workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
 what the Nidhogg workers take off the main thread. Each types the same 6 commands into the editor while the work runs; the
 first key starts it (from a timer, as it starts for a user), so the keys and the work overlap. Each has `:complete-when`
 (`:complete-ms`, polled at idle) and `:digest` (equal on and off), and a budget row `(W PATH LIMIT :report-only STEP)` in
 `test/perf/budgets.eld`: the limit is the design's table (V2 §1 or drgnx's existing row), never a first run. A row fails
-only after `DRGNX_PERF_LANDED` names its step.
+only after `DRGNX_PERF_LANDED` names its step. Five of them (`drgnx-perf-run-workers-seeded`: `explorer-git` and the
+render offload's Quick Open and agent-line pairs) also have allocation, CPU and rows rows, a first run's numbers x 1.25;
+the others are on `drgnx-perf-run-unseeded`.
 
 | Workload | What it does | Budget rows (step) |
 |---|---|---|
@@ -715,8 +717,10 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `compile-flood` | `compile` (comint, a pty) of a generated 200k-line log; the digest is the count and md5 of the log lines that arrived, checked against the file | input p95 16, p99 50, max 50 (ot3) |
 | `image-open` | a 4K PNG screenshot, then the 20-image Markdown preview through `drgnx-markdown--insert-html`; every repeat clears the image cache first (or only the warm-up decodes), and `:preview_drawn_ms` waits until no decode is pending on Nidhogg's image worker | no 16 ms stall, `:image :screenshot_ms` 16, `:image :preview_drawn_ms` 500 (ot6) |
 | `explorer-expand` | `big/` of 5,000 files expanded, listing cache cleared (the bench's operation) | `:expand_ms` 80, no 16 ms stall (ot8) |
-| `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5); `:alloc :p50` 12852 objects, report-only (the git letters moving to the hub cut it) |
+| `explorer-git` | the status of a 25k-file repository read in the background | input p95 16, no 16 ms stall (ot5); `:alloc :p50` 8555 objects, `:cpu_ms :p90` 5.1, `:rows` 1 (ot5; measured x 1.25) |
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
+| `quick-open-typing`, `quick-open-typing-old` | Quick Open (its key, C-p, queued as the user's command) in the 200,000-file repository, then `d012/f001.txt` typed a key at a time and `C-g`; the hub's ranked rows (the session starts a hub), or with `drgnx-view-old-path` the file stream and completion over every name. Done once every key reached the minibuffer on the workload's path and the first list came before the first key. The query has no space: a plain `completing-read` takes SPC as `minibuffer-complete-word` | `:alloc :p50` 4905 / 8003808, `:cpu_ms :p90` 1.4 / 273.3, `:rows` 0 (ot5; measured x 1.25) |
+| `agents-line-motion`, `agents-line-motion-old` | 20 `<down>` in a large Lisp file while three agents' frames arrive, one per command; the editor line's name from the outline, or with `drgnx-view-old-path` from `add-log-current-defun` per frame | `:alloc :p50` 6869 / 7298, `:cpu_ms :p90` 4.5 / 5.2, `:rows` 0 (ot5; measured x 1.25) |
 | `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5; each repeat kills the buffer the one before made (they once stayed, 100 MB that the `memory` row read) | input max 50, `:complete-ms` 1000 (ot8) |
 
 `agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
@@ -735,7 +739,7 @@ rust-analyzer, Node and typescript-language-server) is installed for that run on
 **A report-only run** (the baseline; a Nidhogg with workers, under the lease, no A/B):
 
 ```sh
-DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open explorer-expand explorer-git quick-open-large autosave-typing" \
+DRGNX_PERF_WATCHDOG=on DRGNX_PERF_WORKLOADS="lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open explorer-expand explorer-git quick-open-large quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old autosave-typing" \
   .claude/tmp/perf-exclusive.sh bin/drgnx test --container --perf
 ```
 

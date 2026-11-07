@@ -444,6 +444,11 @@ drops it."
           (when (and message (null (nth 2 entry)))
             (funcall one conn message)))))))
 
+(defconst drgnx-hub--conn-props
+  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
+    (:events . :drgnx-events) (:since . :since))
+  "The core's connection fields and the process properties that keep them between steps.")
+
 (defun drgnx-hub--client-line (conn json)
   "One line JSON read on CONN, as the core's event: the challenge, an event, or an answer."
   (let ((event (plist-get json :event)))
@@ -471,11 +476,6 @@ raises is recorded, and the lines after its answer are still read."
   (drgnx-hub--step (list 'timer (cons 'hub-call id))))
 
 ;;;; The shell: the core decides (drgnx-hub-core.el), this runs what it decided
-
-(defconst drgnx-hub--conn-props
-  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
-    (:events . :drgnx-events) (:since . :since))
-  "The core's connection fields and the process properties that keep them between steps.")
 
 (defvar drgnx-hub--asked-disconnect nil
   "Non-nil when this editor ended its own subscription (`drgnx-hub-disconnect', or a `shutdown' it sent): a hub that

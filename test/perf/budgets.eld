@@ -77,18 +77,18 @@
                      :fails-above-row (scrolling (:compose :compose-ms :p95)) :by 1)
  (scroll-under-popup (:compose :compose-ms :max) 8)
  (scroll-under-popup (:input :p95) 16)
-;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
-;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
-;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
-;; on hosted runners).  Workloads that could not run in the container are in `drgnx-perf-run-unseeded'.  Raise a row only
-;; in the commit that needs it, with the reason.
-;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
-;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
-;; The typing workloads' CPU rows (typing, typing-with-ghost, remote-typing) were 350-420 ms at p90 while one key in ten
-;; spent 100-200 ms (the typing fixture's open list scanned to the end of the file, and Nidhogg's full redisplay after an
-;; insertion, both fixed).  Seeded again 2026-11-05 from two source runs in the GUI container on the desktop island
-;; (4 CPUs, Nidhogg 31.1-nidhogg.5): cpu p50 3.9 / 5.9, 4.0 / 6.0, 3.9 / 4.0 ms and p90 5.1 / 7.8, 5.2 / 8.4, 5.2 / 5.3
-;; ms; the rows are the larger run x 2, rounded up, so a key spike fails the run again.
+ ;; Gated budgets (Task 16 of the determinism plan), seeded 2026-10-20 from two runs of the perf tier in the Emacs 31.1 GUI
+ ;; container (source, not built: compiled code allocates less): :alloc :p50 = the larger of the runs x 1.25, rounded up;
+ ;; :rows = exact (equal in both runs); :cpu_ms :p90 = the larger of the runs' p90 x 2 (scaled by DRGNX_PERF_CPU_FACTOR; 2
+ ;; on hosted runners).  Workloads that could not run in the container are in `drgnx-perf-run-unseeded'.  Raise a row only
+ ;; in the commit that needs it, with the reason.
+ ;; replace-typing :alloc :p50 41340 = 33072 x 1.25 (CI's GUI-container run of 83e460be; the seed run was 25252): the number is
+ ;; timing-coupled, not a code cost (docs/develop/perf.md, "Allocation that follows the wall clock").
+ ;; The typing workloads' CPU rows (typing, typing-with-ghost, remote-typing) were 350-420 ms at p90 while one key in ten
+ ;; spent 100-200 ms (the typing fixture's open list scanned to the end of the file, and Nidhogg's full redisplay after an
+ ;; insertion, both fixed).  Seeded again 2026-11-05 from two source runs in the GUI container on the desktop island
+ ;; (4 CPUs, Nidhogg 31.1-nidhogg.5): cpu p50 3.9 / 5.9, 4.0 / 6.0, 3.9 / 4.0 ms and p90 5.1 / 7.8, 5.2 / 8.4, 5.2 / 5.3
+ ;; ms; the rows are the larger run x 2, rounded up, so a key spike fails the run again.
  (typing (:alloc :p50) 13757) (typing (:cpu_ms :p50) 12) (typing (:cpu_ms :p90) 16) (typing (:rows) 1)
  (scrolling (:alloc :p50) 14840) (scrolling (:cpu_ms :p90) 28.4) (scrolling (:rows) 0)
  (tabs (:alloc :p50) 6234) (tabs (:cpu_ms :p90) 11.2) (tabs (:rows) 0)
@@ -146,8 +146,21 @@
  (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
  (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
  (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
- ;; explorer-git :alloc :p50 12852 = 10281 x 1.25 (one source run, GUI container, 2026-11-07): objects allocated per command
- (explorer-git (:alloc :p50) 12852 :report-only ot5)
+ ;; The render offload's rows (measured x 1.25, rounded up; :rows exact): one source run, GUI container on the desktop,
+ ;; 2026-11-07, with Nidhogg's framing and the worktree's test-hooks hub.  explorer-git: alloc 6844, cpu p90 4.06, rows 1
+ ;; (git status now framed in every locale; 10281 before).  quick-open-typing (the hub's ranked rows) alloc 3924, cpu
+ ;; 1.1; -old (the stream and completion over 200k names) alloc 6403046, cpu 218.63, a key 212 ms at p50.
+ ;; agents-line-motion (the outline's name) alloc 5495, cpu 3.53; -old (`add-log-current-defun' per frame) 5838, 4.15.
+ (explorer-git (:alloc :p50) 8555 :report-only ot5) (explorer-git (:cpu_ms :p90) 5.1 :report-only ot5)
+ (explorer-git (:rows) 1 :report-only ot5)
+ (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
+ (quick-open-typing (:rows) 0 :report-only ot5)
+ (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)
+ (quick-open-typing-old (:cpu_ms :p90) 273.3 :report-only ot5) (quick-open-typing-old (:rows) 0 :report-only ot5)
+ (agents-line-motion (:alloc :p50) 6869 :report-only ot5) (agents-line-motion (:cpu_ms :p90) 4.5 :report-only ot5)
+ (agents-line-motion (:rows) 0 :report-only ot5)
+ (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)
+ (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)

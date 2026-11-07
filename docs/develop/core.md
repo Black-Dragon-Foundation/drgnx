@@ -1617,7 +1617,10 @@ is got on every render and stays recent; a tree with more than 64 expanded folde
 render (an `mtime` check, then a directory read).
 
 `core/drgnx-file-stream.el` lists a local folder's files in batches (`git ls-files -z` through the same `records`
-framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on; Quick Open
+framing in a repository, `nidhogg-directory-files-async` elsewhere), only with the feature and the switch on. The git
+processes of the listing and of the status run decode as `utf-8-unix` whatever the session's default: Nidhogg frames
+only a process whose own coding has no state, and a C locale's default (`undecided`) has, so the stream would be refused
+there and the synchronous path run instead. Quick Open
 (`core/drgnx-quick-open.el`) and Find in Explorer (`drgnx-explorer--find-load`, one generation per listing, a
 late batch is dropped) use it, and keep their synchronous path otherwise and for a remote folder. Quick Open's list and
 highlight are a pure core (`drgnx-quick-open--step`; events `batch`, `input`, `move`, `done`; the highlight is kept by the

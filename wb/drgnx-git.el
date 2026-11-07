@@ -255,6 +255,9 @@ A refresh asked for while one runs is done once afterwards, also when the cache 
                                        :filter #'drgnx-git--stderr))
                (proc (make-process
                       :name "drgnx-git" :buffer buf :noquery t :connection-type 'pipe :stderr err
+                      ;; its own decoding, not the session's: Nidhogg frames only a process whose coding has no
+                      ;; state, and a C locale's default (`undecided') has; the buffer path reads UTF-8 names too
+                      :coding 'utf-8-unix
                       :command '("git" "--no-optional-locks" "status" "--porcelain=v2" "--branch" "-z"
                                  "--ignored=matching" "--untracked-files=normal")
                       :sentinel (lambda (p _event) (drgnx-git--done p root)))))
