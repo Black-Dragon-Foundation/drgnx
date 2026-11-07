@@ -2273,7 +2273,8 @@ the search itself is `hrafn::grep`).
   holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
   by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
   and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
-  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields.
+  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
+  20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what

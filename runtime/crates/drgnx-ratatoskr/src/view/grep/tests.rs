@@ -168,6 +168,34 @@ fn grep_model_is_a_tree_of_files_and_matches() {
     assert!(!model.expect("the second batch's model").reset);
 }
 
+/// [D] Past its window the model holds the first entries, its list `order` a window of all of them (Sjá takes no
+/// longer list unwindowed).
+#[test]
+fn grep_model_windows_a_long_search() {
+    let files = vec![
+        (
+            "/r/a.txt".to_owned(),
+            (1..=3)
+                .map(|l| m("/r/a.txt", l, "", "needle", ""))
+                .collect(),
+        ),
+        (
+            "/r/b.txt".to_owned(),
+            vec![m("/r/b.txt", 1, "", "needle", "")],
+        ),
+    ];
+    let d = grep_doc_in(&files, 3);
+    assert_eq!(
+        d.lists["order"],
+        ["f:/r/a.txt", "m:/r/a.txt:1:0", "m:/r/a.txt:2:0"]
+    );
+    assert_eq!(d.nodes.len(), 3);
+    assert_eq!(d.windows.get("order"), Some(&(6, 0)));
+    let all = grep_doc_in(&files, 6);
+    assert_eq!(all.lists["order"].len(), 6);
+    assert!(all.windows.is_empty(), "no window when everything fits");
+}
+
 #[test]
 fn new_query_starts_with_reset() {
     let mut s = store();

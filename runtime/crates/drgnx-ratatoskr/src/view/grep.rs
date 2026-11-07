@@ -147,8 +147,17 @@ fn match_id(m: &Match) -> String {
     format!("m:{}:{}:{}", m.file, m.line, m.col)
 }
 
+/// The entries (files and matches) a search's model holds; past them its list `order` is a window of the first ones
+/// (Sjá takes no longer list unwindowed).
+const MODEL_WINDOW: usize = 20_000;
+
 /// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
 fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
+    grep_doc_in(files, MODEL_WINDOW)
+}
+
+/// [`grep_doc`] holding at most WINDOW entries.
+fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize) -> Doc {
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -162,8 +171,12 @@ fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
         }),
         ..Doc::default()
     };
+    let total: usize = files.iter().map(|(_, ms)| 1 + ms.len()).sum();
     let mut order = Vec::new();
     for (file, ms) in files {
+        if order.len() >= window {
+            break;
+        }
         let fid = file_id(file);
         let name = Path::new(file)
             .file_name()
@@ -175,7 +188,7 @@ fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
                    "fields": [["label", name], ["path", file]]}),
         );
         order.push(fid.clone());
-        for m in ms {
+        for m in ms.iter().take(window - order.len()) {
             let id = match_id(m);
             d.nodes.insert(
                 id.clone(),
@@ -186,6 +199,9 @@ fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
             );
             order.push(id);
         }
+    }
+    if total > order.len() {
+        d.windows.insert("order".into(), (total, 0));
     }
     d.lists.insert("order".into(), order);
     d
