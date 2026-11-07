@@ -778,8 +778,10 @@ timer, file or hook. `test/unit/hub-core-test.el` runs it in every order of its 
 (`:drgnx-state`, `-queue`, `-proven`, `-asked`, `-events`, `:since`, and whether each is live) into a state. It calls
 the core, writes the new state back, and only then runs the effects, so an effect that comes back (a sentinel
 `delete-process` runs at once, a callback that calls the hub) steps from the new state. The globals stay the truth
-between steps: a test may let-bind them or set a connection's property. Its two I/O points stay
-`drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
+between steps: a test may let-bind them or set a connection's property. An event line is the exception
+(`drgnx-hub--step-event`): it changes nothing in the client, so the core gets only the connection's subscription mark,
+no snapshot, and its step hands back the same state with the one effect that runs `drgnx-hub-event-functions`.
+Its two I/O points stay `drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
 
 **Events** (`drgnx-hub-core-event-kinds`), each fed by one shell entry point:
 
@@ -2125,7 +2127,9 @@ it builds for Android too).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
-  keywords. An image id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  keywords. A runstav test checks every method and event; the places that still map (an event's stored payload, the
+  gateway's and runners' keys, history's cost by unit) are listed in it and wait for the wires' own plans. An image
+  id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
   epoch (a theme change) never reuses an old tile.
 - **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
