@@ -140,7 +140,9 @@ of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.
   before-commit hook refused the merge of J7-3" and quotes your reason and which rule or plugin gave it. The card
   offers **Retry the merge** (after you fixed what the hook objected to), **Dismiss and carry on** (merge this task
   anyway; only you can, an agent cannot) and **Stop the job**. A manager's `merge` tool goes through the same hook: a
-  deny answers the manager with the reason and raises the card.
+  deny answers the manager with the reason and raises the card. That card offers **Merge again** and **Dismiss and let it
+  merge** (the manager is told to call `merge` again; a dismissal lets that one merge through) and **Withdraw the
+  card**.
 - **`at-review`** runs when a task is about to go to its reviewer. An **annotate** adds its note to the reviewer's
   brief. A **deny** fails the review without starting the reviewer: the task goes back to its agent with your reason,
   as any failed review, and counts toward the three failed reviews after which the task waits on you.

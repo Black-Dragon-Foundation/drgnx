@@ -230,17 +230,30 @@ pub(crate) async fn before_commit_hooks(
         paths,
     };
     let (job, tid) = (site.job, site.task);
+    // a manager's merge has no task: its card names the manager and the branch, and the hub answers it itself
+    let extra = card_task
+        .is_none()
+        .then(|| json!({"manager": job, "branch": tree.branch}));
     let Some(out) = hook_points::before_commit(front, site, &info).await else {
         return Ok(Some(None));
     };
     if let Some(why) = hook_points::hook_failure(&out, "commit") {
-        raise_hook_card(front, job, card_task, "before-commit", &why, None).await?;
+        raise_hook_card(front, job, card_task, "before-commit", &why, None, extra).await?;
         return Ok(None);
     }
     if let Some((name, reason)) = hook_points::refusal_of(&out) {
         let title = format!("the before-commit hook refused the merge of {tid}");
         let body = format!("{reason} \u{2014} by {name}");
-        raise_hook_card(front, job, card_task, "before-commit", &title, Some(body)).await?;
+        raise_hook_card(
+            front,
+            job,
+            card_task,
+            "before-commit",
+            &title,
+            Some(body),
+            extra,
+        )
+        .await?;
         return Ok(None);
     }
     Ok(Some(hook_points::commit_message(&out)))
@@ -254,8 +267,12 @@ pub(crate) async fn raise_hook_card(
     point: &str,
     title: &str,
     body: Option<String>,
+    extra: Option<Value>,
 ) -> Result<(), Error> {
     let mut data = json!({"point": point, "key": point});
+    if let Some(Value::Object(m)) = extra {
+        data.as_object_mut().unwrap().extend(m);
+    }
     if let Some(b) = body {
         data["body"] = json!(b);
     }
@@ -717,7 +734,7 @@ impl PlanHooks {
             return Ok(Some(Vec::new()));
         };
         if let Some(why) = hook_points::hook_failure(&out, "review") {
-            raise_hook_card(front, job, Some(tid), "at-review", &why, None).await?;
+            raise_hook_card(front, job, Some(tid), "at-review", &why, None, None).await?;
             return Ok(None);
         }
         if let Some((name, reason)) = hook_points::refusal_of(&out) {
@@ -1561,6 +1578,46 @@ fn arg_text(arg: &Option<StringOrNumber>) -> String {
     }
 }
 
+/// The user's ACTION on the `hook` card of a manager's refused merge of BRANCH (the manager is the card's job, it has no
+/// task): the card settles, and the manager is told to merge again for `retry` (the hooks run again) and `dismiss`
+/// (the hooks let that merge through once); `stop` only withdraws the card.
+async fn manager_hook_card(
+    front: &Front,
+    caller: &Caller,
+    cid: i64,
+    manager: &str,
+    branch: &str,
+    action: &str,
+) -> Result<JobSummary, Error> {
+    let settled = front
+        .writer
+        .write(caller, "cards/settle", {
+            let action = action.to_owned();
+            move |tx| card_settle(tx, cid, &action, now())
+        })
+        .await
+        .map_err(fail)?;
+    if !settled {
+        return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    let text = match action {
+        "retry" => {
+            format!("[hub] The user asked to retry the merge of {branch}: call merge again.")
+        }
+        "dismiss" => {
+            front.core.manager.dismiss_hook(branch);
+            format!(
+                "[hub] The user dismissed the before-commit hook for {branch}: call merge again, the hook will not stop it."
+            )
+        }
+        _ => String::new(),
+    };
+    if !text.is_empty() {
+        let _ = front.core.agents.prompt(manager, text, Origin::Hub);
+    }
+    serde_json::from_value(json!({"id": manager})).map_err(|e| invalid(e.to_string()))
+}
+
 /// The user's ACTION on a card: done once (a card acted on before refuses).  The job's summary.
 pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<JobSummary, Error> {
     let cid = i64::try_from(p.card).map_err(|_| invalid("card"))?;
@@ -1583,6 +1640,12 @@ pub async fn card_act(front: &Front, caller: &Caller, p: CardParams) -> Result<J
     }
     if card.state.as_deref() != Some("open") {
         return Err(invalid(format!("Card {cid} is already settled")));
+    }
+    if kind == "hook"
+        && let Some(branch) = data.get("branch").and_then(Value::as_str)
+        && data.get("manager").and_then(Value::as_str) == Some(job.as_str())
+    {
+        return manager_hook_card(front, caller, cid, &job, branch, &action).await;
     }
     let l = load(front, &job, true)
         .await?

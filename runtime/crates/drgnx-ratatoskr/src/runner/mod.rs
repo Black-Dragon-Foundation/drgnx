@@ -762,6 +762,11 @@ pub(crate) fn card_actions(kind: &str, data: &Value) -> Value {
             ("drop", "Drop the task"),
             ("open", "Open the job's worktree"),
         ]),
+        "hook" if data.get("manager").is_some() => a(&[
+            ("retry", "Merge again"),
+            ("dismiss", "Dismiss and let it merge"),
+            ("stop", "Withdraw the card"),
+        ]),
         "hook" => {
             let retry = match data.get("point").and_then(Value::as_str) {
                 Some("at-review") => ("review", "Review again"),

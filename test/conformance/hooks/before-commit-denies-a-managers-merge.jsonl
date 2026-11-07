@@ -23,9 +23,6 @@
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $STATE/hub/runs/$sid && TD=$(ls -d $STATE/hub/runs/$sid/w*) && echo work > $TD/note.txt && git -C $TD add note.txt && git -C $TD -c user.name=t -c user.email=t@t commit -q -m work && BLOB=$(git -C $TD rev-parse HEAD:note.txt) && HASH=$(printf ':000000 100644 0000000000000000000000000000000000000000 %s A\\tnote.txt' $BLOB | sha256sum | cut -d' ' -f1) && printf '{\"b\":\"job/%s-%s\",\"h\":\"%s\",\"w\":\"%s\"}' $sid $(basename $TD) $HASH $TD > $ROOT/b.json"], "expect_code": 0}
 {"do": "capture_file", "path": "$ROOT/b.json", "capture": "hash", "json_path": "h"}
 {"do": "capture_file", "path": "$ROOT/b.json", "capture": "br", "json_path": "b"}
-{"do": "capture_file", "path": "$ROOT/b.json", "capture": "wdir", "json_path": "w"}
-{"do": "send", "conn": "c", "json": {"id": 70, "method": "coord/agent", "params": {"register": {"id": "$wk", "kind": "claude", "worktree": "$wdir"}}}}
-{"do": "expect", "conn": "c", "json": {"id": 70, "result": {"id": "$wk"}}}
 {"do": "send", "conn": "c", "json": {"id": 20, "method": "review/mark", "params": {"agent": "$wk", "path": "note.txt", "state": "accepted", "hash": "$hash", "event": {"kind": "accept", "summary": "accepted note.txt"}}}}
 {"do": "expect", "conn": "c", "json": {"id": 20, "result": true}, "within_ms": 10000}
 {"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "merge", "arguments": {"branch": "$br"}}}}
