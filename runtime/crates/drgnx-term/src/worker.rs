@@ -16,6 +16,11 @@ use std::collections::HashMap;
 pub const BACKFILL_MAX_BYTES: usize = 40_000;
 /// The most rows one backfill chunk reads.
 const BACKFILL_MAX_ROWS: usize = 1024;
+/// The fewest lines the engine keeps, whatever the window: history above the window stays readable for search and
+/// copy (the bytes setting is the ceiling).
+pub const ENGINE_LINES_MIN: usize = 10_000;
+/// The most prompt rows remembered for `scroll` by prompts.
+const PROMPTS_MAX: usize = 4096;
 
 /// How a terminal starts.
 #[derive(Clone, Debug)]
@@ -74,6 +79,10 @@ pub struct Worker {
     closing: Option<i32>,
     marks: crate::child::Marks,
     shell_pid: u32,
+    /// A shell prompt (OSC 133 A) started since the last frame: the cursor's row is a prompt row.
+    prompt_due: bool,
+    /// The keys of prompt rows, oldest first.
+    prompts: std::collections::VecDeque<Key>,
 }
 
 impl Worker {
@@ -82,7 +91,7 @@ impl Worker {
             opts.cols,
             opts.rows,
             opts.cell_px,
-            opts.scrollback.max(opts.window),
+            opts.scrollback.max(opts.window).max(ENGINE_LINES_MIN),
             opts.scrollback_bytes,
         )?;
         engine.sink().clipboard_write = opts.clipboard_write;
@@ -105,6 +114,8 @@ impl Worker {
             closing: None,
             marks: crate::child::Marks::default(),
             shell_pid: 0,
+            prompt_due: false,
+            prompts: std::collections::VecDeque::new(),
         })
     }
 
@@ -169,6 +180,10 @@ impl Worker {
                 Effect::Progress { state, value } => self.out.push(Out::Progress { state, value }),
                 Effect::Prompt { kind, exit } => {
                     self.marks.mark(kind);
+                    if kind == GHOSTTY_SEMANTIC_PROMPT_PROMPT_START {
+                        self.prompt_due = true;
+                        self.clock.touch();
+                    }
                     self.out.push(Out::Prompt { kind, exit });
                 }
             }
@@ -250,6 +265,39 @@ impl Worker {
                 title: self.engine.title(),
                 shell_pid: self.shell_pid,
             }),
+            In::Scroll {
+                req,
+                from,
+                delta,
+                prompt_delta,
+                to,
+            } => {
+                let key = self.scroll(from.as_deref(), delta, prompt_delta, to.as_deref());
+                self.answer(req, serde_json::json!({ "key": key }));
+            }
+            In::Fetch {
+                req,
+                before_key,
+                max_bytes,
+            } => {
+                let version = self.fetch(
+                    before_key.as_deref(),
+                    max_bytes.unwrap_or(BACKFILL_MAX_BYTES),
+                );
+                self.answer(req, serde_json::json!({ "version": version }));
+            }
+            In::Search { req, query, dir } => {
+                let matches = self.search(&query, dir.as_deref() != Some("down"));
+                self.answer(req, serde_json::json!({ "matches": matches }));
+            }
+            In::TextRange {
+                req,
+                from_key,
+                to_key,
+            } => {
+                let text = self.text_range(from_key.as_deref(), to_key.as_deref());
+                self.answer(req, serde_json::json!({ "text": text }));
+            }
             In::Close { signal } => self.closing = Some(signal.unwrap_or(1)),
         }
     }
@@ -320,7 +368,7 @@ impl Worker {
                 if let Some(n) = value.as_u64() {
                     self.window = n as usize;
                     self.engine
-                        .set_scrollback(self.window, self.scrollback_bytes);
+                        .set_scrollback(self.window.max(ENGINE_LINES_MIN), self.scrollback_bytes);
                     self.tracker.set_above_max(self.window);
                     self.backfill_due = true;
                     self.clock.touch();
@@ -330,7 +378,7 @@ impl Worker {
                 if let Some(n) = value.as_u64() {
                     self.scrollback_bytes = n as usize;
                     self.engine
-                        .set_scrollback(self.window, self.scrollback_bytes);
+                        .set_scrollback(self.window.max(ENGINE_LINES_MIN), self.scrollback_bytes);
                 }
             }
             "clipboard-write" => {
@@ -513,6 +561,17 @@ impl Worker {
         };
         self.alt = alt;
         self.reset_due = false;
+        if std::mem::take(&mut self.prompt_due)
+            && !alt
+            && let Some((_, y)) = self.engine.cursor().at
+            && let Some((_, k)) = self.tracker.screen().get(y as usize)
+            && self.prompts.back() != Some(k)
+        {
+            self.prompts.push_back(k.clone());
+            if self.prompts.len() > PROMPTS_MAX {
+                self.prompts.pop_front();
+            }
+        }
         self.engine.clean();
         let meta = self.meta();
         let term = (reset || self.meta.as_ref() != Some(&meta)).then(|| meta.clone());
@@ -552,10 +611,16 @@ impl Worker {
     /// Send the next chunk of rows above the screen the editor lacks: the newest gap first, at most
     /// `BACKFILL_MAX_BYTES`, inserted after the row the editor holds above it.
     fn backfill(&mut self) {
+        self.backfill_chunk(None, BACKFILL_MAX_BYTES);
+    }
+
+    /// One backfill chunk of at most MAX_BYTES, from the newest gap (below BEFORE: the newest gap above that row); true
+    /// when a patch went.
+    fn backfill_chunk(&mut self, before: Option<&str>, max_bytes: usize) -> bool {
         let over = self.window.min(u16::MAX as usize) as u16;
-        if over == 0 || self.alt {
+        if over == 0 || self.alt || self.attach.is_none() {
             self.backfill_due = false;
-            return;
+            return false;
         }
         self.engine.update(over);
         let mut hist: Vec<RowId> = Vec::new();
@@ -564,12 +629,21 @@ impl Worker {
                 hist.push(id);
             }
         });
-        let Some(top) = (0..hist.len())
-            .rev()
-            .find(|&i| !self.tracker.held(&hist[i]))
-        else {
-            self.backfill_due = false;
-            return;
+        // the rows above BEFORE: up to its place in the history (all of it for a screen row)
+        let limit = before
+            .and_then(|k| {
+                self.tracker
+                    .above()
+                    .find(|(_, a)| a == k)
+                    .map(|(id, _)| *id)
+            })
+            .and_then(|id| hist.iter().position(|h| *h == id))
+            .unwrap_or(hist.len());
+        let Some(top) = (0..limit).rev().find(|&i| !self.tracker.held(&hist[i])) else {
+            if before.is_none() {
+                self.backfill_due = false;
+            }
+            return false;
         };
         let below = hist.get(top + 1).copied();
         let mut low = top;
@@ -593,7 +667,7 @@ impl Worker {
         for (id, cells) in read.iter().rev() {
             let row = build("", cells, px, &mut self.styles).row;
             let n = serde_json::to_vec(&row).map_or(0, |v| v.len()) + 16;
-            if !chunk.is_empty() && bytes + n > BACKFILL_MAX_BYTES {
+            if !chunk.is_empty() && bytes + n > max_bytes {
                 break;
             }
             bytes += n;
@@ -622,5 +696,141 @@ impl Worker {
         }
         self.send(false, ops, None);
         self.clock.backfilled();
+        true
+    }
+
+    fn answer(&mut self, req: u64, result: serde_json::Value) {
+        self.out.push(Out::Answer { req, result });
+    }
+
+    /// The rows the editor holds, top first: the window above the screen, then the screen.
+    fn held_keys(&self) -> Vec<Key> {
+        self.tracker
+            .above()
+            .chain(self.tracker.screen().iter())
+            .map(|(_, k)| k.clone())
+            .collect()
+    }
+
+    /// The row key to scroll to (see `In::Scroll`).
+    pub fn scroll(
+        &mut self,
+        from: Option<&str>,
+        delta: Option<i64>,
+        prompt_delta: Option<i64>,
+        to: Option<&str>,
+    ) -> Option<Key> {
+        let keys = self.held_keys();
+        let cursor = self
+            .meta
+            .as_ref()
+            .map(|m| m.cursor.0.clone())
+            .filter(|k| !k.is_empty())
+            .or_else(|| keys.last().cloned());
+        if to == Some("bottom") {
+            return cursor;
+        }
+        let from = from.map(str::to_owned).or(cursor)?;
+        let at = keys.iter().position(|k| *k == from)? as i64;
+        if let Some(n) = prompt_delta {
+            let place: Vec<i64> = self
+                .prompts
+                .iter()
+                .filter_map(|p| keys.iter().position(|k| k == p).map(|i| i as i64))
+                .collect();
+            let pick = if n < 0 {
+                let before: Vec<&i64> = place.iter().filter(|&&i| i < at).collect();
+                before
+                    .len()
+                    .checked_sub(n.unsigned_abs() as usize)
+                    .map(|i| *before[i])
+            } else {
+                place
+                    .iter()
+                    .filter(|&&i| i > at)
+                    .nth((n.max(1) - 1) as usize)
+                    .copied()
+            };
+            return pick.map(|i| keys[i as usize].clone());
+        }
+        let i = (at + delta.unwrap_or(0)).clamp(0, keys.len() as i64 - 1);
+        Some(keys[i as usize].clone())
+    }
+
+    /// `fetch`: the next backfill chunk now; the version of the patch it went in.
+    pub fn fetch(&mut self, before: Option<&str>, max_bytes: usize) -> Option<u64> {
+        self.backfill_chunk(before, max_bytes.max(1))
+            .then_some(self.version)
+    }
+
+    /// Every row the engine holds, top first: its key when the editor holds it, and its text.
+    fn all_rows(&mut self) -> Vec<(Option<Key>, String)> {
+        let lines = (self.engine.scrollback_rows()).min(u16::MAX as usize) as u16;
+        self.engine.update(lines);
+        let held: HashMap<RowId, Key> = self
+            .tracker
+            .above()
+            .chain(self.tracker.screen().iter())
+            .cloned()
+            .collect();
+        let mut out = Vec::new();
+        self.engine.rows(|id, _, _, r| {
+            let text: String = r
+                .cells()
+                .iter()
+                .map(|c| {
+                    if c.text.is_empty() {
+                        " "
+                    } else {
+                        c.text.as_str()
+                    }
+                })
+                .collect();
+            out.push((held.get(&id).cloned(), text.trim_end().to_owned()));
+        });
+        out
+    }
+
+    /// `search`: `[key, col, len]` of each match of QUERY (columns and lengths in characters), newest first when UP.
+    pub fn search(&mut self, query: &str, up: bool) -> Vec<(Option<Key>, u32, u32)> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let len = query.chars().count() as u32;
+        let mut found = Vec::new();
+        for (key, text) in self.all_rows() {
+            for (b, _) in text.match_indices(query) {
+                found.push((key.clone(), text[..b].chars().count() as u32, len));
+            }
+        }
+        if up {
+            found.reverse();
+        }
+        found
+    }
+
+    /// `text-range`: the rows from FROM to TO (keys; none: the oldest row the engine holds, the last row), one line
+    /// each, without the empty rows below the last that holds text.
+    pub fn text_range(&mut self, from: Option<&str>, to: Option<&str>) -> String {
+        let rows = self.all_rows();
+        let start = from
+            .and_then(|f| rows.iter().position(|(k, _)| k.as_deref() == Some(f)))
+            .unwrap_or(0);
+        let mut end = to
+            .and_then(|t| rows.iter().position(|(k, _)| k.as_deref() == Some(t)))
+            .unwrap_or(rows.len().saturating_sub(1));
+        if to.is_none() {
+            while end > start && rows[end].1.is_empty() {
+                end -= 1;
+            }
+        }
+        if rows.is_empty() || end < start {
+            return String::new();
+        }
+        rows[start..=end]
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }

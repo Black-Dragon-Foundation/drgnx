@@ -32,7 +32,7 @@ pub fn alive(rec: &Record) -> bool {
     if let Some(unit) = &rec.unit
         && crate::exec::unit::systemd_user()
         && let Ok(s) = std::process::Command::new("systemctl")
-            .args(["--user", "is-active", "--quiet", unit])
+            .args(["--user", "is-active", "--quiet", &scope_unit(unit)])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -42,6 +42,15 @@ pub fn alive(rec: &Record) -> bool {
         return false;
     }
     crate::exec::unit::same_process(rec.pid, rec.start_time)
+}
+
+/// The scope's full unit name (`systemctl` reads a bare name as a `.service`).
+fn scope_unit(unit: &str) -> String {
+    if unit.ends_with(".scope") {
+        unit.to_owned()
+    } else {
+        format!("{unit}.scope")
+    }
 }
 
 /// A connection to the worker on SOCKET and its hello (read within WITHIN).

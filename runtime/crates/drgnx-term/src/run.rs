@@ -13,6 +13,9 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::ExitStatusExt;
 use std::time::Instant;
 
+/// How long a worker whose program ended waits for a hub to tell, in seconds.
+const EXIT_WAIT_S: i64 = 30;
+
 /// How the program ended: its exit code, or the signal that ended it.
 pub type Exit = (Option<i32>, Option<i32>);
 
@@ -201,6 +204,23 @@ pub fn run(
     let status = pty.child.wait()?;
     let exit = (status.code(), status.signal());
     tracing::info!(code = ?exit.0, signal = ?exit.1, "program ended");
+    // a program that ended before any hub connected (or while none was): the exit waits for the next one, a while
+    if ctl.is_none()
+        && let Some(l) = &listener
+    {
+        let mut fds = [PollFd::new(l, PollFlags::IN)];
+        let t = Timespec {
+            tv_sec: EXIT_WAIT_S,
+            tv_nsec: 0,
+        };
+        if matches!(poll(&mut fds, Some(&t)), Ok(n) if n > 0)
+            && let Ok((mut c, _)) = l.accept()
+        {
+            c.set_nonblocking(false)?;
+            let _ = write_out(&mut c, vec![hello()]);
+            ctl = Some(c);
+        }
+    }
     if let Some(c) = ctl.as_mut() {
         let _ = write_out(
             c,

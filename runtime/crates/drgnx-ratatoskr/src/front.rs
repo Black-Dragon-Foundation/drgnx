@@ -654,6 +654,40 @@ impl Front {
                 files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
             }))),
             // hub-built rows (`view/*`)
+            // a terminal's view (`term:<id>`): its worker keeps the rows, versions and acknowledgements
+            Params::ViewEnv(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                let msg = drgnx_term::proto::In::Env { env_epoch: p.epoch };
+                Ok(json!(self.core.terms.send(id, &msg)))
+            }
+            Params::ViewResync(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                Ok(json!(
+                    self.core.terms.send(id, &drgnx_term::proto::In::Resync)
+                ))
+            }
+            Params::ViewAck(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                let msg = drgnx_term::proto::In::Ack { version: p.version };
+                Ok(json!(self.core.terms.send(id, &msg)))
+            }
+            p @ (Params::TermOpen(_)
+            | Params::TermConfig(_)
+            | Params::TermKey(_)
+            | Params::TermText(_)
+            | Params::TermPaste(_)
+            | Params::TermFocus(_)
+            | Params::TermMouse(_)
+            | Params::TermResize(_)
+            | Params::TermScroll(_)
+            | Params::TermFetch(_)
+            | Params::TermSearch(_)
+            | Params::TermTextRange(_)
+            | Params::TermClose(_)
+            | Params::TermList(_)
+            | Params::TermSessionEnd(_)) => {
+                crate::term::methods::serve(&self.core.terms, s.conn, p).await
+            }
             Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
             Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
             Params::ViewAck(p) => crate::view::ack(self, &caller, p).map(|b| json!(b)),

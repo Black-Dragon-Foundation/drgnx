@@ -28,6 +28,7 @@ pub mod say;
 pub mod search;
 pub mod settings;
 pub mod tasks;
+pub mod term;
 pub mod timeline;
 pub mod view;
 pub mod work;
@@ -265,6 +266,21 @@ params! {
     ViewGlyphs(view::ViewGlyphs),
     ViewMeasured(view::ViewMeasured),
     ViewClose(view::ViewClose),
+    TermOpen(term::TermOpen),
+    TermConfig(term::TermConfig),
+    TermKey(term::TermKey),
+    TermText(term::TermText),
+    TermPaste(term::TermText),
+    TermFocus(term::TermFocus),
+    TermMouse(term::TermMouse),
+    TermResize(term::TermResize),
+    TermScroll(term::TermScroll),
+    TermFetch(term::TermFetch),
+    TermSearch(term::TermSearch),
+    TermTextRange(term::TermTextRange),
+    TermClose(term::TermClose),
+    TermList(Empty),
+    TermSessionEnd(Empty),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -338,6 +354,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(records::methods());
     v.extend(work::methods());
     v.extend(view::methods());
+    v.extend(term::methods());
     v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(runners::methods());

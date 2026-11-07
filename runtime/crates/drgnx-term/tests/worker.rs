@@ -491,3 +491,72 @@ fn wide_cell_adds_stop() {
         (row.key.as_str(), 3)
     );
 }
+
+#[test]
+fn scroll_by_prompts_rows_and_to_the_bottom() {
+    let mut w = worker(20, 3, 100);
+    let mut m = Model::default();
+    let mut now = 0;
+    // three prompts (OSC 133 A), each followed by a command's output
+    for p in ["one", "two", "three"] {
+        // the shell waits at its prompt: the frame sees the cursor on the prompt's row
+        w.output(format!("\x1b]133;A\x07$ {p}").as_bytes(), now);
+        now += 20;
+        draw(&mut w, &mut m, now);
+        w.output(b"\r\nout\r\nout\r\n", now);
+        now += 20;
+        draw(&mut w, &mut m, now);
+    }
+    // the backfill completes the window
+    for _ in 0..5 {
+        now += 500;
+        draw(&mut w, &mut m, now);
+    }
+    let key_of = |m: &Model, text: &str| {
+        m.rows
+            .iter()
+            .find(|r| r.text == text)
+            .map(|r| r.key.clone())
+    };
+    let bottom = w.scroll(None, None, None, Some("bottom"));
+    assert_eq!(
+        bottom,
+        m.rows.last().map(|r| r.key.clone()),
+        "the cursor's row"
+    );
+    assert_eq!(w.scroll(None, None, Some(-1), None), key_of(&m, "$ three"));
+    assert_eq!(w.scroll(None, None, Some(-3), None), key_of(&m, "$ one"));
+    assert_eq!(
+        w.scroll(None, None, Some(-4), None),
+        None,
+        "no fourth prompt"
+    );
+    let one = key_of(&m, "$ one");
+    assert_eq!(
+        w.scroll(one.as_deref(), None, Some(1), None),
+        key_of(&m, "$ two")
+    );
+    assert_eq!(
+        w.scroll(one.as_deref(), Some(-5), None, None),
+        m.rows.first().map(|r| r.key.clone()),
+        "clamped"
+    );
+}
+
+#[test]
+fn search_and_text_range_read_beyond_the_window() {
+    let mut w = worker(20, 3, 2);
+    let mut m = Model::default();
+    w.output(b"A1\r\nA2\r\nA3\r\nA4\r\nA5\r\nA6", 0);
+    for n in 1..5 {
+        draw(&mut w, &mut m, n * 500);
+    }
+    assert_eq!(w.text_range(None, None), "A1\nA2\nA3\nA4\nA5\nA6");
+    let a1 = w.search("A1", true);
+    assert_eq!(a1, [(None, 0, 2)], "A1 is beyond the window of 2: no key");
+    let a5 = w.search("A5", true);
+    assert!(a5[0].0.is_some(), "A5 is in the window: {a5:?}");
+    let from = a5[0].0.clone();
+    assert_eq!(w.text_range(from.as_deref(), None), "A5\nA6");
+    assert_eq!(w.search("A", false).len(), 6);
+}

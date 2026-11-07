@@ -3207,6 +3207,222 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`term/bell`.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermBell",
+        "type": "object"
+      },
+      "doc": "a terminal's program rang the bell, to its editor session's connection",
+      "name": "term/bell"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is base64.",
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "primary": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "primary",
+          "mime",
+          "data"
+        ],
+        "title": "TermClipboardWrite",
+        "type": "object"
+      },
+      "doc": "a terminal's program wrote the clipboard (OSC 52; only when clipboard-write allows), to its editor session's connection",
+      "name": "term/clipboard-write"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/cwd`: the shell's working directory (OSC 7), as the URL or path it sent.",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "cwd"
+        ],
+        "title": "TermCwd",
+        "type": "object"
+      },
+      "doc": "a terminal's shell reported its working directory (OSC 7), to its editor session's connection",
+      "name": "term/cwd"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/exit`: the terminal's program ended, with its exit code or the signal that ended it (both none: its worker\nwent away without saying).",
+        "properties": {
+          "code": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "signal": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermExit",
+        "type": "object"
+      },
+      "doc": "a terminal's program ended (its code, or the signal), to the connection of the editor session that opened it; the terminal is gone",
+      "name": "term/exit"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/notify`: a desktop notification the program asked for (OSC 9, 777).",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "body"
+        ],
+        "title": "TermNotify",
+        "type": "object"
+      },
+      "doc": "a terminal's program asked for a notification (OSC 9, 777), to its editor session's connection",
+      "name": "term/notify"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/progress`: OSC 9;4, STATE 0 none, 1 set, 2 error, 3 indeterminate, 4 paused; VALUE 0–100 (-1: none).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "value": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "value"
+        ],
+        "title": "TermProgress",
+        "type": "object"
+      },
+      "doc": "a terminal's program reported progress (OSC 9;4), to its editor session's connection",
+      "name": "term/progress"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/prompt`: a shell integration mark (OSC 133): KIND 1 prompt, 2 input, 3 output (a program runs), 4 the command\nended with EXIT.",
+        "properties": {
+          "exit": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "TermPrompt",
+        "type": "object"
+      },
+      "doc": "a terminal's shell sent an OSC 133 mark (prompt, input, output, command end with its status), to its editor session's connection",
+      "name": "term/prompt"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`term/title`: the program set the title (OSC 0/2).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "title": "TermTitle",
+        "type": "object"
+      },
+      "doc": "a terminal's program set its title, to its editor session's connection",
+      "name": "term/title"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "`view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each.",
         "properties": {
           "ask": {
@@ -28308,6 +28524,817 @@
         "title": "AnyValue"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end a terminal's program (SIGHUP, or the signal given): term/exit follows; false for no such terminal",
+      "name": "term/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/close`: end the terminal's program (SIGHUP, or SIGNAL); `term/exit` follows.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "signal": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a terminal's live settings, [name, value] each: scrollback-lines (the buffer's window, trimmed or backfilled at once), scrollback-bytes, clipboard-write",
+      "name": "term/config",
+      "params": {
+        "$defs": {
+          "SettingValue": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "A setting's value: a number, a flag or a string."
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/config`: live settings, `[name, value]` each (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`).",
+        "properties": {
+          "config": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/SettingValue"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "config"
+        ],
+        "title": "TermConfig",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the next rows above the screen the buffer lacks, now, as a view-patch even while another waits for its view/ack: that patch's version, none when nothing is missing",
+      "name": "term/fetch",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/fetch`: the next rows above the screen the buffer lacks, now (above BEFORE_KEY when given; at most MAX_BYTES\nof rows, 40 kB by default), as a `view-patch` that goes even while another is unacknowledged. Answered with that\npatch's version (none: nothing is missing).",
+        "properties": {
+          "before_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_bytes": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermFetch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/fetch`'s answer.",
+        "properties": {
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "TermFetched",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the terminal's window gained or lost focus: reported to the program when it asked (mode 1004)",
+      "name": "term/focus",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/focus`: the terminal's window gained (IN) or lost focus.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "in": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "in"
+        ],
+        "title": "TermFocus",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a key press, encoded by the worker from the terminal's modes (kitty keyboard, modifyOtherKeys, DECCKM); its echo is drawn at once",
+      "name": "term/key",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/key`: a key press, encoded by the worker from the terminal's modes. KEY is its name (`a`, `return`, `f5`),\nMODS its modifiers (`ctrl`, `shift`, `alt`, `super`), TEXT what it types, UNSHIFTED the codepoint without shift.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "mods": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unshifted": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "key"
+        ],
+        "title": "TermKey",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "every terminal: its worker's pid, whether a program runs in it (no answer within 200 ms counts as running), its cwd and title, and whether it is from before an update",
+      "name": "term/list",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "TermStatus": {
+            "description": "One terminal in `term/list`: whether a program runs in it (a worker that does not answer within 200 ms counts as\nrunning), and OLD for one from before an update (only `term/close` reaches it).",
+            "properties": {
+              "cwd": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "old": {
+                "type": "boolean"
+              },
+              "pid": {
+                "format": "int32",
+                "type": "integer"
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "pid",
+              "running",
+              "cwd",
+              "title",
+              "old"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "items": {
+          "$ref": "#/$defs/TermStatus"
+        },
+        "title": "Array_of_TermStatus",
+        "type": "array"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a mouse press, release or motion at a cell: sent to the program only while it tracks the mouse",
+      "name": "term/mouse",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/mouse`: KIND `press`, `release` or `motion`, BUTTON 1–11 (0: none), the cell (0-based); sent to the\nprogram only while it tracks the mouse.",
+        "properties": {
+          "button": {
+            "default": 0,
+            "format": "int32",
+            "type": "integer"
+          },
+          "col": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "mods": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "row": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "col",
+          "row"
+        ],
+        "title": "TermMouse",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open a terminal: its worker runs the command (else the shell) on a PTY and draws the view term:<id>, a reset first; its events go to this editor session",
+      "name": "term/open",
+      "params": {
+        "$defs": {
+          "SettingValue": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "format": "int64",
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "A setting's value: a number, a flag or a string."
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/open`: a terminal running COMMAND (none: `SHELL` from ENV, else `/bin/sh`) in DIR with exactly ENV, of COLS\n× ROWS cells of CELL_PX, for display class CLASS. CONFIG are its first settings, as `term/config`'s. Answered with\nits id and its view (`term:<id>`); the first patch is a reset.",
+        "properties": {
+          "cell_px": {
+            "default": [
+              0,
+              0
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "class": {
+            "type": "string"
+          },
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "config": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/$defs/SettingValue"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "env": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window": {
+            "description": "The rows above the screen the buffer keeps (`drgnx-term-scrollback-lines`).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "dir",
+          "cols",
+          "rows",
+          "class"
+        ],
+        "title": "TermOpen",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/open`'s answer.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "view"
+        ],
+        "title": "TermOpened",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "pasted text, bracketed when the program asked (mode 2004)",
+      "name": "term/paste",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/text` (input method text, sent as is) and `term/paste` (bracketed when the program asked).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "TermText",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the terminal's size in cells and its cell in px: the lines rewrap and the next view-patch is a reset",
+      "name": "term/resize",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/resize`: the window's size in cells and the cell in px; the lines rewrap, so the next patch is a reset.",
+        "properties": {
+          "cell_px": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "cols": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "rows": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "cols",
+          "rows",
+          "cell_px"
+        ],
+        "title": "TermResize",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the row to scroll to: the bottom, some rows from a row, or some shell prompts from it (OSC 133); its key, none when there is no such row",
+      "name": "term/scroll",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/scroll`: where to scroll: TO `bottom` (the cursor's row), DELTA rows from FROM (a row key; none: the\ncursor's row), or PROMPT_DELTA shell prompts from it (OSC 133 marks). Answered with the row's key (none: no such\nrow).",
+        "properties": {
+          "delta": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "from": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "prompt_delta": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermScroll",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/scroll`'s answer.",
+        "properties": {
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "TermRowKey",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a string in every row the terminal holds, above the buffer's window too: [key, col, len] per match, newest first (dir up) or oldest first (down)",
+      "name": "term/search",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/search`: QUERY in every row the terminal holds, the buffer's and above it; DIR `up` (newest first, the\ndefault) or `down`.",
+        "properties": {
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "query"
+        ],
+        "title": "TermSearch",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/search`'s answer: `[key, col, len]` per match, in characters; a row the buffer does not hold has no key.",
+        "properties": {
+          "matches": {
+            "items": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "matches"
+        ],
+        "title": "TermMatches",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor exits cleanly: every terminal of the session this connection's hello named ends now, without the 60 s grace; how many",
+      "name": "term/session-end",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "Params of a method that takes none: any keys are dropped (and listed in `ignored`).",
+        "title": "Empty",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "format": "uint32",
+        "minimum": 0,
+        "title": "uint32",
+        "type": "integer"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "text from an input method, sent to the program as it is",
+      "name": "term/text",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/text` (input method text, sent as is) and `term/paste` (bracketed when the program asked).",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "title": "TermText",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the text of the rows from one key to another, one line per row; with no first key from the oldest row the terminal holds, beyond the buffer's window",
+      "name": "term/text-range",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/text-range`: the text from row FROM_KEY to row TO_KEY (none: the oldest row the terminal holds, beyond the\nbuffer's window; the last row with text), one line per row.",
+        "properties": {
+          "from_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "to_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "TermTextRange",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`term/text-range`'s answer.",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TermTextAnswer",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [

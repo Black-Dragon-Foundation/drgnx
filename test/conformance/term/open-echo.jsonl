@@ -1,0 +1,11 @@
+{"scenario": "term/open-echo", "requires": ["v1", "linux"], "doc": "term/open starts the shell on a PTY and draws its view, a reset first; typed text reaches the shell and its output the terminal."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh"], "env": [["PATH", "/usr/bin:/bin"], ["PS1", "$ "]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "term/text", "params": {"id": "$t", "text": "echo `expr 40 + 2`x\r"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/search", "params": {"id": "$t", "query": "42x"}}, "expect": {"id": 4, "result": {"matches": [["$any", 0, 3]]}}, "within_ms": 10000}

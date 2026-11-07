@@ -1,0 +1,23 @@
+{"scenario": "term/config-scrollback-live", "requires": ["v1", "linux"], "doc": "term/config scrollback-lines applies at once: raised, the rows above the screen the window now has room for are backfilled; lowered, the window's oldest rows are removed."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "seq 1 30; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1", "window": 0}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "30"}}, "expect": {"id": 3, "result": {"matches": [["$any", 0, 2]]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "view/resync", "params": {"view": "$tv", "class": "gui-1", "version": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "version": "$capture:v2", "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "view/ack", "params": {"view": "$tv", "class": "gui-1", "version": "$v2"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
+{"do": "count_events", "conn": "e", "for_ms": 300, "none": ["view-patch"]}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "term/config", "params": {"id": "$t", "config": [["scrollback-lines", 10]]}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": "$v2", "version": "$capture:v3", "ops": [{"insert": {"rows": {"$contains": [{"text": "25"}]}}}]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "view/ack", "params": {"view": "$tv", "class": "gui-1", "version": "$v3"}}}
+{"do": "expect", "conn": "e", "json": {"id": 7, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 8, "method": "term/config", "params": {"id": "$t", "config": [["scrollback-lines", 2]]}}}
+{"do": "expect", "conn": "e", "json": {"id": 8, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": "$v3", "ops": {"$contains": [{"remove": "$any"}]}}}, "within_ms": 10000}

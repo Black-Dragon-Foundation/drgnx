@@ -49,6 +49,11 @@ required-features = ["fleet"]
 name = "fleet_keys"
 required-features = ["fleet"]
 
+# a terminal's worker outlives its hub's unit under KillMode=mixed (a fake runner's systemd)
+[[test]]
+name = "term_scope"
+required-features = ["fleet"]
+
 # the link drills (test/runners/drills.sh): the link broken mid-job, the hub restarted, the runner's guards
 [[test]]
 name = "fleet_drills"

@@ -117,6 +117,49 @@ typed**, only counts; a malformed message from the hub is logged by its position
 clock (frames, flood and backfill, the in-flight patch, mode 2026, row keys through scrolls, resizes and eviction, the
 kitty, DECCKM, paste and mouse encodings, styles and wide cells); `tests/logging.rs` checks the log.
 
+## The hub's methods
+
+The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`, routed by
+`drgnx-ratatoskr/src/term/methods.rs`); ids are values, never object keys.
+
+| Method | Params | Answer |
+|---|---|---|
+| `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?` | `{id, view}`; the view is `term:<id>` and its first patch a reset |
+| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`) | `true` |
+| `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?` | `true` |
+| `term/text`, `term/paste` | `id`, `text` | `true` |
+| `term/focus` | `id`, `in` | `true` |
+| `term/mouse` | `id`, `kind`, `button`, `col`, `row`, `mods` | `true` |
+| `term/resize` | `id`, `cols`, `rows`, `cell_px` | `true`; the next patch is a reset |
+| `term/scroll` | `id`, `to: "bottom"`, or `delta` / `prompt_delta` from `from` (a row key; default the cursor's row) | `{key}` of the row to show, or none |
+| `term/fetch` | `id`, `before_key?`, `max_bytes?` | `{version}` of the backfill patch sent now (none: nothing missing) |
+| `term/search` | `id`, `query`, `dir?` (`up`, `down`) | `{matches: [[key, col, len]…]}`; no key for a row the buffer lacks |
+| `term/text-range` | `id`, `from_key?`, `to_key?` | `{text}`; with no `from_key` from the oldest row the engine holds |
+| `term/close` | `id`, `signal?` | `true`, then `term/exit` |
+| `term/list` | | `[{id, pid, running, cwd, title, old}…]`; 200 ms per worker, a silent one counts as running |
+| `term/session-end` | | how many terminals of this connection's session were closed (a clean Emacs exit) |
+
+**Events**, to the connection of the editor session that opened the terminal: `term/exit {id, code, signal}`,
+`term/title`, `term/cwd`, `term/bell`, `term/notify`, `term/progress`, `term/clipboard-write` and `term/prompt` (the OSC
+133 marks, for notify-on-command-finish). The view's `view/env`, `view/ack` and `view/resync` go to the worker.
+
+Where this differs from the design's sketch: the view id is the hub's (`term:<id>`, so an adopted terminal keeps
+it), `class` names the display class its patches are for, `term/scroll` takes the row it counts from (the editor owns
+its window's position), `term/fetch` answers with the version of the patch it sent (the rows themselves come as a
+`view-patch`, in order with the others), and `term/session-end` is the clean-exit door. The engine keeps at least
+10,000 lines whatever the window (`scrollback-bytes` is the ceiling), so search and copy reach above the window.
+
+**Tests:** `domr --only 'term/*'` (`test/conformance/term/`: open and echo, resize, fetch, search, text-range, live
+scrollback, list, close, exit), `runstav`'s `term_protocol_uses_no_ids_as_object_keys`, the worker's
+`scroll_by_prompts_rows_and_to_the_bottom` and `search_and_text_range_read_beyond_the_window`, and the systemd row
+`tests/term_scope.rs` (`worker_survives_hub_restart_under_kill_mode_mixed`) in a fake runner:
+
+```
+cargo test -p drgnx-ratatoskr --features fleet --test term_scope --no-run && cargo build -p drgnx-term
+test/runners/fleet.sh up --runners 1
+test/runners/fleet.sh host <the term_scope binary> worker_survives_hub_restart_under_kill_mode_mixed
+```
+
 ## Lifetime
 
 A terminal's worker outlives the hub that started it (`runtime/crates/drgnx-ratatoskr/src/term/`, the worker's

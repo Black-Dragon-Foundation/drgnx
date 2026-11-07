@@ -169,13 +169,13 @@ host_tests() {
   local bin=$1 rc=0 c; shift
   cp "$bin" "$STATE/share/runner_host"
   local b
-  for b in sleipnir drgnx-key; do
+  for b in sleipnir drgnx-key drgnx-term; do
     [ ! -x "$(dirname "$bin")/../$b" ] || cp "$(dirname "$bin")/../$b" "$STATE/share/$b"
   done
   for c in $(mine | grep -- '-r[0-9]*$'); do
     echo "== $c"
     podman exec -i "$c" runuser -u runner -- env XDG_RUNTIME_DIR=/run/user/1000 \
-      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus SLEIPNIR_TEST_BIN=/fleet/share/sleipnir \
+      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus SLEIPNIR_TEST_BIN=/fleet/share/sleipnir DRGNX_TERM_BIN=/fleet/share/drgnx-term \
       /fleet/share/runner_host --ignored --test-threads=1 "$@" || rc=1
   done
   return $rc

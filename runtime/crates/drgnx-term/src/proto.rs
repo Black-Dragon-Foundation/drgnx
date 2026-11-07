@@ -75,6 +75,46 @@ pub enum In {
     Status {
         req: u64,
     },
+    /// Where the editor should scroll, answered by `answer` `{key}`: TO `bottom` (the cursor's row), DELTA rows from
+    /// FROM (a row key; none: the cursor's row), or PROMPT_DELTA shell prompts from it (OSC 133 A marks).
+    Scroll {
+        req: u64,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        delta: Option<i64>,
+        #[serde(default)]
+        prompt_delta: Option<i64>,
+        #[serde(default)]
+        to: Option<String>,
+    },
+    /// Send the next backfill chunk now (at most MAX_BYTES, above BEFORE_KEY when given), even with a patch in
+    /// flight: answered by `answer` `{version}` (none: nothing above is missing).
+    Fetch {
+        req: u64,
+        #[serde(default)]
+        before_key: Option<String>,
+        #[serde(default)]
+        max_bytes: Option<usize>,
+    },
+    /// QUERY in every row the engine holds, the window's and above it: answered by `answer` `{matches: [[key, col,
+    /// len]…]}`, newest first for DIR `up` (the default), oldest first for `down`; a row the editor does not hold has no
+    /// key.
+    Search {
+        req: u64,
+        query: String,
+        #[serde(default)]
+        dir: Option<String>,
+    },
+    /// The text from row FROM_KEY to row TO_KEY (none: the oldest row the engine holds, the last row): answered by
+    /// `answer` `{text}`.
+    TextRange {
+        req: u64,
+        #[serde(default)]
+        from_key: Option<String>,
+        #[serde(default)]
+        to_key: Option<String>,
+    },
     /// End the program (SIGHUP, or SIGNAL).
     Close {
         #[serde(default)]
@@ -126,6 +166,11 @@ pub enum Out {
         cwd: String,
         title: String,
         shell_pid: u32,
+    },
+    /// The answer to `scroll`, `fetch`, `search` or `text-range` with the same REQ.
+    Answer {
+        req: u64,
+        result: serde_json::Value,
     },
     /// The program ended: its exit code, or the signal that ended it.
     Exit {

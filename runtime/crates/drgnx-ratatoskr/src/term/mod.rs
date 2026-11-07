@@ -8,6 +8,7 @@
 
 pub mod adopt;
 pub mod life;
+pub mod methods;
 #[cfg(test)]
 mod tests;
 
@@ -51,6 +52,8 @@ pub struct Spawn {
     /// The editor's display class (`gui`, `tty`).
     pub class: String,
     pub limits: Limits,
+    /// The first settings, as `term/config`'s.
+    pub config: Vec<(String, Value)>,
 }
 
 /// What `term/list` tells of a terminal.
@@ -266,6 +269,9 @@ impl Terms {
             lock(&self.inner.state).sessions.insert(conn, sess.clone());
         }
         self.serve(rec.clone(), r, w, Some(conn), hello.old());
+        if !s.config.is_empty() {
+            self.send(&id, &In::Config { config: s.config });
+        }
         self.attach(&id);
         Ok(rec)
     }
@@ -352,7 +358,7 @@ impl Terms {
                 json!({"primary": primary, "mime": mime, "data": data}),
             ),
             Out::Prompt { kind, exit } => ev("term/prompt", json!({"kind": kind, "exit": exit})),
-            Out::Status { req, .. } => {
+            Out::Status { req, .. } | Out::Answer { req, .. } => {
                 if let Some(w) = lock(&self.inner.state).waiting.remove(&req) {
                     let _ = w.send(out);
                 }
@@ -503,16 +509,18 @@ impl Terms {
     }
 
     /// End every terminal of editor session SESSION now (a clean exit, or the grace ran out).
-    pub fn end_session(&self, session: &str) {
+    pub fn end_session(&self, session: &str) -> u32 {
         let ids: Vec<String> = lock(&self.inner.state)
             .terms
             .iter()
             .filter(|(_, t)| t.rec.session.as_deref() == Some(session))
             .map(|(id, _)| id.clone())
             .collect();
+        let mut n = 0;
         for id in ids {
-            self.send(&id, &In::Close { signal: None });
+            n += u32::from(self.send(&id, &In::Close { signal: None }));
         }
+        n
     }
 
     async fn watch_sessions(weak: Weak<Inner>) {
@@ -579,6 +587,44 @@ impl Terms {
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
+    }
+
+    /// Ask worker ID (MAKE builds the message from the request number) and wait for its answer within DEADLINE.
+    pub async fn ask(
+        &self,
+        id: &str,
+        make: impl FnOnce(u64) -> In,
+        deadline: Duration,
+    ) -> Result<Out, String> {
+        let (req, rx) = {
+            let mut st = lock(&self.inner.state);
+            if !st.terms.contains_key(id) {
+                return Err(format!("no terminal {id}"));
+            }
+            st.next_req += 1;
+            let req = st.next_req;
+            let (tx, rx) = oneshot::channel();
+            st.waiting.insert(req, tx);
+            (req, rx)
+        };
+        if !self.send(id, &make(req)) {
+            lock(&self.inner.state).waiting.remove(&req);
+            return Err(format!(
+                "terminal {id} takes nothing but close (from before an update)"
+            ));
+        }
+        match crate::clock::timeout(deadline, rx).await {
+            Ok(Ok(out)) => Ok(out),
+            _ => {
+                lock(&self.inner.state).waiting.remove(&req);
+                Err(format!("terminal {id} did not answer"))
+            }
+        }
+    }
+
+    /// The editor session connection CONN said hello as.
+    pub fn session_of(&self, conn: u64) -> Option<String> {
+        lock(&self.inner.state).sessions.get(&conn).cloned()
     }
 
     /// The record of terminal ID.
