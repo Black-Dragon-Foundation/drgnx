@@ -12,8 +12,10 @@
 mod builder;
 pub mod fit;
 pub mod fit_tty;
+pub mod image;
 mod patch;
 mod row;
+pub mod svg;
 
 pub use builder::RowBuilder;
 pub use patch::{Op, Patch, diff};

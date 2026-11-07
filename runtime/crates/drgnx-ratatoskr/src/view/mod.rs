@@ -17,13 +17,14 @@ pub mod fonts;
 mod tests;
 
 use drgnx_rows::fit::FontSet;
+use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row};
 use runstav::methods::view::{
     ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewResync,
 };
 use runstav::wire::Error;
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::dispatch::Caller;
@@ -37,7 +38,7 @@ struct Pair {
     env: ViewEnv,
     version: u64,
     rows: Vec<Row>,
-    sent_images: BTreeSet<ImageId>,
+    images: ImageSet,
     reset_due: bool,
 }
 
@@ -76,7 +77,7 @@ impl Store {
                         env,
                         version: 0,
                         rows: Vec::new(),
-                        sent_images: BTreeSet::new(),
+                        images: ImageSet::default(),
                         reset_due: true,
                     },
                 );
@@ -130,20 +131,12 @@ impl Store {
     ) -> Patch {
         let reset = matches!(ops.as_slice(), [Op::Reset(_)]);
         if reset {
-            p.sent_images.clear();
             p.reset_due = false;
         }
-        let named: BTreeSet<ImageId> = p
-            .rows
-            .iter()
-            .flat_map(|r| r.images.iter().map(|i| i.1))
-            .collect();
-        let new: Vec<(ImageId, String)> = images
-            .iter()
-            .filter(|(id, _)| named.contains(id) && !p.sent_images.contains(id))
-            .cloned()
-            .collect();
-        p.sent_images.extend(new.iter().map(|i| i.0));
+        for (id, svg) in images {
+            p.images.put(*id, svg);
+        }
+        let new = p.images.for_patch(&p.rows, reset);
         let base = p.version;
         p.version += 1;
         Patch {

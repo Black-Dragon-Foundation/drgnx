@@ -2075,6 +2075,12 @@ All of it is in memory only.
 - **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
   other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
+  literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
+  callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
+  colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
+  never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
+  carries.
 
 ### Fitting: text to a pixel width
 
