@@ -1411,7 +1411,7 @@ mod net {
         let mut d = Drill::new("netl", "r1", "dedicated");
         d.link().await;
         let script = format!(
-            "{NET_PROBE}probe {UNLISTED}; probe {LISTED}; echo \"ifaces $(ls /sys/class/net | tr '\\n' ' ')\"; \
+            "{NET_PROBE}probe {UNLISTED}; probe {LISTED}; echo \"ifaces $(sed -n '3,$s/:.*//p' /proc/net/dev | tr -d ' ' | tr '\\n' ' ')\"; \
              if (exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null; then echo direct open; else echo direct refused; fi"
         );
         let (_, log) = run_parked(&mut d, "xnetl", &script).await;
