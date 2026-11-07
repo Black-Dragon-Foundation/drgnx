@@ -541,6 +541,22 @@ under its own name; the sha256 check is the same for both sources. Whoever bumps
 (already fetched and checked) with `gh release upload test-packages NAME.tar --repo Black-Dragon-Foundation/drgnx`
 (`gh release create test-packages` the first time) in the same change; old tarballs stay. A cache hit needs neither.
 
+**sccache.** The `runtime/target` entries are all-or-nothing: a job restores its own newest entry, and a job with none
+(a new toolchain, a new branch whose base has no entry, an entry evicted from the repository's 10 GB) compiles every
+dependency from scratch. On the PR run of 2026-11-06 only `linux` and `macos` restored one (both PR-scoped entries, since
+`main` held none of them: the 4.8 GB macOS entry and the other PR entries fill most of the 10 GB, so older ones go);
+`msrv`, `android`, both `escape-host` runners and `agent-containers` missed and rebuilt everything (2-3 minutes of
+`cargo build` each, 6-8 for the test builds). Those jobs now also run rustc through
+[sccache](https://github.com/mozilla/sccache) (`.github/actions/sccache`, the `mozilla-actions/sccache-action` pinned by
+SHA, GitHub's cache service as its store; `build-test-bins` does the same inline). sccache keys every rustc call by the
+compiler, its flags and the source hashes, so a dependency compiled by any job with the same toolchain, target and
+flags is a hit, whatever the branch's target entry. The two layers stack: a restored target makes cargo skip rustc
+(sccache never sees it); sccache serves what cargo does rebuild. Scope is the same as `actions/cache`: `main`'s runs write
+what pull requests read. A fork's pull request (no cache token) runs without it, and a cache service error never fails a
+build (`SCCACHE_IGNORE_SERVER_IO_ERROR`). Needs `CARGO_INCREMENTAL=0` (set in every workflow). Not covered: the Rust
+built inside container images (`agent-containers`' podman builds) and the fuzz jobs' cargo-fuzz run. The step summary
+of the sccache action prints the hit statistics; read them after the first run on `main`.
+
 | What | Key | Saves | Bust it |
 |---|---|---|---|
 | the prebuilt images (`Test images`, GHCR; the GUI one also holds the pinned child-frame packages, checked out at pinned upstream commits at build, so the tier fetches none) | tag = `test/container/image-tag.sh`: the Containerfile and every file it copies (and `f45` for the test images); pulled by digest | an install of Emacs and the GUI/terminal stack into Fedora per job: about 1.5–2 min; the Rust job's dnf installs and Nidhogg; the escape legs' bubblewrap build | change an input, or run `Test images` by hand (the weekly run refreshes every tag with Fedora's and Ubuntu's updates) |

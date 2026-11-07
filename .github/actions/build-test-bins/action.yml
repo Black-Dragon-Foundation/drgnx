@@ -48,6 +48,18 @@ runs:
       shell: bash
       working-directory: ${{ inputs.dir }}
       run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
+    # sccache (GitHub's cache as its store) for what the target cache above lacks; inline, not .github/actions/sccache:
+    # a composite action cannot name a sibling by a path that depends on `dir` (Nidhogg's calls check drgnx out elsewhere)
+    - if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.11
+    - if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      shell: bash
+      run: |
+        {
+          echo "RUSTC_WRAPPER=sccache"
+          echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
+        } >> "$GITHUB_ENV"
     - name: Ratatoskr (test hooks), ratatoskr-mock, huginn's dump example
       id: build
       shell: bash
