@@ -17,6 +17,7 @@
 pub mod before_tool_tool;
 pub mod config;
 pub mod deliver;
+pub mod explain;
 pub mod handoff;
 pub mod identity;
 pub mod launch;

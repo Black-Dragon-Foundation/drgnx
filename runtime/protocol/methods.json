@@ -3852,6 +3852,53 @@
       "classes": [
         "user"
       ],
+      "doc": "the user switches a session's mode or model (`option` mode|model): a mode only to one on the provider's lock allow-list, else refused with the reason; the agent is asked by `session/set_config_option`, falling back to `session/set_mode` / `session/set_model` when it lacks the method",
+      "name": "agents/config",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "The user's switch of a session's mode or model.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "option": {
+            "description": "`mode` or `model`.",
+            "maxLength": 32,
+            "type": "string"
+          },
+          "value": {
+            "description": "The mode id or model id; a mode must be on the provider's lock allow-list.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "option",
+          "value"
+        ],
+        "title": "ConfigParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the agent drops an item of its context (`_drgnx/context/drop`, 10 s); an agent without the `drop` feature: invalid-params",
       "name": "agents/context-drop",
       "params": {
@@ -4110,6 +4157,104 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the facts behind a chip (context, cost, mode, model, waiting, mcp): facts only, from the hub's own state and the adapter's last report",
+      "name": "agents/explain",
+      "params": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "id",
+          "item"
+        ],
+        "title": "ExplainParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ExplainItem": {
+            "description": "What `agents/explain` explains: a chip of the agent panel.",
+            "enum": [
+              "context",
+              "cost",
+              "mode",
+              "model",
+              "waiting",
+              "mcp"
+            ],
+            "type": "string"
+          },
+          "Fact": {
+            "additionalProperties": false,
+            "description": "One fact behind a chip: a name and what it is, in words.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The facts behind a chip, as the hub knows them (nothing is guessed; an unknown value is not listed).",
+        "properties": {
+          "facts": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Fact"
+            },
+            "type": "array"
+          },
+          "item": {
+            "$ref": "#/$defs/ExplainItem"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "Explained",
+        "type": "object"
       },
       "writes": false
     },

@@ -117,6 +117,8 @@ pub async fn serve(
         Params::AgentsPause(p) => answer(agents::session::pause(f, c, p)),
         Params::AgentsContextDrop(p) => answer(agents::session::panel::context_drop(f, c, p).await),
         Params::AgentsContextPin(p) => answer(agents::session::panel::context_pin(f, c, p).await),
+        Params::AgentsConfig(p) => answer(agents::session::panel::config(f, c, p).await),
+        Params::AgentsExplain(p) => answer(agents::session::panel::explain(f, c, p).await),
         Params::AgentsCompactPreview(p) => {
             answer(agents::session::panel::compact_preview(f, c, p).await)
         }

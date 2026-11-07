@@ -20,7 +20,8 @@ use crate::front::Front;
 use hermod::Responder;
 use runstav::jsonrpc;
 use runstav::methods::agents::{
-    ById, CompactPreview, Context, ContextDropParams, ContextPinParams, Panel as Shown,
+    ById, CompactPreview, ConfigParams, Context, ContextDropParams, ContextPinParams,
+    ExplainParams, Explained, Panel as Shown,
 };
 use runstav::wire::Error;
 use serde::Deserialize;
@@ -372,6 +373,65 @@ pub async fn compact_preview(f: &Front, _: &Caller, p: ById) -> Result<CompactPr
         internal(format!(
             "the agent's compaction preview does not fit its schema: {e}"
         ))
+    })
+}
+
+/// `agents/config`: a mode only inside the provider's lock ([`crate::agents::config::check`]), a model within the
+/// profile; the agent is asked by `session/set_config_option`, with the older methods as the fallback.
+pub async fn config(f: &Front, _: &Caller, p: ConfigParams) -> Result<bool, Error> {
+    use crate::agents::config;
+    let s = f.core.agents.find(p.id.as_str())?;
+    config::check(s.locked_as, &p.option.0, &p.value.0).map_err(|why| refuse(&why))?;
+    match config::apply(&s.conn, &s.acp, &p.option.0, &p.value.0).await {
+        Ok(()) => Ok(true),
+        Err(hermod::Error::Rpc { message, .. }) => Err(refuse(&format!(
+            "the agent refused {} `{}`: «{message}»",
+            p.option.0, p.value.0
+        ))),
+        Err(e) => Err(internal(format!("switching the {}: {e}", p.option.0))),
+    }
+}
+
+/// `agents/explain`: the facts behind a chip, from the session's state and the adapter's last report.
+pub async fn explain(f: &Front, _: &Caller, p: ExplainParams) -> Result<Explained, Error> {
+    use crate::agents::explain::{Inputs, explain};
+    let s = f.core.agents.find(p.id.as_str())?;
+    let profile = super::find_profile(f, &s.profile);
+    let snap = s.snapshot();
+    let inputs = Inputs {
+        role: serde_json::to_value(s.role)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+        agent: s.profile.clone(),
+        provider: s.locked_as,
+        enforced: s.enforced,
+        enforced_why: s.enforced_why.clone(),
+        mode: s.conn.reported_mode(&s.acp),
+        usage: snap.usage,
+        context: snap.panel.and_then(|p| p.context),
+        model: profile.as_ref().and_then(|p| p.model.clone()),
+        ai: profile.and_then(|p| p.ai),
+        status: serde_json::to_value(snap.status)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default(),
+        waiting_on: snap.waiting_on.filter(|w| !w.is_empty()),
+        pending: snap
+            .permissions
+            .iter()
+            .filter_map(|x| x.title.clone())
+            .collect(),
+        turns: snap.turns.unwrap_or(0),
+        tokens: lock(&s.state).tokens,
+        mcp: s
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.get("mcpCapabilities").cloned()),
+    };
+    Ok(Explained {
+        item: p.item,
+        facts: explain(p.item, &inputs),
     })
 }
 
