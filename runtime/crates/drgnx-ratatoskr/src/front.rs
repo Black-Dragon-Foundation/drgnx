@@ -357,6 +357,7 @@ impl Front {
             registrations: None,
             settings: Some(self.settings.current().status()),
             recording: crate::recording::status(),
+            watch: Some(self.search.watch_status()),
         }
     }
 

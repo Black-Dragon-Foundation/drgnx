@@ -429,6 +429,7 @@ fn project_spec(f: &Fixture, embedders: Vec<Arc<WorkerEmbedder>>, power: &Path) 
             .map(|e| e as Arc<dyn DocEmbedder>)
             .collect(),
         power_root: power.to_path_buf(),
+        base: None,
         test_permits: None,
     }
 }
@@ -541,6 +542,7 @@ async fn denied_root_refused_and_canary_never_embedded() {
         config: hrafn::Config::default(),
         embedders: vec![],
         power_root: PathBuf::from("/nonexistent"),
+        base: None,
         test_permits: None,
     };
     match Project::open(spec_for(inside.clone())).await {
@@ -752,4 +754,349 @@ async fn query_on_battery_uses_the_cpu() {
     assert_eq!(facts.device_arg.as_deref(), Some("cpu"), "{facts:?}");
     assert_eq!(facts.ready.unwrap()["device"], "cpu");
     assert_eq!(facts.spawns, 1);
+}
+
+// ---- worktree overlays in the hub (H16 overlay design §6, O6) ----
+
+/// A project of three Lisp files, its base built, and N linked worktrees `wt-0`… on branches `b0`….
+async fn with_trees(n: usize) -> (Fixture, Project, Vec<PathBuf>) {
+    let f = fixture(&lisp_files(3));
+    let trees: Vec<PathBuf> = (0..n)
+        .map(|i| {
+            let wt = f.home.path().join(format!("src/wt-{i}"));
+            git(
+                &f.root,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &format!("b{i}"),
+                    wt.to_str().unwrap(),
+                ],
+            );
+            wt
+        })
+        .collect();
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    p.refresh_now().await.unwrap();
+    (f, p, trees)
+}
+
+/// The file rows of the tree KEY names.
+async fn tree_rows(p: &Project, key: &str) -> Vec<(String, Option<String>)> {
+    let key = key.to_string();
+    p.store()
+        .handle()
+        .read(move |c| {
+            let mut st = c.prepare(
+                "select f.path, f.blob from file f join tree t on t.id = f.tree where t.key = ?1 order by f.path",
+            )?;
+            Ok(st
+                .query_map([key], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<_, _>>()?)
+        })
+        .await
+        .unwrap()
+}
+
+/// The tree's line in the project's tree status.
+async fn tree_live(p: &Project, key: &str) -> drgnx_ratatoskr::search::project::TreeLive {
+    p.tree_status()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.key == key)
+        .unwrap_or_else(|| panic!("no tree {key}"))
+}
+
+/// The tree at ROOT opened and seeded: its key.
+async fn seeded(p: &Project, root: &Path) -> String {
+    let v = p.view_for(root, false).await.unwrap();
+    p.settle_trees().await;
+    v.worktree.expect("a linked worktree has a key")
+}
+
+fn edit(root: &Path, rel: &str, name: &str) {
+    std::fs::write(
+        root.join(rel),
+        format!(";;; edited\n(defun {name} () \"Edited here.\" 1)\n"),
+    )
+    .unwrap();
+}
+
+/// Pattern D. The main checkout answers from the base; a linked worktree from its own view once seeded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_for_names_the_tree() {
+    let (f, p, trees) = with_trees(1).await;
+    let v = p.view_for(&f.root, false).await.unwrap();
+    assert_eq!(v.view, hrafn::View::Base);
+    assert_eq!(v.worktree, None);
+    edit(&trees[0], "core/f1.el", "wt-only-fn");
+    let key = seeded(&p, &trees[0]).await;
+    let v = p.view_for(&trees[0], false).await.unwrap();
+    assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+}
+
+/// Pattern D. A feed subscriber that lagged past the channel's 256 versions marks the trees stale and re-diffs them:
+/// the version it missed reaches the overlay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lagged_feed_rediffs() {
+    let (_f, p, trees) = with_trees(1).await;
+    let key = seeded(&p, &trees[0]).await;
+    assert!(tree_rows(&p, &key).await.is_empty());
+    edit(&trees[0], "core/f1.el", "missed-fn");
+    let (tx, rx) = tokio::sync::broadcast::channel(256);
+    let version = |path: &str| drgnx_ratatoskr::history::FileVersion {
+        worktree: key.clone(),
+        path: path.into(),
+        blob: None,
+        op: 1,
+        class: drgnx_ratatoskr::history::Class::Text,
+    };
+    // the version of f1 is the first of 300: the subscriber never sees it
+    tx.send(version("core/f1.el")).unwrap();
+    for _ in 0..299 {
+        tx.send(version("core/f0.el")).unwrap();
+    }
+    drop(tx);
+    let checks = tree_live(&p, &key).await.checks;
+    p.feed(rx).expect("the first feed is taken").await.unwrap();
+    p.settle_trees().await;
+    let rows = tree_rows(&p, &key).await;
+    assert_eq!(
+        rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["core/f1.el"]
+    );
+    assert!(tree_live(&p, &key).await.checks > checks, "a lag re-diffs");
+}
+
+/// A watcher double: one tree besides main at a time, the next one is `ENOSPC`.
+struct OneTree {
+    trees: Mutex<Vec<String>>,
+}
+
+impl hrafn::Watch for OneTree {
+    fn events(&self) -> Receiver<hrafn::WatchEvent> {
+        channel().1
+    }
+    fn add_tree(&self, spec: hrafn::TreeSpec) -> Result<(), hrafn::AddError> {
+        let mut t = self.trees.lock().unwrap();
+        if spec.key != hrafn::MAIN_TREE && t.iter().any(|k| k != hrafn::MAIN_TREE) {
+            return Err(hrafn::AddError::NoSpace("the double's budget".into()));
+        }
+        t.push(spec.key);
+        Ok(())
+    }
+    fn remove_tree(&self, key: &str) {
+        self.trees.lock().unwrap().retain(|k| k != key);
+    }
+}
+
+/// Pattern D. On `ENOSPC` the least recently used tree is unwatched (the new one is watched), and the unwatched tree
+/// still answers right after its check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watch_budget_unwatches_lru_tree() {
+    let (_f, p, trees) = with_trees(2).await;
+    let w = Arc::new(hrafn::ProjectWatch::new(|| {
+        Ok(Arc::new(OneTree {
+            trees: Mutex::new(vec![]),
+        }) as Arc<dyn hrafn::Watch>)
+    }));
+    w.add_tree(hrafn::TreeSpec::main(p.root())).unwrap();
+    p.watch(w);
+    let a = seeded(&p, &trees[0]).await;
+    assert!(tree_live(&p, &a).await.watched);
+    let b = seeded(&p, &trees[1]).await;
+    assert!(tree_live(&p, &b).await.watched, "the new tree is watched");
+    let la = tree_live(&p, &a).await;
+    assert!(!la.watched);
+    assert_eq!(la.state, hrafn::TreeState::Unwatched);
+    edit(&trees[0], "core/f2.el", "after-unwatch-fn");
+    p.view_for(&trees[0], false).await.unwrap();
+    p.settle_trees().await;
+    assert_eq!(
+        tree_rows(&p, &a)
+            .await
+            .iter()
+            .map(|r| r.0.as_str())
+            .collect::<Vec<_>>(),
+        ["core/f2.el"]
+    );
+}
+
+/// Pattern D. A query in an unwatched tree answers at once from its rows; its check reads only the stat-dirty file,
+/// and a burst of queries within the TTL runs one check.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_check_is_stat_bound_and_ttl() {
+    let (_f, p, trees) = with_trees(1).await;
+    let key = seeded(&p, &trees[0]).await;
+    assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Unwatched);
+    let before = tree_live(&p, &key).await.checks;
+    edit(&trees[0], "core/f1.el", "dirty-fn");
+    for _ in 0..3 {
+        let v = p.view_for(&trees[0], false).await.unwrap();
+        assert!(matches!(v.view, hrafn::View::Tree(_)), "{v:?}");
+        assert_eq!(v.state, Some(hrafn::TreeState::Unwatched));
+    }
+    p.settle_trees().await;
+    let l = tree_live(&p, &key).await;
+    assert_eq!(l.checks, before + 1, "one check for the burst");
+    assert_eq!(l.last.map(|s| s.read), Some(1), "{:?}", l.last);
+    assert_eq!(tree_rows(&p, &key).await.len(), 1);
+}
+
+/// Pattern D. A 17th tree evicts the least recently used tree's rows; a tree used again is kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resident_cap_evicts_lru() {
+    use drgnx_ratatoskr::search::project::RESIDENT_CAP;
+    let (_f, p, trees) = with_trees(RESIDENT_CAP + 1).await;
+    let mut keys = Vec::new();
+    for (i, t) in trees.iter().enumerate().take(RESIDENT_CAP) {
+        edit(t, "core/f0.el", &format!("tree-{i}-fn"));
+        keys.push(seeded(&p, t).await);
+    }
+    // tree 0 is used again: tree 1 is now the least recently used
+    p.view_for(&trees[0], false).await.unwrap();
+    p.settle_trees().await;
+    let last = &trees[RESIDENT_CAP];
+    edit(last, "core/f0.el", "last-tree-fn");
+    seeded(&p, last).await;
+    let held: Vec<String> = p
+        .tree_status()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.key)
+        .collect();
+    assert_eq!(held.len(), RESIDENT_CAP);
+    assert!(!held.contains(&keys[1]), "{held:?}");
+    assert!(held.contains(&keys[0]), "{held:?}");
+    assert!(tree_rows(&p, &keys[1]).await.is_empty());
+    assert_eq!(tree_rows(&p, &keys[0]).await.len(), 1);
+}
+
+/// Pattern D. `git worktree remove` drops the tree's overlay; a locked worktree whose folder is missing keeps its rows.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removed_worktree_drops_its_overlay() {
+    let (f, p, trees) = with_trees(2).await;
+    edit(&trees[0], "core/f0.el", "gone-fn");
+    edit(&trees[1], "core/f0.el", "locked-fn");
+    let (a, b) = (seeded(&p, &trees[0]).await, seeded(&p, &trees[1]).await);
+    git(&f.root, &["worktree", "lock", trees[1].to_str().unwrap()]);
+    std::fs::rename(&trees[1], f.home.path().join("src/moved-away")).unwrap();
+    git(
+        &f.root,
+        &["worktree", "remove", "--force", trees[0].to_str().unwrap()],
+    );
+    p.sweep_trees().await.unwrap();
+    let held: Vec<String> = p
+        .tree_status()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.key)
+        .collect();
+    assert_eq!(held, [b.clone()]);
+    assert!(tree_rows(&p, &a).await.is_empty());
+    assert_eq!(tree_rows(&p, &b).await.len(), 1);
+}
+
+/// Pattern D. Edits made while the hub was down: on open the tree is stale, the first query answers at once from the
+/// stored rows, and its check brings the edits in.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_rechecks_stale_tree() {
+    let (f, p, trees) = with_trees(1).await;
+    edit(&trees[0], "core/f0.el", "before-down-fn");
+    let key = seeded(&p, &trees[0]).await;
+    drop(p);
+    edit(&trees[0], "core/f2.el", "while-down-fn");
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    assert_eq!(tree_live(&p, &key).await.state, hrafn::TreeState::Stale);
+    let v = p.view_for(&trees[0], false).await.unwrap();
+    assert_eq!(v.state, Some(hrafn::TreeState::Stale));
+    p.settle_trees().await;
+    assert_eq!(
+        tree_rows(&p, &key)
+            .await
+            .iter()
+            .map(|r| r.0.as_str())
+            .collect::<Vec<_>>(),
+        ["core/f0.el", "core/f2.el"]
+    );
+}
+
+/// The symbol names the base view holds.
+async fn base_names(p: &Project) -> Vec<String> {
+    p.store()
+        .handle()
+        .read(|c| {
+            let mut st = c.prepare(
+                "select s.name from symbol s join file f on f.tree = 0 and f.path = s.path and f.blob = s.blob
+                 order by s.name",
+            )?;
+            Ok(st
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap()
+}
+
+/// Pattern D. The base-checkout setting (H16 overlay design §6.5): with another checkout as the base, tier 1 builds
+/// from it, a query there answers from the base, and the main checkout is a worktree with its own overlay. Changing
+/// the base back rebuilds from main and re-seeds the trees.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn base_setting_builds_from_that_checkout() {
+    let f = fixture(&lisp_files(3));
+    let next = f.home.path().join("src/proj-next");
+    git(
+        &f.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "next",
+            next.to_str().unwrap(),
+        ],
+    );
+    edit(&next, "core/f1.el", "next-line-fn");
+    git(&next, &["commit", "-qam", "next"]);
+    let mut spec = project_spec(&f, vec![], Path::new("/nonexistent"));
+    spec.base = Some(next.clone());
+    let p = Project::open(spec).await.unwrap();
+    p.refresh_now().await.unwrap();
+    assert!(base_names(&p).await.contains(&"next-line-fn".to_string()));
+    assert_eq!(
+        p.view_for(&next, false).await.unwrap().view,
+        hrafn::View::Base
+    );
+    let key = seeded(&p, &f.root).await;
+    assert_eq!(
+        tree_rows(&p, &key)
+            .await
+            .iter()
+            .map(|r| r.0.as_str())
+            .collect::<Vec<_>>(),
+        ["core/f1.el"],
+        "main differs from the base in f1"
+    );
+    drop(p);
+    // back to main as the base: tier 1 rebuilds from it
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    p.refresh_now().await.unwrap();
+    let n = base_names(&p).await;
+    assert!(!n.contains(&"next-line-fn".to_string()), "{n:?}");
+    assert_eq!(
+        p.view_for(&f.root, false).await.unwrap().view,
+        hrafn::View::Base
+    );
 }

@@ -7,7 +7,6 @@
 //! - **The text answer** lists each hit as `path:first-last  symbol  [routes]` with a few lines of the chunk, and ends
 //!   with the lag line, e.g. "vectors: 12 files behind (…); keyword and symbol results are current".
 
-use super::methods::wire_answer;
 use crate::front::Front;
 use mimir::{ArgsError, BoxFuture, Tool, ToolResult};
 use runstav::methods::search as w;
@@ -48,9 +47,8 @@ impl Backend for HubBackend {
             };
             front
                 .search
-                .query(&front, root, text, scope, k.unwrap_or(10))
+                .query(&front, root, text, scope, k.unwrap_or(10), false)
                 .await
-                .map(|a| wire_answer(&a))
                 .map_err(|e| e.message)
         })
     }
