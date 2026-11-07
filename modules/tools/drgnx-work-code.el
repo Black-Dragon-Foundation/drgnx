@@ -18,7 +18,6 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-file)
-(require 'drgnx-coord-read)
 (require 'drgnx-work-client)
 (require 'diff-mode)
 
@@ -66,6 +65,12 @@ NAME: `find-file' of NAME follows its links again, with handlers on."
          (not (find-file-name-handler true 'insert-file-contents))
          (seq-some (lambda (d) (drgnx-file-inside-p true d)) dirs)
          true)))
+
+(defconst drgnx-coord-control-chars (concat "\0-\37\177-" (string #x9f #x61c #x200e #x200f #x202a ?- #x202e #x2066 ?- #x2069
+                                                                  #x2028 #x2029))
+  "Characters an agent's text must not carry, as the inside of a regexp bracket: the C0 controls, DEL, the C1
+controls, the BiDi controls (the Arabic letter mark, marks, embeddings, overrides, isolates) that make text
+read other than it is, and the line and paragraph separators (U+2028, U+2029) that start a line a reader sees.")
 
 (defun drgnx-work-code-one-line (s)
   "S, words of an agent's or the hub's (a path, a hunk's header), on one line: its control and bidi characters are
