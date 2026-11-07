@@ -6624,7 +6624,9 @@ mod tests {
             detail: None,
             command: None,
             context: None,
-            before: None,
+            call_end: None,
+            diffs: Vec::new(),
+            cell: Some(cell.clone()),
             cell: Some(cell.clone()),
         })
         .unwrap();
