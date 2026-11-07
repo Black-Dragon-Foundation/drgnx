@@ -3215,6 +3215,7 @@ async fn write_steps(
                     &ctx.cwd,
                 )
                 .await;
+            }
             let ev = AgentStep {
                 session: ctx.session.clone(),
                 step,
