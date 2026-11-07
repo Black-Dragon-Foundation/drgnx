@@ -49,6 +49,13 @@
       ;; no test step of its own: the tiers workflow is the one place those steps live
       (should-not (string-search "bin/drgnx test" yml)))))
 
+(ert-deftest drgnx-ci/the-tiers-fail-a-missing-nidhogg-primitive-on-the-line ()
+  ;; on `nidhogg: line' / `artifact' every test job runs strict (a missing primitive fails, as in the local runs);
+  ;; on `release' the value is empty, which drgnx-test-require-nidhogg reads as off (it compares to "1")
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    (drgnx-ci-test--has tiers "\nenv:\n  DRGNX_NIDHOGG_STRICT: ${{ (inputs.nidhogg == 'line' || inputs.nidhogg == 'artifact') && '1' || '' }}\n")))
+
 (ert-deftest drgnx-ci/the-tiers-workflow-runs-each-tier-only-when-asked ()
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
     (skip-unless tiers)
