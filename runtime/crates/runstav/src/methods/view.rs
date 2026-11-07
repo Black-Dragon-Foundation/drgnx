@@ -52,6 +52,7 @@ pub struct ViewEnv {
     /// `[from, to, width]`: the terminal's character widths that differ from Unicode's.
     #[serde(default)]
     pub tty_widths: Vec<(u32, u32, u8)>,
+    /// The editor's offset from UTC, `+HHMM` as `%z` prints it (the trail's times); anything else is UTC.
     #[serde(default)]
     pub tz: String,
     #[serde(default)]
@@ -215,5 +216,47 @@ mod tests {
             maps(&serde_json::to_value((t.data)()).unwrap(), e, &mut found);
         }
         assert!(found.is_empty(), "maps (ids as keys) at {found:?}");
+    }
+
+    /// Every method and event: none carries ids as object keys, but the places listed here, which wait (each a
+    /// DEFERRED row: a consumer that is frozen code, or a wire another plan owns).
+    #[test]
+    fn no_method_or_event_uses_ids_as_object_keys() {
+        const WAITING: &[&str] = &[
+            // the stored event's own JSON object: a payload, not ids as keys
+            "events/since result/$defs/EventRow/properties/data",
+            "events/$defs/EventRow/properties/data",
+            // keys by provider and by key name: the agent system's gateway and runners wires
+            "gateway/keys params/$defs/ProviderKeys",
+            "gateway/register params/$defs/ProviderKeys",
+            "runners/keys params/$defs/RunnerKeys",
+            // cost by unit name: the history wire
+            "history/revert/preview result/$defs/Spent/properties/cost_by_unit",
+        ];
+        let mut found = Vec::new();
+        for m in crate::registry::registry() {
+            maps(
+                &serde_json::to_value((m.params)()).unwrap(),
+                &format!("{} params", m.name),
+                &mut found,
+            );
+            maps(
+                &serde_json::to_value((m.result)()).unwrap(),
+                &format!("{} result", m.name),
+                &mut found,
+            );
+        }
+        for e in crate::events::events() {
+            maps(
+                &serde_json::to_value((e.data)()).unwrap(),
+                e.name,
+                &mut found,
+            );
+        }
+        let new: Vec<&String> = found
+            .iter()
+            .filter(|f| !WAITING.iter().any(|w| f.starts_with(w)))
+            .collect();
+        assert!(new.is_empty(), "maps (ids as keys) at {new:#?}");
     }
 }

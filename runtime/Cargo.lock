@@ -2991,6 +2991,7 @@ dependencies = [
  "inotify",
  "libc",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -6479,6 +6480,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-rows",
  "proptest",
  "serde",
  "serde_json",

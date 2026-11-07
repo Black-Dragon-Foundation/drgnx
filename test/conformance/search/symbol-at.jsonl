@@ -1,0 +1,12 @@
+{"scenario": "search/symbol-at", "requires": ["v1"], "doc": "search/symbol-at names the innermost symbol a saved file defines around a line (a method inside its impl, the impl between its methods), nothing outside every symbol, and refuses a file outside the root."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/p/src && printf '%s' \"$1\" > $ROOT/p/src/p.rs", "sh", "impl P {\n    fn new() -> P {\n        P { x: 0 }\n    }\n\n    fn get(&self) -> i32 {\n        self.x\n    }\n}\n"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "search/symbol-at", "params": {"root": "$ROOT/p", "file": "src/p.rs", "line": 7}}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": {"name": "get"}}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "search/symbol-at", "params": {"root": "$ROOT/p", "file": "src/p.rs", "line": 5}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"name": "P"}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/symbol-at", "params": {"root": "$ROOT/p", "file": "src/p.rs", "line": 40}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/symbol-at", "params": {"root": "$ROOT/p", "file": "../p/src/p.rs", "line": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "error": {"code": "invalid-params", "path": "file"}}}

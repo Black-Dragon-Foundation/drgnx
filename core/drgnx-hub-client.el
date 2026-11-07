@@ -449,9 +449,16 @@ drops it."
   (let ((event (plist-get json :event)))
     (cond ((equal event "challenge")
            (drgnx-hub--step (list 'challenge conn (plist-get (plist-get json :data) :nonce) (drgnx-hub-socket))))
-          (event (drgnx-hub--step (list 'event conn event (plist-get json :data))))
+          (event (drgnx-hub--step-event conn event (plist-get json :data)))
           ((plist-get json :id)
            (drgnx-hub--step (list 'answer conn (plist-get json :id) (plist-get json :result) (plist-get json :error)))))))
+
+(defun drgnx-hub--step-event (conn name data)
+  "The hub's event NAME with DATA, read on CONN, through the core with only CONN's subscription mark as its state:
+an event changes nothing in the client, so no snapshot of the globals or the connections is taken."
+  (let ((state (drgnx-hub-core-make
+                :conns (list (list conn :events (process-get conn (alist-get :events drgnx-hub--conn-props)))))))
+    (dolist (e (cdr (drgnx-hub-core-step state (list 'event conn name data)))) (drgnx-hub--effect e))))
 
 (defun drgnx-hub--settle (id result error)
   "Call the callback of call ID with RESULT and ERROR (the hub's error object, or this side's message) — once: the

@@ -1,0 +1,15 @@
+{"scenario": "git/letters", "requires": ["v1", "test-hooks"], "doc": "git/letters sends a view the status of a repository as rows: a letter per changed path, a mark per shown folder that holds a change, and the branch; a second call sends only what changed."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "g", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo/src $ROOT/repo/docs && cd $ROOT/repo && git init -q -b main && echo one > src/a.rs && echo two > docs/b.md && git add . && git -c user.name=t -c user.email=t@t commit -q -m init && echo more >> src/a.rs && echo new > docs/c.md"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "git/letters", "params": {"view": "g", "root": "$ROOT/repo", "shown": ["src"]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "g", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": {"$contains": [{"key": "f:src/a.rs", "text": "M", "runs": [[0, 1, "drgnx-git-modified"]]}, {"key": "f:docs/c.md", "text": "U"}, {"key": "d:src", "text": "●"}, {"key": "d:.", "text": "●"}, {"key": "branch", "text": "main"}]}}]}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/repo && git checkout -q -- src/a.rs"], "expect_code": 0}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "git/letters", "params": {"view": "g", "root": "$ROOT/repo", "shown": ["src"]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$hub", "base": 1, "version": 2, "ops": {"$contains": [{"remove": ["f:src/a.rs", "d:src"]}]}}}, "within_ms": 20000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}

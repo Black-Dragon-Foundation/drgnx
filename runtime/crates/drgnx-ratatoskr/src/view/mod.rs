@@ -12,7 +12,10 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod files;
 pub mod fonts;
+pub mod git;
+pub mod grep;
 #[cfg(test)]
 mod tests;
 
@@ -26,7 +29,7 @@ use runstav::methods::view::{
 use runstav::wire::Error;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -218,6 +221,14 @@ pub struct Views {
     fonts: Mutex<Fonts>,
     /// `__test_view_rows`: the rows and images of a fixture view per (connection, view), the same in every class.
     fixtures: Mutex<BTreeMap<(u64, String), Fixture>>,
+    /// The text searches streaming rows (`search/grep`).
+    greps: grep::Greps,
+    /// The git letters streaming rows (`git/letters`).
+    letters: git::Letters,
+    /// The ranked file queries (`search/files`) and the names they rank.
+    files: files::Files,
+    /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
+    front: OnceLock<Weak<Front>>,
 }
 
 impl Default for Views {
@@ -226,6 +237,10 @@ impl Default for Views {
             store: Mutex::new(Store::new(instance_id())),
             fonts: Mutex::new(Fonts::default()),
             fixtures: Mutex::new(BTreeMap::new()),
+            greps: grep::Greps::default(),
+            letters: git::Letters::default(),
+            files: files::Files::default(),
+            front: OnceLock::new(),
         }
     }
 }
@@ -238,9 +253,15 @@ impl Views {
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
     /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
+        if self.grep_build(f, key) || self.git_build(f, key) || self.files_build(f, key) {
+            return;
+        }
         let Some((mut rows, images, labels)) =
             lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
         else {
+            // not a fixture: a Work map, trail or Timeline view of that name, if there is one
+            f.core.map.view_env(f, key);
+            f.core.trails.view_env(key);
             return;
         };
         if !labels.is_empty() {
@@ -250,6 +271,47 @@ impl Views {
                 rows.extend(fitted.unwrap_or_default());
             }
         }
+        let patch = lock(&self.store).publish(key, rows, &images);
+        if let Some(p) = patch {
+            f.send_to(key.0, "view-patch", json!(p));
+        }
+        self.ask(f, key);
+    }
+
+    /// The hub's instance id (on every patch).
+    pub fn hub(&self) -> u64 {
+        lock(&self.store).hub()
+    }
+
+    /// The display classes CONN shows VIEW in.
+    pub fn classes(&self, conn: u64, view: &str) -> Vec<String> {
+        lock(&self.store).classes(conn, view)
+    }
+
+    /// The envs CONN sent for VIEW, one per class.
+    pub fn envs(&self, conn: u64, view: &str) -> Vec<ViewEnv> {
+        let store = lock(&self.store);
+        store
+            .classes(conn, view)
+            .into_iter()
+            .filter_map(|class| store.env_of(&(conn, view.to_owned(), class)).cloned())
+            .collect()
+    }
+
+    /// A builder's rows for KEY: BUILD makes them from KEY's env and fonts, the patch from what its editor holds goes
+    /// out (`view-patch`), and the glyphs the build missed are asked for. Nothing before KEY's env.
+    pub fn publish_built(
+        &self,
+        f: &Front,
+        key: &Key,
+        build: impl FnOnce(&ViewEnv, &FontSet) -> (Vec<Row>, Vec<(ImageId, String)>),
+    ) {
+        let Some(env) = lock(&self.store).env_of(key).cloned() else {
+            return;
+        };
+        let Some((rows, images)) = self.with_fonts(key, |set| build(&env, set)) else {
+            return;
+        };
         let patch = lock(&self.store).publish(key, rows, &images);
         if let Some(p) = patch {
             f.send_to(key.0, "view-patch", json!(p));
@@ -315,7 +377,15 @@ impl Views {
         }
     }
 
+    /// Keep the front once; the searches' threads send through it.
+    pub fn bind(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
+
     pub fn gone(&self, conn: u64) {
+        self.greps.gone(conn);
+        self.letters.gone(conn);
+        self.files.gone(conn);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
@@ -388,6 +458,9 @@ pub fn measured(f: &Front, c: &Caller, p: ViewMeasured) -> Result<bool, Error> {
 pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     let views = &f.core.views;
     lock(&views.fixtures).remove(&(c.conn_id, p.view.clone()));
+    views.greps.stop(c.conn_id, &p.view);
+    views.letters.stop(c.conn_id, &p.view);
+    views.files.stop(c.conn_id, &p.view);
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
     Ok(closed)

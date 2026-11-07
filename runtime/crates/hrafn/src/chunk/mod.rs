@@ -91,6 +91,28 @@ pub fn chunk_file(
     .unwrap_or_else(|| text::chunk(path, generated, text, budget))
 }
 
+/// The name of the innermost symbol PATH's TEXT defines that holds LINE (from 1), or none: the language from the
+/// path (and a `#!` line), the symbols as [`chunk_file`] finds them.
+pub fn symbol_at_line(path: &str, text: &str, line: u32) -> Option<String> {
+    let (lang, _) = crate::files::classify(path, text.as_bytes());
+    let (_, symbols) = chunk_file(path, lang, false, text, BUDGET);
+    symbol_at(text, &symbols, line)
+}
+
+/// The innermost of SYMBOLS (byte spans of TEXT, as [`chunk_file`] gives them) that holds LINE (from 1): of those whose
+/// span reaches into the line, the shortest; none when the line is outside every one.
+pub fn symbol_at(text: &str, symbols: &[Symbol], line: u32) -> Option<String> {
+    let line = line.max(1) as usize;
+    let mut starts = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1));
+    let from = starts.nth(line - 1)?;
+    let to = text[from..].find('\n').map_or(text.len(), |i| from + i);
+    symbols
+        .iter()
+        .filter(|s| (s.start as usize) <= to && (s.end as usize) > from)
+        .min_by_key(|s| s.end - s.start)
+        .map(|s| s.name.clone())
+}
+
 /// Prefix counts of non-whitespace characters by byte offset.
 pub(crate) struct Nws(Vec<u32>);
 

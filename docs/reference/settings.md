@@ -1586,6 +1586,24 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
+## drgnx-search-ignore-rules
+
+Which files Quick Open, Find and the text search list: "index" leaves out dot paths and secret-looking names, as
+the index does; "real" lists them, leaving out only what .gitignore files and the search globs name.
+
+| Key | Value |
+| --- | --- |
+| Default | `"index"` |
+| Type | `(choice (const "index") (const "real"))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:index\\\|real\\)\\'")` |
+
 ## drgnx-search-include
 
 Only files matching one of these globs are indexed (nil: all).
