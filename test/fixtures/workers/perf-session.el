@@ -647,6 +647,151 @@ compared, and a round's own list starts wherever the flood is)."
   (drgnx-perf-w--clean)
   t)
 
+;;;; quick-open-typing(-old): twelve keys typed into Quick Open over the same 200,000 files
+
+(defvar drgnx-perf-w--qot-seen nil "(INPUT COUNT FIRST) of Quick Open after the last key, while it was open.")
+(defvar drgnx-perf-w--qot-listed nil "Non-nil once Quick Open had its first list before the first key.")
+(defvar drgnx-perf-w--qot-old nil "Non-nil: Quick Open's old path (the streamed listing), else the hub's rows.")
+(defvar drgnx-perf-w--qot-log nil "What the run saw, newest first (at most 40): opened, errors, each command.")
+(defvar drgnx-quick-open--state)
+(defvar drgnx-quick-open--current)
+(defvar drgnx-view-old-path)
+(declare-function drgnx-quick-open "drgnx-quick-open")
+(declare-function drgnx-quick-open--candidates "drgnx-quick-open")
+(declare-function drgnx-quick-open--s-input "drgnx-quick-open")
+(declare-function drgnx-quick-open--s-done "drgnx-quick-open")
+(declare-function drgnx-quick-open--rows-candidates "drgnx-quick-open")
+(declare-function drgnx-file-stream-available-p "drgnx-file-stream")
+
+(defun drgnx-perf-w--qot-say (&rest item)
+  (push item drgnx-perf-w--qot-log)
+  (when (nthcdr 40 drgnx-perf-w--qot-log) (setcdr (nthcdr 39 drgnx-perf-w--qot-log) nil)))
+
+(defvar drgnx-perf-w--qot-path nil "Which path the keys reached: `hub' (the hub's rows) or `stream' (the old path).")
+
+(defun drgnx-perf-w--qot-note ()
+  "Post-command: what Quick Open shows after the key (its state is bound only while it reads), on either path."
+  (let ((rows (bound-and-true-p drgnx-quick-open--current)) (state (bound-and-true-p drgnx-quick-open--state)))
+    (drgnx-perf-w--qot-say 'cmd this-command (and rows t) (and state t) (and (minibufferp) t) (point)
+                           (and (minibufferp) (minibuffer-prompt-end)) (buffer-name) (minibuffer-depth))
+    (when (and (minibufferp) (eq this-command 'drgnx-quick-open))
+      (drgnx-perf-w--qot-say 'prompt (buffer-substring-no-properties 1 (minibuffer-prompt-end))))
+    (when (and (or rows state) (minibufferp))
+      (let ((names (if rows (drgnx-quick-open--rows-candidates rows) (drgnx-quick-open--candidates state))))
+        (when (and (not drgnx-perf-w--qot-seen) (eq this-command 'self-insert-command))
+          ;; the first typed key: was the first list there before it?
+          (setq drgnx-perf-w--qot-listed (if rows (> (length names) 0) (and (drgnx-quick-open--s-done state) t))))
+        (when (eq this-command 'self-insert-command)
+          (setq drgnx-perf-w--qot-path (if rows 'hub 'stream)
+                drgnx-perf-w--qot-seen (list (minibuffer-contents-no-properties) (length names) (car names))))))))
+
+(defconst drgnx-perf-w--qot-query "d012/f001.txt"
+  "What the workload types: no space (a plain `completing-read' takes SPC as `minibuffer-complete-word').")
+
+(defun drgnx-perf-w--qot-each (old)
+  "Show a file of the repository and queue Quick Open's key: the command loop runs it as the user's command (drgnx
+refuses a prompt from a timer or this call), and the lab's settle lets the first list come before the typed keys;
+OLD: on the old path."
+  (require 'drgnx-quick-open)
+  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-path nil drgnx-perf-w--qot-old old
+        drgnx-perf-w--qot-log nil drgnx-view-old-path old)
+  (switch-to-buffer (find-file-noselect (expand-file-name "big/d000/f000.txt" drgnx-perf-w--tmp)))
+  (add-hook 'post-command-hook #'drgnx-perf-w--qot-note)
+  (drgnx-perf-w--qot-say 'each (drgnx-file-stream-available-p (expand-file-name "big" drgnx-perf-w--tmp))
+                         (bound-and-true-p nidhogg-workers-framing) (fboundp 'nidhogg-set-process-framing)
+                         (and (executable-find "git") t))
+  (setq unread-command-events (append unread-command-events (listify-key-sequence (kbd "C-p"))))
+  t)
+
+(defun drgnx-perf-w-quick-open-typing-each () (drgnx-perf-w--qot-each nil))
+(defun drgnx-perf-w-quick-open-typing-old-each () (drgnx-perf-w--qot-each t))
+
+(defun drgnx-perf-w-quick-open-typing-done ()
+  "Every key reached Quick Open on the workload's path, whose first list was there before the first key, and it has
+closed."
+  (and drgnx-perf-w--qot-seen drgnx-perf-w--qot-listed (equal (car drgnx-perf-w--qot-seen) drgnx-perf-w--qot-query)
+       (eq drgnx-perf-w--qot-path (if drgnx-perf-w--qot-old 'stream 'hub))
+       (not (active-minibuffer-window))))
+
+(defun drgnx-perf-w-quick-open-typing-check ()
+  "t when the run did what it measures, else an error that says what it saw."
+  (or (drgnx-perf-w-quick-open-typing-done)
+      (error "quick-open-typing: after the keys %S on %S, first list before the first key %S, minibuffer open %S, \
+streams %S, hub %S, C-p %S, saw %S, messages %S"
+             drgnx-perf-w--qot-seen drgnx-perf-w--qot-path drgnx-perf-w--qot-listed (and (active-minibuffer-window) t)
+             (drgnx-file-stream-available-p (expand-file-name "big" drgnx-perf-w--tmp))
+             (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events) t)
+             (key-binding (kbd "C-p"))
+             (reverse drgnx-perf-w--qot-log)
+             (with-current-buffer (messages-buffer)
+               (buffer-substring-no-properties (max (point-min) (- (point-max) 1500)) (point-max))))))
+
+(defun drgnx-perf-w-quick-open-typing-digest ()
+  "The input, the count of candidates and the first one after the last key (relative names)."
+  (format "%S" drgnx-perf-w--qot-seen))
+
+(defun drgnx-perf-w-quick-open-typing-teardown ()
+  (remove-hook 'post-command-hook #'drgnx-perf-w--qot-note)
+  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-log nil drgnx-view-old-path nil)
+  (drgnx-perf-w--kill-visiting (expand-file-name "big" drgnx-perf-w--tmp))
+  (drgnx-perf-w--clean)
+  t)
+
+;;;; agents-line-motion(-old): an agent frame per command while point moves, three agents in a Lisp file
+
+(defvar drgnx-perf-w--al-buf nil "The file the agents are in.")
+(defvar drgnx-perf-w--al-frames 0 "The agent frames applied since the run began.")
+(defvar drgnx-agents-editor-line--entries)
+(defvar drgnx-agents-editor-line--names)
+(declare-function drgnx-agents-editor-line--apply "drgnx-agents-editor-line")
+
+(defun drgnx-perf-w--al-frame ()
+  "Post-command: the hub's next frame for the file (three agents on their lines), as the agent line takes it."
+  (when (eq (current-buffer) drgnx-perf-w--al-buf)
+    (cl-incf drgnx-perf-w--al-frames)
+    (drgnx-agents-editor-line--apply
+     drgnx-perf-w--al-buf
+     (list :agents (mapcar (lambda (o) (list :ordinal o :session (format "s%d" o) :handle (format "Agent%d" o)
+                                             :mode "editing" :line (* o 300) :line_end (* o 300) :col 0))
+                           '(1 2 3))))))
+
+(defun drgnx-perf-w-agents-line-setup ()
+  "A copy of a large Lisp file of the checkout (its symbols are what the line names)."
+  (require 'drgnx-agents-editor-draw)
+  (require 'drgnx-agents-editor-line)
+  (copy-file (expand-file-name "wb/drgnx-view.el" drgnx-dir) (expand-file-name "view.el" (drgnx-perf-w--tmpdir)) t)
+  t)
+
+(defun drgnx-perf-w--al-each (old)
+  "The file shown, point in it, no names kept; OLD: the old path (the name computed every frame)."
+  (setq drgnx-view-old-path old drgnx-perf-w--al-frames 0
+        drgnx-perf-w--al-buf (find-file-noselect (expand-file-name "view.el" drgnx-perf-w--tmp)))
+  (switch-to-buffer drgnx-perf-w--al-buf)
+  (setq drgnx-agents-editor-line--names nil)
+  (goto-char (point-min)) (forward-line 100)
+  (add-hook 'post-command-hook #'drgnx-perf-w--al-frame)
+  t)
+
+(defun drgnx-perf-w-agents-line-each () (drgnx-perf-w--al-each nil))
+(defun drgnx-perf-w-agents-line-old-each () (drgnx-perf-w--al-each t))
+
+(defun drgnx-perf-w-agents-line-done ()
+  "Twenty frames applied, each naming its three agents."
+  (and (>= drgnx-perf-w--al-frames 20)
+       (= (length (buffer-local-value 'drgnx-agents-editor-line--entries drgnx-perf-w--al-buf)) 3)))
+
+(defun drgnx-perf-w-agents-line-digest ()
+  "The three lines as shown."
+  (format "%S" (mapcar (lambda (e) (substring-no-properties (nth 3 e)))
+                       (buffer-local-value 'drgnx-agents-editor-line--entries drgnx-perf-w--al-buf))))
+
+(defun drgnx-perf-w-agents-line-teardown ()
+  (remove-hook 'post-command-hook #'drgnx-perf-w--al-frame)
+  (when (buffer-live-p drgnx-perf-w--al-buf) (kill-buffer drgnx-perf-w--al-buf))
+  (setq drgnx-perf-w--al-buf nil drgnx-view-old-path nil)
+  (drgnx-perf-w--clean)
+  t)
+
 ;;;; autosave-typing: typing in a 50 MB buffer across an auto-save
 
 (defvar drgnx-perf-w--as-buffer nil)

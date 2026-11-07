@@ -342,3 +342,16 @@ build/ ignored (with build/out.o)."
           (drgnx-wb-hide-sidebar)
           (drgnx-explorer-set-roots nil)
           (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name)))))))
+
+(ert-deftest drgnx-git/the-status-run-is-framed-whatever-the-session-decodes ()
+  "With Nidhogg's framing on, git's status run is framed (read in records) also when the session's process coding
+detects (has state), as a C locale's does."
+  (skip-unless (and (fboundp 'nidhogg-set-process-framing) (executable-find "git")))
+  (drgnx-git-test--repo root
+    (let ((nidhogg-workers-framing t) (default-process-coding-system '(undecided . undecided)) accs)
+      (cl-letf* ((frame (symbol-function 'drgnx-git--frame))
+                 ((symbol-function 'drgnx-git--frame) (lambda (p) (car (push (funcall frame p) accs)))))
+        (drgnx-git-refresh root t))
+      (should accs)
+      (should (cl-every #'identity accs))
+      (should (equal (drgnx-git-status (expand-file-name "c.txt" root)) 'untracked)))))
