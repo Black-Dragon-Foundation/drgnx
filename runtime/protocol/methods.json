@@ -28687,6 +28687,7 @@
           },
           "tz": {
             "default": "",
+            "description": "The editor's offset from UTC, `+HHMM` as `%z` prints it (the trail's times); anything else is UTC.",
             "type": "string"
           },
           "view": {
@@ -29588,6 +29589,105 @@
         ],
         "description": "`work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.",
         "title": "MapSubscribed"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "end one trail or Timeline view of this connection (a connection's views end with it)",
+      "name": "work/trail/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/close`'s params.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "TrailClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
+      "name": "work/trail/subscribe",
+      "params": {
+        "$defs": {
+          "TrailLane": {
+            "additionalProperties": false,
+            "description": "One lane of a Timeline: an agent session and its label.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session",
+              "label"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.",
+        "properties": {
+          "lanes": {
+            "items": {
+              "$ref": "#/$defs/TrailLane"
+            },
+            "type": "array"
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "TrailSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
       },
       "writes": false
     }

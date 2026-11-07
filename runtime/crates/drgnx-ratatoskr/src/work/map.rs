@@ -574,7 +574,7 @@ fn view_rows(
 }
 
 /// The renderer's view of ENV: a card line's height and ascent from the `ui` font (else the cell's, 80 % up).
-fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
+pub(crate) fn render_env<'a>(env: &'a ViewEnv, palette: &'a Palette) -> render::Env<'a> {
     let line = env
         .fonts
         .iter()
@@ -726,6 +726,10 @@ impl Map {
 
     /// Session SID closed timeline step STEP of CLASS, at AT (the hub's seconds).
     pub fn step(self: &Arc<Self>, sid: &str, step: i64, class: &StepClass, at: f64) {
+        // the trails read the session's steps again
+        if let Some(f) = self.front.get().and_then(Weak::upgrade) {
+            f.writer.signals.trail.notify_one();
+        }
         if !self.open() {
             return;
         }

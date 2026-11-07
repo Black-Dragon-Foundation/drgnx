@@ -307,6 +307,7 @@ impl Front {
         self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.trails.gone(conn);
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
     }
@@ -761,6 +762,8 @@ impl Front {
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
             | Params::WorkMapClose(_)
+            | Params::WorkTrailSubscribe(_)
+            | Params::WorkTrailClose(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)

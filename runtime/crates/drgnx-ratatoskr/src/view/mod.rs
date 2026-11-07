@@ -241,8 +241,9 @@ impl Views {
         let Some((mut rows, images, labels)) =
             lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
         else {
-            // not a fixture: a Work map rows view of that name, if there is one
+            // not a fixture: a Work map, trail or Timeline view of that name, if there is one
             f.core.map.view_env(f, key);
+            f.core.trails.view_env(key);
             return;
         };
         if !labels.is_empty() {

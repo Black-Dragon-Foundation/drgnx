@@ -1500,6 +1500,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/trail/close` | user | `{view: string}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -2050,6 +2052,27 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The trail and the Timeline
+
+The Work space's trail (one session's steps, its conclusions among them) and Timeline (a lane per agent session) as
+rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
+
+- **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
+  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
+  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
+  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+- **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
+  each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
+  conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
+  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
+  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
+  anything else is UTC).
+- **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
+  `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
+  only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
+  inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
+  the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
 
 ### The follow feed
 

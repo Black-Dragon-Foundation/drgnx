@@ -195,5 +195,7 @@
   "work/hunks": ["user"],
   "work/map/close": ["user"],
   "work/map/set": ["user"],
-  "work/map/subscribe": ["user"]
+  "work/map/subscribe": ["user"],
+  "work/trail/close": ["user"],
+  "work/trail/subscribe": ["user"]
 }

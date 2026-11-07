@@ -306,6 +306,39 @@ pub struct MapRows {
     pub version: u64,
 }
 
+/// One lane of a Timeline: an agent session and its label.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailLane {
+    pub session: String,
+    pub label: String,
+}
+
+/// `work/trail/subscribe`'s params: one view of the connection shows `session`'s trail, or a Timeline of `lanes`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailSubscribe {
+    pub view: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lanes: Vec<TrailLane>,
+}
+
+/// `work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailSubscribed {
+    pub hub: u64,
+}
+
+/// `work/trail/close`'s params.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TrailClose {
+    pub view: String,
+}
+
 /// A map view's full frame: `work/map/subscribe`'s answer.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -458,6 +491,32 @@ fn check_presence_get(p: &PresenceGet) -> Result<(), Error> {
     } else {
         Err(invalid("file", "an absolute path"))
     }
+}
+
+/// The most lanes one Timeline holds.
+const LANES_MAX: usize = 256;
+
+fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    let name = |s: &str| !s.is_empty() && s.len() <= NAME_MAX;
+    match (&p.session, p.lanes.is_empty()) {
+        (Some(s), true) if name(s) => Ok(()),
+        (Some(_), true) => Err(invalid("session", "a session id")),
+        (None, false) if p.lanes.len() > LANES_MAX => Err(invalid("lanes", "at most 256 lanes")),
+        (None, false)
+            if p.lanes
+                .iter()
+                .all(|l| name(&l.session) && l.label.len() <= NAME_MAX) =>
+        {
+            Ok(())
+        }
+        (None, false) => Err(invalid("lanes", "lanes of a session id and a label")),
+        _ => Err(invalid("session", "one of session or lanes")),
+    }
+}
+
+fn check_trail_close(p: &TrailClose) -> Result<(), Error> {
+    check_view(&p.view)
 }
 
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
@@ -617,6 +676,18 @@ pub(crate) fn methods() -> Vec<Method> {
             classes: [User], writes: false,
             doc: "end one map view of this connection (a connection's views end with it)",
             check: check_map_close,
+        ),
+        method!(
+            "work/trail/subscribe", WorkTrailSubscribe(TrailSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one trail view (a session's steps and conclusions) or Timeline view (a lane per session) of this connection: its rows come as view-patch per display class, the first a reset, before the answer",
+            check: check_trail_subscribe,
+        ),
+        method!(
+            "work/trail/close", WorkTrailClose(TrailClose) -> bool,
+            classes: [User], writes: false,
+            doc: "end one trail or Timeline view of this connection (a connection's views end with it)",
+            check: check_trail_close,
         ),
         method!(
             "work/files", WorkFiles(EditedFiles) -> EditedFilesList,

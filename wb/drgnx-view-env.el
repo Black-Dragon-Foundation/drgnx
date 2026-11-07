@@ -153,7 +153,7 @@ the narrowest window of the class (Call 2: one buffer holds one fit)."
                                     :cell (plist-get facts :cell) :width_px width
                                     :palette (drgnx-view-env--palette)
                                     :tty_widths (let ((t-w (drgnx-view-env--tty-widths))) (if (eq t-w :none) nil t-w))
-                                    :tz (or (cadr (current-time-zone)) "")
+                                    :tz (format-time-string "%z")
                                     :reduced_motion (if (eq (bound-and-true-p drgnx-look-motion) 'reduced) t :false)))
                   classes)))))
     (nreverse classes)))

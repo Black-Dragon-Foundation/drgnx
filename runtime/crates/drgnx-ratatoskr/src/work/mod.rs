@@ -28,3 +28,4 @@ pub mod shell_read;
 pub mod specs;
 pub mod subagents;
 pub mod trace;
+pub mod trail;
