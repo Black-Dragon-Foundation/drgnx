@@ -23,7 +23,7 @@ pub enum Pruned {
 }
 
 /// A name safe in a ref and a file name.
-fn safe(sid: &str) -> String {
+pub(super) fn safe(sid: &str) -> String {
     sid.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {

@@ -27,25 +27,45 @@ use std::sync::{Arc, Mutex};
 const PAGE: i64 = 500;
 
 /// The snapshots' shared state: whether they stopped at the cap, the sessions that finished (oldest first), and the
-/// sessions whose snapshots the cap removed in this hub's run.
+/// sessions whose snapshots the cap removed (kept as a marker file per session in the checkpoints' folder, so a restart
+/// of the hub still knows).
 #[derive(Default)]
 pub struct SnapState {
     stopped: AtomicBool,
     finished: Mutex<Vec<String>>,
     pruned: Mutex<BTreeSet<String>>,
+    root: std::sync::OnceLock<PathBuf>,
 }
 
 impl SnapState {
+    /// The checkpoints' folder, where the markers are (the first one told stays).
+    fn attach(&self, root: &Path) {
+        let _ = self.root.set(root.to_path_buf());
+    }
+
+    fn marker(&self, sid: &str) -> Option<PathBuf> {
+        Some(self.root.get()?.join("pruned").join(snapshot::safe(sid)))
+    }
+
     /// GONE's snapshots were removed at the cap.
     fn pruned(&self, gone: &[String]) {
         self.pruned
             .lock()
             .expect("timeline")
             .extend(gone.iter().cloned());
+        for sid in gone {
+            if let Some(m) = self.marker(sid) {
+                let made = m.parent().map(std::fs::create_dir_all).transpose();
+                if let Err(e) = made.and_then(|_| std::fs::write(&m, b"")) {
+                    tracing::warn!(sid, "the pruned mark was not kept: {e}");
+                }
+            }
+        }
     }
 
     fn is_pruned(&self, sid: &str) -> bool {
         self.pruned.lock().expect("timeline").contains(sid)
+            || self.marker(sid).is_some_and(|m| m.exists())
     }
 }
 
@@ -62,6 +82,14 @@ impl Timeline {
         let mut w = step_of(s);
         w.revertible &= !self.state.is_pruned(&w.session);
         w
+    }
+
+    /// [`Timeline::wire`] for a hub whose checkpoints' folder is known: the sessions pruned before a restart are read.
+    pub(crate) fn wire_for(&self, front: &Front, s: table::Step) -> Step {
+        if let Some(d) = front.dirs.get() {
+            self.state.attach(&d.hub.join("checkpoints"));
+        }
+        self.wire(s)
     }
 
     /// SID's task is done: its snapshots may go when the cap needs room.
@@ -117,8 +145,10 @@ impl Snap {
     /// None until the store's folders are known (a front without a state folder takes no snapshots).
     pub fn of(front: &Front) -> Option<Snap> {
         let dirs = front.dirs.get()?;
+        let root = dirs.hub.join("checkpoints");
+        front.core.timeline.state.attach(&root);
         Some(Snap {
-            root: dirs.hub.join("checkpoints"),
+            root,
             state: front.core.timeline.state.clone(),
             settings: front.settings.clone(),
         })
@@ -432,7 +462,7 @@ pub async fn get(front: &Front, _: &Caller, p: TimelineParams) -> Result<Timelin
         .map(|(s, (d, hooks))| Step {
             detail: d.as_ref().map(crate::work::detail::wire),
             hooks,
-            ..front.core.timeline.wire(s)
+            ..front.core.timeline.wire_for(front, s)
         })
         .collect();
     let next = if back.is_some() {
@@ -528,5 +558,21 @@ mod tests {
         // the session's checkpoints were pruned at the cap
         t.state.pruned(&["a1".to_string()]);
         assert!(!t.wire(row(Some(5))).revertible);
+    }
+
+    /// Pattern D: the sessions whose snapshots the cap removed are still unrevertible after the hub restarted.
+    #[test]
+    fn pruned_sessions_stay_pruned_across_a_restart() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("checkpoints");
+        let before = Timeline::default();
+        before.state.attach(&root);
+        before.state.pruned(&["a1".to_string()]);
+        let after = Timeline::default();
+        after.state.attach(&root);
+        assert!(!after.wire(row(Some(5))).revertible);
+        let other = Timeline::default();
+        other.state.attach(&d.path().join("elsewhere"));
+        assert!(other.wire(row(Some(5))).revertible);
     }
 }
