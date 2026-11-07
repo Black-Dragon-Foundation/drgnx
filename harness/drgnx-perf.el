@@ -337,7 +337,8 @@ CULPRIT)\" for the five most frequent signatures, the most frequent first (an em
                                          (let ((u (nth 3 c))) (cond ((stringp u) u) (u (format "%S" u)) (t "-")))))
                      (seq-take (sort by (lambda (a b) (> (nth 1 a) (nth 1 b)))) 5)))))
 
-(defconst drgnx-perf-lab-waits '("drgnx-perf--await-present" "drgnx-perf--wait" "drgnx-work-thirty--wait")
+(defconst drgnx-perf-lab-waits '("drgnx-perf--await-present" "drgnx-perf--wait" "drgnx-work-thirty--wait"
+                                 "drgnx-perf--wl-wait" "drgnx-perf--trail-await")
   "The lab's own waits: a command's wait for its present, a workload's wait for its premise.  To the watchdog they are
 busy spans; a stall spent in one is the lab's (`drgnx-perf--lab-stall-p').")
 

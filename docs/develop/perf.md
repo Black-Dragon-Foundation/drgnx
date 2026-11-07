@@ -560,7 +560,7 @@ and the deltas of the watchdog's own summary lines). The difference comes from N
 (1 2 4 8 16 33 50 100 ms; a forced `drain-now` is not in them); a build without these falls back to the C bucket edges. Each stall it keeps carries its wall time, felt, signature and culprit. `:stalls` is the counter's difference, not the number of records kept: the watchdog holds only its newest 32 records and the ring is not drained during a workload, so the records give `:stalls-felt`, `:stall-max-ms` and the stacks. `:stall-top` (in the results JSON) names the five
 most frequent signatures with their count, longest wall time and culprit: where a workload's stalls come from, the
 lab's own waits included. The lab's own waits are not the workload's stalls: a stall whose culprit is one of
-`drgnx-perf-lab-waits` (a command's wait for its present, a workload's wait for its premise), in its `process-wait`
+`drgnx-perf-lab-waits` (a command's wait for its present, a workload's wait for its premise or for a draw), in its `process-wait`
 phase, with less than the watchdog's threshold of its wall time anywhere else, goes to `:stalls-lab` and out of
 `:stalls`, `:stalls-felt` and `:stall-max-ms` (so the `(:stalls) 0` rows judge the workload, never the lab). Only a
 record can say a stall was the lab's: a stall the ring dropped stays in `:stalls`. `:typing :ge16` is the percent of
@@ -760,12 +760,16 @@ get its situation fails instead of measuring something else. Mock agents only; n
 | work-live | 30 s with the map shown and the agents streaming (checked: the map got at least 30 deltas) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0 |
 | work-typing-shown, work-typing-hidden | the typing workload's six strings with the map shown in the editor's other window, and with it open but shown nowhere (the hub told: no deltas) | `:input :p95` 16 ms each, `:stalls` 0; the rule between them (shown at most 1 ms over hidden) is `drgnx-perf-run--relative-fails`, judged when both are in the run |
 | work-typing-mirror | the same with the map shown and a transcript of one agent open (the mirror of 30 streaming agents) | `:input :p95` 16 ms, `:stalls` 0; at most 1 ms over `typing` (same rule function) |
-| work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened until its first rows are drawn, then 20 steps appended (each with its draw) | `:draw_ms` 100; `:append_ms :max` 1 |
+| work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened until its first rows are drawn, then 20 steps appended (each with its draw) | `:draw_ms` 100; `:append_ms :max` 1 (from the merge to the end of the view's draw of it) |
 
 Beside the budget rows the workloads report where their time goes (results JSON, not judged): work-relayout's
 `:to_frame` (command to the frame's arrival), work-live's `:long` (each draw over 4 ms as `(MS TOUCHED ROWS GC-MS)`),
 work-trail's `:settled_s` (seconds from the turn to its 10,000 steps readable) and, when the hub never holds them, a
-trace of the newest step with the hub's and the session's CPU seconds in the premise's error.
+trace of the newest step with the hub's and the session's CPU seconds in the premise's error. work-trail's append
+splits as `:append_merge_ms` (the merge), `:append_draw_ms` (the view's draw) and `:append_poll_ms` (to the end of
+the lab's wait, which the view's draw ends by throwing out of one bounded `accept-process-output`: no timer wakes it).
+The relayout's wait for a draw is the same: a hook after each draw, no 1 ms timer; work-live waits its 30 s in one wait
+that wakes only for process output.
 
 The timing rows belong on the desktop's perf island (`perf-exclusive.sh` outermost; the relative rules need the shown
 and hidden workloads in one run). Allocation, CPU and rows are not budgeted yet (`drgnx-perf-run-unseeded`). The Rust
