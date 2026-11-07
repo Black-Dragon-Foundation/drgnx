@@ -131,6 +131,10 @@ pub struct JobNetwork {
     job: String,
     channel: JoinHandle<End>,
     log: JoinHandle<()>,
+    /// The proxy's events (its refusals), until [`JobNetwork::take_events`] takes them.
+    events: Option<tokio::sync::mpsc::Receiver<gleipnir::net::proxy::ProxyEvent>>,
+    /// The loop that turns them into cards ([`super::hostgrants`]), ended with the relay.
+    asker: Option<JoinHandle<()>>,
     podman: PathBuf,
     env: Vec<(OsString, OsString)>,
 }
@@ -144,6 +148,19 @@ impl JobNetwork {
     /// The job policy's state, for live grants.
     pub fn web(&self) -> &std::sync::Arc<gleipnir::net::proxy::WebState> {
         &self.web
+    }
+
+    /// The proxy's events, once: a session's job hands them to its card loop ([`JobNetwork::set_asker`]); dropped,
+    /// they are not sent.
+    pub fn take_events(
+        &mut self,
+    ) -> Option<tokio::sync::mpsc::Receiver<gleipnir::net::proxy::ProxyEvent>> {
+        self.events.take()
+    }
+
+    /// The card loop, which [`JobNetwork::end`] ends with the relay.
+    pub fn set_asker(&mut self, task: JoinHandle<()>) {
+        self.asker = Some(task);
     }
 
     /// The sidecar's container name (the job's meta records it as `relay`).
@@ -162,6 +179,9 @@ impl JobNetwork {
     /// Takes the relay down after the job (S11): `podman rm -f` the job's container first (podman records the job's
     /// dependency on the sidecar), then stop the sidecar.  Answers the sidecar's exit code.
     pub async fn end(self) -> Option<i32> {
+        if let Some(a) = &self.asker {
+            a.abort();
+        }
         let _ = tokio::process::Command::new(&self.podman)
             .args(["rm", "-f", &self.job])
             .envs(self.env.iter().map(|(k, v)| (k, v)))
@@ -267,9 +287,7 @@ pub async fn prepare_net(
             tracing::warn!("job {job}: the relay reports {e:?}");
         }
     });
-    let (ptx, mut prx) = tokio::sync::mpsc::channel(16);
-    // nobody is asked about a denied host here; the channel only has to stay drained
-    tokio::spawn(async move { while prx.recv().await.is_some() {} });
+    let (ptx, prx) = tokio::sync::mpsc::channel(16);
     let handle = proxy::start(
         proxy_config(allow, pins, web.clone()),
         std::sync::Arc::new(proxy::SystemResolver),
@@ -309,6 +327,8 @@ pub async fn prepare_net(
             job: container::name_of(id)?,
             channel,
             log,
+            events: Some(prx),
+            asker: None,
             podman: podman.to_path_buf(),
             env,
         },

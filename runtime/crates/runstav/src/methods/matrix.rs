@@ -284,6 +284,10 @@ pub struct Facts {
     /// `loopback`, `host_own`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<Text>,
+    /// `browser.private` asked for a networked container job: the job's id (the hub's, never an agent's words); its
+    /// target is then a port of the user's computer (`{"host_port": "host.drgnx.internal:PORT"}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<Text>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

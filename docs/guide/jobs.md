@@ -106,7 +106,13 @@ shares the job's loopback only, listens on `127.0.0.1:3128` there and carries ea
 job's own allow-list proxy in the hub. `HTTP_PROXY`, `HTTPS_PROXY` (and lowercase) point at it; only the
 hosts on the allow-list are reached: the setting `agents-net-hosts` (an alist tier to `"host:port"` strings; the
 `packages` tier is a granted network's). Its default is `crates.io`, `index.crates.io`, `static.crates.io`,
-`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`. A networked job needs rootless podman 5.0 or newer; otherwise, or
+`registry.npmjs.org`, `pypi.org` and `files.pythonhosted.org`, port 443; a tier you leave out reaches nothing. A job you start yourself asks with `network: true`. An agent's networked job may also ask for a port of
+your computer as `host.drgnx.internal:PORT` (a dev server, say): it is refused, and you get a card "Job N wants your
+port PORT". Allowing it opens that port for the job's session, its browser and its other jobs too, with the browser's
+scopes (once, this session, its plan); it applies to the job's next connection, with no restart. Each port asks once
+per job. Revoking the grant refuses the next connection; connections already open stay until they end, so end the job
+to cut them. The hub's own ports are never opened, whatever you allow. A job on a runner can't ask: its proxy is the
+runner's and has the allow-list only, so `host.drgnx.internal` is refused there. A networked job needs rootless podman 5.0 or newer; otherwise, or
 if its relay can't start (no `READY` within 10 s), a job that was allowed a network is refused with what to fix. The
 relay lives as long as the job: if it stops first (the sidecar exits, breaks the channel's rules or stops reading) the
 job ends `infra` with the sidecar's exit code and its meaning in its log (137: killed, most likely at its memory limit).

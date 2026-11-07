@@ -11,6 +11,7 @@
 //! running; the hub's monitor (or, after a restart, the re-attached one) writes the result once.
 
 pub mod container;
+pub(crate) mod hostgrants;
 pub mod net;
 pub mod summary;
 pub mod unit;
@@ -199,6 +200,9 @@ pub struct Hooks {
     /// The hub's host addresses and never-set (the browser's watches), which a networked job's proxy judges
     /// `host.drgnx.internal` by; none: fresh empty sets (tests).
     pub nevers: Option<crate::browser::nevers::Nevers>,
+    /// What a session's networked job asks the user through (a host port on a card, [`hostgrants`]); none: its
+    /// proxy's refusals ask nothing.
+    pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
@@ -226,6 +230,7 @@ impl Default for Hooks {
             runtime: None,
             shell_env: crate::shell_env::ShellEnv::default(),
             nevers: None,
+            cards: None,
             key_envs: Arc::new(Vec::new),
             #[cfg(test)]
             plain_sessions: false,
@@ -1080,7 +1085,7 @@ impl Inner {
                 .px_dir
                 .clone()
                 .ok_or_else(|| setup("the relay's binaries were not found next to the hub"))?;
-            let (jn, job_net) = net::prepare_net(
+            let (mut jn, job_net) = net::prepare_net(
                 id,
                 &shell,
                 &podman,
@@ -1095,6 +1100,14 @@ impl Inner {
             )
             .await?;
             caps.proxy = Some(job_net);
+            // a session's job asks for a host port on a card; the session's grants apply live
+            if let (Starter::Session(sid), Some(cards), Some(events)) =
+                (&spec.starter, &self.hooks.cards, jn.take_events())
+            {
+                let (task, _) =
+                    hostgrants::start(cards.clone(), id, sid, jn.web().clone(), events).await;
+                jn.set_asker(task);
+            }
             relay = Some(jn);
         } else {
             // caps podman cannot enforce refuse the job: a container without its limits is never run
@@ -1788,6 +1801,24 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
             nevers: Some(f.browser_nevers.clone()),
+            cards: Some(hostgrants::Hub {
+                settings: f.settings.clone(),
+                writer: f.writer.clone(),
+                gate: f.core.matrix.clone(),
+                // read when the job starts, through the front the tools hold (it outlives the runner's hooks)
+                session: {
+                    let tools = f.tool_hub.clone();
+                    Arc::new(move |sid: &str| {
+                        let f = tools.front.get()?.upgrade()?;
+                        // an MCP session's columns are not held: the default (no role); browser.private asks anyway
+                        let who = f.core.agents.who(sid).unwrap_or_default();
+                        Some((
+                            who,
+                            crate::matrix_gate::ActionCtx::of_session(&f.core.runs.scopes(), sid),
+                        ))
+                    })
+                },
+            }),
             // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
             key_envs: Arc::new(move || {
                 crate::settings::providers::effective(

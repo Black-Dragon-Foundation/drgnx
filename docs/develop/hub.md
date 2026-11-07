@@ -1645,6 +1645,17 @@ own.
     `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
     `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
     `browser.private` is capped at Ask, so every new target asks.
+  - **A container job's host port** (`exec/hostgrants.rs`): a session's networked job's proxy runs under
+    `Policy::Job` with a web state of its own and sends its `Private` events to the job's loop, which asks
+    `decide(browser.private)` with the facts `{target, job}` (`target` `{"host_port": "host.drgnx.internal:PORT"}`;
+    other targets are the allow-list's and ask nothing). The card's title is "Job ID wants your port PORT
+    (`host.drgnx.internal:PORT`)", its body says the grant opens the port for the whole session (its browser and its
+    other jobs) and that a revoke leaves open connections until they end; its choices are the browser's scopes, never
+    a CIDR or "all private". One card per port per job, whatever the answer; none once the job ended, none for a
+    user's job. An MCP session's job asks with the default (no role) columns, as the hub holds no `Who` for it. On every change to an answer the loop reads the session's
+    `browser.private` grants again and sets the job's proxy's grants to their `host.drgnx.internal` ports
+    (`WebState::set_grants`): a grant opens the next request, a revoke refuses it; open streams stay (no
+    `CloseStreams`). The pure core is `Core::step(Ev) -> Vec<Effect>`; the loop ends with the relay.
   - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
     event, once per host per session: kind `status`, the session as `agent`, data
     `{"browser-host": true, "session": SID, "host": HOST}`.
@@ -1967,7 +1978,10 @@ the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result, then sweeps: the containers labelled `drgnx.owner=<this hub's
+command stays the hub's child. `Runner::open` re-attaches every folder without a result, except a networked container
+job's (its meta names a `relay`): its relay died with the old hub, so the job's container is removed and the job
+recorded `infra` ("the hub restarted, and a networked job can't keep its relay"); a graceful stop ends the running
+ones the same way first (`Runner::end_networked`, "the hub stopped"). Then it sweeps: the containers labelled `drgnx.owner=<this hub's
 tag>` whose `drgnx.job` isn't running, job containers before sidecars (`sleipnir::linux::podman::leftovers`, shared with
 the runners), and relay images (`localhost/drgnx-px:<tag>`) other than the current binary's. A sibling hub's
 containers carry its own tag and stay; unlabelled ones (made before the labels) are left. Every job but the editor's
