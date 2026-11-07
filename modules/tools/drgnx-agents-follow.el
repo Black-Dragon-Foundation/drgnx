@@ -187,6 +187,20 @@ already have is used as it is."
       (set-window-start window (with-current-buffer (window-buffer window)
                                  (save-excursion (goto-char pos) (forward-line (- (/ h 2))) (point)))))))
 
+;;;; The probe
+
+(defun drgnx-agents-follow-probe (file n)
+  "Time N follow moves of the followed agent through FILE, and one refresh of it: (MOVES . REFRESH), milliseconds.
+The probe for `agents-follow-tick' (a follow move 2 ms; a 3,000-line refresh reported, 8 ms at most); the verdict
+waits for the gate.  The follow must be started (`drgnx-agents-follow-start') and its window shown."
+  (let (moves)
+    (dotimes (i n)
+      (let ((data (list :file file :line (1+ (mod i 3000)) :col 1 :mode "read")))
+        (push (* 1000 (car (benchmark-run 1 (drgnx-agents-follow--moved data)))) moves)))
+    (let ((buffer (drgnx-agents-follow--open file)))
+      (cons (nreverse moves)
+            (* 1000 (car (benchmark-run 1 (drgnx-agents-follow--refresh buffer file))))))))
+
 ;;;; The header
 
 (defconst drgnx-agents-follow--modes
