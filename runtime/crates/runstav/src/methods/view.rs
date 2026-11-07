@@ -2,7 +2,8 @@
 //! (`view/env`), the hub sends that (view, class) its rows as patches (the event `view-patch`), and the editor asks
 //! for a whole set again when a patch does not fit what it holds (`view/resync`). Glyphs the hub cannot measure are
 //! asked of the editor (the event `view-glyphs`, answered by `view/glyphs`); the editor's fit guard reports what it
-//! measured (`view/measured`). Ids are in arrays, never object keys.
+//! measured (`view/measured`). A view that asked for acknowledged patches says `view/ack` after it applied one; the
+//! hub then sends that (view, class) at most one patch it has not acknowledged. Ids are in arrays, never object keys.
 
 use super::{invalid, method};
 use crate::registry::Method;
@@ -10,7 +11,9 @@ use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use drgnx_rows::{ImageId, Op, Patch, Row, RowHeight};
+pub use drgnx_rows::{
+    Colour, CursorShape, ImageId, Op, Patch, Row, RowHeight, Style, StyleId, TermMeta,
+};
 
 /// The longest view id, in bytes.
 pub const VIEW_MAX: usize = 64;
@@ -52,6 +55,7 @@ pub struct ViewEnv {
     /// `[from, to, width]`: the terminal's character widths that differ from Unicode's.
     #[serde(default)]
     pub tty_widths: Vec<(u32, u32, u8)>,
+    /// The editor's offset from UTC, `+HHMM` as `%z` prints it (the trail's times); anything else is UTC.
     #[serde(default)]
     pub tz: String,
     #[serde(default)]
@@ -59,9 +63,43 @@ pub struct ViewEnv {
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an
-/// image it lacks); VERSION is what it holds. The answer is a `reset`.
+/// image it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's
+/// replica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ViewResync {
+    pub view: String,
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub version: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub model: bool,
+}
+
+/// `view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md "The native view
+/// model"), from version BASE to VERSION. MODEL is one JSON string, `{"ops": [...]}`, that the editor hands to its
+/// replica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with
+/// `model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewModel {
+    pub view: String,
+    /// The hub's instance id, as on `view-patch`.
+    pub hub: u64,
+    /// The version this patch applies to: 0 for the first model of a subscription.
+    pub base: u64,
+    pub version: u64,
+    /// MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset: bool,
+    pub model: String,
+}
+
+/// `view/ack`: the editor applied (VIEW, CLASS)'s patch VERSION. For a view whose patches are acknowledged (a
+/// terminal's), the hub holds the next patch until this; a reconnect or a `view/resync` clears what it waits for.
+/// Other views may send it or not.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ViewAck {
     pub view: String,
     pub class: String,
     pub version: u64,
@@ -133,8 +171,14 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "view/resync", ViewResync(ViewResync) -> bool,
             classes: [User], writes: false,
-            doc: "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
-            check: |p: &ViewResync| check_ids(&p.view, Some(&p.class)),
+            doc: "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset; with model, its replica of the view's model is not: answered by a view-model reset",
+            check: |p: &ViewResync| check_ids(&p.view, (!p.model).then_some(p.class.as_str())),
+        ),
+        method!(
+            "view/ack", ViewAck(ViewAck) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor applied a (view, class)'s patch of this version: an acknowledged view's next patch may go",
+            check: |p: &ViewAck| check_ids(&p.view, Some(&p.class)),
         ),
         method!(
             "view/glyphs", ViewGlyphs(ViewGlyphs) -> bool,
@@ -193,7 +237,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            5,
+            6,
             "the view/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );
@@ -210,10 +254,52 @@ mod tests {
                 &mut found,
             );
         }
-        for e in ["view-patch", "view-glyphs"] {
+        for e in ["view-patch", "view-glyphs", "view-model"] {
             let t = crate::events::event(e).unwrap_or_else(|| panic!("no event {e}"));
             maps(&serde_json::to_value((t.data)()).unwrap(), e, &mut found);
         }
         assert!(found.is_empty(), "maps (ids as keys) at {found:?}");
+    }
+
+    /// Every method and event: none carries ids as object keys, but the places listed here, which wait (each a
+    /// DEFERRED row: a consumer that is frozen code, or a wire another plan owns).
+    #[test]
+    fn no_method_or_event_uses_ids_as_object_keys() {
+        const WAITING: &[&str] = &[
+            // the stored event's own JSON object: a payload, not ids as keys
+            "events/since result/$defs/EventRow/properties/data",
+            "events/$defs/EventRow/properties/data",
+            // keys by provider and by key name: the agent system's gateway and runners wires
+            "gateway/keys params/$defs/ProviderKeys",
+            "gateway/register params/$defs/ProviderKeys",
+            "runners/keys params/$defs/RunnerKeys",
+            // cost by unit name: the history wire
+            "history/revert/preview result/$defs/Spent/properties/cost_by_unit",
+        ];
+        let mut found = Vec::new();
+        for m in crate::registry::registry() {
+            maps(
+                &serde_json::to_value((m.params)()).unwrap(),
+                &format!("{} params", m.name),
+                &mut found,
+            );
+            maps(
+                &serde_json::to_value((m.result)()).unwrap(),
+                &format!("{} result", m.name),
+                &mut found,
+            );
+        }
+        for e in crate::events::events() {
+            maps(
+                &serde_json::to_value((e.data)()).unwrap(),
+                e.name,
+                &mut found,
+            );
+        }
+        let new: Vec<&String> = found
+            .iter()
+            .filter(|f| !WAITING.iter().any(|w| f.starts_with(w)))
+            .collect();
+        assert!(new.is_empty(), "maps (ids as keys) at {new:#?}");
     }
 }

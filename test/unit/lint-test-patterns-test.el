@@ -220,7 +220,7 @@ levels that enclose it (a `let' binding, a call's argument); inside a branching 
     "test/live/drgnx-compositor-test.el" "test/live/drgnx-frames-test.el" "test/live/drgnx-invariants-test.el"
     "test/live/drgnx-keys-test.el" "test/live/drgnx-modal-ui-test.el" "test/live/drgnx-onboard-test.el"
     "test/live/drgnx-popup-test.el" "test/live/drgnx-tiling-test.el" "test/live/drgnx-workbench-test.el"
-    "test/live/drgnx-work-test.el" "test/live/mermaid-live-test.el" "test/live/observer-test.el"
+    "test/live/mermaid-live-test.el" "test/live/observer-test.el"
     "test/live/scenario-runner-test.el" "test/scenario/buffers-test.el" "test/scenario/explorer-test.el"
     "test/tty/clipboard-test.el" "test/tty/colours-test.el" "test/tty/harness-test.el" "test/tty/keys-test.el"
     "test/tty/layout-test.el" "test/tty/mixed-test.el" "test/tty/mouse-test.el" "test/tty/popups-test.el"

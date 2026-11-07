@@ -19,6 +19,7 @@
 (require 'drgnx-perf-extensions)
 (require 'drgnx-perf-workloads)
 (require 'drgnx-perf-work)
+(require 'drgnx-perf-agents)
 
 (defvar drgnx-perf-run--fixture nil "The typing fixture of this run (one file, reused, deleted at the end).")
 
@@ -481,57 +482,152 @@ order.  A name that is no workload is an error: a typo must not run nothing and 
   (let ((dir (getenv "DRGNX_USER_ELPA")))
     (and dir (not (string-empty-p dir)) (expand-file-name dir))))
 
-(defun drgnx-perf-run--eat-elpa-p ()
-  "Non-nil when $DRGNX_USER_ELPA holds an eat package (the terminal workloads can then run in the container)."
-  (let ((elpa (drgnx-perf-run--user-elpa)))
-    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`eat-[0-9.]+\\'") t)))
-
 (defun drgnx-perf-run--websocket-elpa-p ()
   "Non-nil when $DRGNX_USER_ELPA holds a websocket package (the Live view workload can then run in the container)."
   (let ((elpa (drgnx-perf-run--user-elpa)))
     (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`websocket-[0-9]") t)))
 
 (defun drgnx-perf-run--terminal-setup-form (command &rest switches)
-  "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
-The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
+  "The terminal workloads' setup: a hub of the workload (`drgnx-perf-run--hub-form'; its terminal worker beside it),
+module tools/term run on it, and the session functions the workloads use (`drgnx-perf-run--terminal-lib-form').  The
+terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
+  (concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+          (drgnx-perf-run--terminal-lib-form (cons command switches) nil t) ")"))
+
+(defun drgnx-perf-run--terminal-lib-form (argv &optional flood own-hub)
+  "The terminal workloads' session side, as a form string, on the hub already connected: module tools/term run, the
+functions the workloads use, and a terminal running ARGV (its program found on PATH) opened.  With FLOOD (an argv) a
+second terminal runs it, shown in the panel, while the first one is typed into (`terminal-echo').  The draws of
+terminal buffers are timed and their allocation counted from `drgnx-perf--term-arm' (`drgnx-perf--term-measure').
+OWN-HUB: the workload started the hub (`drgnx-perf--hub-start'), and the teardown stops it."
   (prin1-to-string
    `(progn
-      (unless (require 'eat nil t)
-        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
-        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
-               (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`eat-[0-9.]+\\'"))))))
-          (unless dir (error "The terminal workloads need the eat package"))
-          (add-to-list 'load-path dir)
-          (require 'eat)))
-      ;; the session started without eat's package, so the module was skipped (missing-packages): run it now, as it runs
-      ;; for a user who has eat installed (its key split, its GC timing)
-      (let ((spec (cdr (assq 'tools/terminal-eat drgnx-modules--table))))
-        (when (and spec (not (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)))
-          (drgnx-modules--run-one 'tools/terminal-eat spec 'startup)))
-      ;; never measure a terminal without the module (its key split, its GC timing) and not know it
-      (unless (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)
-        (error "The terminal workloads need the tools/terminal-eat module to run (status %S)"
-               (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status)))
+      ;; the session's modules ran before its hub was up: run tools/term now, as it runs for a user
+      (let ((spec (cdr (assq 'tools/term drgnx-modules--table))))
+        (when (and spec (not (drgnx-modules--ok-p 'tools/term)))
+          (drgnx-modules--run-one 'tools/term spec 'startup)))
+      ;; never measure without the module and not know it
+      (unless (drgnx-modules--ok-p 'tools/term)
+        (error "The terminal workloads need the tools/term module to run (status %S)"
+               (plist-get (cdr (assq 'tools/term (drgnx-modules-report))) :status)))
       (defvar drgnx-perf--term nil "The terminal's buffer.")
+      (defvar drgnx-perf--term2 nil "The flooding terminal's buffer (`terminal-echo'), or nil.")
       (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
+      (defvar drgnx-perf--term-slices nil "Wall ms of each draw of a terminal buffer since the arm.")
+      (defvar drgnx-perf--term-consed nil "kB allocated by each draw of a terminal buffer since the arm.")
+      (defvar drgnx-perf--term-armed nil "(TIME CONSED) at the arm.")
+      (defvar drgnx-perf--term-own-hub nil "Whether the teardown stops the hub.")
+      (defvar drgnx-perf--echo-pending nil "Send times of the typed terminal's keys not drawn yet, newest first.")
+      (defvar drgnx-perf--echo-ms nil "Per key since the arm: ms from its send to the next draw of the typed terminal.")
+      (defun drgnx-perf--echo-sent (method _params)
+        "Before `drgnx-term--send': a key or text for the typed terminal leaves now."
+        (when (and (eq (current-buffer) drgnx-perf--term) (member method '("term/key" "term/input")))
+          (push (float-time) drgnx-perf--echo-pending)))
+      (setq drgnx-perf--term-own-hub ,own-hub)
+      (defun drgnx-perf--term-live-p (&optional b)
+        "Whether the terminal B (default the typed one) is open: its program runs in the hub's worker."
+        (let ((b (or b drgnx-perf--term)))
+          (and (buffer-live-p b) (eq (buffer-local-value 'drgnx-term--state b) 'open))))
+      (defun drgnx-perf--term-start (argv)
+        "A terminal running ARGV, open; its buffer."
+        (let ((b (drgnx-term-start temporary-file-directory
+                                   (cons (or (executable-find (car argv)) (error "No %s here" (car argv))) (cdr argv)))))
+          (unless (drgnx-perf--wait 30 (lambda () (drgnx-perf--term-live-p b))) (error "The terminal did not open"))
+          b))
       (defun drgnx-perf--term-open ()
-        (let ((buf (generate-new-buffer "*eat-perf*")))
-          (with-current-buffer buf (eat-mode))
-          (eat-exec buf "perf" (executable-find ,command) nil ',switches)
-          (set-process-query-on-exit-flag (get-buffer-process buf) nil)
-          (setq drgnx-perf--term buf)))
+        ,(if (not flood)
+             `(setq drgnx-perf--term (drgnx-perf--term-start ',argv))
+           ;; the Work map holds the panel: both terminals open in the editor area, the typed one above, the flood below
+           `(let ((display-buffer-overriding-action '((display-buffer-same-window)))
+                  (top (selected-window)))
+              (setq drgnx-perf--term (drgnx-perf--term-start ',argv))
+              (select-window (split-window top nil 'below))
+              (setq drgnx-perf--term2 (drgnx-perf--term-start ',flood))
+              (select-window top))))
       (defun drgnx-perf--term-show ()
         "The terminal in the panel (the display rules choose where), the editor window selected."
         (let ((win (selected-window)))
           (display-buffer drgnx-perf--term)
           (select-window win)))
+      (defun drgnx-perf--term-slice (orig buffer)
+        (if (not (eq (buffer-local-value 'major-mode buffer) 'drgnx-term-mode))
+            (funcall orig buffer)
+          (let ((t0 (float-time)) (c0 (drgnx-gc--consed)))
+            (prog1 (funcall orig buffer)
+              (let ((now (float-time)))
+                (push (* 1000 (- now t0)) drgnx-perf--term-slices)
+                (push (/ (- (drgnx-gc--consed) c0) 1024.0) drgnx-perf--term-consed)
+                (when (eq buffer drgnx-perf--term)   ; the keys sent before this draw are on screen with it
+                  (dolist (k drgnx-perf--echo-pending) (push (* 1000 (- now k)) drgnx-perf--echo-ms))
+                  (setq drgnx-perf--echo-pending nil)))))))
+      (defun drgnx-perf--term-arm ()
+        "Start timing terminal draws and counting the session's allocation."
+        (setq drgnx-perf--term-slices nil drgnx-perf--term-consed nil drgnx-perf--echo-pending nil drgnx-perf--echo-ms nil
+              drgnx-perf--term-armed (list (float-time) (drgnx-gc--consed)))
+        (advice-add 'drgnx-term--send :before #'drgnx-perf--echo-sent)
+        (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--term-slice))
+      (defun drgnx-perf--term-measure (&rest more)
+        "Since the arm: each terminal draw's wall ms (:slice_ms) and kB (:draw_kb), the session's allocation in MB/s
+\(:alloc_rate), and when keys were typed into the terminal each one's ms from its send to the draw that showed it
+\(:echo_ms); MORE (a plist) is added."
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--term-slice)
+        (advice-remove 'drgnx-term--send #'drgnx-perf--echo-sent)
+        (let ((secs (max 0.001 (- (float-time) (car drgnx-perf--term-armed))))
+              (mb (/ (- (drgnx-gc--consed) (cadr drgnx-perf--term-armed)) 1048576.0)))
+          (append (list :slice_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--term-slices))
+                        :draw_kb (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--term-consed))
+                        :alloc_rate (drgnx-perf--round (/ mb secs)))
+                  (and drgnx-perf--echo-ms (list :echo_ms (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--echo-ms))))
+                  more)))
+      (defun drgnx-perf--term-text-p (b text)
+        "Whether TEXT is in terminal B's buffer."
+        (with-current-buffer b (save-excursion (goto-char (point-min)) (and (search-forward text nil t) t))))
+      (defun drgnx-perf--term-flood (bytes)
+        "A file of about BYTES of numbered lines; `cat' of it in a new terminal, then a mark, timed from the start to the
+mark on screen: (:wall_ms MS) and the terminal draws' rows (`drgnx-perf--term-measure')."
+        (let ((file (make-temp-file "drgnx-perf-flood")) (mark "drgnx-perf-flood-done") b)
+          (unwind-protect
+              (progn
+                (with-temp-file file
+                  (let ((i 0)) (while (< (buffer-size) bytes) (insert (format "%08d the quick brown fox jumps over the lazy dog\n" (cl-incf i))))))
+                (drgnx-perf--term-arm)
+                (let ((t0 (float-time)))
+                  (setq b (drgnx-perf--term-start (list "sh" "-c" (format "cat \"$0\"; echo %s; exec sleep 600" mark) file)))
+                  (let ((win (selected-window))) (display-buffer b) (select-window win))
+                  (unless (drgnx-perf--wait 120 (lambda () (drgnx-perf--term-text-p b mark)))
+                    (error "The flood's mark did not show in 120 s"))
+                  (drgnx-perf--term-measure :wall_ms (round (* 1000 (- (float-time) t0))))))
+            (when (buffer-live-p b) (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
+            (delete-file file))))
+      (defun drgnx-perf--term-backfill ()
+        "`seq 1 10000' in a new terminal shown in the panel, timed until its buffer holds the 10k lines (the backfill
+after the flood): the draws' rows, and the heap the full terminal adds (:heap_kb: the live Lisp objects after a
+collection, against before it opened, plus its buffer's text)."
+        (let ((heap (lambda ()
+                      (let ((sum 0))
+                        (dolist (e (garbage-collect) sum)
+                          (when (and (numberp (nth 1 e)) (numberp (nth 2 e))) (setq sum (+ sum (* (nth 1 e) (nth 2 e)))))))))
+              (h0 nil) b)
+          (setq h0 (funcall heap))
+          (unwind-protect
+              (progn
+                (drgnx-perf--term-arm)
+                (setq b (drgnx-perf--term-start (list "sh" "-c" "seq 1 10000; exec sleep 600")))
+                (let ((win (selected-window))) (display-buffer b) (select-window win))
+                (unless (drgnx-perf--wait 60 (lambda () (drgnx-perf--term-text-p b "\n2\n")))
+                  (error "The backfill did not reach line 1 in 60 s"))
+                (let ((m (drgnx-perf--term-measure)))
+                  (append m (list :lines (with-current-buffer b (count-lines (point-min) (point-max)))
+                                  :heap_kb (round (/ (+ (- (funcall heap) h0) (buffer-size b)) 1024.0))))))
+            (when (buffer-live-p b) (let ((kill-buffer-query-functions nil)) (kill-buffer b))))))
       (defun drgnx-perf--term-teardown ()
-        (when (buffer-live-p drgnx-perf--term)
-          (let ((proc (get-buffer-process drgnx-perf--term)) (kill-buffer-query-functions nil))
-            (kill-buffer drgnx-perf--term)
-            (let ((d (+ (float-time) 3)))   ; wait for the process to be gone
-              (while (and proc (process-live-p proc) (< (float-time) d)) (accept-process-output nil 0.05)))))
-        (setq drgnx-perf--term nil)
+        (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--term-slice)
+        (advice-remove 'drgnx-term--send #'drgnx-perf--echo-sent)
+        (dolist (b (list drgnx-perf--term drgnx-perf--term2))
+          (when (buffer-live-p b)
+            (let ((kill-buffer-query-functions nil)) (kill-buffer b))))   ; term/close ends its worker
+        (setq drgnx-perf--term nil drgnx-perf--term2 nil)
+        (when drgnx-perf--term-own-hub (drgnx-perf--hub-stop))
         t)
       (drgnx-perf--term-open)
       t)))
@@ -647,57 +743,13 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                                     " (drgnx-perf--hub-start (make-list 6 (drgnx-perf--slow)))"
                                     " (setq drgnx-perf--agent (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
                                     " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--agent) 'idle)))"
-                                    " (drgnx-agents-ui-view) t)")
+                                    " (drgnx-agent-panel-list-show) t)")
                     :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
                                    " (drgnx-perf--wait 15 (lambda () (not (drgnx-perf--running-p drgnx-perf--agent))))"
                                    " (drgnx-perf--send drgnx-perf--agent \"slow\") t)")
                     :actions ,(make-list 2 (funcall type "(setq y 2) "))
                     :check "(drgnx-perf--running-p drgnx-perf--agent)"   ; typed while it streamed
                     :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--agent)) (drgnx-perf--hub-stop) " kill-fixture ")"))
-      ;; typing while the editor's other window shows a transcript whose running answer is 400 kB long and grows by
-      ;; 100-character chunks, 50 a second: a chunk costs the chunk (model) and only the new text is drawn (view)
-      ;; (the mock's turn is that: a first chunk of 400 kB, then five chunks every tenth of a second, 300 times; the
-      ;; run waits for the 400 kB to be in the transcript before it types)
-      ;; the mock runs a prompt past its script's last line as its own words (a turn that ends at once): one line for
-      ;; every run of a setup, both sides' warm-ups and rounds of an A/A included
-      (agent-stream :setup ,(concat "(progn " (drgnx-perf-run--hub-form)
-                                    (format " (drgnx-perf--hub-start (make-list %d (drgnx-perf--stream)))"
-                                            (* 2 (1+ drgnx-perf-ab-min-rounds)))
-                                    " (setq drgnx-perf--stream (drgnx-agents-mirror-start \"mock\" temporary-file-directory))"
-                                    " (drgnx-perf--wait 10 (lambda () (eq (drgnx-agent-session-status drgnx-perf--stream) 'idle)))"
-                                    " t)")
-                    :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                   " (drgnx-perf--wait 40 (lambda () (not (drgnx-perf--running-p drgnx-perf--stream))))"
-                                   " (let ((editor (selected-window)) (b (drgnx-agents-ui-transcript-buffer drgnx-perf--stream)))"
-                                   "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
-                                   "   (select-window editor))"
-                                   ;; the hub sends entries to the editors that showed the session: the editor does it from
-                                   ;; `window-buffer-change-functions', which a run of workloads in one session may have removed
-                                   " (drgnx-agents-mirror-show (drgnx-agent-session-remote drgnx-perf--stream))"
-                                   " (drgnx-perf--send drgnx-perf--stream \"stream 1500\")"
-                                   " (drgnx-perf--wait 30 (lambda () (let ((e (car (last (drgnx-agent-session-entries drgnx-perf--stream)))))"
-                                   "   (and (eq (plist-get e :type) 'agent) (>= (drgnx-agents-entry-length e) 409600)))))"
-                                   " t)")
-                    :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
-                    :check "(drgnx-perf--running-p drgnx-perf--stream)"   ; typed while it streamed
-                    :teardown ,(concat "(progn (ignore-errors (drgnx-agents-kill drgnx-perf--stream)) (drgnx-perf--hub-stop)"
-                                       " (when-let* ((b (get-buffer (format \"*agent: %s*\" (drgnx-agent-session-name drgnx-perf--stream)))))"
-                                       "   (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))"
-                                       "   (kill-buffer b)) "
-                                       kill-fixture ")"))
-      ;; the same shape as agent-stream with no agent: a transcript fed from a recording (test/fixtures/day/transcript.eld) by
-      ;; a timer, at the recorded pace, through `drgnx-agents--append-text' and `drgnx-agents--changed'; it runs in
-      ;; the container, where a mock agent's turn ends before the typing does
-      (transcript-replay :setup ,(format "(progn (defvar drgnx-perf--replay-mark 0 \"Chunks fed when the keys began.\")
-                                                (drgnx-perf-replay-start \"replay\" '%S) t)" (drgnx-perf-day--read "transcript.eld"))
-                         :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form)
-                                        " (let ((editor (selected-window)) (b (drgnx-perf-replay-buffer \"replay\")))"
-                                        "   (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'right) b))"
-                                        "   (select-window editor))"
-                                        " (setq drgnx-perf--replay-mark (drgnx-perf-replay-count \"replay\")) t)")
-                         :actions ,(make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) "))
-                         :check "(> (drgnx-perf-replay-count \"replay\") drgnx-perf--replay-mark)"   ; typed while it streamed
-                         :teardown ,(concat "(progn (drgnx-perf-replay-stop \"replay\") " kill-fixture ")"))
       ;; a long code file with sticky scroll, indent guides (when installed) and smooth scrolling on
       (code-scrolling
        :setup ,(format "(progn (dolist (m '(\"editor/drgnx-sticky\" \"ui/drgnx-smooth\" \"extra/drgnx-guides\")) (load (expand-file-name (concat \"modules/\" m) %S) nil t)) (drgnx-smooth--setup) t)"
@@ -807,27 +859,66 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        (drgnx-wb-area-window 'panel) (drgnx-wb-area-window 'right) t)"
        :repeat 3
        :teardown ,(concat "(progn " drgnx-perf-run--window-switch-teardown-form " " kill-fixture ")"))
-      ;; typing in an eat terminal (cat: the tty echoes every key, eat draws it)
+      ;; typing in drgnx's terminal (cat: the tty echoes every key, the worker draws it)
       (terminal-typing
        :setup ,(drgnx-perf-run--terminal-setup-form "cat")
        :each "(progn (pop-to-buffer drgnx-perf--term) (select-window (get-buffer-window drgnx-perf--term)) t)"
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
-       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) t)"
+       :check "(drgnx-perf--term-live-p)"
        :teardown "(drgnx-perf--term-teardown)")
-      ;; typing in the fixture while a terminal in the panel streams output (seq 1 2000, in a loop)
+      ;; typing in the fixture while a terminal in the panel streams output (seq 1 2000, in a loop); the terminal's
+      ;; draws and the session's allocation while it streams
       (terminal-output
        :setup ,(drgnx-perf-run--terminal-setup-form "sh" "-c" "while :; do seq 1 2000; done")
        :each ,(concat "(progn (drgnx-wb-focus-editor) " (drgnx-perf-run--visit-fixture-form)
-                      " (drgnx-perf--term-show) (setq drgnx-perf--term-tick (buffer-chars-modified-tick drgnx-perf--term)) t)")
+                      " (drgnx-perf--term-show) (setq drgnx-perf--term-tick (buffer-chars-modified-tick drgnx-perf--term))"
+                      " (drgnx-perf--term-arm) t)")
        :timers t
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
-       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) (get-buffer-window drgnx-perf--term)
+       :measure "(drgnx-perf--term-measure)"
+       :check "(and (drgnx-perf--term-live-p) (get-buffer-window drgnx-perf--term)
                     (> (buffer-chars-modified-tick drgnx-perf--term) drgnx-perf--term-tick) t)"   ; output streamed while typing
        :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
+      ;; `cat' of 10 MB and of 100 MB into a terminal in the panel, timed to the mark after it on screen
+      (terminal-output-10mb
+       :setup ,(drgnx-perf-run--terminal-setup-form "cat")
+       :measure "(drgnx-perf--term-flood (* 10 1024 1024))"
+       :teardown "(drgnx-perf--term-teardown)")
+      (terminal-output-100mb
+       :setup ,(drgnx-perf-run--terminal-setup-form "cat")
+       :measure "(drgnx-perf--term-flood (* 100 1024 1024))"
+       :teardown "(drgnx-perf--term-teardown)")
+      ;; end to end: a key read to its echo drawn, in a terminal running `cat' while 30 mock agents stream (their
+      ;; Work map shown) and a second terminal in the panel floods (seq 1 2000 in a loop); one hub carries it all
+      (terminal-echo
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " (drgnx-perf-work--lib-form) " (drgnx-perf--work-up t) (drgnx-wb-focus-editor) "
+                       (drgnx-perf-run--terminal-lib-form '("cat") '("sh" "-c" "while :; do seq 1 2000; done")) " t)")
+       :each "(progn (drgnx-perf--work-premise) (select-window (get-buffer-window drgnx-perf--term)) (drgnx-perf--term-arm) t)"
+       :actions ,(make-list 6 (funcall type "echo hello world 123"))
+       :measure "(drgnx-perf--term-measure)"
+       :check "(and (drgnx-perf--term-live-p) (drgnx-perf--term-live-p drgnx-perf--term2) (get-buffer-window drgnx-perf--term2)
+                    (drgnx-perf--work-premise) t)"
+       :teardown ,(concat "(progn (drgnx-perf--term-teardown) (drgnx-perf--work-down) " kill-fixture " t)"))
+      ;; the same key path with nothing else running: the hop's own cost
+      (terminal-echo-idle
+       :setup ,(drgnx-perf-run--terminal-setup-form "cat")
+       :each "(progn (pop-to-buffer drgnx-perf--term) (select-window (get-buffer-window drgnx-perf--term)) (drgnx-perf--term-arm) t)"
+       :actions ,(make-list 6 (funcall type "echo hello world 123"))
+       :measure "(drgnx-perf--term-measure)"
+       :check "(drgnx-perf--term-live-p)"
+       :teardown "(drgnx-perf--term-teardown)")
+      ;; `seq 1 10000' then the backfill of the rows that scrolled past: the draws' slices while it fills, and the heap
+      ;; of the full 10k-line terminal (terminal-memory's number, recorded only)
+      (terminal-backfill
+       :setup ,(drgnx-perf-run--terminal-setup-form "cat")
+       :measure "(drgnx-perf--term-backfill)"
+       :teardown "(drgnx-perf--term-teardown)")
       ;; the off-the-main-thread workloads (§17.6): report-only until their step lands (harness/drgnx-perf-workloads.el)
       ,@(drgnx-perf-workers-workloads)
       ;; the Work space: 30 streaming mock agents, the map shown or hidden (harness/drgnx-perf-work.el)
       ,@(drgnx-perf-work-workloads (drgnx-perf-run--visit-fixture-form) kill-fixture)
+      ;; the agents in the editor: five streaming mock agents, a 3,000-line file (harness/drgnx-perf-agents.el)
+      ,@(drgnx-perf-agents-workloads)
       (frames :measure "(list :frame (drgnx-perf-frame-ms 5))")
       (redisplay :each ,(drgnx-perf-run--visit-fixture-form) :measure "(list :redisplay (drgnx-perf-redisplay-ms 30))" :teardown ,kill-fixture)
       (startup :daemon t)
@@ -985,8 +1076,17 @@ under :compose (the compose probe)."
         (evil (drgnx-perf--get results 'typing-evil '(:input :p95)))
         (hidden (drgnx-perf--get results 'work-typing-hidden '(:input :p95)))
         (shown (drgnx-perf--get results 'work-typing-shown '(:input :p95)))
-        (mirror (drgnx-perf--get results 'work-typing-mirror '(:input :p95))))
+        (agents (drgnx-perf--get results 'agents-typing '(:input :p95)))
+        (agents-none (drgnx-perf--get results 'agents-typing-none '(:input :p95)))
+        (ratio (drgnx-perf--get results 'pair-typing '(:pair_applied_ratio))))
     (append
+     ;; the agents in the editor: at most 1 ms over the same five agents with the module off; of the paired chat's writes at
+     ;; least 80 % were applied by the editor
+     (when (and (numberp agents) (numberp agents-none) (> (- agents agents-none) 1.0))
+       (list (format "agents-typing input p95 %s ms is %s ms over agents-typing-none's %s ms (the agents in the editor may add at most 1 ms)"
+                     (drgnx-perf--round agents) (drgnx-perf--round (- agents agents-none)) (drgnx-perf--round agents-none))))
+     (when (and (numberp ratio) (< ratio 0.80))
+       (list (format "pair-typing applied %s of the paired chat's writes; at least 0.80 are due" (drgnx-perf--round ratio))))
      (when (and (numberp plain) (numberp evil) (> (- evil plain) 1.0))
        (list (format "typing-evil input p95 %s ms is %s ms over typing's %s ms (evil may add at most 1 ms)"
                      (drgnx-perf--round evil) (drgnx-perf--round (- evil plain)) (drgnx-perf--round plain))))
@@ -995,9 +1095,7 @@ under :compose (the compose probe)."
      (when (and (numberp hidden) (numberp shown) (> (- shown hidden) 1.0))
        (list (format "work-typing-shown input p95 %s ms is %s ms over work-typing-hidden's %s ms (the map may add at most 1 ms)"
                      (drgnx-perf--round shown) (drgnx-perf--round (- shown hidden)) (drgnx-perf--round hidden))))
-     (when (and (numberp plain) (numberp mirror) (> (- mirror plain) 1.0))
-       (list (format "work-typing-mirror input p95 %s ms is %s ms over typing's %s ms (30 agents streaming may add at most 1 ms)"
-                     (drgnx-perf--round mirror) (drgnx-perf--round (- mirror plain)) (drgnx-perf--round plain)))))))
+     )))
 
 (defun drgnx-perf-run--relative-note (results)
   "A line saying the 1 ms rule was not judged, when `typing-evil' was measured without `typing' in RESULTS; else nil."
@@ -1208,19 +1306,25 @@ version and the commit, as JSON in FILE."
     (make-directory (file-name-directory (expand-file-name file)) t)
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
+(defconst drgnx-perf-run-workers-seeded
+  '(explorer-git quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old)
+  "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
+
 (defconst drgnx-perf-run-unseeded
-  `((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
+  `(,@(mapcar (lambda (w) (cons w "report-only until the combined gate pass: allocation, CPU and rows follow its first runs on the desktop island"))
+              '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
-    (terminal-typing . "the container image has no eat package")
-    (terminal-output . "the container image has no eat package")
-    (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
+    ,@(mapcar (lambda (w) (cons w "drgnx's terminal: its time rows are judged and its allocation rows set at the combined gate pass, on the desktop island"))
+              '(terminal-typing terminal-output terminal-output-10mb terminal-output-100mb terminal-echo terminal-echo-idle
+                                terminal-backfill))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
-              drgnx-perf-workers-names)
+              (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
-              '(work-nav work-relayout work-typing-shown work-typing-hidden work-typing-mirror))
+              '(work-nav work-relayout work-typing-shown work-typing-hidden))
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
+    (work-nav-rows . "report-only until the combined pass (gates after core, editor and agents); needs Sjá's Nidhogg")
     (typing-evil . "needs DRGNX_MODAL_ELPA (evil); not run in the container")
     (motions-evil . "needs DRGNX_MODAL_ELPA")
     (explorer-evil . "needs DRGNX_MODAL_ELPA")
@@ -1232,18 +1336,15 @@ version and the commit, as JSON in FILE."
 container.  Seed one (budgets.eld) and take it off this list.")
 
 (defconst drgnx-perf-run-container-skipped
-  '((live-view . "the container image has no websocket package")
-    (terminal-typing . "the container image has no eat package")
-    (terminal-output . "the container image has no eat package"))
+  '((live-view . "the container image has no websocket package"))
   "Workloads that error in the GUI container (seen 2026-10-20, CI perf lab), and why.  In a container the lab names
 them and leaves them out (as it leaves out the evil workloads without evil), so one that cannot run there does not
 fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-unseeded'.")
 
 (defun drgnx-perf-run--container-skip (workload)
-  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The terminal workloads
-run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier), the Live view when it holds websocket."
-  (unless (or (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
-              (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p)))
+  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The Live view runs when
+$DRGNX_USER_ELPA holds websocket (`bin/drgnx' mounts it in the perf tier)."
+  (unless (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p))
     (cdr (assq workload drgnx-perf-run-container-skipped))))
 
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
@@ -1397,7 +1498,7 @@ each round; fails when RSS grows by more than 20% from the first round or passes
 (defconst drgnx-perf-day-seed "drgnx-day-1" "Seeds the order of the workloads in each steady round.")
 
 (defconst drgnx-perf-day-workloads
-  '(typing scrolling tabs explorer code-scrolling diff-scrolling replace-typing replace-retype window-switch transcript-replay)
+  '(typing scrolling tabs explorer code-scrolling diff-scrolling replace-typing replace-retype window-switch)
   "The workloads of a steady round: the container-runnable input workloads that need no package, process or git
 project the GUI image lacks (so not the mock-agent, Live, terminal, evil, popup, remote, ghost or index ones).")
 
@@ -1509,8 +1610,7 @@ against the replay server, read the repository with `vc-git', start two transcri
                              (unless (> (buffer-size dir) 0) (error "vc-git: the status is empty"))))))
         (step "streams" (lambda ()
                           (dolist (n '("day-1" "day-2"))
-                            (drgnx-perf-replay-start n chunks)
-                            (drgnx-perf-replay-buffer n)))))
+                            (drgnx-perf-replay-start n chunks)))))
       (vconcat (nreverse steps)))))
 
 (defconst drgnx-perf-day-teardown-form

@@ -10,8 +10,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs).
   It requires `cl-lib`, `subr-x`, `seq`, `drgnx-paths`, `drgnx-guard`, `drgnx-timer`, `drgnx-file`, `drgnx-notice`,
   `drgnx-agents-matrix` and `drgnx-work-db` (the AI provider list comes from `drgnx-ai`, which the caller has loaded).
-  There is no server half in Emacs: the hub is the Rust binary. The message prompt the cockpit preview uses is
-  `drgnx-coord-message-prompt` (`core/drgnx-coord-read.el`). A `declare-function` of a client function names
+  There is no server half in Emacs: the hub is the Rust binary. A `declare-function` of a client function names
   `"drgnx-hub-client"`. The editor's jobs go through `core/drgnx-exec.el`, a cache fed by `exec/list` and the hub's
   `exec-done` events ([Jobs](#jobs-exec)).
 - **The hub's environment.** One hub runs per drgnx data directory, started as
@@ -62,7 +61,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
-  `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
+  `--parent-pid` counts; real time, also under `--test-clock`). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
   of them), and the outside bridges' connections `mcp/attach` handed to MCP, so its clients see the end before the hub
   waits on anything that can hang. Last, it stops its store
@@ -241,7 +240,8 @@ Every timer of the hub and every reading of its time go through `drgnx-ratatoskr
 `tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
-the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+the hub (a podman pull); `real_interval(period)` ticks on real time on every clock, for watching something outside
+the hub (the `--parent-pid` process). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
 close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
 and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
 the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`
@@ -406,7 +406,7 @@ socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB
 few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
 the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
-connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
+connects again (the Agents module's idle timer, the Work space's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **JSON objects** ("Records 2" below). Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
@@ -534,7 +534,9 @@ Ratatoskr's `hello` (protocol v1, `runtime/crates/drgnx-ratatoskr/src/hello.rs`)
 worth nothing on another connection, because each connection's challenge differs.
 
 1. On accept the hub sends `{"event":"challenge","data":{"nonce":HUB_NONCE}}`, 32 lowercase hex from 16 random bytes.
-2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?}`. `proof` is
+2. The client sends `hello` `{proto, nonce, drgnx_version?, schema?, records?, client?, proof?, cwd?, session?}`.
+   An editor's `session` names its Emacs session: its terminals draw on that connection again ([the
+   terminal](terminal.md), "Lifetime"). `proof` is
    `HMAC-SHA256(cap, "drgnx-hub client " + HUB_NONCE + " " + nonce)` as 64 lowercase hex, keyed with the cap file's 64
    hex characters.
 3. The hub compares the decoded digests in constant time:
@@ -780,8 +782,10 @@ timer, file or hook. `test/unit/hub-core-test.el` runs it in every order of its 
 (`:drgnx-state`, `-queue`, `-proven`, `-asked`, `-events`, `:since`, and whether each is live) into a state. It calls
 the core, writes the new state back, and only then runs the effects, so an effect that comes back (a sentinel
 `delete-process` runs at once, a callback that calls the hub) steps from the new state. The globals stay the truth
-between steps: a test may let-bind them or set a connection's property. Its two I/O points stay
-`drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
+between steps: a test may let-bind them or set a connection's property. An event line is the exception
+(`drgnx-hub--step-event`): it changes nothing in the client, so the core gets only the connection's subscription mark,
+no snapshot, and its step hands back the same state with the one effect that runs `drgnx-hub-event-functions`.
+Its two I/O points stay `drgnx-hub--open` (returns the process) and `drgnx-hub--send-line`.
 
 **Events** (`drgnx-hub-core-event-kinds`), each fed by one shell entry point:
 
@@ -865,7 +869,7 @@ chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
 `DRGNX_RATATOSKR_BIN` names it (`bin/drgnx test --container` passes it into the container), they skip without it,
 and `test/no-skip.eld` makes CI fail when they skip. Among them, `editor-traffic-over-ratatoskr` replays what the
-cockpit, the job UI, the agents mirror and `drgnx job` send, with the params their own code builds, over a populated
+agents mirror and `drgnx job` send, with the params their own code builds, over a populated
 store, and fails on any `invalid-params` or `internal`.
 
 ## Events
@@ -1317,6 +1321,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/explain` | user | `{id: Id, item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | `{facts?: [Fact], item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | no |
 | `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
+| `agents/grants` | user | `{id: Id}` | `{grants: [Grant]}` | no |
+| `agents/grants/revoke` | user | `{grant: string, id: Id}` | `{agent_rule: "cleared" \| "kept", grant: string, restart: boolean}` | yes |
 | `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
 | `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
@@ -1368,6 +1374,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
@@ -1381,6 +1388,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1399,7 +1407,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/scrub` | user | `{}` | `{blocked_by?: string, vacuumed: boolean, wal_truncated: boolean}` | yes |
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
-| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum, session?: string}` | `HelloReply` | no |
 | `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
@@ -1473,6 +1481,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
+| `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
+| `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
@@ -1480,6 +1491,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
 | `search/status` | user | `{root: AbsPath}` | `StatusAnswer` | no |
+| `search/symbol-at` | user | `{file: string, line: natnum, root: AbsPath}` | `{name?: string}` | no |
 | `search/typing` | user | `{}` | `{}` | no |
 | `settings/confirm` | user | `{error?: string, ok: boolean, tx: natnum}` | `{state: "accepted" \| "reverted" \| "blocked"}` | yes |
 | `settings/explained` | user | `{req: natnum, settings: [JsonObject]}` | `boolean` | no |
@@ -1491,19 +1503,38 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/find` | user | `{assignee?: string, cursor?: natnum, labels?: [string], project?: string, query?: Text, status?: Status}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
+| `term/close` | user | `{id: string, signal?: integer}` | `boolean` | no |
+| `term/config` | user | `{config: [[string, SettingValue]], id: string}` | `boolean` | no |
+| `term/fetch` | user | `{before_key?: string, id: string, max_bytes?: natnum}` | `{version?: natnum}` | no |
+| `term/focus` | user | `{id: string, in: boolean}` | `boolean` | no |
+| `term/key` | user | `{id: string, key: string, mods?: [string], text?: string, unshifted?: natnum}` | `boolean` | no |
+| `term/list` | user | `{}` | `[TermStatus]` | no |
+| `term/mouse` | user | `{button?: integer, col: natnum, id: string, kind: string, mods?: [string], row: natnum}` | `boolean` | no |
+| `term/open` | user | `{cell_px?: [natnum, natnum], class: string, cols: natnum, command?: [string], config?: [[string, SettingValue]], dir: string, env?: [[string, string]], memory_max?: string, rows: natnum, tasks_max?: string, window?: natnum}` | `{id: string, view: string}` | no |
+| `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
+| `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
+| `term/search` | user | `{dir?: string, id: string, query: string}` | `{matches: [[string \| null, natnum, natnum]]}` | no |
+| `term/session-end` | user | `{}` | `natnum` | no |
+| `term/text` | user | `{id: string, text: string}` | `boolean` | no |
+| `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
 | `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
-| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
+| `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/trail/close` | user | `{view: string}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -1738,7 +1769,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   work tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
-  mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
+  mirror and the Work space. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
   updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most
   once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
 - **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
@@ -1833,11 +1864,11 @@ again after it.
   or the hub's end, then the exit;
 - a sender, an agent, the event pair's timer, and the hub's end, then the exit (no pair goes out while the hub ends);
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
-  call, and the cockpit settling a card;
+  call, and the Work space settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
   crash;
 - a user who sends and stops, an agent that asks the same question twice and answers, the matrix deciding late
-  through the question's open card or a new one, and the cockpit settling the open card (no card stays open that no
+  through the question's open card or a new one, and the Work space settling the open card (no card stays open that no
   request waits on, and none is withdrawn while one does);
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);
@@ -2018,6 +2049,16 @@ view only what changed, to the connection that shows it.
   at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
   width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
   `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
+- **Rows** (`work/map/subscribe`'s `rows: true`; "Rows" below). The view's rows are built in the hub
+  (`vegvisir::render`, `docs/develop/work-space.md`, "The rows") and go to each display class the editor sent a
+  `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per class a reset; the answer is
+  `{hub, version}` and no `work-map` event comes for that view (nor a stale mark when it is hidden: its editor hid it).
+  Its width is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an
+  env, and a terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the
+  user's change; any other env, a delta, a full frame or a new `selected` (the chain's edges) draws the classes again,
+  and each gets only what changed (a resize: `replace`s of the rows whose fit changed). The coalescing, the quiet
+  reflow and the held chain are the frames' own. The first row is `strip` (the needs-you strip and the machines'
+  load). Without `rows` the view keeps its frames and `work-map` events, unchanged.
 - **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
   from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
   a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
@@ -2044,6 +2085,48 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The trail and the Timeline
+
+The Work space's trail (one session's steps, its conclusions among them) and Timeline (a lane per agent session) as
+rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
+
+- **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
+  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
+  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
+  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+- **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
+  each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
+  conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
+  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
+  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
+  anything else is UTC).
+- **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
+  `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
+  only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
+  inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
+  the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
+- **Model** (`work::trail::model`, the editor's replica; "The native view model"). Before the rows, each refresh sends
+  the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
+  `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
+  chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
+  when its first step is not its first (`from` = that step's seq − 1). A Timeline: `lane:SESSION` (kind `lane`) and
+  `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
+  the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
+  (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
+  of the connection's shown rows map views reaches (`Map::near`: the agents and subagents on its chain). A
+  `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
+  (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
+  query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
+  the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
+  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
+  `cards:I:1` (state · agent · steps done), or `none`. Its model is its own, not the map's: a `card` node per task
+  (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
+  in its column, left and right to the nearest column with cards, at the same height or its last card), lists
+  `cards` (column by column) and `team` (the cards an agent works on).
 
 ### The follow feed
 
@@ -2085,16 +2168,26 @@ it builds for Android too).
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
   [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
-  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out.
+  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out. Runs may
+  overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
-  keywords. An image id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  keywords. A runstav test checks every method and event; the places that still map (an event's stored payload, the
+  gateway's and runners' keys, history's cost by unit) are listed in it and wait for the wires' own plans. An image
+  id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
   epoch (a theme change) never reuses an old tile.
 - **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
   `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
   images the rows name that the editor may not hold yet.
+- **Styles and terminal state** (a terminal's view; `drgnx_rows::style`). A patch may carry `styles: [[id, {fg, bg,
+  ul_color, bold, faint, italic, underline, strike, inverse, blink}]]`, each style sent once and kept by the editor
+  until the next reset (a reset carries every style its rows name). A run names a style as the face `s:<id>`
+  (`Face::Style`). A colour is `{ansi: 0..15}`, `{rgb: "#rrggbb"}` (program data, the 256-colour cube included, never
+  a theme literal) or absent (the default); attributes are present only when true. `term: {cursor: [row_key, col,
+  shape, visible], alt_screen, mouse_tracking, title}` (shape `block`, `block_hollow`, `bar` or `underline`; COL a
+  scalar index) comes on a patch that changes them. Both are left out when empty, so other views see no change.
 
 ### The wire: envs, patches, resyncs (`view`)
 
@@ -2105,10 +2198,12 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
-  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
-  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
-  view; a connection's views end with it.
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,
+  version}` says the editor applied that patch (sent by a view type with `:ack t`; others may ignore it).
+  `view/close {view}` forgets the view; a connection's views end with it.
 - **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
 
 **The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
@@ -2127,15 +2222,57 @@ All of it is in memory only.
   a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
   `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
   outstanding per (view, class).
-- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
-  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
+  class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
+  `epoch_reset`). **Acknowledged** (`ack`, a terminal's): at most one patch is in flight per (view, class). Rows built
+  before the editor's `view/ack` of the version sent wait, the newest winning, and go as one patch on that ack; an ack
+  of another version releases nothing. A `view/resync` answers a reset of the newest rows at once (it is then in
+  flight), and a reconnect starts afresh, so a lost ack never stalls the view. **No epoch reset** (`epoch_reset`
+  false, a terminal's: its faces repaint in the editor): a new epoch is answered by a diff, and the editor applies a
+  patch of an older epoch instead of holding it. A terminal view's resize is a reset, sent by its builder. Views with
+  the default options (`ack` false, `epoch_reset` true) behave as above.
+- **Styles in the editor:** a run naming a style the editor lacks (not in a reset) sends `view/resync`. An ansi
+  foreground is the face `drgnx-term-color-N` itself (it inherits `ansi-color-*` and resets the background), so a
+  remap or a theme shows on rows already inserted; the other attributes, program colours and ansi backgrounds become
+  one anonymous face per distinct style, from a per-buffer LRU of 4,096 (`drgnx-view-patch-style-face-max`).
 - **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
   callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
   colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
   never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
   carries.
+
+### The native view model (`view-model`)
+
+A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
+Nidhogg: `nidhogg-view-apply`) needs to answer every key in-process, never from the hub. The hub keeps, per
+(connection, view), the model and version it last sent (`view::Store`'s models, `view::model`), and sends what changed
+as the event `view-model {view, hub, base, version, reset?, model}`:
+
+- **One string.** `model` is a JSON string, `{"ops": [...]}`, that the editor hands to its replica whole; the editor
+  never makes Lisp data of it. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
+  {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
+  changed descriptor is a reset.
+- **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
+  each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
+  to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
+- **Resets.** The first model after a `work/map/subscribe` (the editor starts a new replica: version 1), after a
+  hidden view is shown again (`work/map/set {shown}`), and the answer to `view/resync {view, model: true}` (CLASS is
+  not read) are resets, and say so in the envelope (`reset: true`), so the editor routes a model without parsing
+  it; a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
+  items' own, so the same records give the same model.
+- **Hidden views get none.** A view hidden by its editor gets no model until it is shown again.
+- **The selection is the editor's.** The hub's own selection only draws the chain's edges in the rows: `work/map/set
+  {selected}` moves it, `{clear: true}` drops it; neither changes the model.
+
+The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
+`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
+(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
+fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`.
 
 ### Fitting: text to a pixel width
 
@@ -2165,6 +2302,92 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
+
+### Text search as rows (`search/grep`)
+
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/grep.rs`;
+the search itself is `hrafn::grep`).
+
+- `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
+  view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
+  runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match. A class whose
+  env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
+  matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
+  an old query never reaches the view (and the editor drops one by `base` as well).
+- **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
+  (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
+  `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
+  `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
+  over each row. The tick state is the editor's.
+- **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
+  holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
+  by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
+  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
+  20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
+- `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
+  change (`replace` ops) and searches nothing again.
+- `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
+  `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
+  default); it is a runtime setting, so the hub reads the user's value.
+
+### Ranked file names as rows (`search/files`)
+
+Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list
+and the ranking are `hrafn::rank`).
+
+- `search/files {view, root, query, n?, ignore?}` stops the view's earlier query and answers `{query}`. A thread then
+  ranks the root's names and sends every class of `view` the `n` best (default 100, at most 1000) as rows: the first
+  query of a view a `reset`, a later one the patch from the rows it shows (the store's diff). The rows of the earlier
+  query stay until the new ones arrive; a query a newer one stopped sends nothing.
+- **The names.** In a repository, what `git ls-files -z --cached --others --exclude-standard` lists (a nested
+  repository, listed as its folder, is left out); elsewhere a walk that follows no link, skips `.git` folders and
+  applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
+  a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
+  and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
+  apply, and `ignore` as for `search/grep` (dot paths and secret-looking names out under `index`, listed under `real`).
+- **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
+  word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
+  among equals. A query checks its cancel flag every 4096 names.
+- **Row:** the key and the text are the path relative to `root`; each word's first place (in the basename when it is
+  there) is in `drgnx-quick-open-match` (the editor's face for it).
+- **The kept lists.** The names of at most 8 roots are kept (by root, rule and globs; the one used longest ago goes).
+  A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
+  `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
+  typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
+
+### The Explorer's listing as a tree (`explorer/subscribe`)
+
+The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
+
+- `explorer/subscribe {view, roots, expanded?, compact?}` stops the view's earlier listing and answers `{listing}`. A
+  thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
+  trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
+  listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
+  without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
+  folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
+  `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
+  the last folder); the chain ends at the first closed folder, which is not read.
+- **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
+  or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
+  fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
+  pre-order; past 20,000 it is a window of the first ones (the rows hold every entry).
+- **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
+  spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
+  control character as `^X`; the path is the `drgnx-work-id` over the whole row.
+- The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
+
+### The symbol at a line (`search/symbol-at`)
+
+`search/symbol-at {root, file, line}` answers `{name?}`: of the symbols Hrafn's chunker finds in `file` (relative to
+`root`, inside it, read from disk; at most 2 MB), the innermost whose span reaches into `line` (from 1), the shortest
+one among them; no name outside every symbol or when the file is missing or too large (`hrafn::chunk::symbol_at_line`).
+A path that leaves `root` is refused (`file`). The editor's agent line asks it once per line of a saved file
+([agents-editor.md](agents-editor.md)).
 
 ## Sessions and their sockets
 

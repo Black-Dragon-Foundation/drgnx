@@ -64,6 +64,9 @@ The callbacks run from the main loop, in order, and never after `drgnx-file-stre
           (let* ((err (make-pipe-process :name "drgnx-files-stderr" :noquery t :sentinel #'ignore :filter #'ignore))
                  (proc (make-process
                         :name "drgnx-files" :buffer nil :noquery t :connection-type 'pipe :stderr err
+                        ;; its own decoding, not the session's: Nidhogg frames only a process whose coding has no
+                        ;; state, and a C locale's default (`undecided') has
+                        :coding 'utf-8-unix
                         :command '("git" "ls-files" "-z" "--cached" "--others" "--exclude-standard")
                         :sentinel (drgnx-guard-wrap
                                    (lambda (p _e)

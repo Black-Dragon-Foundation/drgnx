@@ -268,13 +268,6 @@
             (drgnx-modal-session-act sess "SPC SPC" '(:type "jjk"))
             (should (equal (drgnx-modal-session-eval sess '(minibuffer-contents-no-properties)) "jjk"))
             (drgnx-modal-session-act sess "C-g")
-            ;; the agent prompt (Send to Agent…; M-x, since SPC completes a word in the palette's minibuffer)
-            (drgnx-modal-session-act sess "M-x" '(:type "drgnx-agents-ui-send") "RET")
-            (should (drgnx-modal-ui-test--prompt-p sess "To alpha"))
-            (drgnx-modal-session-act sess '(:type "jjk"))
-            (should (equal (drgnx-modal-session-eval sess '(minibuffer-contents-no-properties)) "jjk"))
-            (drgnx-modal-session-act sess "RET")
-            (should (equal (drgnx-modal-session-eval sess 'drgnx-modal-ui-test--sent) "jjk"))
             ;; a terminal
             (drgnx-modal-session-act sess "SPC t n")
             (should (equal (drgnx-modal-session-eval sess '(list major-mode evil-state)) '(eshell-mode insert)))

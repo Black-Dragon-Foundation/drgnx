@@ -10,11 +10,14 @@ publish = false
 [features]
 # `fixture::thirty()`, the 30-agent fixture read from test/fixtures/work-space/thirty.json: tests and the hub's own
 # tests only, never a shipped binary.
-fixture = ["dep:serde_json"]
+fixture = []
 
 [dependencies]
 serde.workspace = true
-serde_json = { workspace = true, optional = true }
+# the rows the hub sends the editor (render): the row type, the fitter, the SVG writer
+drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
+# the rows' text properties (render)
+serde_json.workspace = true
 
 [dev-dependencies]
 # the crate itself with the fixture, so its integration tests read the 30-agent fixture

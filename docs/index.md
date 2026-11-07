@@ -25,7 +25,7 @@ Using drgnx.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Large files](guide/large-files.md): above 50 MiB a file opens in chunks, lean or raw — a file you open asks once, `drgnx open` and everything automatic never ask; the header line and the status bar say which, and switch; long lines turn on so-long.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
-- [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work cockpit and the job window.
+- [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work space and the job window.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
 - [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
@@ -51,6 +51,7 @@ Using drgnx.
 ## Reference
 
 - [Config files](reference/config.md): every file drgnx keeps, its folder, format, keys and what they mean (generated from the definitions).
+- [Terminal settings](reference/terminal-settings.md): each of Ghostty's options and its place in drgnx's terminal — a setting, a face, an existing setting, or why none (generated).
 
 Commands, options and the CLI, generated from the command registry — not written yet.
 
@@ -74,6 +75,7 @@ How drgnx is built, tested and measured.
 - [drgnx-px](develop/drgnx-px.md): a networked container job's relay sidecar — the channel's frames over the sidecar's stdio, the state machine and writer order both ends share, the shell that keeps either end from stalling the other, the binary's rules and exit codes, and the owner's end that hands each stream to the job's proxy.
 - [Settings](develop/settings.md): the settings files' data subset and its two readers (Lisp and `huginn`), the start-up order, testing in a child Emacs.
 - [The hub and the gateway](develop/hub.md): Ratatoskr, the one durable process behind agents (Ratatoskr phase 7 is done: no Lisp runtime, no backend, one writer), its socket protocol, the traffic gateway.
+- [The terminal](develop/terminal.md): building libghostty-vt (Zig as a build tool, the pins, the link rows) and the `drgnx-term` worker — one PTY and engine per process, its wire with the hub, frames, row keys, scroll, backfill, styles, input encodings, and a log that never holds the program's bytes.
 - [Extensions](develop/extensions.md): the catalog file the refresh job writes for the Extensions view, and what the refresh may touch.
 - [Live recordings](develop/recordings.md): a live run captured at its outside ends (providers and outside agents) and replayed for nothing — the file format, the normalizers and the match key, the secret scrub and its lint, the taps, `ratatoskr-mock llm|acp --replay`, `drgnx record` and `drgnx replay`, the smoke row and the steps of the host-session smoke run; repository fixtures come only from the mocks.
 - [The store (Urdr)](develop/store.md): `work.db` schema 12 — one knowledge graph with history, written by Ratatoskr only.

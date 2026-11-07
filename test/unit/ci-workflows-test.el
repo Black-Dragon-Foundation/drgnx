@@ -289,7 +289,7 @@ Returns (EXIT . OUTPUT)."
         (drgnx-ci-test--has text "key: models-${{ hashFiles('.github/ci/models.txt') }}\n" "enableCrossOsArchive: true\n"
                             "echo \"DRGNX_TEST_MODELS=$(cd ../test-models && pwd)\" >> \"$GITHUB_ENV\"\n")
         (should (and fetch test (< fetch test)))
-        (should (string-search "env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true'" text))))
+        (should (string-search "env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true'" text))))
     (should (string-match-p "DRGNX_TEST_ADAPTER: llvmpipe\n *run: cargo test --locked --no-fail-fast --workspace"
                             (drgnx-ci-test--job rt "linux")))
     (should-not (string-search "DRGNX_TEST_ADAPTER:" (drgnx-ci-test--job rt "macos")))
@@ -348,7 +348,8 @@ Returns (EXIT . OUTPUT)."
                  (member (match-string 1 line) timed))
         (setq runs (1+ runs))
         (should (string-suffix-p " $skips" line))))
-    (should (= runs 1))
+    ;; two runs: the escape-host's sandbox lane and the macos job's ssh rows (--test macos)
+    (should (= runs 2))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "escape-host")
                         "skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == \"drgnx-ratatoskr\" { printf \" --skip %s\", $3 }')\n")))
 
@@ -537,9 +538,9 @@ Returns (EXIT . OUTPUT)."
                         ;; the registry: an older index and set of .crate files only lack crates cargo then fetches
                         (string-prefix-p "cargo-registry-" rk)))))))))
 
-;; A cache is written only by a trusted run (a push or a manual run of main, the daily run, or a pull request from a
-;; branch of this repository, whose cache GitHub scopes to its merge ref, for the families that pay off), never by a
-;; ci/* branch or a fork's pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
+;; A cache is written only by a trusted run (a push or a manual run of main, the daily run, or, for the test ELPA and
+;; the like, a pull request from a branch of this repository, whose cache GitHub scopes to its merge ref); runtime.yml's
+;; and the test binaries' only by main.  Never by a ci/* branch or a fork's pull request, and the cargo caches are pruned first (.github/ci/cargo-prune.sh).
 (defconst drgnx-ci-test--own-pr "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository")
 
 (ert-deftest drgnx-ci/no-fork-pull-request-writes-a-cache ()
@@ -550,9 +551,6 @@ Returns (EXIT . OUTPUT)."
       (should (or (string-search "steps.prune.outcome == 'success'" c)
                   ;; runtime.yml's main-only flag (no pull request): the Nidhogg tarball
                   (and (string-search "env.CACHE_SAVE == 'true'" c) (not (string-search "CACHE_SAVE_PR" c)))
-                  ;; the model files: main and a pull request from this repository (CACHE_SAVE_PR), once models.sh
-                  ;; checked every file's sum
-                  (string-search "(env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success'" c)
                   (string-search "github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')" c))))
     ;; an action the tiers run on another commit than the workflow's own (Nidhogg's drgnx_ref) saves only its own
     (when (string-search "inputs.dir" yml)
@@ -561,11 +559,12 @@ Returns (EXIT . OUTPUT)."
         (unless (string-search "steps.prune.outcome == 'success'" c)
           (should (string-search "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)" c))
           (should (string-search "github.repository == 'Black-Dragon-Foundation/drgnx'" c)))))
-    ;; a pull request saves only when its head is a branch of this repository
+    ;; a pull request saves only when its head is a branch of this repository, or never (the main-only conditions)
     (dolist (c (append (drgnx-ci-test--matches "if: \\(.*\\)\n *uses: actions/cache/save@" yml)
                        (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml)))
       (when (string-search "'pull_request'" c)
-        (should (string-search drgnx-ci-test--own-pr c))))
+        (should (or (string-search drgnx-ci-test--own-pr c)
+                    (string-search "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'" c)))))
     (dolist (c (drgnx-ci-test--matches "id: prune\n *if: \\(.*\\)\n" yml))
       (should (or (string-search "env.CACHE_SAVE == 'true'" c)
                   (string-search "github.event_name != 'pull_request' && github.ref == 'refs/heads/main'" c)))
@@ -574,13 +573,9 @@ Returns (EXIT . OUTPUT)."
   (let ((rt (drgnx-ci-test--yml "runtime.yml")))
     (skip-unless rt)
     (drgnx-ci-test--has rt "CACHE_SAVE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}"
-                        (concat "CACHE_SAVE_PR: ${{ " drgnx-ci-test--own-pr " }}")
                         "CARGO_INCREMENTAL: \"0\"")
-    ;; a pull request saves the two families that pay off, linux and macos; the others restore main's
-    (dolist (job '("linux" "macos"))
-      (should (string-search "env.CACHE_SAVE_PR == 'true'" (drgnx-ci-test--job rt job))))
-    (dolist (job '("msrv" "escape-host" "agent-containers" "android" "fuzz"))
-      (should-not (string-search "env.CACHE_SAVE_PR" (drgnx-ci-test--job rt job))))))
+    ;; runtime.yml's caches are saved by main only: a pull request restores them and writes none
+    (should-not (string-search "CACHE_SAVE_PR" rt))))
 
 (ert-deftest drgnx-ci/the-fuzz-targets-are-built-once-for-the-four-shards ()
   ;; one build job (the only one with the fuzz cargo cache) uploads each shard's binaries; a shard downloads its own
@@ -699,7 +694,6 @@ Returns (EXIT . OUTPUT)."
     (should (string-match "id: prune\n *if: \\(.*\\)\n" bins))
     (let ((cond (match-string 1 bins)))
       (dolist (s (list "github.event_name != 'pull_request'" "github.ref == 'refs/heads/main'"
-                       drgnx-ci-test--own-pr
                        "steps.own.outputs.commit == (github.event.pull_request.head.sha || github.sha)"
                        "github.repository == 'Black-Dragon-Foundation/drgnx'"))
         (should (string-search s cond)))

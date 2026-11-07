@@ -1,7 +1,8 @@
 # drgnx shell integration for bash.  Add one line to ~/.bashrc:   source /path/to/drgnx/etc/shell/drgnx.bash
-# (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and never touches PS1, PROMPT_COMMAND
-# or your plugin manager.  What it does: tab completion for drgnx, and inside drgnx's own terminal (eat) eat's shell
-# integration (directory tracking, prompt marks, "is a command running").
+# (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and outside drgnx's own terminal never
+# touches PS1, PROMPT_COMMAND or your plugin manager.  What it does: tab completion for drgnx; inside drgnx's own
+# terminal, Ghostty's shell integration (prompt marks, the folder, the title; it adds to PS1 and PROMPT_COMMAND) and an
+# ssh that gives the host a TERM it knows; inside eat, eat's shell integration.
 [[ -n ${_drgnx_sourced-} ]] && return 0
 _drgnx_sourced=1
 
@@ -12,7 +13,7 @@ case ${BASH_SOURCE[0]-} in
   */*) _drgnx_dir=$PWD/${BASH_SOURCE[0]%/*} ;;
   *) _drgnx_dir=$PWD ;;
 esac
-_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser'
+_drgnx_commands='open doctor build test ui macos-app sync upgrade rollback generations lock bisect service-unit onboard check lease fmt work hub runtime job runner search keys safe help shell secrets bootstrap update coord graph childframe-elpa browser extensions record replay'
 _drgnx_steps='environment look-and-keys projects ai search agents daemon portability finish'
 _drgnx_bootstrap_steps='preflight config keys sync onboard desktop shell doctor'
 _drgnx_presets='minimal ide full-ai'
@@ -63,7 +64,13 @@ _drgnx() {
           'open '*) words='--check --wait -t --gui' ;;
           'doctor '*) words='--json --dev' ;;
           'test '*) words='--one-process --leaks --shuffle --find-polluter --stress --load --ui --compositor --tty --scenario --config --bench --perf --audit --ab --ab-env --n --aa --no-aa --soak --day --preflight --out --seeds --nidhogg-tarball --container --install --bootstrap --fedora' ;;
-          'sync '*) words='--offline --seed --prune --dry-run' ;;
+          'sync '*) words='--offline --seed --prune --dry-run --add --remove --pending --wait --progress' ;;
+          'upgrade '*) words='--only --stage --staged --progress' ;;
+          'rollback '*) words='--progress' ;;
+          'extensions '*) words='--progress' ;;
+          'record start') words='--cap-usd --cap-weekly --max-minutes' ;;
+          'record export') words='--to' ;;
+          'replay '*) words='--speed --strict' ;;
           'lock '*) words='--ship' ;;
           'onboard '*) words='--non-interactive --again --preset --keys --theme --roots --todos --step' ;;
           'check '*) words='--no-perf --no-gui --jobs --shards' ;;
@@ -102,7 +109,7 @@ _drgnx() {
         case $cmd in
           work) words='record scan status' ;;
           hub) words='start stop status' ;;
-          build) words='runner-bundle' ;;
+          build) words='runner-bundle terminfo' ;;
           runtime) words='build install' ;;
           browser) words='install list' ;;
           job) words='propose approve resume stop status' ;;
@@ -141,4 +148,72 @@ if [[ ${INSIDE_EMACS-} == *eat* && -n ${EAT_SHELL_INTEGRATION_DIR-} && -r ${EAT_
     _drgnx_eat() { local HISTFILE=/dev/null; source "$EAT_SHELL_INTEGRATION_DIR/bash"; }
     _drgnx_eat; unset -f _drgnx_eat
   fi
+fi
+
+# Inside drgnx's own terminal (DRGNX_TERMINAL, set by drgnx-term.el).  Ghostty's shell integration, vendored in
+# ghostty/ next to this file (ghostty/NOTICE): prompt and command marks, the folder, the title, a sudo that keeps
+# TERMINFO.  Its features are the terminal's GHOSTTY_SHELL_FEATURES (drgnx-term-shell-integration-features; unset: the
+# integration is off) without Ghostty's ssh ones, which need Ghostty's own program: drgnx's ssh is below.
+# DRGNX_TERMINAL_SHELL, when set, names the one shell that loads it.
+_drgnx_ghostty_features() { # GHOSTTY_SHELL_FEATURES without ssh-*
+  local IFS=, f out=
+  for f in $GHOSTTY_SHELL_FEATURES; do
+    case $f in ssh-*) ;; *) out=${out:+$out,}$f ;; esac
+  done
+  GHOSTTY_SHELL_FEATURES=$out
+}
+if [[ -n ${DRGNX_TERMINAL-} && -n ${GHOSTTY_SHELL_FEATURES+x} && ${DRGNX_TERMINAL_SHELL:-bash} == bash
+      && -r $_drgnx_dir/ghostty/shell-integration/bash/ghostty.bash ]]; then
+  _drgnx_ghostty_features
+  export GHOSTTY_RESOURCES_DIR=$_drgnx_dir/ghostty GHOSTTY_SHELL_FEATURES
+  unset GHOSTTY_BIN_DIR
+  case $- in   # Ghostty's file reads unset variables as empty: not under set -u
+    *u*) set +u; builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/bash/ghostty.bash"; set -u ;;
+    *) builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/bash/ghostty.bash" ;;
+  esac
+fi
+unset -f _drgnx_ghostty_features
+
+# ssh from drgnx's terminal (TERM=xterm-ghostty): a host knows that entry only once it is installed there.  fallback
+# (DRGNX_TERMINAL_SSH, from drgnx-term-ssh-terminfo): ssh says TERM=xterm-256color.  install: the first ssh to a host
+# sends the entry to its tic (into the remote ~/.terminfo) and records the outcome in <state>/terminal-ssh-hosts, one
+# "USER@HOST:PORT TERM" line per host (delete a line to try again); later ones use what is recorded.
+if [[ -n ${DRGNX_TERMINAL-} ]]; then
+  function ssh {
+    if [[ ${TERM-} != xterm-ghostty ]]; then command ssh "$@"; return; fi
+    _drgnx_term=xterm-256color
+    if [[ ${DRGNX_TERMINAL_SSH-fallback} == install ]]; then _drgnx_ssh_terminfo "$@"; fi
+    TERM=$_drgnx_term command ssh "$@"
+  }
+  function _drgnx_ssh_terminfo { # sets _drgnx_term for this ssh's host
+    local k v user= host= port= key rec=$HOME/.local/state/drgnx/terminal-ssh-hosts
+    [[ ${XDG_STATE_HOME-} == /* ]] && rec=$XDG_STATE_HOME/drgnx/terminal-ssh-hosts
+    while read -r k v; do
+      case $k in user) user=$v ;; hostname) host=$v ;; port) port=$v ;; esac
+    done < <(command ssh -G "$@" 2>/dev/null)
+    [[ -n $host ]] || return 0
+    key=$user@$host:$port
+    if [[ -r $rec ]]; then
+      while read -r k v; do
+        if [[ $k == "$key" ]]; then _drgnx_term=$v; return 0; fi
+      done < "$rec"
+    fi
+    local -a opts=()
+    local dest= a
+    while (($#)); do   # the options, then the destination: the host's tic runs instead of any command of yours
+      a=$1; shift
+      case $a in
+        --) dest=${1-}; break ;;
+        -[BbcDEeFIiJLlmOoPpQRSWw]) opts+=("$a" "${1-}"); (($#)) && shift ;;
+        -*) opts+=("$a") ;;
+        *) dest=$a; break ;;
+      esac
+    done
+    [[ -n $dest ]] || return 0
+    if command infocmp -x xterm-ghostty 2>/dev/null |
+        TERM=xterm-256color command ssh ${opts[@]+"${opts[@]}"} -- "$dest" 'tic -x -'; then
+      _drgnx_term=xterm-ghostty
+    fi
+    command mkdir -p "${rec%/*}" && printf '%s %s\n' "$key" "$_drgnx_term" >> "$rec"
+  }
 fi

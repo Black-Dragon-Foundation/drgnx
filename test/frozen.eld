@@ -6,69 +6,6 @@
 ;; gone, and a `:keep' test tagged `:frozen'.  A row ends when the replacing plan lands: its tests take over, and the
 ;; frozen file (or the frozen tests) are deleted with the row (docs/develop/testing.md, "Frozen tests").
 (
- ("test/unit/agents-ui-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:44" :since "2026-11-04"
-  :tests (drgnx-agents-ui/a-transcript-shows-turns-tools-plans-and-what-waits
-          drgnx-agents-ui/the-list-has-sessions-and-jobs
-          drgnx-agents-ui/last-active-column
-          drgnx-agents-ui/an-agent-edit-is-reviewed-hunk-by-hunk
-          drgnx-agents-ui/every-command-is-registered
-          drgnx-agents-ui/defines-the-agents-segment
-          drgnx-agents-ui/turned-off-it-stops-mirroring-and-closes-the-hub-events
-          drgnx-agents-ui/turned-off-it-empties-the-agents-set-and-a-click-says-why
-          drgnx-agents-ui/hub-sessions-are-mirrored-only-when-a-hub-runs
-          drgnx-agents-ui/reject-leaves-the-file-as-it-was
-          drgnx-agents-ui/an-agent-can-create-a-file-through-review
-          drgnx-agents-ui/closing-a-review-rejects-it
-          drgnx-agents-ui/a-transcript-has-stop-deliver-commands-and-queue-controls
-          drgnx-agents-ui/the-list-reads-jobs-at-most-every-few-seconds
-          drgnx-agents-ui/the-mirror-timer-has-an-owner
-          drgnx-agents-ui/thousand-chunks-insert-only-their-text
-          drgnx-agents-ui/grow-allocation-is-independent-of-size
-          drgnx-agents-ui/a-hidden-transcript-costs-nothing
-          drgnx-agents-ui/a-tool-status-change-redraws-one-row
-          drgnx-agents-ui/a-permission-adds-and-removes-a-footer-row
-          drgnx-agents-ui/answering-the-second-permission-removes-its-row
-          drgnx-agents-ui/an-edited-queued-message-is-redrawn
-          drgnx-agents-ui/a-steer-removed-from-the-entries-removes-its-row
-          drgnx-agents-ui/the-tail-is-followed
-          drgnx-agents-ui/a-reader-scrolled-up-stays-put
-          drgnx-agents-ui/g-redraws-now
-          drgnx-agents-ui/the-list-updates-in-place
-          drgnx-agents-ui/the-list-keeps-each-window-on-its-session
-          drgnx-agents-ui/the-list-follows-removals-and-reorders
-          drgnx-agents-ui/a-hidden-list-prints-nothing
-          drgnx-agents-ui/last-ages-on-a-30-second-tick
-          drgnx-agents-ui/the-tick-runs-only-while-the-list-shows
-          drgnx-agents-ui/hiding-stops-the-tick
-          drgnx-agents-ui/the-list-in-an-editor-window-ticks-too
-          drgnx-agents-ui/the-column-titles-are-the-first-line
-          drgnx-agents-ui/an-empty-list-says-how-to-start
-          drgnx-agents-ui/the-empty-hint-names-the-key-and-what-claude-needs
-          drgnx-agents-ui/a-write-through-a-planted-link-runs-no-file-name-handler)
-  :keep (drgnx-agents-ui/unsaved-edits-of-the-file-are-never-mixed-in
-         drgnx-agents-ui/a-quoted-name-is-refused-and-an-edit-is-copied-and-written-with-no-handler
-         drgnx-agents-ui/an-edit-to-an-encrypted-or-compressed-file-is-refused))
- ("test/unit/job-ui-test.el"
-  :by "2026-10-24-agent-system-design:9; 2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-job-ui/note-jobs-sets-cards-and-messages
-          drgnx-job-ui/a-failed-recount-is-unknown-with-a-reason
-          drgnx-job-ui/a-disconnect-is-unknown
-          drgnx-job-ui/the-badge-is-gone
-          drgnx-job-ui/badge-mode-is-an-obsolete-alias
-          drgnx-job-ui/notify-is-an-obsolete-alias
-          drgnx-job-ui/a-new-card-reaches-the-desktop-once
-          drgnx-job-ui/overlap-cards-count-but-never-interrupt
-          drgnx-job-ui/setup-defines-the-source-and-teardown-clears-it
-          drgnx-job-ui/defines-the-jobs-segment
-          drgnx-job-ui/note-jobs-is-quiet-while-the-module-is-off
-          drgnx-job-ui/the-commands-are-registered
-          drgnx-job-ui/turned-off-it-hears-the-hub-no-more
-          drgnx-job-ui/what-waits-on-you-is-open-cards-and-unacted-messages
-          drgnx-job-ui/attention-mode-adds-and-removes-its-hooks
-          drgnx-job-ui/the-recount-timer-has-an-owner
-          drgnx-job-ui/events-recount-once-and-the-module-owns-the-recount)
-  :keep ())
  ("test/unit/mod-review-test.el"
   :by "2026-11-01-agent-system-p4:44" :since "2026-11-04"
   :tests (drgnx-review/parse-findings-and-verdict
@@ -92,52 +29,6 @@
          drgnx-review/visit-refuses-a-symlink-out-of-the-repository
          drgnx-review/a-path-through-a-planted-link-runs-no-file-name-handler
          drgnx-review/a-finding-is-opened-by-the-name-it-was-checked-by))
- ("test/unit/work-ui-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-work-ui/the-tree-shows-each-spec-with-its-plans-and-their-counts
-          drgnx-work-ui/tab-unfolds-a-plan-into-tasks-and-a-task-into-steps-and-commits
-          drgnx-work-ui/ret-opens-a-task-at-its-line-and-a-commit-as-a-diff
-          drgnx-work-ui/the-filter-and-hide-merged-narrow-the-plans
-          drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns
-          drgnx-work-ui/plans-on-one-branch-each-link-their-own-branch-box
-          drgnx-work-ui/a-big-graph-is-drawn-in-bands-emacs-can-show
-          drgnx-work-ui/the-graph-on-a-text-frame-says-it-cannot-be-shown
-          drgnx-work-ui/g-draws-the-graph-again-and-wide-graphs-scroll-sideways
-          drgnx-work-ui/the-graph-takes-its-colours-from-the-theme
-          drgnx-work-ui/a-tall-graph-scrolls-line-by-line
-          drgnx-work-ui/the-graph-shows-no-cursor-and-a-press-moves-nothing
-          drgnx-work-ui/a-click-on-a-box-opens-what-it-shows
-          drgnx-work-ui/a-click-opens-from-its-own-window-and-a-double-click-once
-          drgnx-work-ui/refresh-scans-in-another-process-and-redraws
-          drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors
-          drgnx-work-ui/an-agent-started-on-a-task-works-on-it
-          drgnx-work-ui/every-command-is-registered
-          drgnx-work-ui/doctor-says-whether-the-tracker-can-work
-          drgnx-work-ui/commits-recorded-for-a-todo-or-the-plan-show-and-count
-          drgnx-work-ui/a-scan-that-changes-one-task-redraws-one-row
-          drgnx-work-ui/folding-inserts-and-removes-children
-          drgnx-work-ui/point-stays-on-its-node
-          drgnx-work-ui/a-fold-a-filter-and-hide-merged-draw-before-they-return
-          drgnx-work-ui/the-node-at-point-is-fresh-after-a-scan-that-leaves-its-row-alone)
-  :keep (drgnx-work-ui/a-file-is-opened-by-its-true-name-with-no-file-name-handler))
- ("test/live/drgnx-work-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows)
-  :keep ())
- ("test/unit/ai-gateway-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-ai-gateway/gptel-backend-points-at-the-gateway
-          drgnx-ai-gateway/gptel-streams-through-the-gateway)
-  :keep ())
- ("test/unit/ai-ask-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-ai-gptel/its-backend-comes-from-the-chat-role
-          drgnx-ai-gptel/configured-unless-the-user-chose-a-backend-of-their-own)
-  :keep ())
- ("test/unit/ai-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-ai/own-gptel-api-key-keeps-default-backend)
-  :keep ())
  ("test/unit/isolated/modal-ai-isolated.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:44" :since "2026-11-05"
   :tests (drgnx-modal-ai/no-suggestion-outside-insert
@@ -153,7 +44,6 @@
   :tests (drgnx-onboard/the-ai-step-finds-providers-sets-roles-and-tests-them
           drgnx-onboard/the-ai-step-keeps-roles-that-work
           drgnx-onboard/the-ai-step-with-nothing-running-says-what-to-do
-          drgnx-onboard/the-ai-step-checks-chats-module-when-providers-work
           drgnx-ai-onboard/role-written-only-after-answer
           drgnx-ai-onboard/a-projects-route-never-reaches-the-global-roles
           drgnx-ai-onboard/the-role-tests-run-side-by-side
@@ -171,17 +61,11 @@
           drgnx-onboard/openrouter-from-the-cli-asks-for-no-key
           drgnx-onboard/a-failed-download-says-how-to-retry
           drgnx-onboard/non-interactive-installs-nothing
-          drgnx-onboard/chat-needs-its-module
-          drgnx-onboard/chat-turned-on-installs-its-package
           drgnx-ai/ensure-local-starts-the-runner-when-it-is-down
           drgnx-ai/a-refused-request-starts-the-runner-at-most-once-a-minute
           drgnx-ai/ensure-local-never-waits-for-the-job)
   :keep (drgnx-onboard/openrouter-key-goes-to-the-keychain
          drgnx-ai-onboard/typed-key-cleared-and-env-noted))
- ("test/unit/mod-extras-teardown-test.el"
-  :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
-  :tests (drgnx-extras-teardown/llm-hook-is-a-name-and-the-backend-returns)
-  :keep ())
  ("test/unit/onboard-test.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45; onboarding rebuilt on the Rust runtime (2026-11-05): 2026-11-04-race-proof-tests.ledger:137"
   :since "2026-11-04"
@@ -228,8 +112,6 @@
           drgnx-onboard/the-welcome-says-where-to-start-and-moves-on
           drgnx-onboard/on-a-mac-look-and-keys-asks-about-option-once
           drgnx-onboard/option-question-shows-the-current-choice
-          drgnx-onboard/chat-check-in-batch-offers-no-restart
-          drgnx-onboard/chat-step-turns-chat-on-whatever-the-file-says-now
           drgnx-onboard/restart-detaches-after-the-questions
           drgnx-onboard/restart-waiter-outlives-a-systemd-service
           drgnx-onboard/new-modules-need-a-restart-and-finish-offers-it

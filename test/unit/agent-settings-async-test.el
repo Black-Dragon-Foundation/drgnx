@@ -11,7 +11,7 @@
 (require 'drgnx-keys)
 (require 'drgnx-agents)
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
 (defvar nidhogg-workers-framing)        ; a `let' of it binds it dynamically, also on an Emacs without the feature
 

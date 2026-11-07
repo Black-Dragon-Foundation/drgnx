@@ -49,6 +49,11 @@ required-features = ["fleet"]
 name = "fleet_keys"
 required-features = ["fleet"]
 
+# a terminal's worker outlives its hub's unit under KillMode=mixed (a fake runner's systemd)
+[[test]]
+name = "term_scope"
+required-features = ["fleet"]
+
 # the link drills (test/runners/drills.sh): the link broken mid-job, the hub restarted, the runner's guards
 [[test]]
 name = "fleet_drills"
@@ -63,6 +68,8 @@ required-features = ["fleet", "test-hooks"]
 runstav = { path = "../runstav", version = "0.1.0" }
 # hub-built view rows (view): the row and patch types and their diff
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
+# the terminals (term): the worker's wire, records and scopes, without the engine
+drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = false }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
 draugr = { path = "../draugr", version = "0.1.0" }
 drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
@@ -133,6 +140,8 @@ openssh.workspace = true
 # `test-hooks`: `urdr::graph::Tx::for_test` for the manager's unit tests (a `-p drgnx-ratatoskr` test build alone has no
 # other crate turning it on)
 urdr = { path = "../urdr", version = "0.1.0", features = ["test-hooks"] }
+# `fixture`: the 30-agent fixture, for the map model's chain golden (work::map::tests)
+vegvisir = { path = "../vegvisir", version = "0.1.0", features = ["fixture"] }
 tokio = { workspace = true, features = ["test-util"] }  # paused time: the pacer's tests take their instants from it
 skuld = { path = "../skuld", version = "0.1.0" }  # waits in tests; every order of a pure core (the connection's, a session's turn)
 rmcp = { workspace = true, features = ["client", "transport-async-rw"] }  # the MCP client of tests/search_query.rs (as mimir's interop test)

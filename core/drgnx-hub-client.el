@@ -55,6 +55,11 @@ only and must be told again, such as the login shell's variables.")
   "The connection whose event `drgnx-hub-event-functions' run for, while they run (else nil): a handler that acts
 only for a hub that proved itself checks its `:drgnx-proven'.")
 
+(defvar drgnx-hub-session (format "%d-%x" (emacs-pid) (random (ash 1 40)))
+  "This Emacs's session id, said in every hello.  The hub keeps the session's terminals while a connection carries it,
+and for a minute after the last one closes (a dropped socket, a hub restart); a subscribed connection of it is where
+they draw (docs/develop/terminal.md, \"Lifetime\").")
+
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
 (defvar drgnx-hub--subscribing nil "This Emacs's connection whose `subscribe' the hub has not answered yet.")
@@ -444,14 +449,26 @@ drops it."
           (when (and message (null (nth 2 entry)))
             (funcall one conn message)))))))
 
+(defconst drgnx-hub--conn-props
+  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
+    (:events . :drgnx-events) (:since . :since))
+  "The core's connection fields and the process properties that keep them between steps.")
+
 (defun drgnx-hub--client-line (conn json)
   "One line JSON read on CONN, as the core's event: the challenge, an event, or an answer."
   (let ((event (plist-get json :event)))
     (cond ((equal event "challenge")
            (drgnx-hub--step (list 'challenge conn (plist-get (plist-get json :data) :nonce) (drgnx-hub-socket))))
-          (event (drgnx-hub--step (list 'event conn event (plist-get json :data))))
+          (event (drgnx-hub--step-event conn event (plist-get json :data)))
           ((plist-get json :id)
            (drgnx-hub--step (list 'answer conn (plist-get json :id) (plist-get json :result) (plist-get json :error)))))))
+
+(defun drgnx-hub--step-event (conn name data)
+  "The hub's event NAME with DATA, read on CONN, through the core with only CONN's subscription mark as its state:
+an event changes nothing in the client, so no snapshot of the globals or the connections is taken."
+  (let ((state (drgnx-hub-core-make
+                :conns (list (list conn :events (process-get conn (alist-get :events drgnx-hub--conn-props)))))))
+    (dolist (e (cdr (drgnx-hub-core-step state (list 'event conn name data)))) (drgnx-hub--effect e))))
 
 (defun drgnx-hub--settle (id result error)
   "Call the callback of call ID with RESULT and ERROR (the hub's error object, or this side's message) — once: the
@@ -464,11 +481,6 @@ raises is recorded, and the lines after its answer are still read."
   (drgnx-hub--step (list 'timer (cons 'hub-call id))))
 
 ;;;; The shell: the core decides (drgnx-hub-core.el), this runs what it decided
-
-(defconst drgnx-hub--conn-props
-  '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)
-    (:events . :drgnx-events) (:since . :since))
-  "The core's connection fields and the process properties that keep them between steps.")
 
 (defvar drgnx-hub--asked-disconnect nil
   "Non-nil when this editor ended its own subscription (`drgnx-hub-disconnect', or a `shutdown' it sent): a hub that
@@ -628,7 +640,7 @@ core judges the answer from what the hello said: the proof the hub must give bac
                         (append (list :proto drgnx-hub-proto :nonce nonce)
                                 (and version (list :drgnx_version version))
                                 (list :schema drgnx-work-db-schema-version :records drgnx-hub-records
-                                      :client (if noninteractive "cli" "editor"))
+                                      :client (if noninteractive "cli" "editor") :session drgnx-hub-session)
                                 (and proof (list :proof proof)))
                         nil :full t :first t
                         :hello (list :problem (and (consp cap) (or (plist-get cap :problem) "it cannot be read"))
@@ -849,7 +861,7 @@ said, or `:unknown' before the hub answered.  Never a key.")
 
 (defvar drgnx-hub-editor-token-hook nil
   "Functions of no arguments run (inside the guard) when the hub gave this Emacs its editor token: what needed the
-gateway's address (gptel's backend) can be set up.")
+gateway's address can be set up.")
 
 (defun drgnx-hub--keys-note ()
   "The hub said which keys it holds (`drgnx-hub--keys-held'): each is one it had (`drgnx-hub--keys-had'), and its
@@ -1247,7 +1259,7 @@ settled one takes its notice away."
   "In an editor: a `matrix' card (the permission matrix asks), an `extension' card (an agent's suggestion:
 `drgnx-hub--note-extension-card') or a `supervisor' pause from a hub that proved itself is a notice.  Nothing asks
 and nothing waits: a card that lists its answers (a browser row's) keeps them here and its notice carries Agents:
-Answer Permission Card with the card's id; the cockpit's cards answer the others.
+Answer Permission Card with the card's id; the agent panel's cards answer the others.
 `agent-step' is not handled here: it matters only to a subscriber that asked for it."
   (when (drgnx-hub--event-proven-p)
     (cond

@@ -562,8 +562,8 @@ state, where no state entry runs.")
 ;;;; Initial states
 
 (defconst drgnx-evil--features
-  '((drgnx-agents-list-mode . drgnx-agents-ui) (drgnx-agents-transcript-mode . drgnx-agents-ui)
-    (drgnx-work-mode . drgnx-work-ui) (drgnx-modules-list-mode . drgnx-modules)
+  '((drgnx-agent-panel-list-mode . drgnx-agent-panel-list)
+    (drgnx-modules-list-mode . drgnx-modules)
     (drgnx-replace-bar-mode . drgnx-replace))
   "Modes whose library is not the mode's name without \"-mode\".")
 

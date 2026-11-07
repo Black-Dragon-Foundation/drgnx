@@ -34,7 +34,7 @@
 (declare-function drgnx-exec-get "drgnx-exec")
 (declare-function drgnx-exec-list "drgnx-exec")
 (declare-function drgnx-hub-call "drgnx-hub-client")
-(declare-function drgnx-agents-ui--session "drgnx-agents-ui")
+(declare-function drgnx-agents-session-pick "drgnx-agents-session")
 (declare-function drgnx-agent-session-name "drgnx-agents")
 (declare-function drgnx-agent-session-entries "drgnx-agents")
 (declare-function drgnx-layouts--mark-pane "drgnx-layouts")
@@ -344,7 +344,7 @@ without one; either ends the wait.  An answer that comes after the wait ended is
 (defun drgnx-browser-agent-page (&optional session)
   "Open the page SESSION's Playwright tool calls are on (the selected agent's), with its latest screenshot beside it."
   (interactive)
-  (let* ((session (or session (drgnx-agents-ui--session "Agent: ")))
+  (let* ((session (or session (drgnx-agents-session-pick "Agent: ")))
          (url (drgnx-browser-agent-url session)))
     (if (not url)
         (message "drgnx: %s has not opened a page yet (no Playwright navigation in its tool calls)" (drgnx-agent-session-name session))

@@ -25,6 +25,7 @@ enum Act {
 
 /// What the store sent, in order.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // a test log: a patch per entry, never moved in bulk
 enum Out {
     Env(&'static str, u64),
     Patch(Patch),
@@ -430,4 +431,219 @@ fn fixture_labels_are_fitted_per_class() {
     // 60 px of 10 px cells: 6 columns, the ellipsis one of them
     let t = super::label_rows(&labels, &tty, &FontSet::new());
     assert_eq!(t[0].text, "abcde… |");
+}
+
+/// An acknowledged view (a terminal's): one patch in flight per (view, class); rows built meanwhile wait, the newest
+/// winning, and go as one patch on the ack of the version sent. An ack of another version releases nothing.
+#[test]
+fn ack_clears_in_flight() {
+    let mut s = Store::new(5);
+    let k = key("gui-1");
+    s.options(
+        CONN,
+        "v",
+        super::ViewOpts {
+            ack: true,
+            epoch_reset: false,
+        },
+    );
+    s.env(CONN, env("gui-1", 1, 400));
+    let first = s.publish(&k, rows("gui-1", 2, 1), &[]).expect("the reset");
+    assert!(is_reset(&first) && s.in_flight(&k));
+    assert_eq!(
+        s.publish(&k, rows("gui-1", 3, 2), &[]),
+        None,
+        "held while v1 is in flight"
+    );
+    assert_eq!(
+        s.publish(&k, rows("gui-1", 4, 3), &[]),
+        None,
+        "held while v1 is in flight"
+    );
+    assert_eq!(
+        s.ack(&k, 0),
+        None,
+        "an ack of an older version releases nothing"
+    );
+    let next = s.ack(&k, 1).expect("the ack releases the waiting rows");
+    assert_eq!((next.base, next.version), (1, 2));
+    let mut held = rows("gui-1", 2, 1);
+    apply(&mut held, &next.ops).unwrap();
+    assert_eq!(held, rows("gui-1", 4, 3), "the newest rows, as one patch");
+    assert!(s.in_flight(&k));
+    // a resync answers at once, with the newest rows, and that reset is what is in flight now
+    assert_eq!(s.publish(&k, rows("gui-1", 1, 4), &[]), None);
+    let r = s.resync(&k, &[]).expect("a resync is never held");
+    assert!(is_reset(&r) && r.version == 3);
+    assert!(matches!(r.ops.as_slice(), [Op::Reset(x)] if *x == rows("gui-1", 1, 4)));
+    assert_eq!(s.ack(&k, 3), None, "nothing waits after the reset");
+    assert!(!s.in_flight(&k));
+    assert!(
+        s.publish(&k, rows("gui-1", 2, 5), &[]).is_some(),
+        "acked: the next patch goes at once"
+    );
+    // a view that asked for no acks is never held
+    let mut plain = Store::new(6);
+    plain.env(CONN, env("gui-1", 1, 400));
+    assert!(plain.publish(&k, rows("gui-1", 2, 1), &[]).is_some());
+    assert!(plain.publish(&k, rows("gui-1", 3, 2), &[]).is_some());
+    assert!(!plain.in_flight(&k));
+}
+
+/// A lost ack never stalls a view: the editor that reconnects is a new connection, and its first patch goes at once.
+#[test]
+fn reconnect_clears_unacked() {
+    let mut s = Store::new(5);
+    let opts = super::ViewOpts {
+        ack: true,
+        epoch_reset: false,
+    };
+    s.options(CONN, "v", opts);
+    s.env(CONN, env("gui-1", 1, 400));
+    let k = key("gui-1");
+    assert!(s.publish(&k, rows("gui-1", 2, 1), &[]).is_some());
+    assert!(s.in_flight(&k), "v1 is not acknowledged");
+    s.gone(CONN);
+    assert!(!s.in_flight(&k));
+    let k2: Key = (CONN + 1, "v".into(), "gui-1".into());
+    s.options(CONN + 1, "v", opts);
+    s.env(CONN + 1, env("gui-1", 1, 400));
+    let p = s
+        .publish(&k2, rows("gui-1", 2, 2), &[])
+        .expect("the new connection's reset");
+    assert!(is_reset(&p) && p.base == 0 && p.version == 1);
+    assert!(s.in_flight(&k2));
+}
+
+/// A view exempt from the epoch reset (a terminal's) answers a new epoch with a diff, echoing the new epoch.
+#[test]
+fn epoch_exempt_view_answers_a_new_epoch_with_a_diff() {
+    let mut s = Store::new(5);
+    let k = key("gui-1");
+    s.options(
+        CONN,
+        "v",
+        super::ViewOpts {
+            ack: false,
+            epoch_reset: false,
+        },
+    );
+    s.env(CONN, env("gui-1", 1, 400));
+    assert!(
+        s.publish(&k, rows("gui-1", 2, 1), &[])
+            .is_some_and(|p| is_reset(&p))
+    );
+    s.env(CONN, env("gui-1", 2, 400));
+    let p = s.publish(&k, rows("gui-1", 3, 2), &[]).expect("a patch");
+    assert!(!is_reset(&p), "{p:?}");
+    assert_eq!(p.env_epoch, 2);
+}
+
+/// A small model: two nodes with a label each (the second's GEN), one edge, one list.
+fn doc(gen_: u32) -> super::model::Doc {
+    use serde_json::json;
+    let mut d = super::model::Doc {
+        descriptor: json!({"scheme": "links", "lists": ["all"]}),
+        ..Default::default()
+    };
+    d.nodes.insert(
+        "a".into(),
+        json!({"id": "a", "kind": "k", "fields": [["label", "A"]]}),
+    );
+    d.nodes.insert(
+        "b".into(),
+        json!({"id": "b", "kind": "k", "fields": [["label", format!("B{gen_}")]]}),
+    );
+    d.edges.insert(("a".into(), "b".into(), "came-from".into()));
+    d.lists.insert("all".into(), vec!["a".into(), "b".into()]);
+    d
+}
+
+/// The model's ops, parsed back from its one string.
+fn ops_of(m: &runstav::methods::view::ViewModel) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(&m.model).expect("one JSON string");
+    v["ops"].as_array().expect("ops").clone()
+}
+
+/// [D] The model goes as one string field: the event's `model` is a JSON string holding `{"ops": [...]}`, never an
+/// object the editor's reader would make Lisp data of.
+#[test]
+fn model_is_one_string_field() {
+    let mut s = Store::new(7);
+    let m = s.publish_model(CONN, "v", doc(1)).expect("a first model");
+    let ev = serde_json::to_value(&m).expect("the event");
+    assert!(ev["model"].is_string(), "{ev}");
+    assert_eq!((m.hub, m.base, m.version), (7, 0, 1));
+    assert!(ops_of(&m)[0].get("reset").is_some());
+    assert_eq!(ev["reset"], true, "the envelope says reset: {ev}");
+    let m = s.publish_model(CONN, "v", doc(2)).expect("a changed model");
+    assert!(!m.reset);
+    let ev = serde_json::to_value(&m).expect("the event");
+    assert!(ev.get("reset").is_none(), "no reset key on a diff: {ev}");
+}
+
+/// [D] A patch names the model version its rows were built from; a view with no model names none.
+#[test]
+fn patch_names_its_model_version() {
+    let mut s = Store::new(7);
+    s.env(CONN, env("g", 1, 600));
+    let p = s.publish(&key("g"), rows("g", 2, 1), &[]).expect("rows");
+    assert_eq!(p.model, None);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.publish_model(CONN, "v", doc(2)).expect("a changed model");
+    let p = s.publish(&key("g"), rows("g", 2, 2), &[]).expect("rows");
+    assert_eq!(p.model, Some(2));
+    assert_eq!(s.resync(&key("g"), &[]).expect("a reset").model, Some(2));
+}
+
+/// [D] A change only the model sees (a field the rows don't show) sends a model and no rows; nothing changed sends
+/// neither.
+#[test]
+fn fields_only_change_sends_model_and_no_rows() {
+    let mut s = Store::new(7);
+    s.env(CONN, env("g", 1, 600));
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.publish(&key("g"), rows("g", 2, 1), &[]).expect("rows");
+    let m = s
+        .publish_model(CONN, "v", doc(2))
+        .expect("the field change");
+    assert_eq!((m.base, m.version), (1, 2));
+    let ops = ops_of(&m);
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert_eq!(ops[0]["nodes"][0]["id"], "b");
+    assert!(s.publish(&key("g"), rows("g", 2, 1), &[]).is_none());
+    assert!(s.publish_model(CONN, "v", doc(2)).is_none());
+}
+
+/// [D] A hidden view's next model is a reset; a resync answers one too, and a closed view has none to resync.
+#[test]
+fn hidden_view_gets_no_model_then_reset() {
+    let mut s = Store::new(7);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.model_hidden(CONN, "v");
+    let m = s
+        .publish_model(CONN, "v", doc(1))
+        .expect("a reset, though unchanged");
+    assert!(ops_of(&m)[0].get("reset").is_some());
+    assert_eq!(m.version, 2);
+    let r = s.resync_model(CONN, "v").expect("a resync");
+    assert!(ops_of(&r)[0].get("reset").is_some());
+    assert_eq!((r.base, r.version), (2, 3));
+    s.close(CONN, "v");
+    assert!(s.resync_model(CONN, "v").is_none());
+}
+
+/// [D] Removals: edges first, then the nodes; a list that went is sent empty.
+#[test]
+fn removals_send_edges_before_nodes() {
+    let mut s = Store::new(7);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    let mut d = doc(1);
+    d.nodes.remove("b");
+    d.edges.clear();
+    d.lists.clear();
+    let ops = ops_of(&s.publish_model(CONN, "v", d).expect("removals"));
+    assert!(ops[0]["edges"]["remove"].is_array(), "{ops:?}");
+    assert_eq!(ops[1]["remove"], serde_json::json!(["b"]));
+    assert_eq!(ops[2]["list"]["ids"], serde_json::json!([]));
 }

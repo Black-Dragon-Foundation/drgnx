@@ -18,6 +18,7 @@ pub mod before_tool_tool;
 pub mod config;
 pub mod deliver;
 pub mod explain;
+pub mod grants;
 pub mod handoff;
 pub mod identity;
 pub mod launch;
@@ -270,6 +271,33 @@ impl Hub {
             ));
         }
         self.find(id)?.answer_permission(request, option).await
+    }
+
+    /// The Always grants of session ID (`agents/grants`).
+    pub fn grants(
+        &self,
+        caller: &Caller,
+        id: &str,
+    ) -> Result<runstav::methods::agents::Grants, Error> {
+        if caller.class != Class::User {
+            return Err(session::refuse("only the user reads the grants"));
+        }
+        Ok(runstav::methods::agents::Grants {
+            grants: self.find(id)?.grants(),
+        })
+    }
+
+    /// Take back grant GRANT of session ID (`agents/grants/revoke`).
+    pub async fn revoke_grant(
+        &self,
+        caller: &Caller,
+        id: &str,
+        grant: &str,
+    ) -> Result<runstav::methods::agents::Revoked, Error> {
+        if caller.class != Class::User {
+            return Err(session::refuse("only the user takes a grant back"));
+        }
+        self.find(id)?.revoke_grant(grant).await
     }
 
     /// Matrix card CARD was settled (in the cockpit, or by an answer here): the requests waiting on it go on.

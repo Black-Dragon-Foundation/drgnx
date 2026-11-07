@@ -134,7 +134,7 @@ packages' entries of the mode line are formatted once per value, for each buffer
   (drgnx-statusbar--bump)
   (force-mode-line-update t))
 
-(defcustom drgnx-statusbar-left '(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)
+(defcustom drgnx-statusbar-left '(branch trust problems tests jobs needs-you drgnx toasts modal misc)
   "The segments on the left of the status bar, in order (see `drgnx-statusbar-define-segment')."
   :type '(repeat symbol) :set #'drgnx-statusbar--set :group 'drgnx-statusbar)
 
@@ -1054,17 +1054,21 @@ window is another one now, so the full bar and the compact one trade places in e
   "Seconds `drgnx-statusbar-refresh' waits, so that a burst of changes is one refresh and one redraw.")
 
 (defvar drgnx-statusbar--redraw-wanted nil "Non-nil: the next refresh redraws the bars.")
+(defvar drgnx-statusbar-mode)           ; below
 
 (defun drgnx-statusbar-refresh (&optional changed)
   "Redraw the bars once what a segment shows has changed.
 CHANGED non-nil: something a segment shows changed (a segment a module defines: jobs, agents, your own): every bar is
 drawn again.
 Debounced: the refresh runs once, `drgnx-statusbar-refresh-delay' seconds after the first call, however many calls
-came in between.  Never blocks; safe in a hook, a timer or a process filter."
+came in between.  Never blocks; safe in a hook, a timer or a process filter.
+With the bar off, the change is noted and nothing is scheduled: there is no bar to draw, and turning the mode on draws
+it (a timer then would outlive the mode that cancels it)."
   (when changed
     (drgnx-statusbar--bump)
     (setq drgnx-statusbar--redraw-wanted t))
-  (drgnx-timer-soon 'statusbar-refresh drgnx-statusbar-refresh-delay #'drgnx-statusbar--refresh-now :owner :core))
+  (when drgnx-statusbar-mode
+    (drgnx-timer-soon 'statusbar-refresh drgnx-statusbar-refresh-delay #'drgnx-statusbar--refresh-now :owner :core)))
 
 (defun drgnx-statusbar--refresh-now ()
   "The refresh itself: redraw every bar when a redraw was asked.

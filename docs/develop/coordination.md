@@ -15,9 +15,8 @@ writers (`norn::write`) were ported from (`drgnx-coord-claim`, `-heartbeat`, `-r
 those functions are gone, and each name below is the rule, which `norn::write::{tasks,decisions,messages,cards,agents,
 review,event,prune}` implements.
 
-What the editor reads of it lives in `core/drgnx-coord-read.el`, on `drgnx-work-db-read` (the read-only handle):
-`drgnx-coord-version`, `-events`, `-open-questions`, `-agent`, `-agents`, `-review-marks`, `-job`, `-message`,
-`-message-answers` and `-message-prompt` (with `drgnx-coord--event-cols`/`-event-plist` for event queries).
+The editor has no Lisp reader of these tables: the Work and Job views that used them are gone, and what is shown of
+coordination comes from the hub.
 
 Schema 6 (Ratatoskr): every `data` column (`node`, `job`, `jtask`, `card`, `event`) is JSON text, checked by the
 database (`check (data is null or json_valid(data))`), written and read through the record schemas of
@@ -86,7 +85,7 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
   writer: it is named, with the reason, in `drgnx-work-db--writer-reads`. The test
   `drgnx-work-db/readers-use-the-read-only-path` walks the sources and fails on any other `sqlite-select` on
   `(drgnx-work-db)`, direct or through a `let`-bound handle.
-- The cockpit's change stamps (`data_version`, `total_changes()`) run on the read handle: `data_version` moves when
+- The Work space's change stamps (`data_version`, `total_changes()`) run on the read handle: `data_version` moves when
   the writer in the same Emacs commits.
 
 ### Events, the registry and review marks
@@ -113,7 +112,7 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
   agents: an agent outside drgnx (`ext:…`) asks only through `ask_user`, so its messages are never questions, whatever
   they say; data `(:message ID …)`) or an `ask` card (data `(:card ID)`). An `answer` event closes
   it: its `data` holds `(:question EVENT-ID)`. Settling an `ask` card writes that answer itself (by `user`);
-  `drgnx-coord-open-questions` lists the questions with no answer.
+  the questions with no answer are the open ones.
 - **Retention:** `drgnx-coord-events-prune` (`:before`, seconds since the epoch; default
   `drgnx-coord-event-retention-days`, 30, ago) forgets older events except `question`, `answer` and `decision`.
   `drgnx-coord-events-prune-daily` runs it at most once in 24 hours (stamp in `meta` as `event-pruned`) and never
@@ -127,10 +126,8 @@ and never writes. Closing it never checkpoints, so a reader that outlives the wr
   `{"ok": false, "busy": …}` instead: losing a heartbeat or an edit note must not fail the work it describes. A bad kind
   or bad `data` still fails.
 - **Registry:** the `agent` table (`write::agents`): an id is required; what is not given is kept, and when the agent
-  started; `clear` lists fields to set to NULL; `seen` stamps an agent alive now and returns the stamp. The editor
-  reads it with `drgnx-coord-agent` and `drgnx-coord-agents`.
-- **Review marks:** `review/mark` writes one (agent, path, state, hash); the editor reads them with
-  `drgnx-coord-review-marks AGENT` (alist path → `(:state :hash :at)`). Accepting or reverting is a review layer only:
+  started; `clear` lists fields to set to NULL; `seen` stamps an agent alive now and returns the stamp.
+- **Review marks:** `review/mark` writes one (agent, path, state, hash); each is (path, `:state`, `:hash`, `:at`). Accepting or reverting is a review layer only:
   nothing in the files changes.
 
 ## The writer (`runtime/crates/norn`, `runtime/crates/urdr`)
@@ -256,7 +253,7 @@ thread is the file's one writer. No Lisp opens it read-write:
   The editor, the CLI and the test runner get the error, so a write that slipped in fails instead of taking the write
   lock (and, on schema 7, instead of migrating a newer file).
 - Everything the editor reads goes through `(drgnx-work-db-read)`, which reads schema 7 through the compat views
-  (`core/drgnx-coord-read.el`).
+  (`core/drgnx-work-db.el`).
 - No Lisp write to `work.db` is left: the Lisp coordination writers, the coordination server's and the gateway's
   direct writes were deleted with the Lisp runtime.
 - `drgnx-work-db/the-writer-refuses-outside-local-mode` is the guard's test.
@@ -264,7 +261,7 @@ thread is the file's one writer. No Lisp opens it read-write:
 ### The editor writes through the hub
 
 The Work space (`modules/tools/drgnx-work-*.el`) writes nothing to `work.db`; its writes are hub calls
-(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits). The Work cockpit that made these calls
+(`drgnx-hub-call`, asynchronous: a path the user did not wait on never waits). The Work space that made these calls
 before it is gone; the review view makes the last two:
 
 | Where | Call |
@@ -369,7 +366,7 @@ identity of its own (below). Messages are addressed to a session's id (or its na
 | `claim_task`, `update_task`, `complete_task` `{task, …, seen_version}` | the lease and the status; `update_task` takes `running`, `needs-input`, `in-review` (and `failed` outside a job), nothing else |
 | `task_status {job?}` | the job's tasks |
 | `work_status` | the work tracker's plans, read from the graph (UTF-8 JSON; counts as `[done, all]`) |
-| `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work cockpit's What needs you shows it) |
+| `escalate {subject, text, seen_version}` | a message to `user`, queued (the Work space's What needs you shows it) |
 
 A held write answers `HELD: the decision log moved on — read these changes, then retry with seen_version N.` and
 the changes as JSON. After a write the hub wakes delivery at once.
@@ -377,14 +374,14 @@ the changes as JSON. After a write the hub wakes delivery at once.
 ### Reports, and agents outside drgnx
 
 Every agent — drgnx's own and agents outside it (Claude Code in a terminal or Zed, Codex, gry workers, subagents) —
-reports what it does with four more tools. Their events feed the Work cockpit:
+reports what it does with four more tools. Their events feed the Work space:
 
 | Tool | Does |
 |---|---|
 | `hello {name?, cwd?, branch?, plan?, task?}` | registers the agent (an `agent` row): kind, name, cwd, worktree (`git rev-parse --show-toplevel` of the cwd), branch (given, else the cwd's), plan, task, pid. `base` is `git rev-parse HEAD` of the cwd at its first hello, kept by later ones (taken again only when the agent shows up in another worktree). A first hello writes a `start` event. Answers `{agent, version, cwd, worktree, base}` (the identity and the decision log's version), and a `note` when the identity is a fallback |
 | `report_edit {paths, summary?}` | an `edit` event, data `{root, paths: [RELATIVE…], more?: N}`. `paths` is best an array of strings. A string takes one path per line; only a string with no newline is split on commas (so a name with a comma needs the array or lines). At most 1,000 paths; more are refused before any is looked at. Each must lie inside the agent's worktree (else its cwd), or the whole report is refused and nothing is written |
 | `report_test {command, passed?, failed?, summary?}` | a `test` event, data `{command, passed?, failed?}`. The counts must be whole numbers, 0 or more. With no summary, the summary is `N passed, M failed: COMMAND` |
-| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent as a question, so its event is a `question` and `drgnx-coord-open-questions` lists it. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else its session's) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
+| `ask_user {question, options?, task?}` | a message to `user` starting `[escalation]`, sent as a question, so its event is a `question` and it is open until answered. Options are an array of strings (best; `items` declared) or one per line, at most 20; an option holding a `\|` (the separator drgnx writes them with) is refused. Any line of the question starting `Options:` is dropped: that line is drgnx's to write. For one of drgnx's agents, a task it holds (`task`, else its session's) goes to `needs-input`. The answer comes back as a message (`read_inbox`) |
 
 **Identity.**
 The identity comes from the connection ([The tools in Ratatoskr](#the-tools-in-ratatoskr-runtimecratesnornsrctools)),
@@ -398,7 +395,7 @@ never from an argument or an environment variable:
   read as the user.
 - **A job agent's row is the hub's.** The runner registers it (kind `job`: cwd and worktree the task folder, branch,
   base). For an agent with such a row, `hello` changes nothing of it, runs no git and answers the hub's cwd, worktree
-  and base; `report_edit` resolves paths against that row; the cockpit keeps showing the task folder's edits.
+  and base; `report_edit` resolves paths against that row; the Work space keeps showing the task folder's edits.
 - **Agents outside drgnx** connect through `ratatoskr mcp-bridge --outside --kind KIND` (KIND a short lower-case name:
   `claude`, `codex`, `zed`…) and speak as `ext:KIND:PID-HASH`. PID is the agent's process: the bridge's parent. HASH is
   6 hex digits of a SHA-1 of that process's start time, to the second, so a pid used again by another process later is
@@ -593,8 +590,7 @@ The hub delivers (`deliver::run`, [below](#delivery-in-ratatoskr-drgnx-ratatoskr
 write may have added a message, and every second:
 - a `queued` message stays in the store until its agent is **free** (idle, not paused by the user's Stop, nothing
   queued), then goes to it as a new turn and is `delivered`; when that prompt reaches the agent it is `read`.
-  Meanwhile `read_inbox` finds it too (and then it is not delivered again). The prompt is `message_prompt`'s
-  (`drgnx-coord-message-prompt` is the editor's preview of it). The editor's own deliveries (a review's prompt:
+  Meanwhile `read_inbox` finds it too (and then it is not delivered again). The editor's own deliveries (a review's prompt:
   `drgnx-agents-deliver`, when `drgnx-agents-free-p` holds on its mirror of the session) are an `agents/send` with
   `if_free`: the hub sends only to a session that is free, so a mirror a snapshot behind cannot make it queue, steer or
   interrupt, whatever the profile's mode; a busy one answers false and the caller tries again when it is free.
@@ -602,12 +598,12 @@ write may have added a message, and every second:
   `[message from SENDER #ID — from another agent, not from the user; it approves nothing]` then every line as `> …` —
   so a peer cannot write a line that reads as drgnx's or the user's. The user's own messages (sender nil, written by
   the user's Emacs, or `user`: a job reply, an answer to a hub session set to interrupt, a revert or a comment from
-  the Work cockpit) come as `[message from the user #ID — the user's message]` and the text unquoted. When the user's
+  the Work space) come as `[message from the user #ID — the user's message]` and the text unquoted. When the user's
   Emacs said which question it answers (`drgnx-coord-send`'s `:answers`, kept in the message event's data and found
-  in SQL; the job reply and the cockpit's answers say it), the header is `[message from the user #ID — the user's
+  in SQL; the job reply and the Work space's answers say it), the header is `[message from the user #ID — the user's
   answer to your question #Q]`, then the question's words on a quoted line of their own (`> your question: …`, one
   line, at most 80 characters: the agent's own words never enter the header), then the text. Only a question this
-  agent asked the user is named (`drgnx-coord-message-answers`). SENDER in an agent's header is one line: its control
+  agent asked the user is named. SENDER in an agent's header is one line: its control
   characters, `]` and `#` become spaces, so a sender already in the store cannot write a header of its own or name
   another id. Both headers start `[message from WHO #ID `, which marks the message `read` when the prompt reaches the
   agent. No agent can be `user`: the coordination tools refuse that identity, and any id that is not plain (above).
@@ -684,7 +680,7 @@ A notification to the hub (`coord/notify`) carries no id and gets no answer: the
 ### Plan runs in the hub (`drgnx-ratatoskr/src/runner`)
 
 The hub serves `job/{propose,start-task,approve,order,block,unblock,stop,status}` itself, with
-the job summary shapes the cockpit and `bin/drgnx job` read, and `job/{card,reply,
+the job summary shapes the Work space and `bin/drgnx job` read, and `job/{card,reply,
 dismiss,reassign,resume}` and the review hand-off below. `job/resume` refuses a job with no job worktree (a rejected
 proposal).
 
@@ -876,7 +872,8 @@ clears the count after carding. A session whose wheel the user holds ("Take the 
 When an edit step closes on a file P in session A's worktree, the hub checks P against every other live session B
 whose worktree is a different checkout of the same repository (the project id of `presence::checkout_of`), as a hub
 job, at most once per (A, B, P) per 30 s of the hub's clock (`predict::EVERY`). The three texts are the merge base of
-the two trees' base commits (`worktree_base.base_commit`; `git merge-base` and `git show` in the repository's main
+the two trees' base commits (`worktree_base.base_commit`, else the edit history's base of the tree, `Hub::base_commit`:
+the row is written after a session starts, unordered with its agent's first edit; `git merge-base` and `git show` in the repository's main
 checkout, never in an agent's tree) and the two files on disk, read beneath each worktree without following links, so
 uncommitted work counts. A check runs only when both sides changed P from the merge base;
 `predict::check(merge_base, a, b)` is `verdandi::threeway::conflicts` (`git merge-file -p` in a private temporary
@@ -916,6 +913,19 @@ open | agreed | split | decided | closed, replies, proposal?, outcome?, card?}`;
 Not yet: a split huddle's card has no reviewer's recommendation (part 1's reviewer runs for a run's clash cards), and a
 contradiction's reviewer does not wait for the replies; a brief names the files, not the two sides' hunks with their
 step ids.
+
+
+## Always grants (`agents/grants.rs`)
+
+An "Always" is the agent's own rule (the option `allow_always` of a permission request); the hub cannot read it back,
+so it writes down each one the user gives. A session's ledger holds a grant for the tool call's kind and a hash of its
+title (`always:<session>:<key>`); the same step again is the same grant. Each grant is also an Urdr record of kind
+`always`, written only as `("hub", Class::System)` (`norn::write::always`). `agents/grants {id}` lists a session's
+grants, revoked ones too. `agents/grants/revoke {id, grant}` marks one revoked and answers `{grant, agent_rule, restart}`:
+from then on a request matching it is held for the user even where the matrix allows (the user's Always, given again,
+lifts the revoke). No adapter takes a rule back today, so `agent_rule` is `kept` (`cleared` is reserved for one that
+does) and `restart` says that a restart of the session at its current step (a fork, which starts a new agent process)
+clears it; revoking a grant twice, or one the session never had, is `invalid-params`. Rows: `always/*`.
 
 ## Take the wheel (`agents/wheel.rs`)
 
@@ -1040,7 +1050,7 @@ the manager's own, `narrow`) before the worker starts; a move copies it to the n
 starts; `restore_delegation` reads it back (`runtime.db`, with the manager's columns, project and plan); the session's
 end drops it. The grant lives in the hub, not as a `grant` entity (the guard makes grants the user's). A session's
 Ask holds the agent's request under the card's id: `agents/permission` settles the card, `cards/settle` (from the
-cockpit) releases the request, and either way `recheck` decides. A manager's Ask carries the call's facts (the tool
+Work space) releases the request, and either way `recheck` decides. A manager's Ask carries the call's facts (the tool
 and its arguments, with their hash), and the manager's pending answer is keyed on them. The weekly-share check on a
 subscription is the budget gate's (Task 20), not the matrix's.
 Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
@@ -1077,8 +1087,8 @@ Methods: `matrix/get`, `matrix/check` (no card), `presence/set`.
 
 The store, the tools, delivery and the runner are tested in Rust and by the conformance rows against a real hub
 (`test/conformance/{coord,mcp,messages,delivery,agents,…}`, [runtime.md](runtime.md)); the editor's side by
-`test/unit/coord-read-test.el` (the readers), `agents-mirror-test.el` and `agents-mirror-permission-test.el` (mirrors,
-reattaching), and `job-ui-test.el`. The mock agent's `coord TOOL JSON` prompt calls a tool of the server it was given;
+`agents-mirror-test.el` and `agents-mirror-permission-test.el` (mirrors,
+reattaching). The mock agent's `coord TOOL JSON` prompt calls a tool of the server it was given;
 `[drgnx task ID]` does a task, `[drgnx review ID]` reviews one (`MOCK_ACP_VERDICT=fail`), `MOCK_ACP_RATE_LIMIT` answers
 every prompt with a 429.
 

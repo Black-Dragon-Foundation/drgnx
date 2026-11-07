@@ -6,7 +6,7 @@
 ;; Part A of M12f.  Someone who opens drgnx and sees an empty editor does not know what to do.  `*drgnx start*' says
 ;; what drgnx is in two lines (under the logo, on a frame that shows images), shows the three keys that open
 ;; everything (the files, the commands, all keys: from the active profile, as the top line shows them) and has
-;; buttons: Open a folder…, Open the work graph, All keys, Don't show this again.
+;; buttons: Open a folder…, All keys, Don't show this again.
 ;;
 ;; It shows itself, only where nothing is lost: in the editor window used last, when that window shows `*scratch*'
 ;; (never a file), by changing that window's buffer — it never splits a window, never selects another one and never
@@ -61,7 +61,6 @@
 
 (defconst drgnx-start--buttons
   '((open-folder "Open a folder…" "Choose a folder to work in; it opens in the Explorer")
-    (work-graph "Open the work graph" "Specs, plans and branches as a graph")
     (keys-sheet "All keys" "Every command with its key")
     (dismiss "Don't show this again" "Keep this page away; Show Start Page in the palette brings it back"))
   "The buttons: a registry command ID (or `dismiss'), the label and the help text.  A command that is not there

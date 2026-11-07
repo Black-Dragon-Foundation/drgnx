@@ -96,6 +96,12 @@ the overlays small.  Changing it builds the base again."
   :type '(choice (const :tag "The main checkout" nil) directory) :group 'drgnx :scope 'project :workspace 'never
   :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
 
+(drgnx-defsetting drgnx-search-ignore-rules "index"
+  "Which files Quick Open, Find and the text search list: \"index\" leaves out dot paths and secret-looking names, as
+the index does; \"real\" lists them, leaving out only what .gitignore files and the search globs name."
+  :type '(choice (const "index") (const "real")) :group 'drgnx :on-error 'strict :agents 'never
+  :runtime "String" :schema '(string :match "\\`\\(?:index\\|real\\)\\'"))
+
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
 (defun drgnx-settings-runtime--str (x)
@@ -201,6 +207,7 @@ the overlays small.  Changing it builds the base again."
     (drgnx-search-exclude . drgnx-settings-runtime--strings)
     (drgnx-search-off . drgnx-settings-runtime--bool)
     (drgnx-search-base . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    (drgnx-search-ignore-rules . drgnx-settings-runtime--str)
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
     ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone

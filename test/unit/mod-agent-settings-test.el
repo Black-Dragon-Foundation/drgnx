@@ -12,7 +12,7 @@
 (require 'drgnx-agents)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-dir) nil t)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-settings" drgnx-dir) nil t)
 
 (defconst drgnx-agent-settings-test--secret "s3cr3t-env-value-0123456789"
@@ -361,22 +361,24 @@ the first time (a fresh eln cache, as in CI), and those runs are not THUNK's."
         (should (re-search-forward (concat (regexp-quote (abbreviate-file-name file)) ", line 3") nil t))
         (should (eq (get-text-property (match-beginning 0) 'face) 'drgnx-agent-settings-problem))))))
 
-(defvar drgnx-agents-ui--session)
+(defvar drgnx-agent-panel--session)
 
 (ert-deftest drgnx-agent-settings/opens-for-the-agent-at-point ()
   (drgnx-agent-settings-test--env
     (let ((drgnx-agents-profiles '(("cx" :command ("codex-acp")))))
       ;; a transcript of a claude-agent-acp profile → Claude Code's page, for the session's project
       (with-temp-buffer
-        (setq-local drgnx-agents-ui--session (drgnx-agents--make :name "a" :profile "claude" :cwd root))
+        (setq drgnx-agents--sessions (list (drgnx-agents--make :name "a" :profile "claude" :cwd root :remote "h-a")))
+        (setq-local drgnx-agent-panel--session "h-a")
         (call-interactively #'drgnx-agent-settings)
         (should (equal (buffer-name) "*agent settings: Claude Code*"))
         (should (equal drgnx-agent-settings--root (file-name-as-directory root))))
       ;; the Agents list, on a Codex session's row → Codex's page
       (with-temp-buffer
-        (drgnx-agents-list-mode)
+        (setq drgnx-agents--sessions (list (drgnx-agents--make :name "b" :profile "cx" :cwd root :remote "h-b")))
+        (drgnx-agent-panel-list-mode)
         (let ((inhibit-read-only t))
-          (insert (propertize "b\n" 'tabulated-list-id (drgnx-agents--make :name "b" :profile "cx" :cwd root))))
+          (insert (propertize "b\n" 'drgnx-agent-panel-list-id "h-b")))
         (goto-char (point-min))
         (call-interactively #'drgnx-agent-settings-here)
         (should (equal (buffer-name) "*agent settings: Codex*")))

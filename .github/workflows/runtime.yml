@@ -136,6 +136,13 @@ jobs:
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
         run: sh test/container/rust-packages.sh
+      - name: Zig (in the prebuilt image already; the terminal engine's build tool)
+        if: ${{ env.PREBUILT == '' }}
+        working-directory: ${{ github.workspace }}
+        run: bash test/container/zig.sh linux
+      - name: libghostty-vt's pinned tarballs (build.rs never downloads)
+        working-directory: ${{ github.workspace }}
+        run: bash runtime/crates/ghostty-vt-sys/fetch.sh
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
       - id: registry
@@ -335,6 +342,10 @@ jobs:
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
       - run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Zig and libghostty-vt's pinned tarballs (the terminal engine's build)
+        run: |
+          sudo bash test/container/zig.sh linux
+          bash runtime/crates/ghostty-vt-sys/fetch.sh
       - id: build
         run: cargo +1.95.0 build --locked --manifest-path runtime/Cargo.toml
       - id: prune
@@ -616,7 +627,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           DRGNX_TEST_PX_DIR="$PWD/runtime/target/bundle/x86_64" \
-            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib -- --ignored an_imported_image_runs_px
+            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib --no-fail-fast -- --ignored an_imported_image_runs_px
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -706,6 +717,8 @@ jobs:
         run: |
           cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p runstav -p draugr -p eitri -p gleipnir -p huginn -p heimdall -p drgnx-ratatoskr -p forseti
           cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p sleipnir --no-default-features --features proto,sync
+          # the terminal worker without its engine until the NDK link row passes (docs/develop/terminal.md)
+          cargo check --locked --manifest-path runtime/Cargo.toml --target aarch64-linux-android -p drgnx-term --no-default-features
       # the pure-Rust crates' tests too: only clippy's test build shows code that is dead on Android (gate review M21)
       - if: ${{ !cancelled() }}
         run: |
@@ -972,6 +985,11 @@ jobs:
         run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
+      # the terminal engine is built from source with a pinned Zig (test/container/zig.sh)
+      - name: Zig
+        run: /bin/bash test/container/zig.sh macos
+      - name: libghostty-vt's pinned tarballs (build.rs never downloads)
+        run: /bin/bash runtime/crates/ghostty-vt-sys/fetch.sh
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
       # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a
       # real sshd. Remote Login on with a throwaway key (.github/ci/macos-sshd.sh), then the generated ssh config and
@@ -984,7 +1002,9 @@ jobs:
           trap 'bash .github/ci/macos-sshd.sh down "$SSHD_DIR"; rm -rf "$SSHD_DIR"' EXIT
           DRGNX_TEST_SSHD_HOST=$(bash .github/ci/macos-sshd.sh up "$SSHD_DIR" | tail -n 1)
           export DRGNX_TEST_SSHD_HOST
-          cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored
+          # the timing rows are #[ignore] too: a debug build on a shared runner would judge a release budget
+          skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored $skips
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
       - id: build

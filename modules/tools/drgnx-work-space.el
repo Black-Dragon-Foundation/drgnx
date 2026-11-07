@@ -67,6 +67,8 @@
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
 (declare-function drgnx-work-job-log "drgnx-work-detail")
+(declare-function drgnx-work-huddle-overlap "drgnx-work-detail")
+(declare-function drgnx-work-map--huddles-changed "drgnx-work-map")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
 
@@ -377,6 +379,7 @@ follows the windows; the commands."
   (drgnx-module-hook 'drgnx-hub-disconnect-functions disconnected () (drgnx-work-client-disconnected))
   (drgnx-module-hook 'drgnx-work-client-change-functions changed (view marks) (drgnx-work-map--changed view marks))
   (drgnx-module-hook 'drgnx-work-client-change-functions board-changed (view marks) (drgnx-work-board--changed view marks))
+  (drgnx-module-hook 'drgnx-agent-panel-huddle-changed-hook huddles () (drgnx-work-map--huddles-changed))
   (drgnx-module-hook 'drgnx-hub-event-functions trail-event (event data) (drgnx-work-trail-event event data))
   (drgnx-module-hook 'drgnx-work-client-status-functions status (view status) (drgnx-work-space--show-status view status))
   (drgnx-module-hook 'drgnx-work-map-select-functions selected (buffer) (drgnx-work-detail-update buffer))
@@ -438,6 +441,8 @@ follows the windows; the commands."
                    (work-pause "Pause the Agent" drgnx-work-trail-pause "Cancel after the current tool call; u resumes")
                    (work-resume "Resume the Agent" drgnx-work-trail-resume "A plain continue prompt, labelled in the trail")
                    (work-stop "Stop the Agent" drgnx-work-trail-stop "Stop it, after a confirmation line")
+                   (work-huddle "Huddle the Overlapping Agents" drgnx-work-huddle-overlap
+                                "Start a huddle between the selected agent and the one its overlap edge points at")
                    (work-keys-sheet "Show This View's Keys" drgnx-work-keys-sheet "The keyboard shortcuts sheet")
                    (work-review "Open the Review" drgnx-work-review-show
                                 "The selected agent's decisions with what they computed to, then its work as hunks")

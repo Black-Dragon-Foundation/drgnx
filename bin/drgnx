@@ -55,8 +55,24 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   return "$rc"
 }
 
-cmd_build() { # byte-compile core/, wb/, modules/, harness/ in place (core/drgnx-build.el)
+cmd_build() { # byte-compile core/, wb/, modules/, harness/ in place (core/drgnx-build.el), then the terminfo entry
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
+  local rc=$?
+  build_terminfo
+  return "$rc"
+}
+
+build_terminfo() { # Ghostty's xterm-ghostty entry, compiled into <data>/terminfo for drgnx's terminal (docs/guide/shell.md)
+  # Without tic, or when it fails, the terminal says TERM=xterm-256color instead: a note, never a failure
+  local src="$here/etc/shell/ghostty/terminfo/xterm-ghostty.terminfo" dir
+  dir="$(drgnx_dir data)/terminfo"
+  if ! command -v tic >/dev/null 2>&1; then
+    echo "drgnx build: no tic (ncurses): drgnx's terminal uses TERM=xterm-256color" >&2; return 0
+  fi
+  [[ -f "$dir/x/xterm-ghostty" && ! "$src" -nt "$dir/x/xterm-ghostty" ]] && return 0
+  mkdir -p "$dir" && tic -x -o "$dir" "$src" >/dev/null 2>&1 ||
+    echo "drgnx build: tic could not compile $src: drgnx's terminal uses TERM=xterm-256color" >&2
+  return 0
 }
 
 # --- drgnx runtime: Ratatoskr, built from source (runtime/; docs/develop/runtime.md) ----------------------------------
@@ -144,6 +160,11 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   local envs=("PATH=${RT_CARGO%/*}:$PATH" "CARGO_TARGET_DIR=$cache/ratatoskr-target" "DRGNX_BUILD_COMMIT=$commit" "DRGNX_CHECKOUT=$here")
   case " ${RT_ENV[*]-} " in *" CARGO_HOME="*) ;; *) envs+=("CARGO_HOME=$cache/cargo") ;; esac
   for l in ${RT_ENV[@]+"${RT_ENV[@]}"}; do envs+=("$l"); done
+  # the zig install.sh recorded in <data>/zig-path (the terminal engine's build tool; the timer's PATH lacks it)
+  if [[ -f "$(drgnx_dir data)/zig-path" ]]; then
+    l="$(head -n 1 "$(drgnx_dir data)/zig-path")"
+    if [[ "$l" == /* && -x "$l" ]]; then envs[0]="PATH=${l%/*}:${envs[0]#PATH=}"; fi
+  fi
   rt_cap "$jobs"
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
@@ -530,7 +551,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     local bmem_run="${DRGNX_TEST_BATCH_MEMORY:-4g}"
     args=(--memory "$bmem_run" --memory-swap "$bmem_run")
   fi
-  # packages the tests load (kkp, corfu, gptel, …), read-only, in every tier; without them those tests skip
+  # packages the tests load (kkp, corfu, …), read-only, in every tier; without them those tests skip
   if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
     elpa="$(cd "$DRGNX_USER_ELPA" && pwd)"
     # a `:' would split -v's SOURCE:TARGET:OPTIONS (and could add options)
@@ -939,6 +960,11 @@ test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selecte
 }
 
 cmd_test() {
+  # huginn's dump example, when this checkout has built it (cargo build -p huginn --example dump): the differential test
+  # is on the must-run list, so a full run without it fails; CI sets the variable itself
+  if [ -z "${DRGNX_HUGINN_DUMP:-}" ] && [ -x "$here/runtime/target/debug/examples/dump" ]; then
+    export DRGNX_HUGINN_DUMP="$here/runtime/target/debug/examples/dump"
+  fi
   case "${1:-}" in
     "") test_batch ;;
     # batch flags, in any order: --one-process (every test file in one Emacs: hunting a leak across files),
@@ -1458,10 +1484,11 @@ open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal
       files+=("${dir%/}/$(basename -- "$p")")
     fi
   done
+  if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
+    echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
+  fi
+  client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # as cmd_open: once per daemon
   if [[ -n "$wait" ]]; then
-    if ((${#dirs[@]})) || ! ((${#files[@]})); then
-      echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
-    fi
     client -- "${files[@]}" >/dev/null; return   # until C-x #
   fi
   if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
@@ -1471,8 +1498,11 @@ open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal
 }
 
 cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
-  # In drgnx's terminal (eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new window or frame
-  if [[ "${INSIDE_EMACS:-}" == *eat* && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then open_here "$@"; return; fi
+  # In drgnx's terminal (DRGNX_TERMINAL, or eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new
+  # window or frame
+  if [[ ( -n "${DRGNX_TERMINAL:-}" || "${INSIDE_EMACS:-}" == *eat* ) && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then
+    open_here "$@"; return
+  fi
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
   local wait="" term="" gui=""
   while true; do   # -t: a frame in this terminal; --gui: a window, whatever the terminal; --wait: until C-x #
@@ -2049,6 +2079,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build runner-bundle [--arch x86_64|aarch64]
                                the static runner bundle (sleipnir, drgnx-key, drgnx-px) in runtime/target/bundle/ARCH
                                (docs/guide/runners.md)
+       drgnx build terminfo    Ghostty's terminfo entry for drgnx's terminal, into <data>/terminfo (drgnx build does it too)
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
@@ -2119,7 +2150,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx extensions refresh [--progress FILE] | fetch-readme ARCHIVE NAME
                                write the catalog of the archives' packages (the Extensions view reads it), or cache
                                one package's readme; reaches the network, changes nothing you have installed
-       drgnx lock --ship      (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
@@ -2191,7 +2222,11 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   build) shift
-        if [[ "${1:-}" == runner-bundle ]]; then shift; rt_bundle "$@"; else cmd_build; fi ;;
+        case "${1:-}" in
+          runner-bundle) shift; rt_bundle "$@" ;;
+          terminfo) build_terminfo ;;
+          *) cmd_build ;;
+        esac ;;
   runtime) shift; cmd_runtime "$@" ;;
   test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
   lease) shift; cmd_lease "$@" ;;

@@ -123,6 +123,7 @@
  (drgnx-search-exclude nil)
  (drgnx-search-off nil)
  (drgnx-search-base nil)
+ (drgnx-search-ignore-rules "index")
  (drgnx-agents-plugins nil)
  (drgnx-agents-hook-rules nil)
  (drgnx-agents-hook-rules-off nil))

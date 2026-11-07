@@ -41,7 +41,7 @@
 (defconst drgnx-settings-page-areas
   '((editor "Editor" "\\`drgnx-\\(?:edit\\|code\\|format\\|indent\\|lsp\\|completion\\|diff\\|git\\|snippet\\|large-files\\|spell\\|lint\\|fold\\)")
     (workbench "Workbench" nil)
-    (agents "Agents" "\\`drgnx-\\(?:agents?\\|hub\\|cockpit\\|work\\|jobs\\)")
+    (agents "Agents" "\\`drgnx-\\(?:agents?\\|hub\\|work\\|jobs\\)")
     (ai "AI" "\\`drgnx-\\(?:ai\\|embed\\|llm\\)")
     (search "Search" "\\`drgnx-\\(?:search\\|replace\\)")
     (extensions "Extensions" "\\`drgnx-\\(?:extensions\\|packages\\)-")

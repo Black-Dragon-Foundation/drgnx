@@ -321,7 +321,7 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel-allow)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-always)
-      (should (equal '("agents/permission" :id "s1" :request 7 :option "always") (car drgnx-agent-panel-test--calls)))
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "always") (assoc "agents/permission" drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-reject)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "reject") (car drgnx-agent-panel-test--calls)))
       ;; a permission card is not a diff card
@@ -507,6 +507,75 @@ unanswered, and panel \"s1\" as `buf'."
                 (should (equal (with-current-buffer file (buffer-string)) "NEW typed\n"))))
           (kill-buffer file))))))
 
+;;;; Huddles on the editor's conflict ranges
+
+(declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
+(declare-function drgnx-agents-editor-draw--conflict-help "drgnx-agents-editor-draw")
+(defvar drgnx-agent-panel-huddle--open)
+
+(ert-deftest drgnx-agent-panel/conflict-range-hover-names-the-open-huddle ()
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-agents-editor-draw" drgnx-dir) nil t)
+    (unwind-protect
+        (progn
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1")))
+          (drgnx-agent-panel-huddle--event "huddle" (list :huddle (drgnx-agent-panel-test--huddle)))
+          (should (equal "x · huddle open · o opens it" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'changed "x" "s1")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s9")))
+          (drgnx-agent-panel-huddle--event "huddle" (list :huddle (plist-put (drgnx-agent-panel-test--huddle) :state "decided")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1"))))
+      (clrhash drgnx-agent-panel-huddle--open))))
+
+;;;; Task 45: the panel replaces the Agents view
+
+(require 'drgnx-work-client)
+(load (expand-file-name "modules/tools/drgnx-work-map" drgnx-dir) nil t)
+(declare-function drgnx-work--open-agent "drgnx-work-map")
+(declare-function drgnx-agent-panel-list-buffer "drgnx-agent-panel-list")
+(declare-function drgnx-agent-panel-list-open "drgnx-agent-panel-list")
+(declare-function drgnx-agents--make "drgnx-agents")
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
+
+(ert-deftest drgnx-agent-panel/enter-on-an-agent-card-opens-the-panel ()
+  ;; part 2's Enter on an agent card (`drgnx-work--open-agent') opens the hub session's panel, not a transcript
+  (let (opened)
+    (cl-letf (((symbol-function 'drgnx-agent-panel-open) (lambda (session) (setq opened session))))
+      (drgnx-work--open-agent "s1")
+      (should (equal "s1" opened)))))
+
+(ert-deftest drgnx-agent-panel/agents-view-lists-panels ()
+  (drgnx-agent-panel-test--with
+    (let ((sessions (list (drgnx-agents--make :name "alpha" :status 'busy :remote "h1")
+                          (drgnx-agents--make :name "beta" :status 'idle :remote "h2")))
+          opened list)
+      (cl-letf (((symbol-function 'drgnx-agents-sessions) (lambda () sessions))
+                ((symbol-function 'drgnx-agent-panel-open) (lambda (session) (setq opened session))))
+        (unwind-protect
+            (progn
+              (setq list (drgnx-agent-panel-list-buffer))
+              (let ((text (substring-no-properties (with-current-buffer list (buffer-string)))))
+                (should (string-match-p "alpha .*busy" text))
+                (should (string-match-p "beta .*idle" text)))
+              (with-current-buffer list
+                (goto-char (point-min))
+                (search-forward "beta")
+                (drgnx-agent-panel-list-open))
+              (should (equal "h2" opened)))
+          (when (buffer-live-p list) (kill-buffer list)))))))
+
+(ert-deftest drgnx-agent-panel/p9-context-map-in-the-panel ()
+  ;; the context map (the bar, each part, what /compact frees) is the context chip's popup now
+  (drgnx-agent-panel-test--with
+    (let* ((ctx (list :used 1200 :size 200000 :compact_frees 300
+                      :parts (vector (list :kind "tool-output" :tokens 1000 :items (vector)))))
+           (text (substring-no-properties
+                  (drgnx-agent-panel-explain--popup-text
+                   'context nil (list :id "s1" :panel (list :features [] :context ctx))))))
+      (should (string-match-p "[█░]" text))
+      (should (string-match-p "tool-output +1000 tokens" text))
+      (should (string-match-p "/compact would free 300 tokens" text)))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
 
@@ -542,7 +611,13 @@ unanswered, and panel \"s1\" as `buf'."
         (should (string-match-p "Time:     1 ms" (buffer-string))))
       (kill-buffer "*agent hook*"))))
 
-(ert-deftest drgnx-agent-panel/revoke-an-always ()
+(declare-function drgnx-agent-panel-explain-take-grants "drgnx-agent-panel-explain")
+
+(defun drgnx-agent-panel-test--grant (&optional revoked)
+  (list :id "always:s1:read-1" :session "s1" :tool "read" :key "read-1" :title "Run make" :at 1.0
+        :revoked (if revoked t :false)))
+
+(ert-deftest drgnx-agent-panel/an-always-answer-asks-the-hub-for-its-grants ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot
@@ -553,15 +628,50 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel-test--text buf)
       (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
       (drgnx-agent-panel-always)
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
+      (should (assoc "agents/permission" drgnx-agent-panel-test--calls))
+      (should (equal '(:id "s1") (cdr (assoc "agents/grants" drgnx-agent-panel-test--calls)))))))
+
+(ert-deftest drgnx-agent-panel/the-always-line-reads-the-hubs-grants ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
       (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "allowed by your Always · V revokes" text)))
-      (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0))))
-        (drgnx-agent-panel-revoke-always))
       (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf)))
-      ;; the line is gone because the panel forgot it; nothing is asked of the hub (the agent keeps its own rule)
-      (should (equal "agents/permission" (car (car drgnx-agent-panel-test--calls)))))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (should (string-match-p "allowed by your Always · V revokes" (drgnx-agent-panel-test--text buf)))
+      ;; a grant the hub says is revoked is no line
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant t))))
+      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf))))))
+
+(ert-deftest drgnx-agent-panel/revoke-an-always ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (drgnx-agent-panel-test--text buf)
+      (let (asked forked)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) "Take back, keep running"))
+                  ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
+          (drgnx-agent-panel-revoke-always))
+        ;; the hub is asked to take the grant back; the panel does not forget it by itself
+        (should asked)
+        (should (equal '(:id "s1" :grant "always:s1:read-1") (cdr (assoc "agents/grants/revoke" drgnx-agent-panel-test--calls))))
+        (should-not forked)
+        (should (string-match-p "Always" (drgnx-agent-panel-test--text buf)))))))
+
+(ert-deftest drgnx-agent-panel/revoke-and-restart-forks-at-the-latest-step ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps (list (list :seq 4) (list :seq 9)))
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (drgnx-agent-panel-test--text buf)
+      (let (forked)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'completing-read) (lambda (&rest _) "Take back and restart at the latest step"))
+                  ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
+          (drgnx-agent-panel-revoke-always))
+        (should (equal '("s1" 9) forked))))))
 
 (ert-deftest drgnx-agent-panel/context-popup-shows-drop-only-when-advertised ()
   (drgnx-agent-panel-test--with
@@ -600,6 +710,7 @@ unanswered, and panel \"s1\" as `buf'."
 (declare-function drgnx-agent-panel-huddle-buffer "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle--take "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle-send "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-of "drgnx-agent-panel-huddle")
 
 (ert-deftest drgnx-agent-panel/subagent-steps-indent-in-their-colour ()
   (drgnx-agent-panel-test--with
@@ -633,7 +744,10 @@ unanswered, and panel \"s1\" as `buf'."
               (should (string-match-p "s1" text))
               (should (string-match-p "s2" text))
               (should (string-match-p "src/a.el" text))
-              (should (string-match-p "open" text))))
+              (should (string-match-p "open" text)))
+            ;; a thread taking the record also keeps it for the strip and the conflict hover
+            (should (equal "huddle:1" (plist-get (drgnx-agent-panel-huddle-of "s1") :id))))
+        (clrhash drgnx-agent-panel-huddle--open)
         (kill-buffer hb)))))
 
 (ert-deftest drgnx-agent-panel/composer-in-a-huddle-sends-to-both ()

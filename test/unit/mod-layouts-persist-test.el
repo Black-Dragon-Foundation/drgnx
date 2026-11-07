@@ -8,7 +8,7 @@
 (require 'drgnx-area)
 (require 'drgnx-groups)
 (require 'drgnx-persist)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-browser" drgnx-dir) nil t)
 

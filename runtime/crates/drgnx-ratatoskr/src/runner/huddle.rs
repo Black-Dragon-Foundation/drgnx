@@ -460,9 +460,6 @@ impl Huddles {
     /// Card CARD was settled: a huddle card's choice acts (`open` / `dismiss` on an ask; `accept` takes the agreed
     /// proposal, `dismiss` closes, any other choice is the user's own decision).
     pub async fn card_settled(&self, front: &Front, card: i64) {
-        let Some(id) = lock(&self.inner).cards.get(&card).cloned() else {
-            return;
-        };
         let Ok(Some(c)) = front
             .writer
             .db
@@ -471,6 +468,20 @@ impl Huddles {
         else {
             return;
         };
+        // a huddle card names its huddle: after a hub restart the maps are empty, the record and the card are not
+        let Some(id) = lock(&self.inner).cards.get(&card).cloned().or_else(|| {
+            (c.kind.as_deref() == Some("huddle"))
+                .then(|| c.data.as_ref()?.get("huddle")?.as_str().map(str::to_owned))
+                .flatten()
+        }) else {
+            return;
+        };
+        if !lock(&self.inner).all.contains_key(&id) {
+            let Ok(h) = self.get(front, &id).await else {
+                return;
+            };
+            lock(&self.inner).all.insert(id.clone(), h);
+        }
         let choice = c.choice.unwrap_or_default();
         let (h, outs, facts) = {
             let mut g = lock(&self.inner);

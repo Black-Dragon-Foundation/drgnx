@@ -204,7 +204,7 @@ count is positive."
        (list (drgnx-topline--item 'drgnx-topline-agents
                                   (drgnx-topline--text (format " %d %s " agents (if (= agents 1) "agent" "agents"))
                                                        'drgnx-topline-strong)
-                                  (and (fboundp 'drgnx-agents-ui-view) 'drgnx-agents-ui-view)
+                                  (and (fboundp 'drgnx-agent-panel-list-show) 'drgnx-agent-panel-list-show)
                                   "Agents at work"))))))
 
 (defun drgnx-topline-toggle-maximized ()

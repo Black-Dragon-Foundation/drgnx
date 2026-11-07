@@ -39,8 +39,7 @@
 (defconst drgnx-lint-bt--hooked-buffers
   ;; Each one needs no buffer hook (no `kill-buffer-hook' of its own, nobody lists it): they can take
   ;; `inhibit-buffer-hooks' — left for the next change to those files.
-  '(("core/drgnx-projects.el" . "generate-new-buffer \" *drgnx-plan*\"")            ; a plan's text while synced
-    ("modules/tools/drgnx-work-ui.el" . "get-buffer-create \" *drgnx work scan*\""))  ; the scan's output
+  '(("core/drgnx-projects.el" . "generate-new-buffer \" *drgnx-plan*\""))            ; a plan's text while synced
   "Internal buffers made with buffer hooks, allowed: (FILE . CALL).")
 
 (ert-deftest drgnx-lint/internal-buffers-skip-buffer-hooks ()
@@ -86,10 +85,13 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; inside the caller); it follows nothing and moves no window by itself.
   ;; Also: a view's draw (`drgnx-view--arm' on a mark, `drgnx-view--draw-buffer' re-arming the rest of a slice)
   ;; follows no window: it moves only windows that show the view's own buffer, as their owner.  The end of a timer
-  ;; pass (`drgnx-view--spend') only clears the frame budget's deadline.
+  ;; pass (`drgnx-view--spend') only clears the frame budget's deadline.  A view's model queue (`drgnx-view-model--arm')
+  ;; hands a model no row patch named to Sjá a throttle later: it changes no buffer and moves no window.  A view's
+  ;; trailing notice (`drgnx-view-nav--arm-notice') only tells the hub the selection: it follows nothing.
   '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
-    ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer))
+    ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm)
+    ("wb/drgnx-view-nav.el" drgnx-view-nav--arm-notice))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 

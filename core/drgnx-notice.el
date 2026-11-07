@@ -6,7 +6,7 @@
 ;; The one way drgnx tells the user something.  A producer posts a notice (`drgnx-notify'): an `event' (something
 ;; happened; ages out of a ring) or a `condition' (something is wrong now; the producer clears it).  A source of
 ;; things waiting on the user replaces its whole set of `attention' items (`drgnx-notice-set'), and the one "needs
-;; you" count is the size of the union of those sets.  Readers (the status bar, the cockpit, the Notices list) read
+;; you" count is the size of the union of those sets.  Readers (the status bar, the Notices list) read
 ;; cached counts memoised on `drgnx-notice-tick'; routes (echo, desktop, the session file) follow the model through
 ;; `drgnx-notice-functions', the synchronous `now' lane.  Nothing here prompts or raises from an automatic path: hook
 ;; errors are recorded.  Core: it requires nothing in wb/ or modules/.  See docs/develop/core.md, "Notices".

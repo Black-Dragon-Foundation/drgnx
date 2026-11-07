@@ -301,7 +301,7 @@ area, so its size and tabs are kept."
                  ("\\`\\*Flycheck errors\\*\\'" problems)
                  ((messages-buffer-mode debugger-mode ert-results-mode process-menu-mode timer-list-mode) output)
                  ("\\`\\*\\(Warnings\\|Backtrace\\|Messages\\|timer-list\\|Process List\\)\\*\\'" output)
-                 ((shell-mode eshell-mode eat-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
+                 ((shell-mode eshell-mode drgnx-term-mode term-mode vterm-mode inferior-emacs-lisp-mode comint-mode) terminal)
                  ;; shell, eshell and eat show their buffer before setting its mode.
                  ("\\`\\*\\(shell\\|eshell\\|eat\\|ielm\\|terminal\\|ansi-term\\|vterm\\)\\*\\(<[0-9]+>\\)?\\'" terminal)))
   (drgnx-wb-place matcher 'panel :tab tab))

@@ -194,7 +194,7 @@ to nil when none is.  Nothing signals."
                     ("edits" (if here-from (format "edits %s" other) (format "edited by %s" other)))
                     ("reads" (if here-from (format "reads %s" other) (format "read by %s" other)))
                     ("runs-on" (if here-from (format "runs on %s" other) (format "%s runs on this" other)))
-                    ("overlap" (format "overlaps with %s" other))
+                    ("overlap" (format "overlaps with %s · H huddle" other))
                     ("manages" (if here-from (format "manages %s" other) (format "managed by %s" other)))
                     (_ (format "%s: %s" kind other)))
                   out)))))
@@ -231,6 +231,27 @@ for a machine, or nil when there are none."
               (if (and running waiting) "\n" "")
               (if waiting (concat "waiting\n" (mapconcat #'identity (nreverse waiting) "\n")) "")
               "\n  l live log"))))
+
+(declare-function drgnx-work-map--require-state "drgnx-work-map")
+(declare-function drgnx-agents-editor-here-huddle "drgnx-agents-editor-here")
+
+(defun drgnx-work-huddle-overlap ()
+  "Start a huddle between the selected agent and the one its overlap edge points at (a choice when it has several)."
+  (interactive)
+  (let* ((state (drgnx-work-map--require-state)) (id (cdr drgnx-work-map--selection))
+         (others (and id (equal (car drgnx-work-map--selection) 'agent)
+                      (delq nil (mapcar (lambda (e)
+                                          (and (equal (plist-get e :kind) "overlap")
+                                               (let ((o (cond ((equal (plist-get e :from) id) (plist-get e :to))
+                                                              ((equal (plist-get e :to) id) (plist-get e :from)))))
+                                                 (and o (string-prefix-p "agent:" o) o))))
+                                        (drgnx-work-client-edges state)))))
+         (other (cond ((null others) (user-error "This agent has no overlap with another agent"))
+                      ((cdr others) (let ((names (mapcar (lambda (o) (cons (drgnx-work-detail--label state o) o)) others)))
+                                      (cdr (assoc (completing-read "Huddle with: " names nil t) names))))
+                      (t (car others)))))
+    (unless (fboundp 'drgnx-agents-editor-here-huddle) (user-error "Agents in the editor is not loaded"))
+    (drgnx-agents-editor-here-huddle (substring id (length "agent:")) (substring other (length "agent:")))))
 
 (defun drgnx-work-detail-sections (state sel &optional finished)
   "The side panel's sections for SEL in STATE: an alist (KEY . TEXT) of :head :why :touches :conclusions :actions.
@@ -306,15 +327,29 @@ FINISHED: the id of the item that went and was replaced by SEL, said first."
 (drgnx-view-define 'work-detail :render #'drgnx-work-detail--render :sync #'drgnx-work-detail--sync
                    :key-test 'eq :slice drgnx-view-slice)
 
+(declare-function drgnx-view-env-register "drgnx-view-env")
+
+(defun drgnx-work-detail--rows-view (map-buffer)
+  "The hub's Detail view beside MAP-BUFFER's map view, when the map is on the rows path, else nil."
+  (with-current-buffer map-buffer
+    (when-let* ((state (and (not drgnx-view-old-path) drgnx-view-patch)))
+      (cons (concat (drgnx-view-patch-view state) "/detail") (drgnx-view-patch-class state)))))
+
 (defun drgnx-work-detail-buffer (map-buffer)
-  "The side panel's buffer for MAP-BUFFER, made when there is none."
-  (let ((buffer (get-buffer-create (format "*drgnx work detail: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))))
+  "The side panel's buffer for MAP-BUFFER, made when there is none.  On the rows path its rows are the hub's (the view
+VIEW/detail beside the map's VIEW), following the map's selection there; else drawn here from the frame."
+  (let ((buffer (get-buffer-create (format "*drgnx work detail: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*"))))
+        (rows (drgnx-work-detail--rows-view map-buffer)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'drgnx-work-detail-mode)
         (drgnx-work-detail-mode)
-        (drgnx-view-attach 'work-detail))
+        (if rows
+            (progn (drgnx-view-patch-attach (car rows) (cdr rows))
+                   (require 'drgnx-view-env)
+                   (drgnx-view-env-register (car rows) buffer))
+          (drgnx-view-attach 'work-detail)))
       (setq drgnx-work-detail--map map-buffer)
-      (drgnx-view-touch drgnx-view))
+      (unless rows (drgnx-view-touch drgnx-view)))
     buffer))
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
@@ -346,9 +381,11 @@ Press it again for what came since."
   (seq-filter (lambda (b) (eq (buffer-local-value 'major-mode b) 'drgnx-work-detail-mode)) (buffer-list)))
 
 (defun drgnx-work-detail-update (map-buffer)
-  "The selection of MAP-BUFFER changed: its panel (when it has one) is drawn again."
+  "The selection of MAP-BUFFER changed: its panel (when it has one) is drawn again.  A panel on the rows path is
+the hub's: it follows the selection there, so nothing is drawn here."
   (dolist (b (drgnx-work-detail-buffers))
-    (when (eq (buffer-local-value 'drgnx-work-detail--map b) map-buffer)
+    (when (and (eq (buffer-local-value 'drgnx-work-detail--map b) map-buffer)
+               (not (buffer-local-value 'drgnx-view-patch b)))
       (with-current-buffer b (drgnx-view-touch drgnx-view)))))
 
 (provide 'drgnx-work-detail)

@@ -259,6 +259,15 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
                                      (propertize (drgnx-agents-editor-draw--margin-char kind first ord) 'face face))
                   'help-echo help))))
 
+(declare-function drgnx-agent-panel-huddle-of "drgnx-agent-panel-huddle")
+
+(defun drgnx-agents-editor-draw--conflict-help (kind help session)
+  "HELP of a gutter range of KIND; a conflict range of an agent in an open huddle says so.
+`o' in the follow view opens the huddle."
+  (if (and (eq kind 'conflict) (fboundp 'drgnx-agent-panel-huddle-of) (drgnx-agent-panel-huddle-of session))
+      (concat help " · huddle open · o opens it")
+    help))
+
 (defun drgnx-agents-editor-draw--gutter-lines (frame)
   "FRAME's gutter ranges as the line table of `drgnx-agents-editor-draw--lines', or nil when there are none."
   (when-let* ((ranges (plist-get frame :gutter)))
@@ -268,7 +277,8 @@ Two agents of one colour, and the agent you follow, keep their tags on whatever 
                         (plist-get (cl-find (plist-get g :session) agents :key (lambda (a) (plist-get a :session)) :test #'equal)
                                    :ordinal)
                         1))
-               (kind (intern (or (plist-get g :kind) "changed"))) (help (or (plist-get g :help) ""))
+               (kind (intern (or (plist-get g :kind) "changed")))
+               (help (drgnx-agents-editor-draw--conflict-help kind (or (plist-get g :help) "") (plist-get g :session)))
                (first (drgnx-agents-editor-draw--strip ord kind t help))
                (rest (drgnx-agents-editor-draw--strip ord kind nil help)))
           (cl-loop for l from (plist-get g :start) to (or (plist-get g :end) (plist-get g :start))

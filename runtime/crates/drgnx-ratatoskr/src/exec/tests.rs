@@ -23,6 +23,30 @@ fn spec(starter: Starter, cwd: &Path, script: &str, timebox: Duration) -> ExecSp
     }
 }
 
+/// What a runner is told is the job's folder inside its tree ("." for the tree itself): a runner mounts its own
+/// checkout, so the hub's absolute path would name a folder that does not exist there.
+#[test]
+fn a_runner_is_told_the_jobs_folder_inside_its_tree() {
+    let user = spec(
+        Starter::User,
+        Path::new("/p/proj"),
+        "true",
+        Duration::from_secs(5),
+    );
+    let f = user.forseti_spec("x1", "1G");
+    assert_eq!((f.tree, f.cwd), ("/p/proj".into(), ".".into()));
+
+    let mut deep = spec(
+        Starter::User,
+        Path::new("/p/proj/crates/x"),
+        "true",
+        Duration::from_secs(5),
+    );
+    deep.worktree = Some("/p/proj".into());
+    let f = deep.forseti_spec("x2", "1G");
+    assert_eq!((f.tree, f.cwd), ("/p/proj".into(), "crates/x".into()));
+}
+
 /// The row of job `id` once it has ended. A job's result is written before the runner says `Done`, so: subscribe, look,
 /// and while it has not ended wait for the next event (any job's) and look again. An end between the look and the wait
 /// is an event the subscription already holds. The deadline only bounds a failure.

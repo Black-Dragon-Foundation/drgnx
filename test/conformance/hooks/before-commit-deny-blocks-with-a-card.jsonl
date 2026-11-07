@@ -1,0 +1,29 @@
+{"scenario": "hooks/before-commit-deny-blocks-with-a-card", "requires": ["v1", "test-hooks"], "doc": "[C] A before-commit rule that denies holds the merge after the reviewer's pass: a `hook` card titled from the hub's facts (\"the before-commit hook refused the merge of J#1\") quotes the rule's reason and its source in its body, offers retry, dismiss and stop, the task waits (needs-input), and nothing reaches the job's tree."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-merge", "point": "before-commit", "verdict": "deny", "reason": "freeze until Monday"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say Looks fine.\\nsay **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$any", "kind": "hook", "title": "$string"}}, "within_ms": 90000}
+{"do": "sql_expect", "sql": "select kind, state, title, json_extract(data, '$.point'), json_extract(data, '$.body') from card where kind = 'hook'", "rows": [["hook", "open", "$string", "before-commit", "$string"]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'hook' and json_extract(data, '$.body') like 'freeze until Monday%no-merge%'", "rows": [[1]]}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 3000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test ! -e $STATE/hub/runs/$job/_job/note.txt"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$job", "tasks": [{"n": 1, "status": "needs-input"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select json_extract(e.data, '$.point'), json_extract(e.data, '$.outcome'), json_extract(e.data, '$.job') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks'", "rows": [["before-commit", "deny", "$job"]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'hook' and title like 'the before-commit hook refused the merge of %'", "rows": [[1]]}

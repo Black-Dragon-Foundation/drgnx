@@ -353,14 +353,64 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "view-model",
+            crate::methods::view::ViewModel,
+            "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
+        ),
+        event!(
             "view-patch",
             crate::methods::view::Patch,
             "what changed in one (view, display class) of a hub-fed view, to its connection only: a reset first and after every new env epoch, then ops against the version base; every patch names the hub's instance id and the editor's epoch"
         ),
         event!(
+            "term/exit",
+            crate::methods::term::TermExit,
+            "a terminal's program ended (its code, or the signal), to the connection of the editor session that opened it; the terminal is gone"
+        ),
+        event!(
+            "term/title",
+            crate::methods::term::TermTitle,
+            "a terminal's program set its title, to its editor session's connection"
+        ),
+        event!(
+            "term/cwd",
+            crate::methods::term::TermCwd,
+            "a terminal's shell reported its working directory (OSC 7), to its editor session's connection"
+        ),
+        event!(
+            "term/bell",
+            crate::methods::term::TermBell,
+            "a terminal's program rang the bell, to its editor session's connection"
+        ),
+        event!(
+            "term/notify",
+            crate::methods::term::TermNotify,
+            "a terminal's program asked for a notification (OSC 9, 777), to its editor session's connection"
+        ),
+        event!(
+            "term/progress",
+            crate::methods::term::TermProgress,
+            "a terminal's program reported progress (OSC 9;4), to its editor session's connection"
+        ),
+        event!(
+            "term/clipboard-write",
+            crate::methods::term::TermClipboardWrite,
+            "a terminal's program wrote the clipboard (OSC 52; only when clipboard-write allows), to its editor session's connection"
+        ),
+        event!(
+            "term/prompt",
+            crate::methods::term::TermPrompt,
+            "a terminal's shell sent an OSC 133 mark (prompt, input, output, command end with its status), to its editor session's connection"
+        ),
+        event!(
             "view-glyphs",
             crate::methods::view::ViewGlyphsAsk,
             "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
+        ),
+        event!(
+            "search-grep-done",
+            crate::methods::search::GrepDone,
+            "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing"
         ),
         event!(
             "agent-follow",
@@ -453,6 +503,18 @@ mod tests {
                     // hub-built rows (the render offload)
                     "view-patch",
                     "view-glyphs",
+                    "search-grep-done",
+                    // the native view model
+                    "view-model",
+                    // the terminals
+                    "term/exit",
+                    "term/title",
+                    "term/cwd",
+                    "term/bell",
+                    "term/notify",
+                    "term/progress",
+                    "term/clipboard-write",
+                    "term/prompt",
                 ]
                 .contains(&n.as_str())
             })
@@ -467,7 +529,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 40);
+        assert_eq!(events().len(), 50);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

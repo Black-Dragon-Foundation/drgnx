@@ -11,6 +11,7 @@
 (require 'drgnx-hub-client)
 (load (expand-file-name "test/unit/agents-mirror-test" drgnx-dir) nil t)   ; its helpers and the hub fixtures
 (load (expand-file-name "modules/tools/drgnx-agents-editor" drgnx-dir) nil t)   ; it loads the follow code
+(load (expand-file-name "modules/tools/drgnx-agents-editor-here" drgnx-dir) nil t)   ; who is here, and its huddle keys
 (defvar drgnx-hub-event-functions)
 (defvar drgnx-agents-follow--session)
 (defvar drgnx-agents-follow--view)
@@ -18,6 +19,9 @@
 (declare-function drgnx-agents-follow-start "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-stop "drgnx-agents-follow")
 (declare-function drgnx-agents-follow--event "drgnx-agents-follow")
+(declare-function drgnx-agents-editor-here-show "drgnx-agents-editor-here")
+(declare-function drgnx-agents-here-mark "drgnx-agents-editor-here")
+(declare-function drgnx-agents-here-huddle "drgnx-agents-editor-here")
 
 (defmacro drgnx-agents-editor-hub-test--with (&rest body)
   "BODY with a gated hub whose profile \"asks\" is the mock Claude, the follow code listening to the hub's events and
@@ -162,6 +166,25 @@ not used: the module fixture moves the config, and the hub's socket with it."
 (ert-deftest drgnx-agents-editor-hub/the-interim-save-hook-is-gone ()
   (load (expand-file-name "modules/tools/drgnx-work-space" drgnx-dir) nil t)
   (should-not (fboundp 'drgnx-work-live-file--saved)))
+
+(ert-deftest drgnx-agents-editor-hub/start-a-huddle-from-two-rows ()
+  ;; two marked rows of the who-is-here list reach the real hub's `agents/huddle/start'; its record opens the thread
+  (drgnx-agents-editor-hub-test--with
+    (let* ((a (drgnx-agents-editor-hub-test--start dir)) (b (drgnx-agents-editor-hub-test--start dir)) opened buf)
+      (cl-letf (((symbol-function 'drgnx-agent-panel-huddle-open-thread) (lambda (rec) (setq opened rec))))
+        (unwind-protect
+            (progn
+              (setq buf (drgnx-agents-editor-here-show (list (list a 1 "edit" file 3) (list b 2 "edit" file 4))))
+              (with-current-buffer buf
+                (goto-char (point-min))
+                (drgnx-agents-here-mark)
+                (forward-line 1)
+                (drgnx-agents-here-mark)
+                (drgnx-agents-here-huddle))
+              (drgnx-agents-mirror-test--settle (lambda () opened) "the huddle's record from the hub")
+              (should (equal (sort (list a b) #'string<) (sort (append (plist-get opened :participants) nil) #'string<)))
+              (should (member (plist-get opened :state) '("asked" "open"))))
+          (when (buffer-live-p buf) (kill-buffer buf)))))))
 
 (provide 'agents-editor-hub-test)
 ;;; agents-editor-hub-test.el ends here

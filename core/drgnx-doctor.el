@@ -469,8 +469,11 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :service-unit (drgnx-doctor--service-unit)
            :fedora-release (drgnx-doctor--fedora-release)
            :native-available native
+           :history-hook (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain)
+                              (fboundp 'nidhogg-history-pending-p) t)
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
+           :view-model (fboundp 'nidhogg-view--call)
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
                       (t (drgnx-doctor--gui-from-features system-configuration-features)))
            :git (and (executable-find "git") t)
@@ -660,6 +663,23 @@ severity, the fix the first `:fix'."
                                       (t (list 'fail (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build" v)
                                                drgnx-doctor-nidhogg-hint))))))
 
+(drgnx-doctor-define 'edit-history :group "Emacs"
+                     :doc "This Emacs has Nidhogg's change hook, which the edit history (revert, pair mode) needs"
+                     :check (lambda (f)
+                              (when (plist-member f :history-hook)
+                                (if (plist-get f :history-hook)
+                                    (list 'ok "the change hook is there" nil)
+                                  (list 'warn "this Emacs has no Nidhogg change hook: the edit history stays off (no revert, no pair mode)"
+                                        drgnx-doctor-nidhogg-hint)))))
+
+(drgnx-doctor-define 'pair-mode :group "Emacs"
+                     :doc "Pair mode (an agent's writes to the files you have open) can be turned on: it needs the same change hook"
+                     :check (lambda (f)
+                              (when (plist-member f :history-hook)
+                                (if (plist-get f :history-hook)
+                                    (list 'ok "pair mode can be turned on (Agents: Pair: Turn On or Off)" nil)
+                                  (list 'info "pair mode cannot be turned on: Pair needs Nidhogg .6 with Glitnir" drgnx-doctor-nidhogg-hint)))))
+
 (drgnx-doctor-define 'fedora-release :group "Emacs" :platform 'linux
                      :doc "On Fedora: release 45 or newer (older releases are not supported)"
                      :check (lambda (f)
@@ -682,6 +702,13 @@ severity, the fix the first `:fix'."
                      :check (lambda (f)
                               (if (plist-get f :treesit) (list 'ok "tree-sitter available" nil)
                                 (list 'warn "this Emacs has no tree-sitter support" drgnx-doctor-install-hint))))
+
+(drgnx-doctor-define 'view-model :group "Emacs"
+                     :doc "Sjá, Nidhogg's native view model: the hub-fed views' keys answer from it (nidhogg-view--call)"
+                     :check (lambda (f)
+                              (if (plist-get f :view-model) (list 'ok "nidhogg-view--call is there" nil)
+                                (list 'fail "this Emacs has no nidhogg-view--call: the Work views' keys need Sjá"
+                                      drgnx-doctor-nidhogg-hint))))
 
 (drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS), or a terminal-only one"
                      :check (lambda (f)
@@ -1275,6 +1302,8 @@ built-in model once it is ready (its device)."
                                                nil))))))
 
 (drgnx-doctor-define-notices 'wb :name 'display-rules :group "drgnx" :doc "Buffers are placed by drgnx's rules")
+(drgnx-doctor-define-notices 'render :name 'views :group "drgnx"
+                             :doc "No hub-fed view is broken (Sjá stops a view whose model broke twice)")
 
 (drgnx-doctor-define 'portable-config :group "drgnx"
                      :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"

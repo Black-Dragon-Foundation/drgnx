@@ -28,6 +28,7 @@
 (require 'drgnx-file-stream)
 (require 'drgnx-wb)
 (require 'drgnx-view)
+(require 'drgnx-view-nav)
 (require 'drgnx-large-file)             ; a large file: Replace needs it whole (lean), never asks; skips chunks and raw
 
 (declare-function eglot-current-server "eglot")
@@ -37,6 +38,8 @@
 (declare-function eglot--signal-textDocument/didChange "eglot")
 (declare-function jsonrpc-request "jsonrpc")
 (declare-function project-root "project")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (defvar eglot-move-to-linepos-function)
 (defvar apheleia-format-after-save-in-progress) ; bound around our saves: no format on save (extra/format)
 
@@ -1394,24 +1397,139 @@ match left loses its header too.  BLOCK: the file read off the main thread (see 
     (when (and (drgnx-replace--opt :symbol) (string-empty-p new)) (user-error "Type the new name first"))
     new))
 
+;;;;; On the rows path: the keys, the ticks and Replace All through the native view model (Sjá)
+;; Fed by the hub's `search/grep', the Search view's results are a `tree' model: a node per file (`f:FILE'), its
+;; matches as children (`m:FILE:LINE:COL'), the rows' keys and their `drgnx-work-id'.  The match keys walk it
+;; in-process.  The ticks are user state: Sjá's ticked set of the view's instance holds the matches the user unticked
+;; (a file's box ticks or unticks all of its matches), shown over the hub's "[x]" boxes.  Replace All writes the
+;; matches not in it, read from the model's fields.
+
+(defvar-local drgnx-replace--box-overlays nil "Hash ROW-KEY → the overlay showing its tick box as the ticks say.")
+
+(defun drgnx-replace--rows-p ()
+  "Whether the Search view is hub-fed with Sjá's model (the rows path)."
+  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
+
+(defun drgnx-replace-rows-attached ()
+  "The Search view is now hub-fed (the rows path): its tick boxes follow the ticks after every draw."
+  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes nil t))
+
+(defun drgnx-replace--rows-match (id &optional extra)
+  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended."
+  (let ((f (lambda (name) (drgnx-view-nav-field name id))))
+    (append (list :file (funcall f "file") :line (funcall f "line") :col (funcall f "col") :end (funcall f "end")
+                  :text (funcall f "text"))
+            extra)))
+
+(defun drgnx-replace--rows-kind-p (id kind)
+  "Whether node ID of the model is of KIND (\"file\" or \"match\")."
+  (equal (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id) kind))
+
+(defun drgnx-replace--rows-off ()
+  "The unticked matches: a hash ID → t."
+  (let ((off (make-hash-table :test #'equal)))
+    (mapc (lambda (id) (puthash id t off)) (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'ticked))
+    off))
+
+(defun drgnx-replace--rows-file-matches (file)
+  "The ids of node FILE's matches, in order: the model's order holds them right after it."
+  (let ((tail (cdr (member file (append (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order")
+                                        nil))))
+        ms)
+    (while (and tail (drgnx-replace--rows-kind-p (car tail) "match"))
+      (push (pop tail) ms))
+    (nreverse ms)))
+
+(defun drgnx-replace--rows-box-text (key off)
+  "The tick box of row KEY (a node id) with the unticked matches OFF: a file's is [x], [ ] or [-] for some."
+  (if (drgnx-replace--rows-kind-p key "file")
+      (let* ((ms (drgnx-replace--rows-file-matches key)) (n (cl-count-if (lambda (m) (gethash m off)) ms)))
+        (cond ((zerop n) "[x]") ((= n (length ms)) "[ ]") (t "[-]")))
+    (if (gethash key off) "[ ]" "[x]")))
+
+(defun drgnx-replace--rows-boxes (view keys)
+  "Show the tick boxes of VIEW's rows KEYS as the ticks say, over the hub's \"[x]\" (a `display' overlay; none for
+[x]).  `drgnx-view-patch-patched-functions' runs it after a draw."
+  (let ((off (drgnx-replace--rows-off))
+        (table (or drgnx-replace--box-overlays (setq drgnx-replace--box-overlays (make-hash-table :test #'equal)))))
+    (dolist (key keys)
+      (let* ((ov (gethash key table)) (beg (drgnx-view-row-start view key))
+             (pos (and beg (text-property-not-all beg (save-excursion (goto-char beg) (line-end-position))
+                                                  'drgnx-replace-box nil)))
+             (text (cond ((not pos) "[x]") ((zerop (hash-table-count off)) "[x]")
+                         (t (drgnx-replace--rows-box-text key off)))))
+        (if (equal text "[x]")
+            (when ov (delete-overlay ov) (remhash key table))
+          (if ov (move-overlay ov pos (+ pos 3)) (setq ov (make-overlay pos (+ pos 3))) (puthash key ov table))
+          (overlay-put ov 'display text))))))
+
+(defun drgnx-replace--rows-tick (&optional id)
+  "Tick or untick ID (default: the selection) on the rows path: a match, or a file, all of its matches (ticked when
+every one was unticked, else unticked)."
+  (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+         (id (or id (drgnx-view-nav-selection) (user-error "No match is selected")))
+         (file (if (drgnx-replace--rows-kind-p id "file") id (nidhogg-view-get h 'parent id)))
+         (ms (drgnx-replace--rows-file-matches file)))
+    (if (equal id file)
+        (let* ((off (drgnx-replace--rows-off)) (tick (cl-every (lambda (m) (gethash m off)) ms)))
+          (dolist (m ms) (when (eq tick (gethash m off)) (nidhogg-view-set h 'tick m))))
+      (nidhogg-view-set h 'tick id))
+    (drgnx-replace--rows-boxes drgnx-view (cons file ms))))
+
+(defun drgnx-replace--rows-step (dir)
+  "Select the next (DIR 1) or previous (DIR -1) shown match, wrapping: its id, or nil when there is none."
+  (let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (before (drgnx-view-nav-selection))
+         (id (drgnx-view-nav 'follow (if (> dir 0) "down:match" "up:match"))))
+    (if (and id (not (equal id before)) (drgnx-replace--rows-kind-p id "match"))
+        id
+      (let ((ms (cl-remove-if-not (lambda (i) (drgnx-replace--rows-kind-p i "match"))
+                                  (append (nidhogg-view-get h 'list "visible") nil))))
+        (when ms (drgnx-view-nav 'select (if (> dir 0) (car ms) (car (last ms)))))))))
+
+(defun drgnx-replace--rows-ticked (extra)
+  "The model's ticked matches in order, as `drgnx-replace-apply' takes them, EXTRA appended to each."
+  (let ((off (drgnx-replace--rows-off)) ms)
+    (mapc (lambda (id) (when (and (not (gethash id off)) (drgnx-replace--rows-kind-p id "match"))
+                         (push (drgnx-replace--rows-match id extra) ms)))
+          (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order"))
+    (nreverse ms)))
+
+(defun drgnx-replace--rows-replace-all (new)
+  "Replace All on the rows path: the ticked matches by NEW (a regexp search's matches carry its pattern), then the
+search again, as the files changed."
+  (let ((ms (drgnx-replace--rows-ticked
+             (when (drgnx-replace--opt :regexp)
+               (list :pattern (drgnx-replace--emacs-regexp (drgnx-replace--text 'find))
+                     :case (drgnx-replace--opt :case))))))
+    (unless ms (user-error "Nothing to replace: no match is ticked"))
+    (let ((msg (drgnx-replace--apply-report (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))))
+      (drgnx-replace--search-now)
+      (drgnx-replace--message "%s" msg))))
+
 (defun drgnx-replace-all ()
   "Replace every ticked match of the Search view (in the find bar: every match of its buffer)."
   (interactive)
   (if (drgnx-replace--bar-context-p)
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-replace-all))
     (with-current-buffer (drgnx-replace--live-view)
-      (let ((new (drgnx-replace--new-name))
-            (ms (seq-remove (lambda (m) (gethash m drgnx-replace--off)) drgnx-replace--matches)))
-        (unless ms (user-error "Nothing to replace: no match is ticked"))
-        (drgnx-replace-cancel drgnx-replace--handle)
-        (setq drgnx-replace--handle nil drgnx-replace--searching nil)
-        (drgnx-replace--rs-feed '(replace))               ; the replace reads the files itself, at once
-        (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
-               (msg (drgnx-replace--apply-report res)))
-          (drgnx-replace--clear)
-          (drgnx-replace--add (plist-get res :skipped))       ; what is left: the skipped, with their reasons
-          (drgnx-replace--watch)
-          (drgnx-replace--message "%s" msg))))))
+      (if (drgnx-replace--rows-p)
+          (drgnx-replace--rows-replace-all (drgnx-replace--new-name))
+        (drgnx-replace--replace-all-old)))))
+
+(defun drgnx-replace--replace-all-old ()
+  "`drgnx-replace-all' in the Search view off the rows path."
+  (let ((new (drgnx-replace--new-name))
+        (ms (seq-remove (lambda (m) (gethash m drgnx-replace--off)) drgnx-replace--matches)))
+    (unless ms (user-error "Nothing to replace: no match is ticked"))
+    (drgnx-replace-cancel drgnx-replace--handle)
+    (setq drgnx-replace--handle nil drgnx-replace--searching nil)
+    (drgnx-replace--rs-feed '(replace))               ; the replace reads the files itself, at once
+    (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
+           (msg (drgnx-replace--apply-report res)))
+      (drgnx-replace--clear)
+      (drgnx-replace--add (plist-get res :skipped))       ; what is left: the skipped, with their reasons
+      (drgnx-replace--watch)
+      (drgnx-replace--message "%s" msg))))
 
 (defun drgnx-replace-this ()
   "Replace the match on this row of the Search view, ticked or not."
@@ -1486,12 +1604,16 @@ match left loses its header too.  BLOCK: the file read off the main thread (see 
   (if (drgnx-replace--bar-context-p)
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-step dir))
     (with-current-buffer (drgnx-replace--live-view)
-      (let* ((win (get-buffer-window (current-buffer)))
-             (pos (drgnx-replace--next-row (if win (window-point win) (point)) dir)))
-        (unless pos (user-error "No matches"))
-        (goto-char pos)
-        (when win (set-window-point win pos))
-        (drgnx-replace--show-match (get-text-property pos 'drgnx-replace-match) nil)))))
+      (if (drgnx-replace--rows-p)
+          (drgnx-replace--show-match (drgnx-replace--rows-match (or (drgnx-replace--rows-step dir)
+                                                                    (user-error "No matches")))
+                                     nil)
+        (let* ((win (get-buffer-window (current-buffer)))
+               (pos (drgnx-replace--next-row (if win (window-point win) (point)) dir)))
+          (unless pos (user-error "No matches"))
+          (goto-char pos)
+          (when win (set-window-point win pos))
+          (drgnx-replace--show-match (get-text-property pos 'drgnx-replace-match) nil))))))
 
 (defun drgnx-replace-next () "The next match, shown in the editor." (interactive) (drgnx-replace--step 1))
 (defun drgnx-replace-prev () "The previous match, shown in the editor." (interactive) (drgnx-replace--step -1))

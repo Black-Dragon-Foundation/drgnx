@@ -1586,6 +1586,24 @@ Files matching one of these globs are not indexed; a workspace's are added to yo
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
+## drgnx-search-ignore-rules
+
+Which files Quick Open, Find and the text search list: "index" leaves out dot paths and secret-looking names, as
+the index does; "real" lists them, leaving out only what .gitignore files and the search globs name.
+
+| Key | Value |
+| --- | --- |
+| Default | `"index"` |
+| Type | `(choice (const "index") (const "real"))` |
+| `:scope` | `buffer` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `strict` |
+| `:apply` | - |
+| `:runtime` | `"String"` |
+| `:agents` | `never` |
+| `:schema` | `(string :match "\\`\\(?:index\\\|real\\)\\'")` |
+
 ## drgnx-search-include
 
 Only files matching one of these globs are indexed (nil: all).
@@ -1691,6 +1709,666 @@ Read at every start; a change turns it on or off at once.  Without a watchdog in
 | `:runtime` | - |
 | `:agents` | `never` |
 | `:schema` | - |
+
+## drgnx-term-abnormal-command-exit-runtime
+
+Milliseconds: a terminal whose program fails (a code other than 0, or a signal) sooner than this after it started
+keeps its buffer open with the status, even a shell's, so the error can be read.
+
+| Key | Value |
+| --- | --- |
+| Default | `250` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-term-clipboard-codepoint-map
+
+Characters replaced in text copied from a terminal: a list of (FROM TO REPLACEMENT), each character from FROM to
+TO (code points) becoming the string REPLACEMENT; e.g. box-drawing lines as plain dashes.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat (list (character :tag "From") (character :tag "To") (string :tag "Replacement")))` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of (list-of any))` |
+
+## drgnx-term-clipboard-paste-bracketed-safe
+
+Whether a paste into a program that asked for bracketed paste is safe whatever it holds (but the end of a
+bracketed paste itself).  Off: `drgnx-term-clipboard-paste-protection' asks about every multi-line paste.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-clipboard-paste-protection
+
+Whether Paste asks first when the text could run commands: it holds a line break, or the end of a bracketed paste,
+and the program did not ask for bracketed paste (or `drgnx-term-clipboard-paste-bracketed-safe' is off).
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-clipboard-trim-trailing-spaces
+
+Whether text copied from a terminal loses the spaces at the end of each line.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-clipboard-write
+
+Whether a program in a terminal may write the clipboard (OSC 52): what it writes goes to the kill ring.  A
+program never reads the clipboard: a terminal refuses every read.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-clipboard` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-command
+
+The program a new terminal runs, with its arguments; nil: your shell (`drgnx-terminal-shell').  Applies to new
+terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-term-confirm-close-surface
+
+Whether closing a terminal asks first: t when a program runs in it (not a shell at its prompt), `always', or nil
+(never).  Only a command you run asks; quitting drgnx asks once for every terminal.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `(choice (const :tag "When a program runs" t) (const always) (const :tag "Never" nil))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or boolean (enum always))` |
+
+## drgnx-term-copy-on-select
+
+Whether selecting a terminal's text with the mouse copies it at once (to the kill ring and the clipboard).
+Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-local` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-cursor-style
+
+The cursor a terminal shows until its program chooses one: "block", "block_hollow", "bar" or "underline".
+A change applies to every terminal at once (a program's own choice is reset).
+
+| Key | Value |
+| --- | --- |
+| Default | `"block"` |
+| Type | `(choice (const "block") (const "block_hollow") (const "bar") (const "underline"))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum "block" "block_hollow" "bar" "underline")` |
+
+## drgnx-term-desktop-notifications
+
+Whether a program's notification (OSC 9, OSC 777) becomes a drgnx notice.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-enquiry-response
+
+What a terminal answers a program that sends ENQ (0x05); empty: nothing.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `""` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `string` |
+
+## drgnx-term-env
+
+Environment entries of new terminals' programs, "NAME=VALUE" each, over drgnx's own; "NAME" alone unsets it.
+Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-term-grapheme-width-method
+
+How wide a terminal counts a grapheme cluster (an emoji sequence, a letter with accents): "unicode" (as Unicode
+says, one width for the cluster) or "legacy" (each code point its own width, as older programs expect).  A program
+can still switch it (mode 2027).  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `"unicode"` |
+| Type | `(choice (const "unicode") (const "legacy"))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum "unicode" "legacy")` |
+
+## drgnx-term-input
+
+Text typed into a new terminal as soon as it starts, as if from the keyboard; nil: none.  Applies to new
+terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
+## drgnx-term-linux-cgroup-memory-limit
+
+The most memory a new terminal (its program and all it starts) may use, in systemd's form ("4G", "512M"); nil:
+no limit.  Needs a user systemd.  Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or null (string :match "\\`[0-9]+[KMGT]?\\'"))` |
+
+## drgnx-term-linux-cgroup-processes-limit
+
+The most processes a new terminal (its program and all it starts) may run; nil: no limit.  Needs a user systemd.
+Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) natnum)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or null natnum)` |
+
+## drgnx-term-mouse-reporting
+
+Whether a program that asks for the mouse gets it.  Off: clicks and the wheel in a terminal are always drgnx's.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-mouse-shift-capture
+
+Whether a program that tracks the mouse also gets clicks with Shift held.  Off: a Shift-click is drgnx's, to
+select text in a program that takes the mouse.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-notify-on-command-finish
+
+When a command that ran a long time ending in a terminal is told (`drgnx-term-notify-on-command-finish-action'):
+`never', `unfocused' (when its terminal is not the selected window) or `always'.  It needs the shell's integration,
+which marks where a command starts and ends.
+
+| Key | Value |
+| --- | --- |
+| Default | `never` |
+| Type | `(choice (const never) (const unfocused) (const always))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum never unfocused always)` |
+
+## drgnx-term-notify-on-command-finish-action
+
+How a finished command is told: `bell' rings the bell, `notify' adds a drgnx notice.
+
+| Key | Value |
+| --- | --- |
+| Default | `(bell)` |
+| Type | `(set (const bell) (const notify))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of symbol)` |
+
+## drgnx-term-notify-on-command-finish-after
+
+How many seconds a command must run before its end is told.
+
+| Key | Value |
+| --- | --- |
+| Default | `5` |
+| Type | `number` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `number` |
+
+## drgnx-term-progress-style
+
+Whether a program's progress (OSC 9;4) shows on its terminal's tab.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-scroll-to-bottom
+
+When a terminal scrolled back to earlier output goes back to its cursor: on a keystroke (`keystroke'), on new
+output (`output'), both, or never (nil).
+
+| Key | Value |
+| --- | --- |
+| Default | `(keystroke)` |
+| Type | `(set (const keystroke) (const output))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of symbol)` |
+
+## drgnx-term-scrollback-bytes
+
+The most bytes of scrollback a terminal remembers (Find in Terminal and copy reach that far), whatever
+`drgnx-term-scrollback-lines' keeps in its buffer.  A change applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `67108864` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-term-scrollback-lines
+
+How many rows a terminal's buffer keeps above its screen.  A change trims or fills every terminal at once.  The
+terminal itself remembers at least 10,000 lines whatever this says, so Find in Terminal and copy reach further.
+
+| Key | Value |
+| --- | --- |
+| Default | `10000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-scrollback` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
+## drgnx-term-selection-clear-on-copy
+
+Whether Copy in a terminal deselects the text it copied.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-selection-clear-on-typing
+
+Whether typing into a terminal deselects its text.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-selection-word-chars
+
+The characters that end a word when a double click selects one in a terminal; every other character (a slash, a
+dot, a dash) is part of the word, so a path or an address is selected whole.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `" '\"│`\|:;,()[]{}<>$"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-local` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `string` |
+
+## drgnx-term-shell-integration
+
+Which shell integration a new terminal loads: `detect' (from the shell's name: bash, zsh, fish, elvish), one of
+those, or `none'.  It marks prompts and commands, reports the folder and sets the title.  Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `detect` |
+| Type | `(choice (const detect) (const none) (const bash) (const zsh) (const fish) (const elvish))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum detect none bash zsh fish elvish)` |
+
+## drgnx-term-shell-integration-features
+
+The features of the shell integration a new terminal turns on (Ghostty's names: "cursor", "title", "sudo",
+"path").  Ghostty's ssh features are `drgnx-term-ssh-terminfo'.  Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `("cursor" "title" "sudo")` |
+| Type | `(repeat string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(list-of string)` |
+
+## drgnx-term-ssh-terminfo
+
+What `ssh' typed in a terminal does about TERM (with drgnx's shell file sourced): `fallback', ssh says
+"xterm-256color", which every host knows; `install', the first ssh to a host installs Ghostty's entry there with the
+host's tic, once, and later ones keep "xterm-ghostty".  Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `fallback` |
+| Type | `(choice (const fallback) (const install))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum fallback install)` |
+
+## drgnx-term-term
+
+The TERM a new terminal's program sees.  "xterm-ghostty" (Ghostty's entry, which `drgnx build' compiles into
+<data>/terminfo; TERMINFO then names that folder) falls back to "xterm-256color" while the entry is not there.
+Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `"xterm-ghostty"` |
+| Type | `string` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `string` |
+
+## drgnx-term-title
+
+A fixed title for every terminal's tab; nil: the title the program sets.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) string)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or null string)` |
+
+## drgnx-term-title-report
+
+Whether a program may read a terminal's title back (CSI 21 t).  Off by default: a program can set a title and read
+it back as typed input, which can carry commands.  Applies to every terminal at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-config` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-wait-after-command
+
+Whether every terminal's buffer stays open after its program ended, with the status.  Off: a shell's buffer
+closes, and a command's stays (what it printed can be read).
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `code` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
+## drgnx-term-working-directory
+
+Where New Terminal starts: nil, the folder of what you are looking at; `home', your home folder; or a folder.
+Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(choice (const nil) (const home) directory)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(or null symbol string)` |
 
 ## drgnx-trust-parents
 

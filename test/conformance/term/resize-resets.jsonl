@@ -1,0 +1,13 @@
+{"scenario": "term/resize-resets", "requires": ["v1", "linux"], "doc": "A resize rewraps the lines: the terminal's next view-patch is a reset, whatever was acknowledged before."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "echo hi; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}], "version": "$capture:v1"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "view/ack", "params": {"view": "$tv", "class": "gui-1", "version": "$v1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "term/resize", "params": {"id": "$t", "cols": 30, "rows": 4, "cell_px": [8, 16]}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}

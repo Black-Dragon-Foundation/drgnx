@@ -179,6 +179,67 @@ light and high contrast, one shot each at the session's scale) both use it. What
 files, edits and prompts (plans, specs, shared files, machines) is what the map shows; the description's cards and
 machines are not injected.
 
+### The rows (`vegvisir::render`)
+
+The map's rows are built in the hub (`docs/develop/hub.md`, "Rows") from a layout, the items and edges it shows, the
+view's env and a `drgnx_rows::fit::Measure`; no I/O, no clock (a job chip's elapsed time takes `Scene::now`).
+`render::Index::of` sorts once per layout (each row's items by x, the rows by y with each band above its row, each
+layer's first row, each layer's count); `render::rows` only reads it. One row per text line:
+
+- `row:LAYER:BLOCK-LINE:SUB:LINE`: a layout row's line N (five for a rich agent row, two for a compact one, else one),
+  its height the row's px over its lines, minus one. The layer's name starts its first row's first line (a collapsed
+  layer's: "Name · count"), fitted to the margin less 8 px. Each card's line is a stop at the card's left, its text
+  fitted to the card's width less 10 px, and a stop at its right; the card's box face (`drgnx-card-*`) is a run under
+  the text's own faces, and `drgnx-work-id` names the item over the text and the right stop.
+- `band:LAYER:BLOCK-LINE:SUB`: the band above that row, as high as the band: each 192 px tile (at the scale) that a
+  curve or a port chip crosses is an image at its column, else the row is blank.
+- Lanes: each line of a card row carries the row's lanes as images among its cards, by column; lanes at one x are one
+  image (the widest stroke's: the chain's when one is on it) whose words name them all, so an image never takes the
+  gap and pushes the next card right.
+- `strip` (`render::strip`, the header line): a chip with its jump key per needs-you entry (the cards, then the agents
+  that need you with no card), the first nine and `+N`, then a stop that puts the machines' load at the view's right
+  edge.
+
+Edge strokes follow `drgnx-work-edges.el`'s table (a width or a dash per kind, never colour alone); the selection's
+chain (`Scene::chain`) draws in the accent, an edit on it in its agent's colour, one px wider and on top. The SVG comes
+from `drgnx_rows::svg` in palette roles only (`edge`, `edit`, `accent`, `warn`, `chip-bg`, `chip-fg`, `agent-1..6`);
+an image's id is its content hash and the env epoch, so the same strokes are the same image across draws (sent once)
+and a theme change draws them all again.
+- On a terminal, a layout that does not fit, or the user's `O`: `notice` (the layout did not fit), then
+  `outline:ID:LINE` per agent in plan order (its line, why, touches and conclusion, each within the columns), or
+  `outline-none`.
+
+The card text is the editor's (`drgnx-work-map-row-text`), so the rows of the fixture frame equal
+`test/fixtures/work-space/rows-golden.eld` under a fixed 8 px advance (`tests/render.rs`). Selection, dimming and
+search stay the editor's: the inserter puts them over the rows by `drgnx-work-id`. The runner icons are the default
+glyphs of `drgnx-face-glyphs`.
+
+### Keys and the native view model (`vegvisir::nav`)
+
+The editor answers the map's keys from a replica of the map's model (Sjá, in Nidhogg), never from the hub. The hub
+sends, with each shown item, where each arrow goes from it; `vegvisir::nav` computes those links over the frame (the
+items a view shows, their places in its layout, and the chain edges among them), with the rules the editor's own
+navigation had:
+
+- `left`/`right`: the neighbours along the item's layer in reading order (by top, then left), stopping at its ends.
+- `up`: the nearest (least vertical, then horizontal distance from the card's centre, then id) of what it came from
+  above it; when none of those has a place (a missing level, or a collapsed layer), the nearest of its ancestors on the
+  lowest layer above. `down`: the nearest of what it touches below it.
+- `then`: where the selection goes when the item goes: the last of everything it came from, by layer then id.
+- The lists the walking keys follow: `outline` (the agents by plan rank, start order, id), `team` (the outline with each
+  agent's subagents after it, in start order), `needs-you` (each strip entry's first shown item: the cards by id, then
+  the agents that need you with no card).
+
+The replica's chain is checked against the hub's: `work::map::tests::chain_golden_matches_vegvisir` writes
+`test/fixtures/work-space/model-thirty.json` (the map's model of the 30-agent fixture at 1600 px and
+`vegvisir::Model::chain` of every item; `UPDATE_VEGVISIR_GOLDEN=1`), and `test/unit/view-model-chain-test.el`, in the
+Nidhogg image, selects each item in Sjá and checks that the nodes it classes `chain` are exactly that chain.
+
+An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
+`tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
+`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved
+fails until the golden is recorded again.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
@@ -194,30 +255,32 @@ worktree the hub makes branched from: its repository, the branch, the commit, an
   branch that points at the commit, or, among several, the run's own `job/<run>` for a tree `job/<run>-<task>`. It never
   defaults to `main`, and when it cannot tell the branch is empty.
 - The tree is `timeline::snapshot::take_base`: the worktree as it is when made, kept as `refs/drgnx/base/<hash>` in its
-  shadow repository (a prune leaves it). `snapshot::numstat(root, worktree, from_tree, to_tree)` counts the lines
-  between two trees there, and marks a file not in the first as new (`untracked`); it runs git in the shadow
-  repository only, so it works with the worktree gone and never runs git in an agent's tree.
+  shadow repository (a prune leaves it). The edited-file counts no longer read it: they come from the edit history (below).
 - A session in a folder the hub made no tree for (a docs agent in the org folder) gets a row at its start, from the
   folder's head (`bases::session_started`); folders under `<state>/hub/runs` record their own.
 - `bases::ancestry_of(rows, roots)` and `bases::ancestry(front, workspace)` answer "based on" pairs of
   `BranchRef {repo, branch}` for the workspace's roots, computed from the rows when asked.
 
-### Edited files, counts and hunks (interim)
+### Edited files, counts and hunks
 
-`work::edits` answers three user methods from snapshots alone, until the edit history serves them (their shapes stay):
+`work::edits` answers three user methods from the edit history (`history::views`): the worktree's branch `wt/<id>` in
+the project's `history.db`, its documents against the branch's base commit (`History::hunks` from record 0, each
+document as first stored). The agent's folder is never asked.
 
-- `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: the session's newest step snapshot
-  tree against the worktree's `base_tree`, through `snapshot::numstat`. Step snapshots are written with `add -A`, so a
-  file the agent created is in the tree and comes back `untracked: true`. No snapshot yet: an empty list. `read_at` is
-  not filled yet.
-- `work/hunks {session, path} -> {diff}`: the unified diff of one path between the same two trees
-  (`snapshot::patch`), empty before the first snapshot.
-- `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) in the newest snapshot at or before
-  step `seq`; `seq` is the step that snapshot belongs to. A missing path or a path leaving the worktree is
+- `work/files {session} -> {files: [{path, plus, minus, untracked, read_at?}]}`: per changed file the lines added and
+  removed (`Hub::edits_against_base`); `untracked` is a file the base commit lacks. No branch yet: an empty list.
+  `read_at` is not filled yet. Text files only: binary, large, generated and lock files are whole-file versions the
+  document store does not hold, so they are not listed.
+- `work/hunks {session, path} -> {diff}`: the unified diff of one path, base text to current (`Hub::diff_against_base`),
+  empty when it changed nothing.
+- `work/file-at {session, path, seq} -> {bytes, seq}`: the file's bytes (base64) after the session's newest record at or
+  before step `seq` (`Hub::file_at_step`, which reads the records' cause); a file the session never touched is the base
+  commit's. `seq` is that record's step, 0 before the session's first. A missing path or a path leaving the worktree is
   `invalid-params`.
 
 Only sessions the hub holds are served. `edits::changed(front, session)` gives the same counts to the map's `Changed`
-fact, after every step that took a snapshot (`Map::edited`, from the step-close path). Git runs in the shadow repository only, never in an agent's tree.
+fact, after every step that took a snapshot (`Map::edited`, from the step-close path). The buffer view's gutter
+(`changed_lines`) and the three-way projection (`base_of`) still read the step snapshots.
 
 ### Live specs
 
@@ -328,6 +391,12 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
   session's `machine` is the job's machine, so the "runs on" edge points at the runner. The agent item carries `job`;
   the Lisp card turns it into `job · MACHINE · M:SS/Nm`, and the side panel of a machine lists the jobs on it
   (`drgnx-work-detail--machine-queue`), `l` (`work-job-log`) calling `exec/log` for the row's job.
+- Huddles on the map (client only): `drgnx-work-map--needs-you` appends one strip entry for each open huddle
+  (`drgnx-agent-panel-huddle-open-records`, subject = the clash; its jump selects the agents in it), and the huddle
+  module's `drgnx-agent-panel-huddle-changed-hook` redraws the strips. On an agent with an `overlap` edge, `H`
+  (`work-huddle`, `drgnx-work-huddle-overlap`) starts a huddle with the agent at the other end through
+  `agents/huddle/start`; the side panel's edge line says "H huddle". In the editor, a `conflict` gutter range of an agent
+  in an open huddle reads "huddle open · o opens it" on hover, and `o` in the follow view opens the thread.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
 - The local pool is read from the job runner (`exec::Runner::slot_counts`, the queue's `local_slots`): one `local-N`
@@ -516,9 +585,26 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `drgnx-work-map-select-functions` (the side panel) and arms `drgnx-timer-soon` keyed `(work-edges . VIEW)`: one frame
   later it runs `drgnx-work-map-edges-functions` with the final selection, so a held arrow key never pays for tiles it
   has left.
+- **On the rows path** (a map whose rows the hub builds: `drgnx-view-patch` with an instance in Sjá, and not
+  `drgnx-view-old-path`) every key is one line through `drgnx-view-nav` (docs/develop/core.md, "Keys through the
+  model"), and the frame's functions above are the frozen path. `drgnx-work-map--nav` keeps `drgnx-work-map--selection`
+  as `(KIND . ID)` (the kind read from the model with the selection) and runs `drgnx-work-map-select-functions` when it
+  moved. Left, right, why and touches follow the `left` `right` `up` `down` links (from nothing, the team's first);
+  next and previous agent walk `team`; `g N` walks to entry N of `needs-you` and `n`/`N` cycle it; search sets the
+  model's search (non-matches dim on their spans) and selects the first matching agent of `outline`; Esc clears it;
+  `O` sets the model's form, so up and down walk `outline`. Open reads the label once; a file opens at the team's
+  agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
+  `test/unit/work-map-nav-test.el`.
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
+  - On the rows path (Sjá) the panel is the hub's: `drgnx-work-detail-buffer` attaches it as the hub-fed view
+    `VIEW/detail` in the map view's class and registers its env. The hub (`work/map/detail.rs`) builds its rows from
+    the map's model and the view's selection (head, why, touches, conclusions, a machine's queue, actions; one row
+    per line, keyed `SECTION/N`, a job's line carrying `drgnx-work-job` for `l`) whenever it publishes the map, and
+    when the panel's env arrives. `drgnx-work-detail-update` draws nothing here for such a panel: the selection
+    reaches the hub as the map's `work/map/set`. Tests: `detail_rows_say_the_edges` (Rust),
+    `drgnx-work-detail/rows-follow-the-selection`.
 
 ### The strip, the lens, the filters, search and Esc
 
@@ -606,6 +692,13 @@ card, the bar a 4 px `display` space). Its tasks come from `tasks/find` (every t
 `drgnx-work-board-to-selection` are the design's table 8.2, pure functions of the cached frame and the cards; an agent
 works on a card when its `task` field names the card's id.
 
+On the rows path (the map is a hub-fed view `VIEW`) the Board is the hub-fed view `VIEW/board` in the map's class:
+`drgnx-work-board-refresh` asks `work/board/subscribe {view, map, plans}` instead of the tasks (docs/develop/hub.md,
+"The Board"), and the hub sends its model and rows. Its keys answer from its own model (`drgnx-work-board--rows-nav`:
+the `board` form's links, `team` for the agent keys, the card's `agent` field to open). Its selection is its own: it
+neither follows the map's nor moves it, and switching back to the map selects nothing there (a decision of 2026-11-08:
+the map's model holds no tracker tasks, so the Board is not an instance in the map's selection group).
+
 ### The Timeline and the trail
 
 `modules/tools/drgnx-work-trail.el` holds both, and the steering commands. A step is the hub's `timeline/get` row;
@@ -632,6 +725,17 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
   `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
   (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
   `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
+- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`; the buffers are attached to
+  `work/trail/subscribe` with the render offload's Lisp switch) the keys go through the replica
+  (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name (`next-agent`/`previous-agent` are
+  `down`/`up`; the trail ignores them), open reads the selected node's fields once (`drgnx-work-trail--model-step`:
+  a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`, `conclusion-kind` and `label`). A selected
+  conclusion lights the steps it rests on through the model's chain class. `drgnx-work-timeline-rows-attached` makes
+  the Timeline's lit lanes the model's list `near` (in `drgnx-work-chain`); the hub sends that list again when the map's
+  selection moves, and the queue's timer applies it and runs the class step (`drgnx-view-model--reclass`). Steering
+  reads the selected step's `session`. Paging a trail back past its 500-step window (the model's `steps` list answers
+  `more`) waits for `view/window` (deferred). Tests: `test/unit/work-trail-nav-test.el`, Rust
+  `trail_model_windows_past_500`, `timeline_model_links_lanes`, `near_is_the_selections_agents`.
 - **Steering** (`drgnx-work-trail-steer`, `-pause`, `-resume`, `-stop`) lives on the lens map and finds its agent per
   view (`drgnx-work-trail--agent-sid`): the trail's session, the Timeline's lane, the Board's card, the map's selection.
   Pause is `agents/pause`; resume is `agents/send` with `drgnx-work-resume-text`; stop asks `y-or-n-p` and is not
@@ -692,8 +796,7 @@ in every mirrored worktree of the same repository (found from the `.git` file), 
 given a node: the hub has no way to add one for a selection yet.
 
 `work-diffs` (`d`, `drgnx-work-code-diffs`) asks `work/files {session}`, then `work/hunks {session, path}` for each file: the
-hub's diff against the worktree's recorded base (the interim source, the base snapshot; part 4's edit history replaces
-it behind the same methods). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
+hub's diff against the worktree's recorded base (the edit history's branch against its base). Each answer becomes a `drgnx-work-diff-mode` buffer, killed and made again each time. It
 derives from `drgnx-work-hunk-mode` (also a trail step's hunk): a read-only `special-mode` coloured from its text with
 `diff-mode`'s faces, standing in `/`. It is no `diff-mode` buffer on purpose: `diff-mode` reads the file names in the
 diff with file name handlers on (syntax colouring, which-func), and its keys, VC and ediff open, apply or revert the files

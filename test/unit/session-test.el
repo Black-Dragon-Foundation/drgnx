@@ -341,24 +341,35 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
 
 (ert-deftest drgnx-session/running-programs-refreshes-terminal-query-flags-first ()
   :tags '(:cond)
-  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question asks the module
-  ;; to bring the flags up to date first — when the module is there.
+  ;; A terminal's flag is set by its module (a shell asks, an idle prompt does not); the quit question runs the
+  ;; modules' functions first, so a flag they set counts, and the names they return are listed too.
   (let ((p (make-process :name "drgnx-session-test-term" :command '("sleep" "30") :noquery t)))
     (unwind-protect
         (progn
-          (should-not (memq p (drgnx-session--running-programs)))                  ; no terminal module: as it was
-          (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags)
-                     (lambda () (set-process-query-on-exit-flag p t))))
-            (should (memq p (drgnx-session--running-programs)))))
+          (let ((drgnx-session-running-functions nil))
+            (should-not (member "drgnx-session-test-term" (drgnx-session--running-names))))   ; no module: as it was
+          (let ((drgnx-session-running-functions
+                 (list (lambda () (set-process-query-on-exit-flag p t) nil) (lambda () '("*terminal*")))))
+            (let ((names (drgnx-session--running-names)))
+              (should (member "drgnx-session-test-term" names))
+              (should (member "*terminal*" names)))))
       (delete-process p))))
 
 (ert-deftest drgnx-session/a-failing-terminal-refresh-does-not-stop-the-quit-question ()
   :tags '(:cond)
   (let ((p (make-process :name "drgnx-session-test-term2" :command '("sleep" "30") :noquery nil)))
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-terminal-eat-refresh-query-flags) (lambda () (error "eat is gone"))))
-          (should (memq p (drgnx-session--running-programs))))
+        (let ((drgnx-session-running-functions (list (lambda () (error "the terminal is gone")))))
+          (should (member "drgnx-session-test-term2" (drgnx-session--running-names))))
       (delete-process p))))
+
+(ert-deftest drgnx-session/quit-question-names-terminal-programs ()
+  ;; a program in drgnx's terminal is no Emacs process: the question names it from the terminal's function
+  (drgnx-session-test--with (:keep-running nil :daemon t :windows (list 'f1) :processes nil :confirm nil)
+    (let ((drgnx-session-running-functions (list (lambda () '("*terminal*")))))
+      (should-not (drgnx-session-quit-confirm))
+      (should (= asked 1))
+      (should (string-match-p "1 program is still running (\\*terminal\\*)" (car events))))))
 
 
 (ert-deftest drgnx-session/windows-ask-the-classifier ()

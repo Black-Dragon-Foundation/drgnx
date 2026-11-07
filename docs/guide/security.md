@@ -92,7 +92,7 @@ The rules behind it:
 - **Remote names in compile and grep output.** In a local compilation or grep buffer, a remote file name or an
   "Entering directory" line naming a remote directory is read as a local name (quoted with `/:`). Output text never
   makes Emacs connect anywhere, and clicking such an error opens nothing remote.
-- **Links in the Work tab and agent edits.** A Work row, graph box, commit or worktree that names a remote file opens
+- **Links in the Work space and agent edits.** A Work space file or step that names a remote file opens
   nothing and says so. When an agent proposes a change to a remote name from a local session, the review does not
   open and the agent is told the change was rejected; in a session started in a remote folder, its files review as
   usual.
@@ -162,13 +162,13 @@ The hub holds your provider keys, in its memory only (above). What else gets nea
   never an agent's session socket, and never the Messages API agents use. One process holds one such token (asking
   again replaces it); it goes when that process does, and it survives a restart of the hub. A keyless provider on
   your machine (a local Ollama, llama.cpp, TEI) needs no key and is reached directly. Chat, completion, edits, commit
-  messages, embeddings and gptel all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
+  messages, embeddings all take this route ([ai.md](ai.md#where-requests-go)); the editor fetches its token
   again on every reconnect and keeps it in memory only. A background request that has no token yet fails with "drgnx hub is starting; try again" and never
   waits.
 - **The editor keeps no key once the hub has one.** AI: Load Keys (and onboarding, the Store key button of Agent
   Settings, a command that finds a key in your Keychain or keyring) reads a key, hands it to the hub over the proven
-  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, the
-  gptel backend holds the editor token, and nothing the editor sends carries it but that one hand-over. Until a hub
+  socket and, once the hub answered, forgets it: it is gone from the editor's memory and auth-source's cache, and
+  nothing the editor sends carries it but that one hand-over. Until a hub
   runs, a key AI: Load Keys found waits in memory and goes when the editor connects. Checking whether a provider is
   usable (AI: Choose, onboarding's checks) reads its key only to see that there is one, and keeps nothing: neither the
   key nor auth-source's copy of the file. When the hub restarts (an update, `drgnx hub restart`), the editor hands
@@ -291,9 +291,9 @@ widens what it sees.
   another project.
 - **Only you make, change and revoke grants.** The store refuses any write of a grant that does not come from you,
   whatever path it takes (an agent's tool, a proposed change, an import, a scanned file), and the same holds for the
-  store's settings. An agent can only ask (an access card in the Work cockpit), never grant itself or another
+  store's settings. An agent can only ask (an access card in the Work space), never grant itself or another
   anything.
-- **An agent's request** (`access_request`) waits on a card in the Work cockpit with its reason. You answer with one
+- **An agent's request** (`access_request`) waits on a card in the Work space with its reason. You answer with one
   of four choices: **This session** (that session only, while it lives and for a day at most), **Its project**
   (every agent working in the requester's project), **Its profile** (every session of its profile) or **Refuse**.
   The first three give a read grant of the project it asked for; the agent is told either way. drgnx's own
@@ -448,7 +448,7 @@ project).
 
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
   hash), never the agent's own description. The same question open twice is one card. An agent's permission request
-  waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit
+  waits under that card's id: answering the request settles the card, and settling the card in the Work space
   answers the request. Before the agent goes on the hub checks again: if the matrix has since become Never for it,
   it is refused whatever you answered.
 - **Away:** when you are away the matrix can switch to a stricter (or looser) preset on its own; it applies from the
@@ -544,7 +544,7 @@ again, so the agent's retry goes through without a second card.
   - **Refuse**: nothing is granted, and the session's browser is not asked about again.
 - **Where you answer:** the card's notice runs **Agents: Answer Permission Card** (also in the palette, where it asks
   which card when several wait). It shows the card's line and its answers; the one you pick goes to the hub, which
-  settles the card and writes the grant. Nothing ever asks you from the background. In the Work cockpit, Allow is
+  settles the card and writes the grant. Nothing ever asks you from the background. In the Work space, Allow is
   the narrowest answer (once) and Deny is Refuse.
 - A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
 

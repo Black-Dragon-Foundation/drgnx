@@ -1,6 +1,7 @@
 //! A patch: one (view, display class) from version `base` to `version`.
 
 use crate::row::{ImageId, Row};
+use crate::style::{Style, StyleId, TermMeta};
 use serde::{Deserialize, Serialize};
 
 /// One operation of a patch, applied in order.
@@ -38,6 +39,16 @@ pub struct Patch {
     /// `[id, svg]`: images the rows name and Lisp may not hold yet (a reset: every image its rows name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<(ImageId, String)>,
+    /// `[id, style]`: the styles the rows' `s:<id>` runs name and Lisp may not hold yet (a terminal view's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<(StyleId, Style)>,
+    /// A terminal view's cursor, screen and title, when they changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub term: Option<TermMeta>,
+    /// The version of the view's model (`view-model`) these rows were built from; none for a view with no model.
+    /// The editor applies its queued models up to it before it draws these rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<u64>,
 }
 
 /// The ops that turn OLD into NEW, rows matched by key: removes, then replaces of changed rows, then inserts of new

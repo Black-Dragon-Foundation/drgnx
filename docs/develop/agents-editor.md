@@ -80,9 +80,11 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   `(:eval ...)` after the breadcrumb that joins the providers' strings, each a function of the window, run in
   redisplay, answering from cache. The large-file header (depth 10) and sticky scroll (depth 20) are providers too;
   `drgnx-chrome-header-tail` still works as a buffer-local construct after the providers. At each frame the line's
-  strings are built once per agent (symbol at its line from `add-log-current-defun`, or
-  `drgnx-agents-editor-line-symbol-function`; the plan entry, else the step title, truncated to 40 columns; `%`
-  doubled); redisplay only picks the entry nearest the window's point, so the same string object comes back until the
+  strings are built once per agent (the symbol at its line, or `drgnx-agents-editor-line-symbol-function`; the
+  name is kept per (modification tick, line) in `drgnx-agents-editor-line--names`: a saved local file asks the hub's
+  outline once per line, `search/symbol-at` in [hub.md](hub.md), and shows no name until it answers; a modified or
+  remote buffer runs `add-log-current-defun` once per tick and line; only `drgnx-view-old-path` runs it every frame;
+  the plan entry, else the step title, truncated to 40 columns; `%` doubled); redisplay only picks the entry nearest the window's point, so the same string object comes back until the
   next frame. `drgnx-chrome-short-breadcrumb-functions` shortens the breadcrumb to the file name while the line shows.
   `drgnx-agents-editor-line-probe` times the build and a provider call (the probe for `agents-line-tick`; the verdict
   waits for the gate).
@@ -144,6 +146,7 @@ three gutter ranges, an 80 to 95 row window). These are readings; the verdicts w
 - Pixels: the strip shows the agent's colour in the fringe of its lines and not elsewhere; the read range's rows hold none
   of the default background along their text, in both themes at both scales.
 - `agents-line-tick` has its probe (`drgnx-agents-editor-line-probe`) and no GUI reading yet.
+- `agents-follow-tick` has its probe (`drgnx-agents-follow-probe`: N follow moves and a refresh of a 3,000-line file) and no GUI reading yet.
 
 ## Not yet in this branch
 

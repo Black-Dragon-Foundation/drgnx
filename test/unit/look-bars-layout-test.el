@@ -181,7 +181,7 @@ are in sentence case."
   (should (memq 'drgnx-ui-title (ensure-list (face-attribute 'drgnx-start-title :inherit nil nil))))
   (should (memq 'drgnx-ui-text (ensure-list (face-attribute 'drgnx-start-quiet :inherit nil nil))))
   (should (equal (mapcar #'cadr drgnx-start--buttons)
-                 '("Open a folder…" "Open the work graph" "All keys" "Don't show this again"))))
+                 '("Open a folder…" "All keys" "Don't show this again"))))
 
 (defconst drgnx-look-bars-test--font-info-fields
   '(OPENED-NAME FULL-NAME SIZE HEIGHT BASELINE-OFFSET RELATIVE-COMPOSE DEFAULT-ASCENT MAX-WIDTH ASCENT DESCENT

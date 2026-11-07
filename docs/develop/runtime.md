@@ -74,6 +74,15 @@ cargo deny  --manifest-path runtime/Cargo.toml check
 
 Only `Cargo.lock` regeneration (`cargo generate-lockfile`, `cargo update -w`) runs without `--locked`.
 
+### Zig
+
+The terminal's engine (`ghostty-vt-sys`, libghostty-vt) is built from pinned sources with **Zig 0.17.x**, a build tool
+only: nothing Zig is shipped or fetched by a build script. `install.sh` uses a `zig` 0.17.x on PATH, else downloads the
+pinned tarball into `<data>/zig/` (its sha256 per target and Zig's minisign signature are both checked first; it needs
+the `minisign` package) and records the path in `<data>/zig-path`; `drgnx runtime build` puts that directory on PATH.
+CI gets the same pinned Zig from `test/container/zig.sh` (in the Rust job's image, and on the macOS runner). Bump
+`ZIG_VERSION` and the sha256 lines in `install.sh` and `zig.sh` together, from `https://ziglang.org/download/index.json`.
+
 ### Platforms
 
 Linux and macOS are supported; Android is not a target, but the door stays open. Every `cfg(target_os)` gate names its
@@ -692,7 +701,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 - `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
-  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
+  =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:run CMD` (pending first, so the call lasts as long as CMD), `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
   `commit MSG`, `sleep-loop` (asks to run `sleep 30; pgrep …`), `silent N` (a `session/cancel` ends it),
   `crash` (exit 3); anything else is echoed. `--script` gives the n-th prompt its n-th line. Every answer carries

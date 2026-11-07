@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 199, "{names:?}");
+        assert_eq!(names.len(), 226, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -381,6 +381,7 @@ mod tests {
         let mut want = vec![
             "agents/config",
             "agents/do",
+            "agents/grants/revoke",
             "agents/huddle/start",
             "agents/kill",
             "agents/pause",
@@ -675,7 +676,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 151);
+        assert_eq!(with, 176);
     }
 
     #[test]

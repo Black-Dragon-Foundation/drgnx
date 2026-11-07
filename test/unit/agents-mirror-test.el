@@ -14,7 +14,7 @@
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/delivery-gate-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (defmacro drgnx-agents-mirror-test--with (schedule &rest body)
   "BODY inside `drgnx-test-gated' SCHEDULE (quoted, as there) with a gated Ratatoskr serving drgnx's dirs under ROOT

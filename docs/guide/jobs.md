@@ -198,9 +198,9 @@ drgnx job resume job-20261017-101500 --budget 10      # go on (after a stop, or 
 never approved: propose the plan again", and the job stays stopped; a job you approved and then stopped resumes. Whether
 a stopped job was still a proposal is decided in the hub's one write of the stop: reject a proposal in one place while
 you approve it in another, and the approval that lands first runs and is then stopped like any job (its work resumes);
-a budget pause never turns a job you just stopped back into a paused one. In Emacs: **Start Job from Plan…** (the
-proposal, with Approve and Reject), **Show Job in Work…**, **Approve Plan Job…**, **Show Plan
-Jobs**, **Stop Plan Job…** — in the palette (no keys by default; module `tools/jobs`).
+a budget pause never turns a job you just stopped back into a paused one. Emacs has no job commands of its own: a
+job's proposal and everything it needs of you are cards in the [Work space](work-space.md) and the agent panel, and
+`drgnx job` starts, approves and stops it.
 
 ### From the command line
 
@@ -225,21 +225,18 @@ unknown option, a missing plan or id, a `--budget` that is not a number).
 
 ## A job in the Work space
 
-**Show Job in Work…** (`job-show`) opens the [Work space](work-space.md): the job's agents are on the map (what needs
+Open the [Work space](work-space.md): the job's agents are on the map (what needs
 you is the strip along its top, `n` and `g 1` to `g 9` select the chips), its tasks are on the Board (`b`), an agent's
 decisions and edits are in its review (`v`), and its steps are in the research trail (`r`). No window of its own opens.
-The Work cockpit and the job window before it are gone: a workbench saved with either comes back as the Work space.
 
 You do not have to watch it: the open cards and the messages to you (not yet acted on) of the proposed, running and
-paused jobs are the **Jobs** source of [Notices](notices.md), so they count in the one "needs you" number (the status
-bar's, What needs you's first line, the Notices list) and each new card is a desktop notification (D-Bus on Linux;
-`osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the backends are
-[Notices](notices.md#on-the-desktop)). An `overlap` card is advice: it counts but never interrupts. When the hub cannot
-be asked or goes away the count is not shown as a number: Notices says "Jobs: not known" and why, rather than showing
-the last count. The mode-line badge of earlier releases is gone (`drgnx-job-ui-badge-mode` is now the obsolete name of
-`drgnx-job-ui-attention-mode`, and `drgnx-job-ui-notify` of `drgnx-notice-desktop`). Nothing here ever asks you
-anything. Turning `tools/jobs` off (Preferences: Modules) removes the source and its items; open job windows stay as
-they are but no longer follow the hub (the job goes on). What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
+paused jobs are the **Jobs** source of [Notices](notices.md) (module `tools/jobs`), so they count in the one "needs you"
+number (the status bar's, What needs you's first line, the Notices list) and each new card is a desktop notification
+(D-Bus on Linux; `osascript` on macOS; else a message in the echo area — `drgnx-notice-desktop` nil turns them off; the
+backends are [Notices](notices.md#on-the-desktop)). The status bar's `jobs` segment counts the running jobs. An
+`overlap` card is advice: it counts but never interrupts. When the hub cannot be asked or goes away the count is not
+shown as a number: Notices says "Jobs: not known" and why, rather than showing the last count. Turning `tools/jobs`
+off (Preferences: Modules) removes the source and its items. Nothing here ever asks you anything. What needs you is a **card** with its actions — the proposal (Approve, Reject), a permission (Allow, Reject),
 a merge conflict (let the agent resolve it, merge again after you resolved it, drop the task), a review that failed
 (merge as it is, back to an agent, drop), a stuck or failed agent (retry, drop), the budget (resume with more, stop);
 each acts once. Messages agents send you are listed with a Reply and a Dismiss.
@@ -356,8 +353,8 @@ The job is **done** when every task is done (or dropped). Review the job's branc
 
 ## The merge gate
 
-`drgnx-job-merge-gate` (Customize group `drgnx`) says what a finished task needs before it is merged into
-the job's branch:
+The `gate` of the hub's `job/propose` (the default is `review`; the planning agent's proposal block can set it, there is no Emacs option) says what a finished task
+needs before it is merged into the job's branch:
 
 - `review` (the default): its reviewer's pass, as above.
 - `review+accept`: the pass, then every file its agent changed accepted by you. Until then the task waits on you
@@ -393,6 +390,10 @@ The details:
   worktree folder changes, and every 5 s while the worktree is not clean. Just before it merges, it checks that
   nothing changed since the look.
 
+- **Your hooks.** After the gate cleared a task, the `before-commit` rules and plugin hooks are asked (see
+  [Plugins](plugins.md#rules-and-hooks)); one can reword the merge commit's message or hold the merge with a `hook`
+  card (Retry the merge, Dismiss and carry on, Stop the job). `at-review` hooks are asked before the reviewer starts.
+
 A job keeps the gate it was proposed with: the hub runs it, and it does not read your `config.el`. **Start Job from
 Plan…** and **Start as Job** take your option with them. `drgnx job propose` gives the hub's default, `review`.
 
@@ -424,8 +425,7 @@ limit, a crashed agent), `job-policy-test.el` (the policy, writes in the worktre
 not start, a stalled turn, a reviewer's answered permission, a restart with a request waiting), `job-cli-test.el` (`drgnx job`
 against a hub in a child process), `job-cards-test.el` (cards and their actions), `job-clash-test.el` and
 `job-clash-review-test.el` (the rules, the reviewer, the user's choice), `job-gate-test.el` (the gate),
-`job-cockpit-test.el` (reassign, block, the run order and Start as Job from the Work graph; the merge gate),
-`job-ui-test.el` and `test/ui/job-window-test.el` (the window; `job-ui-test.el`: the Jobs source, not known, notifications), `job-exit-test.el` (a
+`test/ui/job-window-test.el`, `job-exit-test.el` (a
 four-task job end to end with automatic start, no credential file opened under a fake HOME, closing the window);
 the perf workload `job-window` ([perf.md](../develop/perf.md)). Developer details: [coordination.md](../develop/coordination.md#jobs).
 

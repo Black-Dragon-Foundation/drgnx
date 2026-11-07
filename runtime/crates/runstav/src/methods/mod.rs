@@ -13,6 +13,7 @@ pub mod exec;
 pub mod extensions;
 pub mod forecast;
 pub mod gateway;
+pub mod git;
 pub mod graph;
 pub mod history;
 pub mod hub;
@@ -28,6 +29,7 @@ pub mod say;
 pub mod search;
 pub mod settings;
 pub mod tasks;
+pub mod term;
 pub mod timeline;
 pub mod view;
 pub mod work;
@@ -209,6 +211,8 @@ params! {
     AgentsPause(agents::ById),
     AgentsHuddleStart(agents::HuddleStart),
     AgentsHuddleGet(agents::ById),
+    AgentsGrants(agents::ById),
+    AgentsGrantsRevoke(agents::GrantRevoke),
     AgentsWheelTake(agents::ById),
     AgentsWheelGive(agents::ById),
     AgentsWheelSaved(agents::WheelSaved),
@@ -258,20 +262,45 @@ params! {
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
+    WorkTrailSubscribe(work::TrailSubscribe),
+    WorkTrailClose(work::TrailClose),
+    WorkBoardSubscribe(work::BoardSubscribe),
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
     ViewEnv(view::ViewEnv),
     ViewResync(view::ViewResync),
+    ViewAck(view::ViewAck),
     ViewGlyphs(view::ViewGlyphs),
     ViewMeasured(view::ViewMeasured),
     ViewClose(view::ViewClose),
+    TermOpen(term::TermOpen),
+    TermConfig(term::TermConfig),
+    TermKey(term::TermKey),
+    TermText(term::TermText),
+    TermPaste(term::TermText),
+    TermFocus(term::TermFocus),
+    TermMouse(term::TermMouse),
+    TermResize(term::TermResize),
+    TermScroll(term::TermScroll),
+    TermFetch(term::TermFetch),
+    TermSearch(term::TermSearch),
+    TermTextRange(term::TermTextRange),
+    TermClose(term::TermClose),
+    TermList(Empty),
+    TermSessionEnd(Empty),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
     SearchEmbedders(Empty),
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
+    GitLetters(git::LettersParams),
+    SearchGrep(search::GrepParams),
+    SearchFiles(search::FilesParams),
+    SearchSymbolAt(search::SymbolAtParams),
+    SearchGrepReplace(search::GrepReplaceParams),
+    ExplorerSubscribe(search::ExplorerParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),
     SearchServerStop(search::ServerKindParams),
@@ -339,8 +368,10 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(records::methods());
     v.extend(work::methods());
     v.extend(view::methods());
+    v.extend(term::methods());
     v.extend(editor::methods());
     v.extend(search::methods());
+    v.extend(git::methods());
     v.extend(runners::methods());
     v.extend(extensions::methods());
     v.extend(plugins::methods());

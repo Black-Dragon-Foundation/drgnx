@@ -47,6 +47,8 @@ pub struct Signals {
     pub records: Notify,
     /// A write the Work map may follow: asks, specs, plans, tasks, worktree bases, cards ([`crate::work::map::run`]).
     pub map: Notify,
+    /// A write or a closed step the trails may follow ([`crate::work::trail::run`]).
+    pub trail: Notify,
     /// What the proposal tools ask of the records (set once the hub's front is built).
     pub records_tool: std::sync::OnceLock<RecordsTool>,
     /// Counts the changes that may change what a browser session may reach ([`Signals::answers_changed`]): each
@@ -68,6 +70,7 @@ impl Signals {
         self.writes.fetch_add(1, Ordering::Relaxed);
         self.records.notify_one();
         self.map.notify_one();
+        self.trail.notify_one();
         self.deliver.notify_one();
         self.events_soon();
     }

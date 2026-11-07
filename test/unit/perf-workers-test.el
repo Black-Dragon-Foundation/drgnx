@@ -51,15 +51,6 @@ Emacs (each form is read and evaluated here), `nidhogg-workers-apply' records."
                                               :measure "(list :x 1)" :repeat 1)))
     (should (equal (reverse perf-workers-test--order) '((apply "+nidhogg-workers-framing") (setup))))))
 
-(ert-deftest drgnx-perf-workers/agent-stream-has-a-turn-for-every-run ()
-  "The mock agent runs the n-th line of its script for the n-th prompt, and a prompt past the last line runs its own
-words (a two-chunk turn that ends at once, so the run's check, typed while it streamed, fails).  One mock serves a
-setup's runs: in an A/A both sides' warm-ups and rounds, `drgnx-perf-ab-min-rounds' each.  Pattern D: the setup form."
-  (let* ((spec (cdr (assq 'agent-stream (drgnx-perf-run--workloads))))
-         (setup (plist-get spec :setup)))
-    (should (string-match "(make-list \\([0-9]+\\) (drgnx-perf--stream))" setup))
-    (should (>= (string-to-number (match-string 1 setup)) (* 2 (1+ drgnx-perf-ab-min-rounds))))))
-
 (ert-deftest drgnx-perf-workers/worker-wait-is-judged ()
   ;; Nidhogg's phase-ms: symbol keys, worker-wait by reason.  The probe gives numbers only (worker-wait's total and
   ;; each reason), :wait-ms sums treesit-wait and worker-wait, and the A/B judges worker-wait like a phase
@@ -200,7 +191,8 @@ setup's runs: in an A/A both sides' warm-ups and rounds, `drgnx-perf-ab-min-roun
 form and a digest, and a setup form that reads."
   (let ((ws (drgnx-perf-run--workloads)) (budgets (drgnx-perf-run--budgets)))
     (dolist (n '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
-                           explorer-expand explorer-git quick-open-large autosave-typing))
+                           explorer-expand explorer-git quick-open-large quick-open-typing quick-open-typing-old
+                           agents-line-motion agents-line-motion-old autosave-typing))
       (let ((spec (cdr (assq n ws))) (rows (seq-filter (lambda (b) (eq (car b) n)) budgets)))
         (should spec)
         (should (stringp (plist-get spec :complete-when)))
@@ -212,7 +204,7 @@ form and a digest, and a setup form that reads."
           (should (plist-get (nthcdr 3 r) :report-only))
           (should (memq (plist-get (nthcdr 3 r) :report-only) '(ot2 ot3 ot4 ot5 ot6 ot8))))))
     ;; the existing workloads are still there, unchanged in kind
-    (dolist (n '(agent-stream terminal-output live-view)) (should (assq n ws)))))
+    (dolist (n '(terminal-output live-view)) (should (assq n ws)))))
 
 ;;;; Task 8 fixes: the workloads' own correctness
 
@@ -428,5 +420,66 @@ the two arms agree.  Pattern D: the same listing under two roots."
                         drgnx-perf-w--qo-files (mapcar (lambda (f) (concat tmp "/big/" f)) '("d1/a" "d0/b" "d0/a")))
                   (drgnx-perf-w-quick-open-digest))))
     (should (equal (funcall digest "/tmp/drgnx-perf-wAAA") (funcall digest "/tmp/drgnx-perf-wBBB")))))
+
+(defvar drgnx-quick-open--state)
+(defvar drgnx-perf-w--qot-seen)
+(defvar drgnx-perf-w--qot-listed)
+(defvar drgnx-perf-w--qot-old)
+(defvar drgnx-perf-w--tmp)
+(declare-function drgnx-perf-w-quick-open-typing-each "perf-session")
+(declare-function drgnx-perf-w--qot-note "perf-session")
+(declare-function drgnx-perf-w-quick-open-typing-done "perf-session")
+(declare-function drgnx-quick-open--step "drgnx-quick-open")
+(declare-function drgnx-quick-open--init "drgnx-quick-open")
+
+(defun perf-workers-test--qot-keys (done-first inputs)
+  "Quick Open's state after each of INPUTS, noted as the workload's post-command does; DONE-FIRST: the listing had
+ended before the first key.  Returns whether the workload counts the run as done."
+  (require 'drgnx-quick-open)
+  (setq drgnx-perf-w--qot-seen nil drgnx-perf-w--qot-listed nil drgnx-perf-w--qot-old t)
+  (let ((drgnx-quick-open--state (car (drgnx-quick-open--step (drgnx-quick-open--init) '(batch ("d012/f001.txt" "d013/f000.txt"))))))
+    (when done-first (setq drgnx-quick-open--state (car (drgnx-quick-open--step drgnx-quick-open--state '(done)))))
+    (dolist (in inputs)
+      (setq drgnx-quick-open--state (car (drgnx-quick-open--step drgnx-quick-open--state (list 'input in))))
+      (cl-letf (((symbol-function 'minibufferp) (lambda (&rest _) t))
+                ((symbol-function 'minibuffer-contents-no-properties) (lambda () in)))
+        (let ((this-command 'self-insert-command)) (drgnx-perf-w--qot-note)))
+      (setq drgnx-quick-open--state (car (drgnx-quick-open--step drgnx-quick-open--state '(done))))))
+  (drgnx-perf-w-quick-open-typing-done))
+
+
+(ert-deftest drgnx-perf-workers/quick-open-typing-needs-every-key-on-a-finished-listing ()
+  "quick-open-typing measures keys over the whole list: a run whose first key came while the files were still being
+listed, or that lost a key, is not done.  Pattern D: the three runs."
+  (perf-workers-test--session)
+  (let ((keys (mapcar (lambda (n) (substring "d012/f001.txt" 0 n)) (number-sequence 1 13))))
+    (should (perf-workers-test--qot-keys t keys))
+    (should-not (perf-workers-test--qot-keys nil keys))
+    (should-not (perf-workers-test--qot-keys t (butlast keys)))
+    (should (equal (car drgnx-perf-w--qot-seen) "d012/f001.tx"))))
+
+;; the first run (2026-11-07) opened Quick Open from a timer: drgnx refuses a prompt there, and the session had no hub
+(ert-deftest drgnx-perf-workers/quick-open-typing-opens-by-its-key-on-its-path ()
+  "Both quick-open-typing workloads open Quick Open by its key, queued for the command loop (a timer's prompt is
+refused), and measure only the typed keys; the hub's one starts a hub and stops it, and a run on the other path is not
+done.  Pattern D: the specs, the each functions and the predicate."
+  (perf-workers-test--session)
+  (let ((ws (drgnx-perf-run--workloads)))
+    (dolist (n '(quick-open-typing quick-open-typing-old))
+      (let ((spec (cdr (assq n ws))))
+        (should (equal (car (plist-get spec :actions)) '(:type "d")))
+        (should-not (string-match-p "run-at-time" (plist-get spec :each)))
+        (should (eq (and (string-match-p "drgnx-perf--hub-start" (plist-get spec :setup)) t) (eq n 'quick-open-typing)))
+        (should (eq (and (string-match-p "drgnx-perf--hub-stop" (plist-get spec :teardown)) t) (eq n 'quick-open-typing))))))
+  (cl-letf (((symbol-function 'find-file-noselect) (lambda (&rest _) (current-buffer)))
+            ((symbol-function 'switch-to-buffer) #'ignore))
+    (let ((unread-command-events nil) (drgnx-perf-w--tmp temporary-file-directory))
+      (drgnx-perf-w-quick-open-typing-each)
+      (remove-hook 'post-command-hook #'drgnx-perf-w--qot-note)
+      (should (equal unread-command-events (listify-key-sequence (kbd "C-p"))))))
+  ;; the stream path's run, read as the hub workload's, is not done
+  (should (perf-workers-test--qot-keys t (mapcar (lambda (n) (substring "d012/f001.txt" 0 n)) (number-sequence 1 13))))
+  (let ((drgnx-perf-w--qot-old nil))
+    (should-not (drgnx-perf-w-quick-open-typing-done))))
 
 ;;; perf-workers-test.el ends here

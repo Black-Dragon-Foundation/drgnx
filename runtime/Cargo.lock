@@ -1362,6 +1362,7 @@ dependencies = [
  "draugr",
  "drgnx-px",
  "drgnx-rows",
+ "drgnx-term",
  "eitri",
  "fastwebsockets",
  "forseti",
@@ -1425,6 +1426,21 @@ dependencies = [
  "serde_json",
  "skrifa",
  "unicode-width",
+]
+
+[[package]]
+name = "drgnx-term"
+version = "0.1.0"
+dependencies = [
+ "drgnx-rows",
+ "ghostty-vt-sys",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "skuld",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2007,6 +2023,13 @@ dependencies = [
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -3000,6 +3023,7 @@ dependencies = [
  "inotify",
  "libc",
  "notify",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
@@ -6489,6 +6513,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vegvisir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-rows",
  "proptest",
  "serde",
  "serde_json",

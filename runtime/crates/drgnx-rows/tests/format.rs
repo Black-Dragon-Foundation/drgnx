@@ -1,6 +1,6 @@
 //! The row and patch format: positions, runs, ids on the wire.
 
-use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
+use drgnx_rows::{Colour, CursorShape, Face, ImageId, Op, Patch, Row, RowBuilder, Style, TermMeta};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
@@ -90,6 +90,9 @@ fn ids_never_appear_as_object_keys() {
             Op::Remove(vec!["row-2".into()]),
         ],
         images: [(img, "<svg/>".into())].into_iter().collect(),
+        styles: vec![],
+        term: None,
+        model: None,
     };
     let v = serde_json::to_value(&p).unwrap();
     let mut found = BTreeSet::new();
@@ -142,4 +145,143 @@ fn image_id_changes_with_epoch() {
         serde_json::to_value(ImageId::of(b"<svg>a</svg>", 2)).unwrap()
     );
     assert_eq!(serde_json::from_value::<ImageId>(s).unwrap(), a);
+}
+
+/// A terminal patch: styles as `[[id, {...}]]`, colours as `{ansi}`/`{rgb}`/absent, the cursor as an array. Every
+/// object key is a field name, never an id.
+#[test]
+fn styles_serialise_as_arrays() {
+    let mut b = RowBuilder::new("41");
+    b.push("ab", Some(&Face::Style(3).to_string()))
+        .push("cd", Some(&Face::Style(12).to_string()));
+    let p = Patch {
+        view: "term-1".into(),
+        class: "gui-1".into(),
+        hub: 7,
+        base: 1,
+        version: 2,
+        env_epoch: 1,
+        ops: vec![Op::Insert {
+            after: Some("40".into()),
+            rows: vec![b.finish()],
+        }],
+        images: vec![],
+        styles: vec![
+            (
+                3,
+                Style {
+                    fg: Colour::Ansi(1),
+                    bold: true,
+                    ..Style::default()
+                },
+            ),
+            (
+                12,
+                Style {
+                    bg: Colour::Rgb([0x0a, 0xb0, 0xff]),
+                    ul_color: Colour::Ansi(9),
+                    underline: true,
+                    inverse: true,
+                    ..Style::default()
+                },
+            ),
+        ],
+        term: Some(TermMeta {
+            cursor: ("41".into(), 2, CursorShape::Bar, true),
+            alt_screen: true,
+            mouse_tracking: false,
+            bracketed_paste: false,
+            title: "vim".into(),
+        }),
+        model: None,
+    };
+    let v = serde_json::to_value(&p).unwrap();
+    assert_eq!(
+        v["styles"],
+        json!([[3, {"fg": {"ansi": 1}, "bold": true}],
+               [12, {"bg": {"rgb": "#0ab0ff"}, "ul_color": {"ansi": 9}, "underline": true, "inverse": true}]])
+    );
+    assert_eq!(
+        v["term"],
+        json!({"cursor": ["41", 2, "bar", true], "alt_screen": true, "mouse_tracking": false,
+               "bracketed_paste": false, "title": "vim"})
+    );
+    assert_eq!(
+        v["ops"][0]["insert"]["rows"][0]["runs"],
+        json!([[0, 2, "s:3"], [2, 4, "s:12"]])
+    );
+    let mut found = BTreeSet::new();
+    keys(&v, &mut found);
+    let fixed: BTreeSet<String> = [
+        "view",
+        "class",
+        "hub",
+        "base",
+        "version",
+        "env_epoch",
+        "ops",
+        "insert",
+        "after",
+        "rows",
+        "key",
+        "text",
+        "runs",
+        "styles",
+        "fg",
+        "bg",
+        "ul_color",
+        "bold",
+        "faint",
+        "italic",
+        "underline",
+        "strike",
+        "inverse",
+        "blink",
+        "ansi",
+        "rgb",
+        "term",
+        "cursor",
+        "alt_screen",
+        "mouse_tracking",
+        "bracketed_paste",
+        "title",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert!(
+        found.is_subset(&fixed),
+        "keys that are not field names: {:?}",
+        found.difference(&fixed).collect::<Vec<_>>()
+    );
+    assert_eq!(serde_json::from_value::<Patch>(v).unwrap(), p);
+}
+
+/// A run's face names a style as `s:<id>`; any other string stays a face name, and both survive the wire.
+#[test]
+fn style_run_round_trips() {
+    let mut b = RowBuilder::new("1");
+    b.push("x", Some(&Face::Style(4_000_000).to_string()))
+        .push("y", Some("drgnx-dim"))
+        .push("z", Some("s:"));
+    let row = b.finish();
+    let back: Row = serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
+    let faces: Vec<Face> = back.runs.iter().map(|r| Face::parse(&r.2)).collect();
+    assert_eq!(
+        faces,
+        vec![
+            Face::Style(4_000_000),
+            Face::Named("drgnx-dim".into()),
+            Face::Named("s:".into())
+        ]
+    );
+    // every colour form reads back
+    for c in [Colour::Ansi(15), Colour::Rgb([1, 2, 3]), Colour::Default] {
+        let s = Style {
+            fg: c,
+            ..Style::default()
+        };
+        let v = serde_json::to_value(s).unwrap();
+        assert_eq!(serde_json::from_value::<Style>(v).unwrap(), s, "{c:?}");
+    }
 }

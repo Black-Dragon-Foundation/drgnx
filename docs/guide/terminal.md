@@ -288,12 +288,15 @@ With VS Code keys (the rows are what `drgnx-tty-fallback-table` computes from th
 | `C-S-SPC` | Show Hover | — | `F6 Space` |
 | `C-.` | Quick Fix | — | `F6 .` |
 | `C-S-m` | Problems | `Alt+Shift+M` | `F6 m` |
+| `C-S-x` | View: Extensions | — | `F6 x` |
 | `C-S-f` | View: Search | `Alt+Shift+F` | `F6 f` |
 | `C-S-o` | Go to Symbol | — | `F6 o` |
 | `C-<tab>` | Recent Buffers | — | `F6 Tab` |
 | `C-S-h` | Replace in Files | `Alt+Shift+H` | `F6 h` |
 | `` C-S-` `` | New Terminal | — | `F6 ~` |
 | `C-S-g` | Source Control | `Alt+Shift+G` | `F6 g` |
+| `C-S-c` | Copy (in a terminal) | `Alt+Shift+C` | `F6 c` |
+| `C-S-v` | Paste (in a terminal) | `Alt+Shift+V` | `F6 v` |
 | `C-=` | Zoom In | `Alt+Shift+=` | `F6 =` |
 | `C-+` | Zoom In | — | `F6 +` |
 | `C--` | Zoom Out | — | `F6 -` |

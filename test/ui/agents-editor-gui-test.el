@@ -4,7 +4,7 @@
 ;; prototype the visible-rows rebuild of ring and gutter overlays, a per-line fringe `before-string' beside diff-hl
 ;; (with `diff-hl-highlight-function' wrapped, through its sync, async and flydiff updates) and the one-column margin
 ;; form, and print what they measured (`S1: ...' lines).  The numbers are in docs/develop/agents-editor.md.  The pixel
-;; rows run in the dark and the light theme, at whatever scale the session has (DRGNX_UI_SCALE: 1, 2).
+;; rows run in the dark, the light and the high-contrast theme, at whatever scale the session has (DRGNX_UI_SCALE: 1, 2).
 
 (require 'ert)
 (require 'cl-lib)
@@ -32,7 +32,7 @@
 
 ;;;; Prototype: the faces, bitmaps and the visible-rows rebuild
 
-(defconst agents-editor-gui--themes '((dark . drgnx-dark) (light . drgnx-light)))
+(defconst agents-editor-gui--themes '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
 (defconst agents-editor-gui--faces
   '(font-lock-keyword-face font-lock-string-face font-lock-type-face font-lock-function-name-face
                            font-lock-constant-face)
@@ -471,7 +471,7 @@ window, where margins work the same way: the marked row has the agent's colour i
 
 (ert-deftest agents-editor-gui/p3-drawn-frame ()
   "The module's drawing of one frame (a bar, a tinted read range, a dashed pending range, a projected tag, the strip)
-in the dark and the light theme: pictures, the gutter and tint pixels, and the time of an apply and a scroll rebuild
+in the dark, the light and the high-contrast theme: pictures, the gutter and tint pixels, and the time of an apply and a scroll rebuild
 \(recorded as `P3 ...' lines; the verdict waits for the gate)."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
@@ -539,3 +539,55 @@ in the dark and the light theme: pictures, the gutter and tint pixels, and the t
       (drgnx-agents-editor-draw-clear buf)
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
+
+;;;; The agent panel scene (the look's agent-panel.html), in each theme and at the session's scale
+
+(defvar drgnx-agent-panel--snap)
+
+(ert-deftest agents-editor-gui/p3-agent-panel-scene ()
+  "The panel of one agent drawn from fixture state (a snapshot with chips, a read, an edit with a card waiting and a
+subagent's step) in the dark, the light and the high-contrast theme: a picture of each (`p3-panel-VARIANT.png' in the
+evidence folder) and a check that text was drawn in the window (more than one colour of pixels).  The verdict on the look
+waits for the gate, by eye."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (load (expand-file-name "modules/ui/drgnx-look-derive" agents-editor-gui--repo) nil t)
+  (add-to-list 'load-path (expand-file-name "modules/tools" agents-editor-gui--repo))
+  (require 'drgnx-agent-panel)
+  (let ((win (selected-window)) buf)
+    (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1)))
+      (setq buf (drgnx-agent-panel-buffer "s1"))
+      (unwind-protect
+          (with-current-buffer buf
+            (drgnx-agent-panel--take-snapshot
+             (list :id "s1" :name "Opus" :status "waiting" :mode "default" :model "opus" :context 42
+                   :permissions (list (list :id 7 :title "Run make test" :tool (list :id "t2")
+                                            :options (list (list :optionId "allow" :kind "allow_once")
+                                                           (list :optionId "always" :kind "allow_always")
+                                                           (list :optionId "no" :kind "reject_once"))))))
+            (drgnx-agent-panel--take-entries
+             (list (list 0 (list :type "user" :text "make the tests pass"))
+                   (list 1 (list :type "tool" :id "t1" :title "Read src/main.el" :kind "read" :status "completed"))
+                   (list 2 (list :type "tool" :id "t2" :title "Run make test" :kind "execute" :status "pending"))
+                   (list 3 (list :type "agent" :text "Two tests fail; looking at the first."))))
+            (set-window-buffer win buf)
+            (pcase-dolist (`(,variant . ,theme) agents-editor-gui--themes)
+              (agents-editor-gui--theme theme)
+              (when (fboundp 'drgnx-look-derive) (drgnx-look-derive))
+              (drgnx-view-draw-now drgnx-view)
+              (redisplay t)
+              (drgnx-test-wait-presented)
+              (agents-editor-gui--png (format "p3-panel-%s" variant))
+              (let* ((snap (drgnx-uitest-snapshot)) (seen (make-hash-table :test #'equal)))
+                (dotimes (i 40)
+                  (puthash (cdr (drgnx-uitest-pixel snap (+ 20 (* i 7)) (* 2 (drgnx-uitest-device-scale (selected-frame))
+                                                                           (+ 8 (* i 3)))))
+                           t seen))
+                (agents-editor-gui--note "P3 panel %s scale=%S: %d colours sampled" variant
+                                         (drgnx-uitest-device-scale (selected-frame)) (hash-table-count seen))
+                (should (> (hash-table-count seen) 1)))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (mapc #'disable-theme custom-enabled-themes)))))
+
+(provide 'agents-editor-gui-test)
+;;; agents-editor-gui-test.el ends here

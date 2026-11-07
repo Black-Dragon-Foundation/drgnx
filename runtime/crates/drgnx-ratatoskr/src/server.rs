@@ -227,6 +227,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     });
     front.extensions.configure(&env);
     front.search.bind(&front);
+    front.core.views.bind(&front);
     if let Some(d) = front.dirs.get() {
         front
             .search
@@ -272,6 +273,7 @@ pub async fn run(args: ServeArgs) -> Exit {
     }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    crate::clock::spawn("trail:run", crate::work::trail::run(front.clone()));
     // the editors' buffer views follow the presence model from now on
     front.core.buffers.bind(&front);
     // an edit step's file is checked against the other worktrees' from now on
@@ -286,6 +288,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     // The jobs a hub before this one left running are watched again first (a session resumed then knows it waits),
     // and a job end that reached no session is delivered once they are back.
     crate::exec::ensure_open(&front);
+    // the terminals a hub before this one left running are connected to again (in the background)
+    crate::term::start(&front);
     crate::work::machines::seed(&front);
     // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
     crate::runners::methods::start(&front);
@@ -398,10 +402,8 @@ pub async fn run(args: ServeArgs) -> Exit {
             .and_then(|p| p.parse().ok())
             .filter(|p| *p > 0)
     });
-    let mut parent = parent_pid.map(|p| {
-        let every = crate::clock::interval(Duration::from_secs(1));
-        (p, every)
-    });
+    // real time on any clock: it watches a real process, and on the test clock it is no task's timer
+    let mut parent = parent_pid.map(|p| (p, crate::clock::real_interval(Duration::from_secs(1))));
     let exit = loop {
         let parent_gone = async {
             match &mut parent {

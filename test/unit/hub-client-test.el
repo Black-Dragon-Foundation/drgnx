@@ -30,101 +30,7 @@
 (require 'drgnx-settings-agents nil t)
 (require 'drgnx-records-review nil t)
 
-(defvar drgnx-exec--jobs)
-(defvar drgnx-exec--stale)
-
-(defmacro drgnx-hub-client-test--with (&rest body)
-  "BODY with drgnx's dirs under ROOT (the hub's socket in ROOT/run/drgnx), the client's state fresh; the client is
-disconnected at the end."
-  (declare (indent 0))
-  `(drgnx-hub-client-test--in-root
-     (unwind-protect (progn ,@body)
-       (drgnx-hub-disconnect))))
-
-(defmacro drgnx-hub-client-test--in-root (&rest body)
-  "BODY with drgnx's dirs under ROOT (the hub's socket in ROOT/run/drgnx), the client's state fresh."
-  (declare (indent 0))
-  `(let* ((root (file-name-as-directory (make-temp-file "drgnx-hc" t)))
-          (process-environment (append (list (concat "DRGNX_CONFIG_DIR=" root "config") (concat "DRGNX_DATA_DIR=" root "data")
-                                             (concat "XDG_STATE_HOME=" root "state") (concat "XDG_RUNTIME_DIR=" root "run")
-                                             (concat "XDG_DATA_HOME=" root "xdg-data") (concat "XDG_CONFIG_HOME=" root "xdg-config")
-                                             (concat "XDG_CACHE_HOME=" root "cache") (concat "HOME=" root "home")
-                                             "OPENROUTER_API_KEY" "DRGNX_JOBS_LAUNCHER=detached" "DRGNX_NO_HUB_START"
-                                             (format "DRGNX_HUB_PARENT_PID=%d" (emacs-pid)))
-                                       process-environment))
-          (drgnx-hub--client nil) (drgnx-hub--events nil) (drgnx-hub--subscribing nil)
-          (drgnx-hub--pending (make-hash-table)) (drgnx-hub--last-hello nil) (drgnx-hub-client-proves t)
-          (drgnx-hub--ensuring nil) (drgnx-hub--binary-version nil) (drgnx-hub--binary-reading nil)
-          (drgnx-hub-event-functions nil) (drgnx-hub-disconnect-functions nil) (drgnx-hub-skew-functions nil)
-          (drgnx-hub--keys-had nil)
-          (drgnx-hub--asked-disconnect nil) (drgnx-hub--resubscribe-since nil) (drgnx-hub--resubscribe-delay 1))
-     (dolist (d '("run" "home" "config" "data")) (with-file-modes #o700 (make-directory (concat root d) t)))
-     (unwind-protect (progn ,@body)
-       (delete-directory root t))))
-
-(defun drgnx-hub-client-test--wait (pred &optional what)
-  (drgnx-test-wait pred :secs 30 :what (or what "the client's condition")))
-
-(defun drgnx-hub-client-test--calls ()
-  "A list to collect callbacks' (RESULT ERROR) in, and the callback that pushes onto it (newest first)."
-  (let ((cell (list nil)))
-    (cons cell (lambda (r e) (setcar cell (cons (list r e) (car cell)))))))
-
-;;;; Ratatoskr (the binary tests)
-
-(defun drgnx-hub-client-test--bin ()
-  "Ratatoskr for the binary tests: DRGNX_RATATOSKR_BIN when it is an absolute executable, else nil."
-  (let ((b (getenv "DRGNX_RATATOSKR_BIN")))
-    (and b (file-name-absolute-p b) (file-executable-p b) (not (file-directory-p b)) b)))
-
-(defmacro drgnx-hub-client-test--with-ratatoskr (&rest body)
-  "BODY with Ratatoskr serving ROOT (`drgnx-hub-client-test--with'), this Emacs not yet connected; skipped without the
-binary.  For the tests of other files that drive a real agent through the hub and wait on conditions of their own (the
-agents mirror's): their order is the agent's, not the gate's."
-  (declare (indent 0))
-  `(drgnx-hub-client-test--with
-     (skip-unless (drgnx-hub-client-test--bin))
-     (let* ((process-environment (append (list (concat "DRGNX_DIR=" (directory-file-name drgnx-dir)) "RATATOSKR_SUPERVISOR=none"
-                                               (concat "DRGNX_EMACS=" (expand-file-name invocation-name invocation-directory)))
-                                         process-environment))
-            (hub (make-process :name "ratatoskr" :noquery t :connection-type 'pipe :buffer (generate-new-buffer " *ratatoskr*")
-                               :sentinel (lambda (p _event) (unless (process-live-p p) (process-put p :done t)))
-                               :command (list (drgnx-hub-client-test--bin) "serve" "--foreground"
-                                              "--parent-pid" (number-to-string (emacs-pid))))))
-       (unwind-protect
-           (progn (drgnx-hub-client-test--wait #'drgnx-hub-running-p "Ratatoskr answers a ping")
-                  ,@body)
-         (drgnx-hub-disconnect)
-         (when (process-live-p hub) (signal-process hub 'term))
-         (ignore-errors (drgnx-test-wait (lambda () (process-get hub :done)) :secs 10 :what "Ratatoskr ends"))
-         (when (process-live-p hub) (signal-process hub 'kill))
-         (kill-buffer (process-buffer hub))))))
-
-(defmacro drgnx-hub-client-test--with-hub (&rest body)
-  "BODY with a gated Ratatoskr serving ROOT (`drgnx-hub-client-test--in-root'), this Emacs not connected: BODY
-connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture disconnects at the end."
-  (declare (indent 0))
-  `(drgnx-hub-client-test--in-root
-     (let ((drgnx-hub--presence-sent :unknown) (drgnx-hub-editor-token-hook nil)
-           (drgnx-exec--jobs (make-hash-table :test #'equal)) (drgnx-exec--stale nil))
-       (drgnx-test-with-ratatoskr root :gated t ,@body))))
-
-(defun drgnx-hub-client-test--answer-held-p (name key)
-  "Whether the gate holds an answer on connection NAME with KEY in its result."
-  (cl-some (lambda (line)
-             (let ((j (and (stringp line) (ignore-errors (json-parse-string line :object-type 'plist :null-object nil
-                                                                            :false-object nil)))))
-               (and (plist-get j :id) (not (plist-get j :event)) (consp (plist-get j :result))
-                    (plist-member (plist-get j :result) key))))
-           (drgnx-test-gate-held name)))
-
-(defun drgnx-hub-client-test--mock-profile (root)
-  "The profile \"mock\" (test/fixtures/mock-acp.el) in ROOT's settings.el."
-  (drgnx-test-write-settings
-   (concat root "config/settings.el")
-   'drgnx-agents-profiles (list (list "mock" :command (list "sh" (expand-file-name "test/fixtures/mock-acp-stdin.sh" drgnx-dir)
-                                                            (expand-file-name invocation-name invocation-directory) "--batch" "-Q"
-                                                            "-l" (expand-file-name "test/fixtures/mock-acp.el" drgnx-dir))))))
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; the helpers below, shared
 
 (ert-deftest drgnx-hub-client/proves-itself-and-is-user ()
   ;; binary: the hello's proof makes the connection user class, and Ratatoskr's proof back checks out
@@ -142,6 +48,16 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
       (should proven)
       (should agents)
       (should-not nope))))
+
+(ert-deftest drgnx-hub-client/the-gated-clock-runs-past-the-parent-watch ()
+  ;; binary: the hub watches its --parent-pid on real time, so seconds of the test clock wake no task without an origin
+  (drgnx-hub-client-test--with-hub
+    (let ((n 0))
+      (drgnx-test-gated '()
+        (drgnx-hub-connect)
+        (drgnx-test-wait (lambda () (drgnx-test-hub-advance 100) (> (cl-incf n) 30)) :what "three seconds of the hub's clock")
+        (drgnx-test-deliver-all)
+        (should (process-live-p drgnx-hub--events))))))
 
 (ert-deftest drgnx-hub-client/ping-probe-skips-the-challenge ()
   ;; binary: the challenge is the first line on every connection; the probe reads past it to the answer.  The probe is
@@ -207,14 +123,14 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
   (cl-count method drgnx-hub-client-test--traffic :key #'car :test #'equal))
 
 (ert-deftest drgnx-hub-client/editor-traffic-over-ratatoskr ()
-  ;; binary + the Lisp backend (review I6): the calls the job UI, the agents mirror and `drgnx job' make,
+  ;; binary + the Lisp backend (review I6): the calls the agents mirror and `drgnx job' make,
   ;; with the params their own code builds, over a store with a proposed job and a mock-acp session: none is
   ;; refused for its params, and none fails inside.  :frozen until agent system part 1's Task 16a: the hub serves
   ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI is frozen Lisp too)
   :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
-    (dolist (f '(drgnx-job drgnx-job-ui drgnx-agents-ui)) (require f)))
+    (dolist (f '(drgnx-job drgnx-agents-session)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
@@ -233,15 +149,8 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
       (progn
         (unwind-protect
             (progn
-              ;; the job UI: propose (with this Emacs's gate), list, reject
-              (let ((second nil))
-                (cl-letf (((symbol-function 'drgnx-job-ui-show) (lambda (id) (setq second id))))
-                  (drgnx-job-ui-start plan))
-                (drgnx-job-ui-status)
-                (drgnx-job-ui-stop second))
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 2)) "the job UI's answers")
               ;; a durable session and its mirror: the agents UI starts it, the mirror drives it
-              (cl-letf (((symbol-function 'drgnx-agents-ui--cwd) (lambda () root))) (drgnx-agents-ui-new-durable "mock"))
+              (cl-letf (((symbol-function 'drgnx-agents-session--cwd) (lambda () root))) (drgnx-agents-session-new-durable "mock"))
               (let ((m (drgnx-hub-client-test--wait (lambda () (seq-find #'drgnx-agent-session-remote drgnx-agents--sessions))
                                                     "the mirror")))
                 (drgnx-hub-client-test--wait (lambda () (eq (drgnx-agent-session-status m) 'idle)) "the mirror is idle")
@@ -255,7 +164,7 @@ connects inside `drgnx-test-gated'.  `hub' is the hub's process; the fixture dis
           (drgnx-agents-mirror-stop)
           (drgnx-hub-disconnect)
           (drgnx-timer-cancel-owner :core)))
-      (dolist (m '("job/propose" "job/status" "job/stop" "job/card" "agents/start" "agents/list" "agents/get"
+      (dolist (m '("agents/start" "agents/list" "agents/get"
                    "agents/send" "agents/do" "agents/kill"))
         (should (member m (mapcar #'car drgnx-hub-client-test--traffic))))
       (should-not (seq-filter (lambda (c) (member (plist-get (nth 2 c) :code) '("invalid-params" "internal")))

@@ -15,8 +15,10 @@ pub mod fit_tty;
 pub mod image;
 mod patch;
 mod row;
+pub mod style;
 pub mod svg;
 
 pub use builder::RowBuilder;
 pub use patch::{Op, Patch, diff};
 pub use row::{ImageId, Row, RowHeight};
+pub use style::{Colour, CursorShape, Face, Style, StyleId, TermMeta};
