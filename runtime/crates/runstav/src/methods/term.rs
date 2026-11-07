@@ -268,7 +268,7 @@ pub struct TermProgress {
     pub value: i32,
 }
 
-/// `term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is base64.
+/// `term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is the text.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TermClipboardWrite {

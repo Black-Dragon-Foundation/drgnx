@@ -166,7 +166,19 @@ pub fn run(
             let mut used = 0;
             while let Some(nl) = inbuf[used..].iter().position(|b| *b == b'\n') {
                 match serde_json::from_slice::<In>(&inbuf[used..used + nl]) {
-                    Ok(msg) => worker.handle(msg, now()),
+                    Ok(msg) => {
+                        // the program learns the new size from the pty (SIGWINCH); the engine from the worker
+                        if let In::Resize {
+                            cols,
+                            rows,
+                            cell_px,
+                        } = &msg
+                            && let Err(e) = pty.resize(crate::pty::winsize(*cols, *rows, *cell_px))
+                        {
+                            tracing::warn!(error = %e, "resizing the pty");
+                        }
+                        worker.handle(msg, now())
+                    }
                     // the error's position only: never the message, which may hold typed text
                     Err(e) => tracing::warn!(
                         line = e.line(),

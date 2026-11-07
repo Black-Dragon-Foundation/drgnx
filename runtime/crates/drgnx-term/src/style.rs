@@ -25,6 +25,8 @@ pub struct Cell {
     pub text: String,
     pub style: Style,
     pub wide: Wide,
+    /// The OSC 8 link the cell is part of (read for the screen's rows only).
+    pub link: Option<String>,
 }
 
 /// The view's styles: each distinct style gets an id once (the worker's counter); a patch carries the styles its rows
@@ -81,8 +83,12 @@ pub struct Built {
     pub cols: Vec<u32>,
 }
 
+/// The text property of an OSC 8 link's characters: its URI (the editor makes them a button).
+pub const LINK_PROP: &str = "drgnx-term-link";
+
 /// The row KEY of CELLS: one character per cell (a blank is a space), trailing default blanks dropped, a wide
-/// character followed by a stop at the next column's pixel (CELL_PX wide cells; none when 0), runs naming styles.
+/// character followed by a stop at the next column's pixel (CELL_PX wide cells; none when 0), runs naming styles, and
+/// each OSC 8 link's characters a [`LINK_PROP`].
 pub fn build(key: &str, cells: &[Cell], cell_px: u32, styles: &mut StyleTable) -> Built {
     let mut end = cells.len();
     while end > 0 {
@@ -99,7 +105,16 @@ pub fn build(key: &str, cells: &[Cell], cell_px: u32, styles: &mut StyleTable) -
     let mut b = RowBuilder::new(key);
     let mut cols = Vec::with_capacity(end);
     let mut face_buf = String::new();
+    // the link being read: where it started and its URI
+    let mut link: Option<(u32, &str)> = None;
     for (x, c) in cells[..end].iter().enumerate() {
+        let here = c.link.as_deref();
+        if link.map(|l| l.1) != here && c.wide != Wide::Tail {
+            if let Some((start, uri)) = link.take() {
+                b.prop(start, b.pos(), LINK_PROP, uri.into());
+            }
+            link = here.map(|u| (b.pos(), u));
+        }
         cols.push(b.pos());
         let face = styles.id(&c.style).map(|id| {
             face_buf.clear();
@@ -126,6 +141,9 @@ pub fn build(key: &str, cells: &[Cell], cell_px: u32, styles: &mut StyleTable) -
                 b.push(t, face);
             }
         }
+    }
+    if let Some((start, uri)) = link {
+        b.prop(start, b.pos(), LINK_PROP, uri.into());
     }
     Built {
         row: b.finish(),

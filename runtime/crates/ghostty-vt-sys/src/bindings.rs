@@ -214,10 +214,55 @@ pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_GRAPHEMES_BUF: i32 = 4;
 pub const GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_HAS_STYLING: i32 = 8;
 
 pub const GHOSTTY_CELL_DATA_WIDE: i32 = 3;
+pub const GHOSTTY_CELL_DATA_HAS_HYPERLINK: i32 = 7;
 pub const GHOSTTY_CELL_WIDE_NARROW: i32 = 0;
 pub const GHOSTTY_CELL_WIDE_WIDE: i32 = 1;
 pub const GHOSTTY_CELL_WIDE_SPACER_TAIL: i32 = 2;
 pub const GHOSTTY_CELL_WIDE_SPACER_HEAD: i32 = 3;
+/// A cell's place (`GhosttyPoint`): TAG one of the `GHOSTTY_POINT_TAG_*`, the column and row inside that area.
+pub const GHOSTTY_POINT_TAG_ACTIVE: i32 = 0;
+pub const GHOSTTY_POINT_TAG_VIEWPORT: i32 = 1;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GhosttyPointCoordinate {
+    pub x: u16,
+    pub y: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union GhosttyPointValue {
+    pub coordinate: GhosttyPointCoordinate,
+    pub _padding: [u64; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GhosttyPoint {
+    pub tag: i32,
+    pub value: GhosttyPointValue,
+}
+
+/// A reference to one cell (`ghostty_terminal_grid_ref`), valid until the terminal changes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct GhosttyGridRef {
+    pub node: *mut c_void,
+    pub x: u16,
+    pub y: u16,
+}
+
+impl Default for GhosttyGridRef {
+    fn default() -> Self {
+        GhosttyGridRef {
+            node: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+        }
+    }
+}
+
 /// `GhosttyRow` (raw row) and its data: whether the row soft-wraps into the next.
 pub type GhosttyRow = u64;
 pub const GHOSTTY_ROW_DATA_WRAP: i32 = 1;
@@ -514,6 +559,17 @@ unsafe extern "C" {
     pub fn ghostty_render_state_row_cells_free(cells: GhosttyRenderStateRowCells);
     pub fn ghostty_cell_get(cell: GhosttyCell, data: i32, out: *mut c_void) -> GhosttyResult;
     pub fn ghostty_row_get(row: GhosttyRow, data: i32, out: *mut c_void) -> GhosttyResult;
+    pub fn ghostty_terminal_grid_ref(
+        terminal: GhosttyTerminal,
+        point: GhosttyPoint,
+        out_ref: *mut GhosttyGridRef,
+    ) -> GhosttyResult;
+    pub fn ghostty_grid_ref_hyperlink_uri(
+        r#ref: *const GhosttyGridRef,
+        buf: *mut u8,
+        buf_len: usize,
+        out_written: *mut usize,
+    ) -> GhosttyResult;
 
     pub fn ghostty_key_event_new(
         allocator: *const GhosttyAllocator,

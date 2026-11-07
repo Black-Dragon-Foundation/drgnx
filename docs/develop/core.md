@@ -1991,6 +1991,8 @@ through `core/drgnx-color.el`), the terminal's width table, the time zone and re
 carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub-fed buffer lives) only stores rows
 and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
 Hub-fed views do not call `drgnx-view-sync-rows`.
+`(drgnx-view-patch-pause BUFFER ON)` stops applying patches to a buffer (a terminal's copy mode): they are kept, at
+most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past that the resume sends `view/resync`.
 
 - **The rules**, in order (`drgnx-view-patch--decide`, pure; `drgnx-view-patch--accept` keeps the books, tested in
   every order of arrival, disconnect, reconnect, env and selection): a patch whose `hub` is not the last reset's, or

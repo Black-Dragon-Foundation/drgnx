@@ -308,6 +308,22 @@ fn row_keys_survive_scroll() {
 }
 
 #[test]
+fn osc52_write_is_reported_as_text() {
+    let mut w = worker(30, 2, 10);
+    // "from-osc52" in base64
+    w.output(b"\x1b]52;c;ZnJvbS1vc2M1Mg==\x07", 0);
+    let writes: Vec<_> = w
+        .take_out()
+        .into_iter()
+        .filter_map(|o| match o {
+            Out::ClipboardWrite { primary, data, .. } => Some((primary, data)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(writes, vec![(false, "from-osc52".to_owned())]);
+}
+
+#[test]
 fn resize_sends_reset() {
     let (mut w, mut m) = (worker(20, 5, 100), Model::default());
     w.output(b"hello", 0);
@@ -489,6 +505,27 @@ fn wide_cell_adds_stop() {
     assert_eq!(
         (term.cursor.0.as_str(), term.cursor.1),
         (row.key.as_str(), 3)
+    );
+}
+
+#[test]
+fn osc8_link_is_a_row_prop() {
+    let (mut w, mut m) = (worker(30, 2, 10), Model::default());
+    w.output(
+        b"see \x1b]8;;file:///tmp/a.txt\x1b\\a.txt\x1b]8;;\x1b\\ end",
+        0,
+    );
+    draw(&mut w, &mut m, 0);
+    let row = &m.rows[0];
+    assert_eq!(row.text, "see a.txt end");
+    assert_eq!(
+        row.props,
+        vec![(
+            4,
+            9,
+            "drgnx-term-link".to_owned(),
+            serde_json::json!("file:///tmp/a.txt")
+        )]
     );
 }
 

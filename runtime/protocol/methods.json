@@ -3226,7 +3226,7 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is base64.",
+        "description": "`term/clipboard-write`: the program wrote the clipboard (OSC 52, when `clipboard-write` allows); DATA is the text.",
         "properties": {
           "data": {
             "type": "string"

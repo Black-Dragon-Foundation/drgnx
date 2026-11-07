@@ -215,5 +215,145 @@ hub or its worker."
         (should (memq cursor-type '(box hollow)))
         (should-not (text-property-not-all (point-min) (point-max) 'display nil))))))
 
+;;;; Keys, mouse, copy mode, links and the program's requests
+
+(defun drgnx-term-test--row-matching (buffer regexp)
+  "The first of BUFFER's rows (as drawn now) that matches REGEXP, or nil."
+  (seq-find (lambda (l) (string-match-p regexp l)) (drgnx-term-test--lines buffer)))
+
+(ert-deftest drgnx-term/shell-key-sends-term-key ()
+  ;; C-d is a raw key: it reaches the shell, which ends at an empty prompt, and its buffer goes
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (with-current-buffer b
+        (should (eq (key-binding [?\C-d]) #'drgnx-term-send-event))
+        (let ((last-command-event ?\C-d)) (drgnx-term-send-event)))
+      (drgnx-term-test--settle (lambda () (not (buffer-live-p b))) "the shell ended, its buffer gone"))))
+
+(ert-deftest drgnx-term/paste-is-bracketed-when-asked ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)) (kill-ring nil))
+      (drgnx-term-test--run b "printf '\\033[?2004h'; echo pa''ste-ready; cat -v")
+      (drgnx-term-test--until-line b "paste-ready" "bracketed paste asked for")
+      (kill-new "pasted")
+      (with-current-buffer b (drgnx-term-paste))
+      ;; the tty echoes what reached it: the paste inside its brackets
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\[200~pasted"))
+                               "the bracketed paste"))))
+
+(ert-deftest drgnx-term/mouse-goes-to-program-only-while-tracking ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (drgnx-term-test--run b "echo no-mo''use")
+      (drgnx-term-test--until-line b "no-mouse" "the echo")
+      (with-current-buffer b (should-not (eq (key-binding [down-mouse-1]) #'drgnx-term-mouse)))
+      (drgnx-term-test--run b "printf '\\033[?1000h'; echo mo''use-ready; cat -v")
+      (drgnx-term-test--until-line b "mouse-ready" "mouse tracking asked for")
+      (drgnx-term-test--settle
+       (lambda () (with-current-buffer b
+                    (eq (plist-get (drgnx-view-patch-term drgnx-view-patch) :mouse_tracking) t)))
+       "the patch says the program tracks the mouse")
+      (let ((w (get-buffer-window b t)))
+        (with-current-buffer b
+          (should (eq (key-binding [down-mouse-1]) #'drgnx-term-mouse))
+          (drgnx-term-mouse (list 'down-mouse-1 (posn-at-point (save-excursion (goto-char (point-max))
+                                                                               (line-beginning-position))
+                                                               w)))))
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\^\\[\\[M")) "the press reached the program"))))
+
+(ert-deftest drgnx-term/copy-mode-pauses-and-isearch-works ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (drgnx-term-test--run b "echo before-co''py")
+      (drgnx-term-test--until-line b "before-copy" "the echo")
+      (with-current-buffer b (drgnx-term-copy-mode 1))
+      (drgnx-term-test--run b "echo during-co''py")
+      (drgnx-term-test--settle
+       (lambda () (with-current-buffer b (> (car (drgnx-view-patch-paused drgnx-view-patch)) 0)))
+       "a patch kept while paused")
+      (with-current-buffer b
+        ;; the screen stands still, and the buffer has Emacs's keys: isearch finds the text
+        (should-not (member "during-copy" (mapcar #'string-trim-right (drgnx-term-test--lines b))))
+        (should-not (eq (key-binding "a") #'drgnx-term-send-event))
+        (should (eq (key-binding [remap keyboard-quit]) #'drgnx-term-copy-mode))
+        (goto-char (point-max))
+        (let ((isearch-forward nil)) (should (isearch-search-string "before-copy" nil t)))
+        (drgnx-term-copy-mode -1)
+        (should (eq (key-binding "a") #'drgnx-term-send-event)))
+      (drgnx-term-test--until-line b "during-copy" "the kept output drawn on leaving"))))
+
+(ert-deftest drgnx-term/find-in-terminal-jumps ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (drgnx-term-test--run b "echo find-me-here")
+      (drgnx-term-test--until-line b "find-me-here" "the echo")
+      (with-current-buffer b (drgnx-term-find "find-me"))
+      (drgnx-term-test--settle (lambda () (buffer-local-value 'drgnx-term-copy-mode b)) "the match shown")
+      (with-current-buffer b
+        ;; newest first: the echoed row, not the typed command above it
+        (should (looking-at "find-me-here"))
+        (should (eq (overlay-get drgnx-term--find-overlay 'face) 'drgnx-term-search-selected))
+        (drgnx-term-copy-mode -1)))))
+
+(ert-deftest drgnx-term/osc8-link-opens-file ()
+  (drgnx-term-test--with
+    (let* ((b (drgnx-term-test--start)) (file (make-temp-file "drgnx-term-link")) (uri (concat "file://" file)))
+      (unwind-protect
+          (progn
+            (drgnx-term-test--run b (concat "printf '\\033]8;;" uri "\\033\\\\link-text\\033]8;;\\033\\\\\\n'"))
+            (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\`link-text")) "the link")
+            (with-current-buffer b
+              (let ((pos (save-excursion (goto-char (point-min)) (re-search-forward "^link-text") (match-beginning 0))))
+                (should (equal (get-text-property pos 'drgnx-term-link) uri))
+                (should (get-text-property pos 'mouse-face))
+                (drgnx-term-open-link pos)))
+            (should (get-file-buffer file)))
+        (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
+        (delete-file file)))))
+
+(ert-deftest drgnx-term/osc52-write-reaches-kill-ring ()
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)) (kill-ring nil) (interprogram-cut-function nil))
+      (drgnx-term-test--run b (format "printf '\\033]52;c;%s\\007'" (base64-encode-string "from-osc52")))
+      (drgnx-term-test--settle (lambda () (equal (car kill-ring) "from-osc52")) "the program's copy in the kill ring"))))
+
+(ert-deftest drgnx-term/osc52-read-refused-by-default ()
+  ;; a read gets no answer: nothing reaches the program before what is typed after it
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (drgnx-term-test--run b "printf '\\033]52;c;?\\007'; cat -v")
+      (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "cat -v")) "the command typed")
+      (drgnx-term-test--run b "end52")
+      (drgnx-term-test--settle
+       (lambda () (>= (seq-count (lambda (l) (equal (string-trim-right l) "end52")) (drgnx-term-test--lines b)) 2))
+       "the typed line echoed and printed")
+      (should-not (drgnx-term-test--row-matching b "\\^\\[\\]52")))))
+
+(ert-deftest drgnx-term/osc7-sets-default-directory ()
+  (drgnx-term-test--with
+    (let* ((b (drgnx-term-test--start)) (dir (file-name-as-directory (make-temp-file "drgnx-term-cwd" t))))
+      (unwind-protect
+          (progn
+            (drgnx-term-test--run b (format "printf '\\033]7;file://%s\\007'" (directory-file-name dir)))
+            (drgnx-term-test--settle (lambda () (equal (buffer-local-value 'default-directory b) dir))
+                                     "the buffer's directory follows the shell"))
+        (delete-directory dir t)))))
+
+(ert-deftest drgnx-term/resize-debounced ()
+  (drgnx-term-test--with
+    (let* ((b (drgnx-term-test--start)) (w (get-buffer-window b t)) (before (buffer-local-value 'drgnx-term--resizes b)))
+      (with-selected-window w
+        (split-window w nil 'below)
+        (drgnx-term--windows-changed)
+        (drgnx-term--windows-changed))
+      ;; two changes within the 50 ms: one resize
+      (drgnx-test-advance 0.06)
+      (should (= (buffer-local-value 'drgnx-term--resizes b) (1+ before)))
+      (let ((size (buffer-local-value 'drgnx-term--size b)))
+        (drgnx-term-test--run b "stty size")
+        (drgnx-term-test--settle (lambda () (drgnx-term-test--row-matching b "\\`[0-9]+ [0-9]+ *\\'")) "stty's answer")
+        (should (equal (string-trim-right (drgnx-term-test--row-matching b "\\`[0-9]+ [0-9]+ *\\'"))
+                       (format "%d %d" (nth 1 size) (nth 0 size))))))))
+
 (provide 'term-test)
 ;;; term-test.el ends here

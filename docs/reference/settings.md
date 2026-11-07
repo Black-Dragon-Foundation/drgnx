@@ -1692,6 +1692,24 @@ Read at every start; a change turns it on or off at once.  Without a watchdog in
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-term-clipboard-write
+
+Whether a program in a terminal may write the clipboard (OSC 52): what it writes goes to the kill ring.  A
+program never reads the clipboard: a terminal refuses every read.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-clipboard` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `boolean` |
+
 ## drgnx-term-scrollback-lines
 
 How many rows a terminal's buffer keeps above its screen.  A change trims or fills every terminal at once.  The

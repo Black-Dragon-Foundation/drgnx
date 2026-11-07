@@ -219,8 +219,26 @@ program runs).
 - **Scrollback:** `drgnx-term-scrollback-lines`'s `:apply` sends `term/config` `scrollback-lines` to every worker,
   which removes the oldest rows or backfills; window-start reaching the buffer's top sends `term/fetch` with the first
   row's key (one at a time; not again for the same top row once the worker said nothing is missing).
-- **Input:** `term/key` (printable keys and the named keys of `drgnx-term-mode-map`, a raw-input map) and `term/text`
-  (`drgnx-term-send-string`). While the subscription is down, or before the terminal opened, input queues per buffer,
+- **Input:** `term/key` from `drgnx-term-send-event` (`drgnx-term--event-key`: the event's base key, its modifiers
+  and the text a printable key types) and `term/text` (`drgnx-term-send-string`). `drgnx-term-mode-map` binds every
+  raw key (control, meta, the named keys) to `drgnx-term-send-event`; `drgnx-term-apply-keys` takes out the keys the
+  active profile keeps for drgnx (`drgnx-terminal-key-split`, with `drgnx-term-reserved-keys`), on every key-stack
+  change. `term/paste` sends the kill ring's newest entry (bracketed by the engine when the program asked).
+- **Mouse:** the mouse bindings are menu-item filters that answer only while the patch's `term` says
+  `mouse_tracking`; then `term/mouse` carries the cell (`drgnx-term--mouse-cell`: the screen row counts from the
+  buffer's last `rows` lines). Focus changes (`window-selection-change-functions`, buffer-local) send `term/focus`.
+- **Copy mode** (`drgnx-term-copy-mode`) pauses the view (`drgnx-view-patch-pause`) and swaps in a map with only
+  `C-g`; leaving draws the kept patches. `drgnx-term-find` sends `term/search` up from the cursor and enters copy mode
+  at the first match, marked by the face `drgnx-term-search-selected`.
+- **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link` (screen rows only: backfilled rows carry
+  none); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
+  `find-file-other-window`, anything else with `browse-url`.
+- **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
+  (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
+- **Events:** `term/cwd` sets `default-directory`, `term/title` renames the buffer, `term/progress` sets
+  `mode-line-process`, `term/notify` is a notice of the source `term`, `term/clipboard-write` is a `kill-new` when
+  `drgnx-term-clipboard-write` allows it (sent to the worker as `term/config` `clipboard-write`). Clipboard reads
+  (OSC 52 `?`) are refused by the engine. While the subscription is down, or before the terminal opened, input queues per buffer,
   at most `drgnx-term-queue-max` (4096) bytes, and goes on `drgnx-hub-connected-functions`.
 - **Session:** every hello carries `drgnx-hub-session`; the subscription re-attaches this Emacs's terminals after a
   dropped socket or a hub restart (see [Lifetime](#lifetime)).

@@ -1378,6 +1378,7 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
   view class hub version (epoch 0) held resync stale
   ack (epoch-reset t)                           ; the view type's options
   term                                          ; a terminal's last metadata (cursor, alt screen, mouse, title)
+  paused                                        ; while paused: (COUNT . PATCHES), the patches kept, newest first
   (styles (make-hash-table))                    ; style id → its style (a plist as the event has it)
   (faces (make-hash-table :test #'equal))       ; style → (TICK . FACE), the LRU of `drgnx-view-patch-style-face-max'
   (face-tick 0)
@@ -1555,33 +1556,57 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
           (drgnx-view-remove view keys)))))
     (drgnx-view-patch--evict-images state)))
 
+(defconst drgnx-view-patch-paused-max 256
+  "The most patches a paused view keeps; past that it keeps none and asks for a reset when it resumes.")
+
+(defun drgnx-view-patch-pause (buffer on)
+  "Pause BUFFER's hub-fed view (ON non-nil), or resume it.  While it is paused the patches that come are kept, not
+drawn and not acknowledged (a view that acknowledges is sent no more meanwhile); resuming applies them in order, or
+asks for a reset when more than `drgnx-view-patch-paused-max' came."
+  (with-current-buffer buffer
+    (when-let* ((state drgnx-view-patch))
+      (if on
+          (unless (drgnx-view-patch-paused state) (setf (drgnx-view-patch-paused state) (list 0)))
+        (let ((kept (drgnx-view-patch-paused state)))
+          (setf (drgnx-view-patch-paused state) nil)
+          (if (and kept (> (car kept) drgnx-view-patch-paused-max))
+              (funcall drgnx-view-patch-send-function "view/resync"
+                       (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                             :version (or (drgnx-view-patch-version state) 0)))
+            (dolist (p (reverse (cdr kept))) (drgnx-view-apply-patch p))))))))
+
 (defun drgnx-view-apply-patch (patch)
   "Apply PATCH (a `view-patch' event's data) to its (view, class)'s buffer, by the rules (`drgnx-view-patch--decide').
-Returns what was done: `drop', `hold', `resync', `apply', or nil when no buffer shows the pair."
+Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until the view resumes:
+`drgnx-view-patch-pause'), or nil when no buffer shows the pair."
   (let ((buffer (gethash (cons (plist-get patch :view) (plist-get patch :class)) drgnx-view-patch--buffers)))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
-        (let* ((state drgnx-view-patch) (sent (drgnx-view-patch-resyncs state))
-               (what (drgnx-view-patch--accept state patch)))
-          (pcase what
-            ('hold (drgnx-view-patch--stale state t))
-            ('resync
-             (unless (= sent (drgnx-view-patch-resyncs state))
-               (funcall drgnx-view-patch-send-function "view/resync"
-                        (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                              :version (or (drgnx-view-patch-version state) 0)))))
-            ('apply
-             (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
-             (drgnx-view-patch--apply-ops state drgnx-view patch)
-             ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
-             (when-let* ((term (plist-get patch :term)))
-               (setf (drgnx-view-patch-term state) term)
-               (when-let* ((key (car (plist-get term :cursor)))) (drgnx-view-dirty drgnx-view (list key))))
-             (when (drgnx-view-patch-ack state)
-               (funcall drgnx-view-patch-send-function "view/ack"
-                        (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
-                              :version (drgnx-view-patch-version state))))))
-          what)))))
+        (if-let* ((kept (drgnx-view-patch-paused drgnx-view-patch)))
+            (progn (setcar kept (1+ (car kept)))
+                   (setcdr kept (and (<= (car kept) drgnx-view-patch-paused-max) (cons patch (cdr kept))))
+                   'paused)
+          (let* ((state drgnx-view-patch) (sent (drgnx-view-patch-resyncs state))
+                 (what (drgnx-view-patch--accept state patch)))
+            (pcase what
+              ('hold (drgnx-view-patch--stale state t))
+              ('resync
+               (unless (= sent (drgnx-view-patch-resyncs state))
+                 (funcall drgnx-view-patch-send-function "view/resync"
+                          (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                                :version (or (drgnx-view-patch-version state) 0)))))
+              ('apply
+               (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
+               (drgnx-view-patch--apply-ops state drgnx-view patch)
+               ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
+               (when-let* ((term (plist-get patch :term)))
+                 (setf (drgnx-view-patch-term state) term)
+                 (when-let* ((key (car (plist-get term :cursor)))) (drgnx-view-dirty drgnx-view (list key))))
+               (when (drgnx-view-patch-ack state)
+                 (funcall drgnx-view-patch-send-function "view/ack"
+                          (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
+                                :version (drgnx-view-patch-version state))))))
+            what))))))
 
 (defun drgnx-view-patch-event (event data)
   "A `drgnx-hub-event-functions' handler: a `view-patch' goes to its buffer."

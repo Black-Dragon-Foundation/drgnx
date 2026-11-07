@@ -127,6 +127,9 @@ a keyboard key of a command.")
 (defconst drgnx-lint--decode-map-builders '(drgnx-tty-frames--mok-map drgnx-tty-frames--csi-u-map)
   "Functions that build a keymap for `input-decode-map' from the terminal's key encodings (modifyOtherKeys, CSI u).")
 
+(defconst drgnx-lint--raw-input-builders '(drgnx-term--fill-map)
+  "Functions that fill a raw-input map (`drgnx-lint--raw-input-maps') with every raw event, computed in code.")
+
 (defun drgnx-lint--names-mouse-p (key)
   "Does the computed KEY form name a mouse or wheel event (a quoted mouse-1, wheel-up…)?"
   (catch 'found
@@ -140,7 +143,8 @@ a keyboard key of a command.")
     (dolist (f (drgnx-lint--files "wb" "modules"))
       (dolist (top (drgnx-lint--forms f))
         (unless (or (and (memq (car-safe top) '(defvar defconst defvar-keymap)) (memq (cadr top) drgnx-lint--raw-input-maps))
-                    (and (eq (car-safe top) 'defun) (memq (cadr top) drgnx-lint--decode-map-builders)))
+                    (and (eq (car-safe top) 'defun) (memq (cadr top) (append drgnx-lint--decode-map-builders
+                                                                             drgnx-lint--raw-input-builders))))
           (drgnx-lint--walk top (lambda (form)
                                   (pcase form
                                     (`(,(or 'define-key 'keymap-set 'keymap-local-set 'local-set-key) ,map ,key . ,_)

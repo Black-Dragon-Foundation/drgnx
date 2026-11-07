@@ -26,6 +26,12 @@
 (require 'drgnx-timer)
 (require 'drgnx-view)
 (require 'drgnx-hub-client)
+(require 'drgnx-registry)
+(require 'drgnx-notice)
+(require 'drgnx-state)
+(require 'url-util)
+(defvar drgnx-keys-last)
+(defvar drgnx-term-copy-mode)
 (declare-function drgnx-terminal-environment "drgnx-terminal" ())
 (declare-function drgnx-terminal-shell "drgnx-terminal" ())
 
@@ -123,31 +129,238 @@ subscription reads the setting)."
 buffer's terminal; TEXT is what it types.  The worker encodes it from the terminal's modes (`term/key')."
   (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text)))))
 
-(defun drgnx-term-self-insert ()
-  "Type the character of this key into the terminal."
-  (interactive)
-  (let ((s (string last-command-event)))
-    (drgnx-term-send-key s nil s)))
+(defconst drgnx-term--event-names
+  '((13 . "return") (9 . "tab") (127 . "backspace") (return . "return") (tab . "tab") (backspace . "backspace")
+    (delete . "delete") (deletechar . "delete") (escape . "escape") (insert . "insert") (insertchar . "insert"))
+  "Events whose key name is not their basic type's name.")
 
-(defconst drgnx-term--named-keys
-  '((return . "return") (13 . "return") (tab . "tab") (9 . "tab") (backspace . "backspace") (127 . "backspace")
-    (delete . "delete") (escape . "escape") (left . "left") (up . "up") (right . "right") (down . "down")
-    (home . "home") (end . "end") (prior . "prior") (next . "next") (insert . "insert"))
-  "Emacs events typed into the terminal as named keys, and their names.")
+(defconst drgnx-term--modifier-names '((control . "ctrl") (meta . "alt") (shift . "shift") (super . "super"))
+  "Emacs's event modifiers as the worker names them.")
 
-(defun drgnx-term-named-key ()
-  "Press this named key (Return, Tab, Backspace, the arrows…) in the terminal."
+(defun drgnx-term--event-key (event)
+  "EVENT as (KEY MODS TEXT) for `term/key', or nil for an event a terminal does not take."
+  (if-let* ((name (alist-get event drgnx-term--event-names)))
+      (list name nil nil)
+    (let* ((basic (event-basic-type event))
+           (mods (delq nil (mapcar (lambda (m) (alist-get m drgnx-term--modifier-names)) (event-modifiers event))))
+           (name (cond ((alist-get basic drgnx-term--event-names))
+                       ((characterp basic) (string basic))
+                       ((symbolp basic) (symbol-name basic)))))
+      (when name
+        (list name mods (and (characterp event) (>= event 32) (/= event 127) (string event)))))))
+
+(defun drgnx-term-send-event ()
+  "Send this key to the terminal's program (`term/key'), encoded by the worker from the terminal's modes."
   (interactive)
-  (when-let* ((name (alist-get last-command-event drgnx-term--named-keys)))
-    (drgnx-term-send-key name)))
+  (pcase (drgnx-term--event-key last-command-event)
+    (`(,key ,mods ,text) (drgnx-term-send-key key mods text))))
+
+;;;; Which keys reach drgnx, which the program
+
+(defcustom drgnx-terminal-skip-shell-keys '("C-p" "C-b" "C-k" "C-f")
+  "First keys that reach drgnx in a terminal even though readline uses them: VS Code's commandsToSkipShell.
+Quick Open (C-p), Toggle Sidebar (C-b), every C-k chord, and Find (C-f, which searches the terminal's text).
+It only applies to keys the active key stack binds to an app or window command, so the Emacs and Vim profiles,
+which bind none of them, leave these keys to the shell.  Every other control or Alt key of such a command goes to
+the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
+  :type '(repeat string) :group 'drgnx)
+
+(defconst drgnx-terminal--meta-bit #x8000000 "The meta modifier bit of an event.")
+
+(defconst drgnx-term-reserved-keys
+  '([?\C-c] [?\C-x] [?\C-g] [?\C-h] [?\C-u] [?\C-q] [?\C-\\] [?\e ?x] [?\e ?:] [?\e ?!] [?\e ?&])
+  "Keys a terminal always leaves to Emacs: C-c (a prefix: drgnx's terminal keys), C-x, C-g, C-h, C-u, C-q, C-\\,
+M-x, M-:, M-! and M-&.  As key vectors (M-x is [?\\e ?x]).")
+
+(defvar drgnx-surfaces-cheatsheet-sections nil
+  "Abnormal hook of the key sheet: each function returns (TITLE . LINES) or nil; shown after \"Key problems\".")
+
+(defun drgnx-terminal--keys-vector (event)
+  "EVENT as a key vector: M-x is [?\\e ?x]."
+  (if (and (integerp event) (/= 0 (logand event drgnx-terminal--meta-bit)))
+      (vector ?\e (logand event (lognot drgnx-terminal--meta-bit)))
+    (vector event)))
+
+(defun drgnx-terminal--shell-event-p (event)
+  "Non-nil when EVENT is an ASCII character, control or plain, or M- plus one: what readline and zle mean."
+  (and (integerp event) (<= 0 (logand event (lognot drgnx-terminal--meta-bit)) 127)))
+
+(defun drgnx-terminal--bindings ()
+  "Global bindings (plists of `drgnx-keys-last') of the active stack's app and window commands."
+  (seq-filter (lambda (b)
+                (and (memq (plist-get b :map) '(nil global-map))
+                     (let ((cmd (drgnx-commands-get (plist-get b :id))))
+                       (and cmd (memq (drgnx-cmd-scope cmd) '(app window))))))
+              (plist-get drgnx-keys-last :bindings)))
+
+(defun drgnx-terminal-key-split (&optional reserved)
+  "Where the active key profile's keys go in a terminal: (:to-drgnx KEYS :to-shell KEYS), key strings.
+Only global bindings of commands with scope app or window count.  A key whose first event is an ASCII control
+or Alt character the terminal sends to the shell goes to the shell (C-a, C-e, C-w, C-k, M-f as readline mean them),
+unless its first key is in `drgnx-terminal-skip-shell-keys'; every other key reaches drgnx (as do the RESERVED
+keys, by default `drgnx-term-reserved-keys')."
+  (let ((reserved (or reserved drgnx-term-reserved-keys)) to-drgnx to-shell)
+    (dolist (b (drgnx-terminal--bindings))
+      (let* ((key (plist-get b :key)) (event (aref (key-parse key) 0)))
+        (if (and (drgnx-terminal--shell-event-p event)
+                 (not (member (drgnx-terminal--keys-vector event) reserved))
+                 (not (member (key-description (vector event)) drgnx-terminal-skip-shell-keys)))
+            (cl-pushnew key to-shell :test #'equal)
+          (cl-pushnew key to-drgnx :test #'equal))))
+    (list :to-drgnx (nreverse to-drgnx) :to-shell (nreverse to-shell))))
+
+(defun drgnx-terminal--key-title (key)
+  "The title of the first command the active stack binds KEY to."
+  (when-let* ((b (seq-find (lambda (b) (equal (plist-get b :key) key)) (drgnx-terminal--bindings)))
+              (cmd (drgnx-commands-get (plist-get b :id))))
+    (drgnx-cmd-title cmd)))
+
+(defun drgnx-terminal--collapse-chords (keys)
+  "KEYS with the chords of one first key (two or more, e.g. C-k C-s and C-k C-o) shown once, as \"C-k chords\"."
+  (let (seen out)
+    (dolist (k keys)
+      (let* ((v (key-parse k)) (prefix (key-description (vector (aref v 0)))))
+        (if (or (< (length v) 2)
+                (= 1 (seq-count (lambda (k2) (let ((v2 (key-parse k2))) (and (> (length v2) 1) (equal (aref v2 0) (aref v 0)))))
+                                keys)))
+            (push k out)
+          (unless (member prefix seen)
+            (push prefix seen)
+            (push (concat prefix " chords") out)))))
+    (nreverse out)))
+
+(defun drgnx-terminal-cheatsheet-section ()
+  "The key sheet's \"In the terminal\" section: (TITLE . LINES), or nil without the terminal or keys."
+  (when (drgnx-modules--ok-p 'tools/term)
+    (let* ((split (drgnx-terminal-key-split))
+           (to-drgnx (drgnx-terminal--collapse-chords (plist-get split :to-drgnx)))
+           (to-shell (drgnx-terminal--collapse-chords (plist-get split :to-shell))))
+      (when (or to-drgnx to-shell)
+        (cons "In the terminal"
+              (append (when to-drgnx (list (format "Reach drgnx: %s" (string-join to-drgnx ", "))))
+                      (mapcar (lambda (k)
+                                (let ((title (drgnx-terminal--key-title k)))   ; nil for "C-k chords"
+                                  (format "%s goes to the shell (%soutside the terminal, or the palette)"
+                                          k (if title (concat title ": ") ""))))
+                              to-shell)))))))
+
+(defun drgnx-terminal--sheet-sections (&rest _)
+  "Append the `drgnx-surfaces-cheatsheet-sections' to the key sheet unless it shows them itself (after \"Key problems\")."
+  (when-let* ((buffer (get-buffer "*drgnx keys*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (dolist (fn drgnx-surfaces-cheatsheet-sections)
+            (pcase (funcall fn)
+              (`(,title . ,lines)
+               (when (and lines (not (save-excursion (goto-char (point-min)) (search-forward (concat "\n" title "\n") nil t))))
+                 (goto-char (point-max))
+                 (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
+                 (dolist (l lines) (insert "  " l "\n")))))))))))
+
+;;;; The terminal's keymap: raw input, but for the keys that reach drgnx
+
+(defconst drgnx-term--raw-symbols
+  '(return tab backspace delete escape insert left up right down home end prior next
+           f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12)
+  "The function keys a terminal sends to its program, alone and with C-, M-, S- and C-S-.")
+
+(defun drgnx-term--raw-events ()
+  "Every event the terminal's keymap may send to the program: ASCII control characters (not ESC), M- plus any ASCII
+character, and `drgnx-term--raw-symbols' with modifiers."
+  (append (number-sequence 0 26) (number-sequence 28 31) '(127)
+          (mapcar (lambda (c) (logior c drgnx-terminal--meta-bit)) (number-sequence 0 127))
+          (mapcan (lambda (sym)
+                    (mapcar (lambda (mods) (event-convert-list (append mods (list sym))))
+                            '(nil (control) (meta) (shift) (control shift))))
+                  drgnx-term--raw-symbols)))
+
+(defun drgnx-term--mouse-filter (cmd)
+  "A mouse binding's filter: CMD while the terminal's program tracks the mouse, else nil (Emacs's own binding)."
+  (and (eq (plist-get (and drgnx-view-patch (drgnx-view-patch-term drgnx-view-patch)) :mouse_tracking) t) cmd))
+
+(defconst drgnx-term--mouse-events
+  '(down-mouse-1 mouse-1 drag-mouse-1 down-mouse-2 mouse-2 down-mouse-3 mouse-3 wheel-up wheel-down mouse-4 mouse-5)
+  "The mouse events a program that tracks the mouse is sent.")
+
+(defun drgnx-term--fill-map (map drgnx)
+  "Bind in MAP every raw event (`drgnx-term--raw-events') to `drgnx-term-send-event', but for the reserved keys, the
+events in DRGNX (those reach drgnx: their raw binding goes) and events bound to something else (a terminal key)."
+  (dolist (ev (drgnx-term--raw-events))
+    (unless (member (drgnx-terminal--keys-vector ev) drgnx-term-reserved-keys)
+      (let ((cur (lookup-key map (vector ev))))
+        (cond ((memql ev drgnx) (when (eq cur #'drgnx-term-send-event) (define-key map (vector ev) nil t)))
+              ((or (null cur) (numberp cur)) (define-key map (vector ev) #'drgnx-term-send-event)))))))
 
 (defvar drgnx-term-mode-map
   (let ((m (make-sparse-keymap)))
-    (define-key m [remap self-insert-command] #'drgnx-term-self-insert)
-    (dolist (k drgnx-term--named-keys) (define-key m (vector (car k)) #'drgnx-term-named-key))
+    (define-key m [remap self-insert-command] #'drgnx-term-send-event)
+    (dolist (ev drgnx-term--mouse-events)
+      (define-key m (vector ev) '(menu-item "" drgnx-term-mouse :filter drgnx-term--mouse-filter)))
+    (drgnx-term--fill-map m nil)
     m)
-  "A terminal's raw input: printable keys, Return, Tab, Backspace, Delete, Escape, the arrows and the page keys go
-to the program; every other key stays drgnx's.")
+  "A terminal's raw input: every key goes to the program, but for `drgnx-term-reserved-keys' and the keys the key
+profile has reach drgnx (`drgnx-term-apply-keys'); the mouse goes to it while it tracks the mouse.")
+
+(defun drgnx-term-apply-keys (&rest _)
+  "The terminal's keymap follows the key profile: the first events of the keys that reach drgnx
+\(`drgnx-terminal-key-split') are no longer sent to the program; the others are again.  Runs at the module's setup
+and after `drgnx-keys-apply'."
+  (drgnx-term--fill-map drgnx-term-mode-map
+                        (mapcar (lambda (k) (aref (key-parse k) 0))
+                                (plist-get (drgnx-terminal-key-split) :to-drgnx))))
+
+;;;; Copy, paste, the mouse, focus
+
+(defun drgnx-terminal-copy ()
+  "Copy the selected text of the terminal to the kill ring and deselect it; with no selection do nothing."
+  (interactive)
+  (when (use-region-p)
+    (copy-region-as-kill (region-beginning) (region-end))
+    (deactivate-mark)))
+
+(defun drgnx-term-paste ()
+  "Paste the kill ring's newest text into the terminal (bracketed when its program asked: `term/paste')."
+  (interactive)
+  (when-let* ((text (ignore-errors (current-kill 0))))
+    (drgnx-term--send "term/paste" (list :text text))))
+
+(defun drgnx-terminal--in-terminal-p () (derived-mode-p 'drgnx-term-mode))
+
+(defvar-local drgnx-term--size nil "The (COLS ROWS) the worker was last told.")
+
+(defun drgnx-term--mouse-cell (posn)
+  "The screen's (COL . ROW) of POSN, or nil above the screen."
+  (when-let* ((pos (posn-point posn)) (size drgnx-term--size))
+    (let* ((last (line-number-at-pos (point-max))) (line (line-number-at-pos pos))
+           (row (- line (- last (nth 1 size)) 1)))
+      (when (>= row 0)
+        (cons (car (posn-col-row posn)) row)))))
+
+(defun drgnx-term-mouse (event)
+  "Send the mouse EVENT to the terminal's program (it tracks the mouse: `drgnx-term--mouse-filter')."
+  (interactive "e")
+  (let* ((type (event-basic-type event)) (mods (event-modifiers event))
+         (button (pcase type
+                   ((or 'mouse-1 'wheel-up 'mouse-4) (if (memq type '(wheel-up mouse-4)) 4 1))
+                   ((or 'mouse-2) 2) ((or 'mouse-3) 3) ((or 'wheel-down 'mouse-5) 5) (_ 0)))
+         (kind (cond ((memq type '(wheel-up wheel-down mouse-4 mouse-5)) "press")
+                     ((memq 'down mods) "press")
+                     ((memq 'drag mods) "release")
+                     (t "release")))
+         (cell (drgnx-term--mouse-cell (event-start event))))
+    (when cell
+      (with-current-buffer (window-buffer (posn-window (event-start event)))
+        (drgnx-term--send "term/mouse"
+                          (list :kind kind :button button :col (car cell) :row (cdr cell)
+                                :mods (vconcat (delq nil (mapcar (lambda (m) (alist-get m drgnx-term--modifier-names))
+                                                                 mods)))))))))
+
+(defun drgnx-term--selected (window)
+  "`window-selection-change-functions' of a terminal buffer: tell its program it gained or lost the focus."
+  (let ((in (eq window (selected-window))))
+    (with-current-buffer (window-buffer window)
+      (drgnx-term--send "term/focus" (list :in (if in t :false))))))
 
 ;;;; Settings
 
@@ -166,6 +379,26 @@ to the program; every other key stays drgnx's.")
   "How many rows a terminal's buffer keeps above its screen.  A change trims or fills every terminal at once.  The
 terminal itself remembers at least 10,000 lines whatever this says, so Find in Terminal and copy reach further."
   :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-scrollback)
+
+;; the setting's variable, read before its definition below
+(defvar drgnx-term-clipboard-write)
+
+(defun drgnx-term--clipboard-config ()
+  "The `term/config' entry of `drgnx-term-clipboard-write'."
+  (vector "clipboard-write" (if drgnx-term-clipboard-write t :false)))
+
+(defun drgnx-term--apply-clipboard ()
+  "`:apply' of `drgnx-term-clipboard-write': every live terminal's worker allows or denies writes at once."
+  (maphash (lambda (_ b)
+             (when (buffer-live-p b)
+               (with-current-buffer b
+                 (drgnx-term--send "term/config" (list :config (vector (drgnx-term--clipboard-config)))))))
+           drgnx-term--buffers))
+
+(drgnx-defsetting drgnx-term-clipboard-write t
+  "Whether a program in a terminal may write the clipboard (OSC 52): what it writes goes to the kill ring.  A
+program never reads the clipboard: a terminal refuses every read."
+  :type 'boolean :group 'drgnx :scope 'global :agents 'never :schema 'boolean :apply #'drgnx-term--apply-clipboard)
 
 ;;;; The view
 
@@ -195,13 +428,109 @@ terminal itself remembers at least 10,000 lines whatever this says, so Find in T
       (goto-char pos)
       (dolist (w (get-buffer-window-list nil nil t)) (set-window-point w pos)))))
 
+(defvar drgnx-term-link-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [mouse-2] #'drgnx-term-open-link)
+    m)
+  "The keymap on an OSC 8 link's text: a click opens it.")
+
+(defun drgnx-term--buttons (view keys)
+  "The OSC 8 links of VIEW's rows KEYS (their `drgnx-term-link' text) become buttons."
+  (dolist (key keys)
+    (when-let* ((beg (drgnx-view-row-start view key)))
+      (let ((end (save-excursion (goto-char beg) (line-end-position))) (pos beg))
+        (while (< pos end)
+          (let ((next (next-single-property-change pos 'drgnx-term-link nil end)))
+            (when (get-text-property pos 'drgnx-term-link)
+              (with-silent-modifications
+                (add-text-properties pos next (list 'mouse-face 'highlight 'keymap drgnx-term-link-map 'follow-link t
+                                                    'help-echo (get-text-property pos 'drgnx-term-link)))))
+            (setq pos next)))))))
+
 (defun drgnx-term--patched (view keys)
-  "PATCHED of `drgnx-term-view': the inserter's overlays back, then the cursor."
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, the links made buttons, then the cursor."
   (drgnx-view-patch--patched view keys)
-  (with-current-buffer (drgnx-view--buffer view) (drgnx-term--place-cursor)))
+  (with-current-buffer (drgnx-view--buffer view)
+    (unless drgnx-term-copy-mode
+      (drgnx-term--buttons view keys)
+      (drgnx-term--place-cursor))))
+
+(defun drgnx-term--link-file (uri)
+  "The local file URI names (`file://' with no host or this host), or nil."
+  (when (string-match "\\`file://\\([^/]*\\)\\(/.*\\)\\'" uri)
+    (let ((host (match-string 1 uri)) (path (url-unhex-string (match-string 2 uri))))
+      (when (member host (list "" "localhost" (system-name))) path))))
+
+(defun drgnx-term-open-link (&optional pos)
+  "Open the OSC 8 link at POS (the click's position, or point): a local file is visited, any other URI browsed."
+  (interactive (list (when (mouse-event-p last-input-event) (posn-point (event-start last-input-event)))))
+  (when-let* ((uri (get-text-property (or pos (point)) 'drgnx-term-link)))
+    (if-let* ((file (drgnx-term--link-file uri)))
+        (find-file-other-window file)
+      (browse-url uri))))
 
 (drgnx-view-define 'drgnx-term-view :render #'drgnx-view-patch-render :patched #'drgnx-term--patched
                    :slice drgnx-view-slice :delay 0 :follow-tail t :ack t :epoch-reset nil)
+
+;;;; Copy mode and Find in Terminal
+
+(defvar drgnx-term-copy-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [remap keyboard-quit] #'drgnx-term-copy-mode)
+    m)
+  "Copy mode's keymap: Emacs's own keys (isearch, the region, copying); quitting leaves copy mode.")
+
+(defvar-local drgnx-term--find nil "The last Find in Terminal: (QUERY . the index of the match shown).")
+(defvar-local drgnx-term--find-overlay nil "The match Find in Terminal shows.")
+
+(define-minor-mode drgnx-term-copy-mode
+  "Copy mode: the terminal stops drawing and its buffer takes Emacs's keys, so isearch, the region and
+`kill-ring-save' work on its text; quitting (or this command again) goes back to the program, which drew on
+meanwhile."
+  :lighter " Copy"
+  (unless (derived-mode-p 'drgnx-term-mode)
+    (setq drgnx-term-copy-mode nil)
+    (user-error "Not a terminal"))
+  (if drgnx-term-copy-mode
+      (progn (drgnx-view-patch-pause (current-buffer) t)
+             (use-local-map drgnx-term-copy-mode-map))
+    (use-local-map drgnx-term-mode-map)
+    (deactivate-mark)
+    (when drgnx-term--find-overlay (delete-overlay drgnx-term--find-overlay))
+    (drgnx-view-patch-pause (current-buffer) nil)
+    (when drgnx-view (drgnx-view-draw-now drgnx-view))
+    (drgnx-term--place-cursor)))
+
+(defun drgnx-term-find (query)
+  "Find QUERY in everything the terminal remembers, newest first: point goes to the match, in copy mode.  Asked again
+with the same text, it goes to the next older match."
+  (interactive (list (read-string "Find in terminal: " (car drgnx-term--find))))
+  (unless (string-empty-p query)
+    (let ((buffer (current-buffer))
+          (index (if (equal query (car drgnx-term--find)) (1+ (cdr drgnx-term--find)) 0)))
+      (when (and drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
+        (drgnx-hub--call-on drgnx-hub--events "term/search" (list :id drgnx-term--id :query query :dir "up")
+                            (lambda (r _e) (drgnx-term--found buffer query index (plist-get r :matches))))))))
+
+(defun drgnx-term--found (buffer query index matches)
+  "Show match INDEX of MATCHES (`[key, col, len]' each, newest first) of QUERY in BUFFER; those of rows the buffer
+does not hold are passed over."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let* ((held (seq-filter (lambda (m) (and (stringp (car m)) (drgnx-view-row-start drgnx-view (car m))))
+                               matches))
+             (i (if (< index (length held)) index 0)))
+        (if (null held)
+            (message "Find in terminal: no %s" query)
+          (let* ((m (nth i held)) (beg (+ (drgnx-view-row-start drgnx-view (nth 0 m)) (nth 1 m))))
+            (setq drgnx-term--find (cons query i))
+            (unless drgnx-term-copy-mode (drgnx-term-copy-mode 1))
+            (if drgnx-term--find-overlay
+                (move-overlay drgnx-term--find-overlay beg (+ beg (nth 2 m)))
+              (setq drgnx-term--find-overlay (make-overlay beg (+ beg (nth 2 m))))
+              (overlay-put drgnx-term--find-overlay 'face 'drgnx-term-search-selected))
+            (goto-char beg)
+            (dolist (w (get-buffer-window-list nil nil t)) (set-window-point w beg))))))))
 
 ;;;; Rows above the buffer
 
@@ -255,10 +584,12 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
         (progn (setq drgnx-term--state nil) (drgnx-hub-connect))
       (setq drgnx-term--state 'opening)
       (let ((size (drgnx-term--window-size (or (get-buffer-window buffer) (selected-window)))))
+        (setq drgnx-term--size (list (nth 0 size) (nth 1 size)))
         (drgnx-hub--call-on drgnx-hub--events "term/open"
                             (list :dir (expand-file-name default-directory) :command (vconcat drgnx-term--program)
                                   :env (drgnx-term--env) :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size)
-                                  :class drgnx-term-class :window drgnx-term-scrollback-lines)
+                                  :class drgnx-term-class :window drgnx-term-scrollback-lines
+                                  :config (vector (drgnx-term--clipboard-config)))
                             (lambda (r e) (drgnx-term--opened buffer r e)))))))
 
 (defun drgnx-term--opened (buffer result error)
@@ -287,13 +618,41 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
     (with-current-buffer b
       (if (null drgnx-term--state) (drgnx-term--open b) (drgnx-term--flush)))))
 
+(defvar drgnx-term--notices nil "Terminal id → its last notification (a notice item), newest first.")
+
 (defun drgnx-term--killed ()
   "`kill-buffer-hook' of a terminal buffer: its terminal is closed and forgotten."
   (when drgnx-term--id
     (remhash drgnx-term--id drgnx-term--buffers)
+    (when (assoc drgnx-term--id drgnx-term--notices)
+      (setq drgnx-term--notices (cl-remove drgnx-term--id drgnx-term--notices :key #'car :test #'equal))
+      (drgnx-notice-set 'term (mapcar #'cdr drgnx-term--notices)))
     (when (and (eq drgnx-term--state 'open) (drgnx-term--up-p))
       (drgnx-hub--call-on drgnx-hub--events "term/close" (list :id drgnx-term--id) #'ignore))
     (setq drgnx-term--id nil)))
+
+;;;; Resizing
+
+(defvar-local drgnx-term--resizes 0 "How many `term/resize' this terminal sent (for tests).")
+
+(defun drgnx-term--resize (buffer)
+  "Tell BUFFER's worker the size of the window showing it, if that changed (`term/resize')."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when-let* ((w (get-buffer-window buffer)))
+        (let ((size (drgnx-term--window-size w)))
+          (unless (equal (list (nth 0 size) (nth 1 size)) drgnx-term--size)
+            (setq drgnx-term--size (list (nth 0 size) (nth 1 size)))
+            (cl-incf drgnx-term--resizes)
+            (drgnx-term--send "term/resize" (list :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size)))))))))
+
+(defun drgnx-term--windows-changed (&rest _)
+  "The windows changed: each terminal whose window's size changed resizes once the sizes settle (50 ms)."
+  (dolist (b (drgnx-term-buffers))
+    (when-let* ((w (get-buffer-window b)))
+      (let ((size (drgnx-term--window-size w)))
+        (unless (equal (list (nth 0 size) (nth 1 size)) (buffer-local-value 'drgnx-term--size b))
+          (drgnx-timer-debounce (cons 'drgnx-term-resize b) 0.05 #'drgnx-term--resize :args (list b) :owner b))))))
 
 ;;;; Events
 
@@ -315,7 +674,43 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
     (when-let* ((b (gethash (plist-get data :id) drgnx-term--buffers)) ((buffer-live-p b)))
       (with-current-buffer b
         (pcase event
-          ("term/exit" (drgnx-term--exited data)))))))
+          ("term/exit" (drgnx-term--exited data))
+          ("term/cwd" (drgnx-term--cwd (plist-get data :cwd)))
+          ("term/title" (drgnx-term--title (plist-get data :title)))
+          ("term/progress" (drgnx-term--progress (plist-get data :state) (plist-get data :value)))
+          ("term/notify" (drgnx-term--notify (plist-get data :title) (plist-get data :body)))
+          ("term/clipboard-write"
+           (when drgnx-term-clipboard-write
+             (kill-new (plist-get data :data)))))))))
+
+(defun drgnx-term--cwd (cwd)
+  "The shell says its directory is CWD (OSC 7: a `file://' URL or a path): the buffer's `default-directory' follows."
+  (when-let* ((dir (if (string-prefix-p "file://" cwd) (drgnx-term--link-file cwd) cwd))
+              ((file-directory-p dir)))
+    (setq default-directory (file-name-as-directory dir))))
+
+(defvar-local drgnx-term--title nil "The title the program set (OSC 0/2).")
+
+(defun drgnx-term--title (title)
+  "The program set TITLE: the buffer, and so its tab, is named after it."
+  (setq drgnx-term--title title)
+  (unless (string-empty-p title)
+    (rename-buffer (format "*terminal: %s*" title) t)))
+
+(defun drgnx-term--progress (state value)
+  "OSC 9;4 progress STATE (0 none) and VALUE (0-100, -1 none): shown in the mode line, and so on the tab."
+  (setq mode-line-process (cond ((eq state 0) nil)
+                                ((eq state 2) ":error")
+                                ((and (natnump value) (memq state '(1 4))) (format ":%d%%" value))
+                                (t ":busy")))
+  (force-mode-line-update))
+
+(defun drgnx-term--notify (title body)
+  "The program asked for a desktop notification (TITLE, BODY): it is a drgnx notice until its terminal goes."
+  (setf (alist-get drgnx-term--id drgnx-term--notices nil nil #'equal)
+        (list :id (concat "term:" drgnx-term--id)
+              :text (if (string-empty-p (or title "")) body (format "%s: %s" title body))))
+  (drgnx-notice-set 'term (mapcar #'cdr drgnx-term--notices)))
 
 (defun drgnx-term--theme-changed (&optional _theme)
   "A theme was enabled or disabled: every terminal repaints from the faces now, without a reset."
@@ -331,6 +726,7 @@ Typing goes to the program (`drgnx-term-mode-map')."
   (setq-local hscroll-margin 0)
   (face-remap-add-relative 'default 'drgnx-term-default)
   (add-hook 'window-scroll-functions #'drgnx-term--scrolled nil t)
+  (add-hook 'window-selection-change-functions #'drgnx-term--selected nil t)
   (add-hook 'kill-buffer-hook #'drgnx-term--killed nil t))
 
 (defun drgnx-term-start (dir &optional command)
@@ -354,7 +750,9 @@ command's stays, so what it printed can be read."
        (drgnx-modules--ok-p 'tools/term)))
 
 (defun drgnx-term--teardown ()
-  "Turning the module off: every terminal ends (its buffer killed closes it)."
+  "Turning the module off: every terminal ends (its buffer killed closes it), and its keymap sends every key again."
+  (drgnx-term--fill-map drgnx-term-mode-map nil)
+  (setq drgnx-term--notices nil)
   (dolist (b (drgnx-term-buffers)) (kill-buffer b))
   (dolist (b (buffer-list))
     (when (eq (buffer-local-value 'major-mode b) 'drgnx-term-mode) (kill-buffer b))))
@@ -366,6 +764,30 @@ command's stays, so what it printed can be read."
                      :setup
                      (lambda ()
                        (add-hook 'drgnx-hub-event-functions #'drgnx-term--event)
+                       (drgnx-term-apply-keys)
+                       (advice-add 'drgnx-keys-apply :after #'drgnx-term-apply-keys)
+                       (add-hook 'drgnx-surfaces-cheatsheet-sections #'drgnx-terminal-cheatsheet-section)
+                       (advice-add 'drgnx-surfaces-cheatsheet :after #'drgnx-terminal--sheet-sections)
+                       (drgnx-state-subscribe 'windows-changed #'drgnx-term--windows-changed)
+                       (drgnx-notice-define-source 'term :title "Terminal")
+                       (drgnx-command-define 'terminal-copy :category "Terminal" :title "Copy" :scope 'editing
+                                             :command #'drgnx-terminal-copy :map '(drgnx-term . drgnx-term-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Copy the selected text of the terminal to the kill ring")
+                       (drgnx-command-define 'terminal-paste :category "Terminal" :title "Paste" :scope 'editing
+                                             :command #'drgnx-term-paste :map '(drgnx-term . drgnx-term-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Paste the kill ring into the terminal")
+                       (drgnx-command-define 'terminal-copy-mode :category "Terminal" :title "Copy Mode"
+                                             :scope 'editing :command #'drgnx-term-copy-mode
+                                             :map '(drgnx-term . drgnx-term-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Stop the terminal drawing and select, search and copy its text")
+                       (drgnx-command-define 'terminal-find :category "Terminal" :title "Find in Terminal"
+                                             :scope 'editing :command #'drgnx-term-find
+                                             :map '(drgnx-term . drgnx-term-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Find text in everything the terminal remembers, newest first")
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
                        (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)
                        (add-hook 'disable-theme-functions #'drgnx-term--theme-changed)))

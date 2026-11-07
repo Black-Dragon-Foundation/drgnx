@@ -549,6 +549,8 @@ impl Engine {
                     rows: self.rows,
                     cells: self.cells,
                     palette: &self.palette,
+                    term: self.term,
+                    y,
                 };
                 f(id.bits, dirty || full, y, &mut r);
             }
@@ -730,9 +732,45 @@ pub struct CellReader<'a> {
     rows: GhosttyRenderStateRowIterator,
     cells: GhosttyRenderStateRowCells,
     palette: &'a [[u8; 3]; 256],
+    term: GhosttyTerminal,
+    /// The row's viewport y (negative above the screen).
+    y: i32,
 }
 
 impl CellReader<'_> {
+    /// The URI of the OSC 8 link on the screen's cell X of this row; none above the screen (no point reaches it).
+    fn link(&self, x: usize) -> Option<String> {
+        let (Ok(y), Ok(x)) = (u32::try_from(self.y), u16::try_from(x)) else {
+            return None;
+        };
+        let point = GhosttyPoint {
+            tag: GHOSTTY_POINT_TAG_VIEWPORT,
+            value: GhosttyPointValue {
+                coordinate: GhosttyPointCoordinate { x, y },
+            },
+        };
+        // SAFETY: a live terminal; the reference is read at once, before the terminal changes.
+        unsafe {
+            let mut r = GhosttyGridRef::default();
+            if ghostty_terminal_grid_ref(self.term, point, &raw mut r) != GHOSTTY_SUCCESS {
+                return None;
+            }
+            let mut n = 0usize;
+            ghostty_grid_ref_hyperlink_uri(&raw const r, null_mut(), 0, &raw mut n);
+            if n == 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; n];
+            if ghostty_grid_ref_hyperlink_uri(&raw const r, buf.as_mut_ptr(), n, &raw mut n)
+                != GHOSTTY_SUCCESS
+            {
+                return None;
+            }
+            buf.truncate(n);
+            String::from_utf8(buf).ok()
+        }
+    }
+
     /// The row's cells, left to right.
     pub fn cells(&mut self) -> Vec<Cell> {
         let mut out = Vec::new();
@@ -793,6 +831,13 @@ impl CellReader<'_> {
                 );
                 let mut wide: i32 = 0;
                 ghostty_cell_get(raw, GHOSTTY_CELL_DATA_WIDE, (&raw mut wide).cast());
+                let mut linked = false;
+                ghostty_cell_get(
+                    raw,
+                    GHOSTTY_CELL_DATA_HAS_HYPERLINK,
+                    (&raw mut linked).cast(),
+                );
+                let link = if linked { self.link(out.len()) } else { None };
                 let mut styled = false;
                 ghostty_render_state_row_cells_get(
                     self.cells,
@@ -819,6 +864,7 @@ impl CellReader<'_> {
                         GHOSTTY_CELL_WIDE_SPACER_HEAD => Wide::Head,
                         _ => Wide::Narrow,
                     },
+                    link,
                 });
             }
         }
