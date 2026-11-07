@@ -82,6 +82,21 @@ GUI and live tiers and the tests that start an Emacs of their own keep their own
 `bin/drgnx test --shuffle[=SEED]` shuffles each file's tests from a seed, and `--find-polluter TEST [FILE…]` bisects the
 tests before TEST down to the one that makes it fail ([check.md](check.md#the-order-of-the-tests---shuffle---find-polluter)).
 
+### Running the whole suite locally
+
+A full `bin/drgnx test` is green only with two binaries, which CI builds and a local checkout does not have: Ratatoskr
+(`DRGNX_RATATOSKR_BIN`, built with `--features drgnx-ratatoskr/test-hooks`) and huginn's `dump` example
+(`DRGNX_HUGINN_DUMP`). `test/no-skip.eld` lists the tests that must run, and in a full run a listed test that skipped is
+a failure, so without the binaries about 175 hub-client, agents-mirror, ai-gateway, agent-pair-hub and work tests, and
+`drgnx-huginn/differential-fresh-seed`, fail with nothing but "skipped" as the reason (the huginn one prints no
+per-test line). Build both (`cargo build -p drgnx-ratatoskr -p huginn --examples --bins --features
+drgnx-ratatoskr/test-hooks` in `runtime/`), set the two variables, and run `bin/drgnx test` (or `--container`, which
+mounts them). A run narrowed by `DRGNX_TEST_SELECTOR` does not hold the list. The selector is read as a Lisp string:
+`DRGNX_TEST_SELECTOR='"a\\|b"'`, quotes included.
+
+The helpers of the hub-client tests (`test/fixtures/hub-client-fixture.el`) are a fixture so that loading them registers
+no test: a test file that loaded `hub-client-test.el` whole ran its 54 tests again in its own session.
+
 ### Native trampolines
 
 A test that `cl-letf`s a primitive (`buffer-list`, `message`, …) makes Emacs compile a native trampoline, which it
@@ -1029,7 +1044,8 @@ Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`,
 socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
 only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA`, `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
 tests run, which macOS CI builds in the checkout under HOME, and `DRGNX_HUGINN_DUMP`, huginn's dump example for the
-differential test). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+differential test; `drgnx test` finds `runtime/target/debug/examples/dump` without the variable once
+`cargo build -p huginn --example dump` has built it, and the test is on the must-run list, so a full run without it fails). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
 runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
 `DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
 read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).

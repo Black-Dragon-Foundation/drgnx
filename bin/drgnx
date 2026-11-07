@@ -937,6 +937,11 @@ test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selecte
 }
 
 cmd_test() {
+  # huginn's dump example, when this checkout has built it (cargo build -p huginn --example dump): the differential test
+  # is on the must-run list, so a full run without it fails; CI sets the variable itself
+  if [ -z "${DRGNX_HUGINN_DUMP:-}" ] && [ -x "$here/runtime/target/debug/examples/dump" ]; then
+    export DRGNX_HUGINN_DUMP="$here/runtime/target/debug/examples/dump"
+  fi
   case "${1:-}" in
     "") test_batch ;;
     # batch flags, in any order: --one-process (every test file in one Emacs: hunting a leak across files),
@@ -2117,7 +2122,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx extensions refresh [--progress FILE] | fetch-readme ARCHIVE NAME
                                write the catalog of the archives' packages (the Extensions view reads it), or cache
                                one package's readme; reaches the network, changes nothing you have installed
-       drgnx lock --ship      (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]

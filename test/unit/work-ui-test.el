@@ -298,7 +298,7 @@ without SVG (librsvg), e.g. a terminal-only build."
       (should (eq (lookup-key keymap [double-mouse-1]) #'ignore))
       (should (eq (lookup-key keymap (vector (nth 1 spot) 'double-mouse-1)) #'ignore)))))
 
-(load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+(load (expand-file-name "test/fixtures/hub-client-fixture" drgnx-dir) nil t)   ; its Ratatoskr helpers
 
 (ert-deftest drgnx-work-ui/refresh-scans-in-another-process-and-redraws ()
   :tags '(:frozen)
