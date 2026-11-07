@@ -226,7 +226,7 @@ its attempt folder, since each container relabels what it mounts (`Z`).
 
 ## The runner bundle
 
-`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and `drgnx-fwd` static (Rust's
+`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key`, `drgnx-fwd` and the relay sidecar `drgnx-px` (kept in the bundle as `drgnx-px-<arch>-linux-musl`) static (Rust's
 self-contained musl targets, release) into `runtime/target/bundle/<arch>/`, and checks each with `file`. The host's
 architecture is the default; `install.sh` builds that one, and CI's container lane builds both. `tests/bundle_host.rs`
 (`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) runs the bundle's

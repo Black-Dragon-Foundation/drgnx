@@ -190,6 +190,25 @@ The owner's end runs where the job's proxy is (the hub, or a runner's job helper
 cargo test -p drgnx-px --features test-hooks
 ```
 
+## The sidecar's image
+
+`image::image_tar` makes the sidecar's image from the binary alone: a tar of `etc/passwd` (`nobody`, 65534) and `px`
+(0755), in a fixed order with mtime 0 and uid/gid 0, so one binary always gives the same bytes. `image::image_ref`
+tags it `localhost/drgnx-px:<first 16 hex of sha256(tar)>`: a new binary is a new image, and an old one is never reused
+by accident. `image::ensure_image` runs `podman image exists` and, if it fails, `podman import --change 'ENTRYPOINT
+["/px"]' - <ref>` with the tar on stdin; podman runs with exactly the environment it is given and is killed when it
+outlives its limit. `image::binary_for(dir, podman_arch)` picks `drgnx-px-x86_64-linux-musl` or
+`drgnx-px-aarch64-linux-musl` (`amd64`, `arm64`) from a folder.
+
+The binary is static musl. `drgnx runtime build` builds it for the host's architecture (on a Mac, the Linux target of
+the same architecture, cross-built with Rust's self-contained musl and `rust-lld`: no C toolchain for Linux) into its
+own target folder, and `drgnx runtime install` puts it beside `ratatoskr` as `drgnx-px-<arch>-linux-musl`. `drgnx build
+runner-bundle --arch <arch>` puts it into the runner bundle under the same name. `drgnx-px --version` prints
+`drgnx-px <version>` and starts no relay.
+
+The row `an_imported_image_runs_px` needs rootless podman and `DRGNX_TEST_PX_DIR` (a folder holding the binary as above);
+CI's container lane runs it after the bundle step, and its macOS lane only checks that the cross-build works.
+
 ## Fuzzing
 
 `px_frames` feeds arbitrary bytes in chunks through the decoder; every frame it returns must re-encode to exactly the

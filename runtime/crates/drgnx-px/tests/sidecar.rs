@@ -437,3 +437,21 @@ async fn a_full_stderr_never_stalls_the_relay() {
     px.close_stdin();
     assert_eq!(px.exit().await, Some(0));
 }
+
+/// `drgnx-px --version` names itself and the crate's version, and starts no relay.
+#[test]
+fn it_prints_its_version() {
+    let out = std::process::Command::new(PX)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n")
+    );
+}

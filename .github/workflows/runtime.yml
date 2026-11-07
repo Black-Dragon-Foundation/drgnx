@@ -578,6 +578,12 @@ jobs:
           img="docker.io/library/alpine@$(podman image inspect docker.io/library/alpine:3.22 --format '{{.Digest}}')"
           DRGNX_TEST_BUNDLE="$PWD/runtime/target/bundle/x86_64" DRGNX_TEST_FOREIGN_IMAGE="$img" \
             cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p sleipnir --test bundle_host -- --ignored
+      # the sidecar's tar imported by podman, and the image run (the bundle above holds drgnx-px-<arch>-linux-musl)
+      - name: the relay sidecar's image runs
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          DRGNX_TEST_PX_DIR="$PWD/runtime/target/bundle/x86_64" \
+            cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-px --lib -- --ignored an_imported_image_runs_px
       # last, whatever the rows said
       - id: prune
         if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
@@ -942,6 +948,16 @@ jobs:
       - id: build
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr -p gleipnir-escape --features drgnx-ratatoskr/test-hooks
+      # the relay sidecar of a networked container job is a Linux binary: build-only here (no podman machine to run it in).
+      # Apple Silicon builds aarch64 musl with Rust's self-contained musl and rust-lld, as `drgnx runtime build` does
+      - name: the relay sidecar cross-builds (Linux musl, no C toolchain)
+        if: ${{ !cancelled() }}
+        run: |
+          arch=$(uname -m); [ "$arch" = arm64 ] && arch=aarch64
+          rustup target add "$arch-unknown-linux-musl"
+          l=$(printf '%s' "$arch-unknown-linux-musl" | tr 'a-z-' 'A-Z_')
+          env "CARGO_TARGET_${l}_LINKER=rust-lld" "CARGO_TARGET_${l}_RUSTFLAGS=-C link-self-contained=yes" \
+            cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target "$arch-unknown-linux-musl"
       # the pinned release tarball, kept by the hash of nidhogg.sh (which holds the version and the checksums; the
       # tarball is checked against them on every use); main saves it once per pin, every run restores it
       - id: nidhogg-tarball

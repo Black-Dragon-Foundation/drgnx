@@ -112,6 +112,13 @@ pub fn exit_code(end: &End) -> i32 {
 
 /// The binary's whole life: returns its exit code.
 pub fn main(args: Vec<OsString>) -> i32 {
+    if args.len() == 1 && args[0] == "--version" {
+        write_now(
+            1,
+            concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n").as_bytes(),
+        );
+        return 0;
+    }
     let args = match parse_args(args) {
         Ok(a) => a,
         Err(e) => {
