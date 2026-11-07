@@ -147,6 +147,32 @@
         (goto-char (point-min))
         (should-not (re-search-forward (concat "(" (regexp-quote fn) "[ )]") nil t))))))
 
+(ert-deftest drgnx-history/a-batch-and-a-resync-carry-the-buffers-version ()
+  ;; D: every batch of a drain carries the drain's counter as `:version' (the version the buffer's text has from then
+  ;; on, which the hub's frames name), and a resync, a drain of its own, the next one.  Nidhogg's ring is stubbed.
+  (let ((b (generate-new-buffer "history-version")) (calls nil) (drained nil) (drgnx-history-drained-functions nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-history--connected-p) (lambda () t))
+                  ((symbol-function 'nidhogg-history-drain) (lambda (_b) (prog1 drained (setq drained nil))))
+                  ((symbol-function 'drgnx-hub-call)
+                   (lambda (method params callback &rest _)
+                     (push (cons method params) calls)
+                     (funcall callback (list :ok t) nil)
+                     1)))
+          (with-current-buffer b (insert "ab"))
+          (let ((st (drgnx-history--st-make :id "b-1" :registered t)))
+            (puthash b st drgnx-history--buffers)
+            (setq drained (list (list 0 0 "a" 1.0 nil)))
+            (drgnx-history--drain-buffer b st)
+            (setq drained (list (list 1 0 "b" 2.0 nil)))
+            (drgnx-history--drain-buffer b st)
+            (setq drained 'resync)
+            (drgnx-history--drain-buffer b st)
+            (should (equal (mapcar (lambda (c) (cons (car c) (plist-get (cdr c) :version))) (reverse calls))
+                           '(("history/batch" . 1) ("history/batch" . 2) ("history/resync" . 3))))))
+      (remhash b drgnx-history--buffers)
+      (kill-buffer b))))
+
 (defmacro drgnx-history-test--draining (sent &rest body)
   "BODY with the hub's calls caught: every `history/batch' call's params are pushed on SENT (newest first) and
 answered ok."

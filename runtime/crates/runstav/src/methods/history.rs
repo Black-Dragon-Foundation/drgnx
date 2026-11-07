@@ -52,6 +52,9 @@ pub struct BatchParams {
     pub changes: Vec<BatchChange>,
     /// SHA-256 in hex of the buffer's whole text after the batch.
     pub region_hash: String,
+    /// The buffer's version once the batch is in: the editor's count of its drains (a resync is one of them). The
+    /// frames of its file name it as `doc_version`.
+    pub version: u64,
 }
 
 /// `{ok: true}`, or `{resync: true}` when the buffer and the document disagree (send `history/resync`).
@@ -70,6 +73,8 @@ pub struct ResyncParams {
     pub buffer_id: String,
     /// The buffer's whole text (LF line ends).
     pub text: String,
+    /// The buffer's version once the text is in, as for `history/batch`.
+    pub version: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]

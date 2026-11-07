@@ -97,7 +97,7 @@ Their directories: (MAIN WT1 WT2)."
                                                  :worktree_root (directory-file-name main) :buffer_id "main-a")))
       (should (eq (plist-get r :tracked) t))
       (should (equal (drgnx-history-worktrees-test--ask
-                      "history/batch" :buffer_id "main-a" :region_hash (secure-hash 'sha256 typed)
+                      "history/batch" :buffer_id "main-a" :region_hash (secure-hash 'sha256 typed) :version 1
                       :changes (vector (list :start 0 :old_len 0 :inserted "USER " :origin "user")))
                      '(:ok t)))
       (let* ((one (concat "ONE\n" (substring drgnx-history-worktrees-test--base 4)))

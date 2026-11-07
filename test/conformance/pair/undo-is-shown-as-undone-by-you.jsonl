@@ -17,18 +17,18 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/README", "step": "$capture:st"}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "README", "origin": "agent:$sid#$st"}], "region_hash": "57bb905d0f2ccecbb9d81d40daa17e1e05b109c833ddc766edb0b59561088f20"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "README", "origin": "agent:$sid#$st"}], "region_hash": "57bb905d0f2ccecbb9d81d40daa17e1e05b109c833ddc766edb0b59561088f20", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 15000}
 {"do": "send", "conn": "e", "json": {"id": 5, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": false}}}
 {"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}
 {"do": "send", "conn": "c", "json": {"id": 9, "method": "__test_advance", "params": {"ms": 36000}}}
 {"do": "expect", "conn": "c", "json": {"id": 9, "result": {"now_ms": "$number"}}, "within_ms": 30000}
-{"do": "send", "conn": "e", "json": {"id": 6, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 7, "old_len": 0, "inserted": "more\n"}], "region_hash": "d3de0a5fa70c6f2d5d060d6252f8dd752bfdb4f284281385959f514ede8a2310"}}}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 7, "old_len": 0, "inserted": "more\n"}], "region_hash": "d3de0a5fa70c6f2d5d060d6252f8dd752bfdb4f284281385959f514ede8a2310", "version": 2}}}
 {"do": "expect", "conn": "e", "json": {"id": 6, "result": {"ok": true}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 10, "method": "__test_advance", "params": {"ms": 36000}}}
 {"do": "expect", "conn": "c", "json": {"id": 10, "result": {"now_ms": "$number"}}, "within_ms": 30000}
 {"do": "poll", "conn": "c", "json": {"id": 11, "method": "history/op/hunks", "params": {"worktree": "$ROOT/project", "session": "$sid"}}, "expect": {"id": 11, "result": {"hunks": {"$contains": [{"op": "$capture:op", "path": "README", "index": 0, "state": "live"}]}}}, "within_ms": 20000, "every_ms": 200}
-{"do": "send", "conn": "e", "json": {"id": 7, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "readme"}], "region_hash": "5168d418e65b6ff407a45f12193b689899b167a415714ee88fdfa6d7adad6066"}}}
+{"do": "send", "conn": "e", "json": {"id": 7, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "readme"}], "region_hash": "5168d418e65b6ff407a45f12193b689899b167a415714ee88fdfa6d7adad6066", "version": 3}}}
 {"do": "expect", "conn": "e", "json": {"id": 7, "result": {"ok": true}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 13, "method": "__test_advance", "params": {"ms": 36000}}}
 {"do": "expect", "conn": "c", "json": {"id": 13, "result": {"now_ms": "$number"}}, "within_ms": 30000}

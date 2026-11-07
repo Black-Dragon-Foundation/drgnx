@@ -130,6 +130,7 @@ impl Hub {
                 branch,
                 raw: None,
                 file: tree.root.join(rel),
+                version: 0,
             },
         );
         Ok(Registered {
@@ -141,12 +142,14 @@ impl Hub {
 
     /// Apply CHANGES to BUFFER_ID's document, each as its origin's peer.  Refused as `split-required` when they insert
     /// more than [`BATCH_MAX`] bytes.  The document's text must then hash to REGION_HASH, else the buffer is out of
-    /// step and wants a `resync`.
+    /// step and wants a `resync`.  VERSION is the buffer's version once the batch is in (the editor's count of its
+    /// drains): the version the frames of its file name from now on.
     pub fn batch(
         &self,
         buffer_id: &str,
         changes: &[BatchChange],
         region_hash: &str,
+        version: u64,
         now: f64,
     ) -> Result<BatchReply> {
         if changes.iter().map(|c| c.inserted.len()).sum::<usize>() > BATCH_MAX {
@@ -162,6 +165,7 @@ impl Hub {
                 .buffers
                 .get_mut(buffer_id)
                 .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
+            b.version = version;
             (b.doc, b.branch, b.raw.take())
         };
         g.h.activate(doc, branch, || Ok(String::new()))?;
@@ -241,14 +245,15 @@ impl Hub {
         })
     }
 
-    /// The buffer's whole TEXT replaces the document's, as the user's change.
-    pub fn resync(&self, buffer_id: &str, text: &str, now: f64) -> Result<()> {
+    /// The buffer's whole TEXT replaces the document's, as the user's change; VERSION as for [`Self::batch`].
+    pub fn resync(&self, buffer_id: &str, text: &str, version: u64, now: f64) -> Result<()> {
         let mut g = self.lock();
         let (doc, branch) = {
             let b = g
                 .buffers
-                .get(buffer_id)
+                .get_mut(buffer_id)
                 .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
+            b.version = version;
             (b.doc, b.branch)
         };
         let (key, author, _) = author_of("user")?;
@@ -402,7 +407,7 @@ mod tests {
         let text = "one two\n";
         let reply = f
             .hub
-            .batch("b1", &[change(3, 0, " two", "user")], &hash(text), 5.0)
+            .batch("b1", &[change(3, 0, " two", "user")], &hash(text), 1, 5.0)
             .unwrap();
         assert_eq!(reply, BatchReply::Ok);
         assert_eq!(f.hub.text(&f.tree, "a.txt").unwrap().as_deref(), Some(text));
@@ -411,6 +416,22 @@ mod tests {
             h.author_of(verdandi::PeerId(n as u64)).unwrap().unwrap()
         });
         assert_eq!(who["kind"], "user");
+    }
+
+    // pattern: D
+    #[test]
+    fn the_buffers_version_is_its_last_batch_or_resync() {
+        let f = fx(&[("a.txt", "one\n"), ("b.txt", "x\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(0));
+        f.hub
+            .batch("b1", &[change(3, 0, "!", "user")], &hash("one!\n"), 4, 5.0)
+            .unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(4));
+        f.hub.resync("b1", "one!!\n", 6, 6.0).unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(6));
+        // a file no buffer tracks has no version
+        assert_eq!(f.hub.mirror_version(&f.tree, "b.txt").unwrap(), None);
     }
 
     // pattern: D
@@ -424,12 +445,13 @@ mod tests {
                 "b1",
                 &[change(3, 0, "!", "user")],
                 &hash("not what the buffer has"),
+                1,
                 5.0,
             )
             .unwrap();
         assert_eq!(reply, BatchReply::Resync);
         // the editor then sends the whole text
-        f.hub.resync("b1", "one!\n", 6.0).unwrap();
+        f.hub.resync("b1", "one!\n", 1, 6.0).unwrap();
         assert_eq!(
             f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
             Some("one!\n")
@@ -446,11 +468,12 @@ mod tests {
                 "b1",
                 &[change(3, 0, "X", "agent:s9#1")],
                 &hash("oneX\n"),
+                1,
                 5.0,
             )
             .unwrap();
         f.hub
-            .batch("b1", &[change(4, 0, "Y", "user")], &hash("oneXY\n"), 6.0)
+            .batch("b1", &[change(4, 0, "Y", "user")], &hash("oneXY\n"), 1, 6.0)
             .unwrap();
         let authors = f.hub.with(|h| {
             let n = h.count("peer").unwrap();
@@ -477,6 +500,7 @@ mod tests {
                 "b1",
                 &[change(3, 0, "X", "agent:s9#4")],
                 &hash("oneX\n"),
+                1,
                 5.0,
             )
             .unwrap();
@@ -485,6 +509,7 @@ mod tests {
                 "b1",
                 &[change(4, 0, "Y", "agent:s9#5")],
                 &hash("oneXY\n"),
+                1,
                 6.0,
             )
             .unwrap();
@@ -513,6 +538,7 @@ mod tests {
             "b1",
             &[change(5, 0, "Z", "agent:s9")],
             &hash("oneXYZ\n"),
+            1,
             7.0,
         );
         assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
@@ -531,6 +557,7 @@ mod tests {
                 "b1",
                 &[change(3, 0, &format!(" {key}"), "user")],
                 &hash(&typed),
+                1,
                 5.0,
             )
             .unwrap();
@@ -544,11 +571,11 @@ mod tests {
         let more = format!("one {key}!\n");
         let reply = f
             .hub
-            .batch("b1", &[change(37, 0, "!", "user")], &hash(&more), 6.0)
+            .batch("b1", &[change(37, 0, "!", "user")], &hash(&more), 1, 6.0)
             .unwrap();
         assert_eq!(reply, BatchReply::Ok);
         // the editor's whole text through a resync is redacted too
-        f.hub.resync("b1", &format!("{key}\n"), 7.0).unwrap();
+        f.hub.resync("b1", &format!("{key}\n"), 1, 7.0).unwrap();
         assert_eq!(
             f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
             Some(format!("{}\n", "*".repeat(33)).as_str())
@@ -563,7 +590,13 @@ mod tests {
         let big = "x".repeat(BATCH_MAX + 1);
         let e = f
             .hub
-            .batch("b1", &[change(0, 0, &big, "user")], &hash("anything"), 5.0)
+            .batch(
+                "b1",
+                &[change(0, 0, &big, "user")],
+                &hash("anything"),
+                1,
+                5.0,
+            )
             .unwrap_err();
         assert!(e.to_string().contains("split-required"), "{e}");
         // nothing was applied

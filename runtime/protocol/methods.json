@@ -16242,12 +16242,19 @@
           "region_hash": {
             "description": "SHA-256 in hex of the buffer's whole text after the batch.",
             "type": "string"
+          },
+          "version": {
+            "description": "The buffer's version once the batch is in: the editor's count of its drains (a resync is one of them). The\nframes of its file name it as `doc_version`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "buffer_id",
           "changes",
-          "region_hash"
+          "region_hash",
+          "version"
         ],
         "title": "BatchParams",
         "type": "object"
@@ -16997,11 +17004,18 @@
           "text": {
             "description": "The buffer's whole text (LF line ends).",
             "type": "string"
+          },
+          "version": {
+            "description": "The buffer's version once the text is in, as for `history/batch`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "buffer_id",
-          "text"
+          "text",
+          "version"
         ],
         "title": "ResyncParams",
         "type": "object"

@@ -16,7 +16,7 @@
 {"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/work", "buffer_id": "b1"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": {"tracked": true}}, "within_ms": 15000}
-{"do": "send", "conn": "c", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 0, "inserted": "user\n"}], "region_hash": "c7445023791703dbc8d542637c813df84c90330594adfeaa353d586318bcab35"}}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 0, "inserted": "user\n"}], "region_hash": "c7445023791703dbc8d542637c813df84c90330594adfeaa353d586318bcab35", "version": 1}}}
 {"do": "expect", "conn": "c", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 15000}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "cd $ROOT/work && printf 'user\\nbase\\nagent\\n' > a.new && mv a.new a.txt"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$sid", "text": "say second\nfs:write a.txt user\\nbase\\nagent\\nmore\\n"}}}

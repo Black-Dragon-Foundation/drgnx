@@ -17,7 +17,7 @@
 {"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:edit_file {\"path\": \"$ROOT/project/README\", \"old\": \"readme\", \"new\": \"README\"}"}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/README", "step": "$capture:st"}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "README", "origin": "agent:$sid#$st"}], "region_hash": "57bb905d0f2ccecbb9d81d40daa17e1e05b109c833ddc766edb0b59561088f20"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 6, "inserted": "README", "origin": "agent:$sid#$st"}], "region_hash": "57bb905d0f2ccecbb9d81d40daa17e1e05b109c833ddc766edb0b59561088f20", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 15000}
 {"do": "send", "conn": "e", "json": {"id": 5, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 2, "saved": false}}}
 {"do": "expect", "conn": "e", "json": {"id": 5, "result": true}}

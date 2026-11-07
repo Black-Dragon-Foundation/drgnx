@@ -33,8 +33,10 @@ returns `(state . effects)`:
 
 - events: `watch`, `unwatch`, `frame`, `delta`, `buffer-changed`, `restart`;
 - a delta whose `version` is not newer than the state's is dropped; one whose `base` is not the state's version asks for
-  a full frame (the effect `call-watch`); a frame or delta whose `doc_version` is older than the buffer's last change
-  sent to the hub (`drgnx-agents-editor-note-change`) is dropped; after a restart no delta has a base;
+  a full frame (the effect `call-watch`); a frame or delta whose `doc_version` (the edit history's version of the
+  buffer: the hub names its last batch's `version` for a tracked buffer, the watch's otherwise) is older than the
+  buffer's last change sent to the hub (`drgnx-agents-editor-note-change`, from `drgnx-history-drained-functions`'s
+  counter) is dropped; after a restart no delta has a base;
 - the shell watches a file buffer when a window shows it (`window-buffer-change-functions`,
   `window-size-change-functions`), unwatches it when none does, and asks again from `drgnx-hub-connected-functions`.
 

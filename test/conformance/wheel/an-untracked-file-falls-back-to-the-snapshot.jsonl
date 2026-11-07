@@ -15,7 +15,7 @@
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 4, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "a81a2468d3f9687b11c3933ea758f42dff91e8c751314fa4941022413e91f9a9"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 4, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "a81a2468d3f9687b11c3933ea758f42dff91e8c751314fa4941022413e91f9a9", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "echo by-shell > $ROOT/work/b.txt"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/wheel/give", "params": {"id": "$sid"}}}

@@ -111,6 +111,8 @@ pub(crate) struct Buffer {
     pub raw: Option<String>,
     /// The buffer's file.
     pub file: PathBuf,
+    /// The buffer's version: what its last batch or resync carried (0 at the register).
+    pub version: u64,
 }
 
 pub(crate) struct Inner {
@@ -370,6 +372,19 @@ impl Hub {
             Some(r) => Ok(Some(r)),
             None => g.h.text(at.0, at.1).map(Some),
         }
+    }
+
+    /// The version of the editor's tracked buffer of REL of TREE (its last batch's or resync's); none when no buffer
+    /// of it is tracked.
+    pub fn mirror_version(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<u64>> {
+        let g = self.lock();
+        let Some(at) = Self::found(&g, tree, rel)? else {
+            return Ok(None);
+        };
+        Ok(g.buffers
+            .values()
+            .find(|b| (b.doc, b.branch) == at)
+            .map(|b| b.version))
     }
 
     /// TREE's document of REL as text on the tree's branch; none when it was never tracked.
