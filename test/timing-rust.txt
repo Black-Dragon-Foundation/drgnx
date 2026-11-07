@@ -1,7 +1,8 @@
 # The Rust timing tests (test/timing-rust.sh): every `#[ignore = "timing: …"]` test under runtime/, one per line,
-#   CRATE TARGET TEST [release]
+#   CRATE TARGET TEST [release|fleet]
 # TARGET is `lib` or an integration test file's name; TEST is a substring of the test's path; `release` builds it
-# optimized (a budget set on the optimized build).  A new `#[ignore = "timing: …"]` test that is not listed here runs
+# optimized (a budget set on the optimized build); `fleet` needs the fake fleet, so test/runners/drills.sh --timing
+# runs it and this lane only names it.  A new `#[ignore = "timing: …"]` test that is not listed here runs
 # nowhere: drgnx-ci/every-rust-timing-test-is-in-the-timing-list fails then.
 draugr reap a_term_ignoring_group_is_killed_only_after_the_grace
 drgnx-ratatoskr sandbox_check doctor_json_answers_within_the_editors_wait
@@ -12,9 +13,14 @@ gleipnir timing notify_round_trip_p95_within_15_us release
 gleipnir timing traced_2000_opens_within_budget release
 saga records a_1600_row_table_parses_under_50_ms
 drgnx-ratatoskr work_timing shell_parse_within_200_us release
+drgnx-ratatoskr editor_timing project_5_agents_5000_lines_within_2_ms release
+drgnx-ratatoskr editor_timing range_update_per_op_within_100_us release
+drgnx-ratatoskr editor_timing blame_rebuild_5000_lines release
+drgnx-ratatoskr pair_timing whole_file_5000_lines_within_2_ms release
 drgnx-ratatoskr timing query_p95_at_50k_chunks release
 drgnx-ratatoskr timing query_p95_at_100k_chunks release
 drgnx-ratatoskr timing tier1_of_a_checkout_and_one_saved_file release
 urdr lib a_lone_write_waits_max_wait_for_company
 vegvisir timing core_step_within_50_us release
 vegvisir timing layout_200_items_within_2_ms release
+drgnx-ratatoskr fleet_drills a_set_spreads_over_two_runners_within_its_bound fleet

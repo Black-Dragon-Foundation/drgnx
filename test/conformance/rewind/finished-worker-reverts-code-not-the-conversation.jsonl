@@ -1,0 +1,25 @@
+{"scenario": "rewind/finished-worker-reverts-code-not-the-conversation", "requires": ["v1", "test-hooks"], "doc": "A worker that has finished is no live session: the revert still puts its files back, but the card says the conversation is not restored because the agent has finished, and offers a fork from the step instead."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first\nfs:write b.txt one\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s1", "class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say second\nfs:write b.txt one\\ntwo\\n"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/kill", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": "$any"}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "files": ["b.txt"], "fork": true, "conversation": {"state": "not-restored", "label": "conversation not restored: the agent has finished"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "conversation": {"state": "not-restored", "label": "conversation not restored: the agent has finished"}, "op": "$number"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test \"$(cat $ROOT/work/b.txt)\" = one"], "expect_code": 0}

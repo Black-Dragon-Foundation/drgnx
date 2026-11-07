@@ -1,4 +1,4 @@
-//! `ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL]`: a scripted ACP agent
+//! `ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL]`: a scripted ACP agent
 //! (JSON-RPC 2.0, one object per line on stdin/stdout) that stands in for the outside agents' CLIs.  Std only.
 //! The wire is `agent-client-protocol-schema =1.12.0`'s (camelCase fields, `session/*` methods).
 //!
@@ -9,23 +9,53 @@
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
+//! | `provider:edit-stream PATH OLD NEW` (Claude) | an `Edit`: the path first, then `rawInput` field by field, then completed with a `Diff` (quote an argument to keep its spaces) |
+//! | `provider:pending-edit PATH OLD NEW` | `session/request_permission` for an edit whose content is the `Diff`; when allowed the edit is reported and completed; says `permission: OPTION` |
+//! | `provider:diff-hunks PATH OLD NEW [OLD NEW ...]` (Codex) | one edit call whose content has one `Diff` per hunk |
+//! | `provider:whole-diff PATH` (Gemini) | `fs/read_text_file`, an edit call with the whole file as old and new text (no `rawInput`), `fs/write_text_file`, completed |
+//! | `provider:native-edit PATH` | the personality's own edit tool is tried: pending, then failed (nothing is written) |
+//! | `moves N [SECONDS]` | one read call whose `locations` line advances N times per second for SECONDS (default 1) |
 //! | `tool:write N` | a tool call (pending, then completed) whose raw input is a Write of N bytes (nothing is written) |
+//! | `fs:write PATH TEXT` | an edit tool call during which the client writes TEXT (`\n` a line break) to PATH in the cwd (`fs/write_text_file`); its output says `written` or `refused: …` |
 //! | `ask:permission KIND` | `session/request_permission` for a tool call of KIND (read, edit, execute, ...); says `permission: OPTION` |
-//! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` |
+//! | `ask:tool JSON` | `session/request_permission` for the tool call JSON (`kind`, `title`, `rawInput`, `locations`, `_meta` …; its id is added); says `permission: OPTION` |
+//! | `ask:burst N JSON` | N `session/request_permission` requests for the tool call JSON, all sent before the first answer is read (Claude's parallel tool calls); says `burst: A/N allowed` |
+//! | `ask:announced JSON` | as `ask:tool`, after a pending `tool_call` of that shape (the request keeps its `kind`: Claude, Gemini) |
+//! | `ask:folded JSON` | as `ask:tool`, after a pending `tool_call` of that shape, and the request itself has no `kind` (Kimi Code, DeepSeek Harness) |
+//! | `call:TOOL JSON` | calls the hub's MCP tool TOOL through the first stdio server of `mcpServers`; says `call: TEXT` (`record_decision` and `note_add` also show as a tool call named `mcp__drgnx__TOOL`, as the agents show them, so the hub can stamp the step) |
 //! | `decide TEXT` | `call:record_decision {"text": TEXT}` |
 //! | `commit MSG` | `git add -A && git commit -m MSG` in the cwd |
 //! | `sleep-loop` | asks permission (execute) to run `sleep 30; pgrep -f ratatoskr-mock-sleep-loop`, runs it when allowed |
 //! | `silent N` | N seconds with no output (a `session/cancel` ends the turn, `cancelled`) |
 //! | `crash [TEXT]` | exits 3, "mock crashed[: TEXT]" on stderr (a provider at its limit: `crash 429 rate limit`) |
 //! | `say TEXT` | says TEXT and a line break (a reviewer's `VERDICT: pass` is its last line) |
+//! | `mode MODE` (Kimi Code) | a `current_mode_update` to MODE, as Kimi Code sends for a switch |
 //! | `error CODE TEXT` | the turn ends with the JSON-RPC error CODE, TEXT (a provider at its limit: `error 429 rate limit`) |
 //! | anything else | "You said: ..." in two chunks |
 //!
 //! `--script FILE`: its non-empty lines are programs (a literal `\n` in a line is a line break: several words); the n-th prompt of the process runs line n (a prompt after
 //! the last line runs its own words).  `--log FILE`: JSONL of `{"initialize"|"session/new"|"session/fork"|
-//! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_overrides"|"gemini": ...}`.  `--llm URL`: each turn first
-//! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn.
-//! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted.
+//! "session/load"|"session/resume"|"session/close"|"prompt"|"permission"|"llm"|"claude_options"|"codex_config"|"gemini"|"kimi"|"dsh"|"ran": ...}`.
+//! Kimi Code's and DeepSeek Harness's `provider:WHAT ARG` tools ask or run as their locks say (`kimi.rs`, `dsh.rs`).  `--llm URL`: each turn first
+//! POSTs a small JSON body to URL (a `ratatoskr-mock llm`), so its log counts one request per turn; `--llm env` POSTs
+//! it to the agent's own gateway (`$ANTHROPIC_BASE_URL/v1/messages`, `$ANTHROPIC_AUTH_TOKEN` as its bearer).
+//!
+//! `--replay DIR` makes it the ACP replayer of a recorded run instead (`replay.rs`; docs/develop/recordings.md).
+//! `--refuse-mode MODE`: `session/set_mode` to MODE is refused (a lock that does not hold); other modes are accepted
+//! (Codex: only the four codex-acp knows, `codex.rs`; Kimi Code: only its four, each switch told by a
+//! `current_mode_update`, `kimi.rs`).  `--start-mode MODE` (Kimi Code): sessions open in MODE, not `default`.
+//! `--config-options`: `session/set_config_option` is answered and logged as `{"config_option": {configId, value}}`;
+//! without it the method is not found, as in an older agent (`set_mode` and `set_model` are logged as `{"set_mode": ...}`
+//! and `{"set_model": ...}`).
+//! `--state DIR`: each session's history is kept in `DIR/<sessionId>.json` (written at its start and after every turn),
+//! and `session/fork` and `session/resume` read it there for a session this process does not hold, so a second process
+//! forks or resumes what the first left; session ids then skip the ones the folder holds.  Without it, history lives
+//! in the process only.
+//!
+//! `--panel FEATURES`: the personality also speaks drgnx's `_drgnx/panel` extension (src/mock_acp/panel.rs: its
+//! `panel:*` words and the client's `_drgnx/*` requests). With `before-tool`, every confirmation it asks for is
+//! preceded by the fork's `_drgnx/before_tool` for the same tool call, and a `deny` answer vetoes the step (logged
+//! `{"vetoed": KIND}`, no permission request), as the forks' listeners do.
 //!
 //! Every prompt answer carries `_meta.turnId` ("t1", "t2", ...).  Messages have ids (`messageId` of chunks); a
 //! fork's `_meta.jetbrains.air.fork.messageId` cuts the history: Claude after that message, Codex after its turn.
@@ -33,7 +63,11 @@
 
 mod claude;
 mod codex;
+mod dsh;
 mod gemini;
+mod kimi;
+mod panel;
+mod replay;
 
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -49,6 +83,19 @@ enum Kind {
     Claude,
     Codex,
     Gemini,
+    Kimi,
+    Dsh,
+}
+
+/// How a permission request carries its tool call: whole; without its `kind`, after a pending `tool_call` of its
+/// shape (Kimi Code); or as its id only, after that `tool_call` (DeepSeek Harness). `Announced`: whole, after a pending
+/// `tool_call` of its shape (Claude and Gemini send the tool call first, so the step exists when the request comes).
+#[derive(Clone, Copy, PartialEq)]
+enum Fold {
+    No,
+    Announced,
+    NoKind,
+    IdOnly,
 }
 
 struct Session {
@@ -74,6 +121,8 @@ struct Agent {
     prompts: usize,
     /// Set by the `error` word: the turn answers this JSON-RPC error instead of a result.
     fail: Option<(i64, String)>,
+    /// `--state DIR`: where each session's history is kept.
+    state: Option<PathBuf>,
 }
 
 fn flag(args: &[String], name: &str) -> Option<String> {
@@ -85,14 +134,25 @@ fn flag(args: &[String], name: &str) -> Option<String> {
 }
 
 pub fn run(args: &[String]) -> ! {
+    if args.iter().any(|a| a == "--replay") {
+        replay::run(args);
+    }
     let kind = match flag(args, "--as").as_deref() {
         Some("claude") => Kind::Claude,
         Some("codex") => Kind::Codex,
         Some("gemini") => Kind::Gemini,
+        Some("kimi") => Kind::Kimi,
+        Some("dsh") => Kind::Dsh,
         _ => crate::die(
-            "usage: ratatoskr-mock acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]",
+            "usage: ratatoskr-mock acp --as claude|codex|gemini|kimi|dsh [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]",
         ),
     };
+    // DeepSeek Harness refuses an overlay that is not a patch list at boot, before it speaks ACP
+    if kind == Kind::Dsh
+        && let Err(why) = dsh::check(args)
+    {
+        crate::die(&format!("dsh: {why}"));
+    }
     let script = flag(args, "--script")
         .map(|p| {
             std::fs::read_to_string(&p)
@@ -136,6 +196,7 @@ pub fn run(args: &[String]) -> ! {
         script,
         prompts: 0,
         fail: None,
+        state: flag(args, "--state").map(PathBuf::from),
     };
     a.serve();
     std::process::exit(0)
@@ -149,6 +210,50 @@ fn send(v: &Value) {
 
 fn rpc_error(id: &Value, code: i64, message: &str) {
     send(&json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}));
+}
+
+/// A word-line's arguments split on whitespace; a double-quoted argument keeps its spaces.
+fn words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for c in s.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    out.push(std::mem::take(&mut cur));
+                    started = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        out.push(cur);
+    }
+    out
+}
+
+/// ACP `Diff` content items for PATH, one per `(old, new)` hunk.
+fn diff_content(path: &str, hunks: &[(&str, &str)]) -> Value {
+    Value::Array(
+        hunks
+            .iter()
+            .map(|(o, n)| json!({"type": "diff", "path": path, "oldText": o, "newText": n}))
+            .collect(),
+    )
+}
+
+fn completed_diffs(tid: &str, path: &str, hunks: &[(&str, &str)]) -> Value {
+    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+        "content": diff_content(path, hunks)})
 }
 
 fn text_of(prompt: &Value) -> String {
@@ -240,12 +345,54 @@ impl Agent {
             Kind::Claude => claude::session_caps(),
             Kind::Codex => codex::session_caps(),
             Kind::Gemini => gemini::session_caps(),
+            Kind::Kimi => kimi::session_caps(),
+            Kind::Dsh => dsh::session_caps(),
         }
     }
 
+    /// Session SID's file in the state folder.
+    fn state_file(&self, sid: &str) -> Option<PathBuf> {
+        self.state.as_ref().map(|d| d.join(format!("{sid}.json")))
+    }
+
+    /// Session SID's history into its state file (with `--state`).
+    fn save(&self, sid: &str) {
+        let (Some(path), Some(s)) = (self.state_file(sid), self.sessions.get(sid)) else {
+            return;
+        };
+        let body = json!({"cwd": s.cwd, "turns": s.turns, "history": s.history});
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, body.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
+    /// Session SID as its state file kept it (with `--state`), with the tools PARAMS give it now.
+    fn load(&self, sid: &str, params: &Value) -> Option<Session> {
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(self.state_file(sid)?).ok()?).ok()?;
+        let history = v["history"]
+            .as_array()?
+            .iter()
+            .filter_map(|h| Some((h[0].as_u64()?, h[1].as_str()?.to_string())))
+            .collect();
+        Some(Session {
+            cwd: v["cwd"].as_str().map(PathBuf::from)?,
+            mcp: params["mcpServers"].as_array().cloned().unwrap_or_default(),
+            turns: v["turns"].as_u64().unwrap_or(0),
+            history,
+        })
+    }
+
     fn open(&mut self, params: &Value) -> String {
-        let sid = format!("s{}", self.next_session);
+        let mut sid = format!("s{}", self.next_session);
         self.next_session += 1;
+        // another process's sessions in the state folder keep their ids
+        while self.sessions.contains_key(&sid) || self.state_file(&sid).is_some_and(|p| p.exists())
+        {
+            sid = format!("s{}", self.next_session);
+            self.next_session += 1;
+        }
         let session = Session {
             cwd: params["cwd"]
                 .as_str()
@@ -264,10 +411,21 @@ impl Agent {
         match self.kind {
             Kind::Claude => self.log("claude_options", claude::options(params)),
             Kind::Codex => {
-                let o = codex::overrides(&self.argv);
-                self.log("codex_overrides", json!(o));
+                let c = codex::config(&self.argv);
+                self.log("codex_config", c);
             }
-            Kind::Gemini => self.log("gemini", gemini::note()),
+            Kind::Gemini => {
+                let n = gemini::note(&self.argv);
+                self.log("gemini", n);
+            }
+            Kind::Kimi => {
+                let n = kimi::note(&self.argv);
+                self.log("kimi", n);
+            }
+            Kind::Dsh => {
+                let n = dsh::note(&self.argv);
+                self.log("dsh", n);
+            }
         }
     }
 
@@ -286,20 +444,42 @@ impl Agent {
         let reply = |result: Value| send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
         match method.as_str() {
             "initialize" => {
-                self.log("initialize", params);
-                reply(json!({"protocolVersion": 1, "authMethods": [],
+                let mut answer = json!({"protocolVersion": 1, "authMethods": [],
                     "agentInfo": {"name": format!("ratatoskr-mock-{}", self.kind_name()), "version": "0.1.0"},
-                    "agentCapabilities": {"loadSession": self.kind == Kind::Gemini,
+                    "agentCapabilities": {"loadSession": matches!(self.kind, Kind::Gemini | Kind::Kimi),
                         "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
                         "mcpCapabilities": {"http": false, "sse": false},
-                        "sessionCapabilities": self.session_caps()}}));
+                        "sessionCapabilities": self.session_caps()}});
+                if let Some(meta) = panel::caps_meta(&self.argv) {
+                    answer["agentCapabilities"]["_meta"] = meta;
+                }
+                // Gemini's fork reports its admin policy beside the features `--panel` names
+                if self.kind == Kind::Gemini
+                    && let Some(panel) = gemini::panel(&self.argv, &params)
+                {
+                    match answer.pointer_mut("/agentCapabilities/_meta/_drgnx~1panel") {
+                        Some(have) => have["adminPolicy"] = panel["adminPolicy"].clone(),
+                        None => {
+                            answer["agentCapabilities"]["_meta"] = json!({"_drgnx/panel": panel})
+                        }
+                    }
+                }
+                self.log("initialize", params);
+                reply(answer);
             }
+            m if m.starts_with("_drgnx/") => panel::answer(self, &id, m, &params),
             "session/new" => {
+                if self.kind == Kind::Codex
+                    && let Some(why) = codex::refused_config()
+                {
+                    return rpc_error(&id, -32603, &why);
+                }
                 let sid = self.open(&params);
+                self.save(&sid);
                 self.log("session/new", json!({"sessionId": sid, "mcpServers": params["mcpServers"], "cwd": params["cwd"]}));
-                reply(json!({"sessionId": sid}));
+                reply(self.with_modes(json!({"sessionId": sid})));
             }
-            "session/load" if self.kind == Kind::Gemini => {
+            "session/load" if matches!(self.kind, Kind::Gemini | Kind::Kimi) => {
                 let sid = params["sessionId"].as_str().unwrap_or("s0").to_string();
                 self.log(
                     "session/load",
@@ -309,7 +489,7 @@ impl Agent {
                 if let Some(v) = self.sessions.remove(&s) {
                     self.sessions.insert(sid, v);
                 }
-                reply(json!({}));
+                reply(self.with_modes(json!({})));
             }
             "session/list" if self.kind != Kind::Gemini => {
                 let mut ids: Vec<&String> = self.sessions.keys().collect();
@@ -327,11 +507,20 @@ impl Agent {
                     json!({"sessionId": sid, "mcpServers": params["mcpServers"]}),
                 );
                 if !self.sessions.contains_key(&sid) {
-                    let s = self.open(&params);
-                    let v = self.sessions.remove(&s).unwrap();
-                    self.sessions.insert(sid, v);
+                    let v = match self.load(&sid, &params) {
+                        Some(v) => {
+                            self.personality_log(&params);
+                            v
+                        }
+                        None => {
+                            let s = self.open(&params);
+                            self.sessions.remove(&s).unwrap()
+                        }
+                    };
+                    self.sessions.insert(sid.clone(), v);
+                    self.save(&sid);
                 }
-                reply(json!({}));
+                reply(self.with_modes(json!({})));
             }
             "session/close" if self.kind != Kind::Gemini => {
                 self.log("session/close", json!({"sessionId": params["sessionId"]}));
@@ -344,18 +533,39 @@ impl Agent {
                     rpc_error(&id, -32602, "unknown session");
                 }
             }
-            "session/fork" if self.kind != Kind::Gemini => self.fork(&id, &params),
+            "session/fork" if !matches!(self.kind, Kind::Gemini | Kind::Dsh) => {
+                self.fork(&id, &params)
+            }
             "session/prompt" => self.prompt(&id, &params),
+            "session/set_config_option" if self.argv.iter().any(|a| a == "--config-options") => {
+                self.log(
+                    "config_option",
+                    json!({"configId": params["configId"], "value": params["value"]}),
+                );
+                reply(json!({"configOptions": []}));
+            }
+            "session/set_model" => {
+                self.log("set_model", json!({"modelId": params["modelId"]}));
+                reply(json!({}));
+            }
             "session/set_mode" => {
                 let mode = params["modeId"].as_str().unwrap_or_default();
+                self.log("set_mode", json!({"modeId": mode}));
                 let refused = self
                     .argv
                     .iter()
                     .position(|a| a == "--refuse-mode")
                     .and_then(|i| self.argv.get(i + 1));
-                if refused.is_some_and(|r| r == mode) {
+                if refused.is_some_and(|r| r == mode)
+                    || (self.kind == Kind::Codex && !codex::known_mode(mode))
+                    || (self.kind == Kind::Kimi && !kimi::known_mode(mode))
+                {
                     rpc_error(&id, -32602, &format!("mode {mode:?} refused"));
                 } else {
+                    if self.kind == Kind::Kimi {
+                        let sid = params["sessionId"].as_str().unwrap_or_default();
+                        self.update(sid, kimi::mode_update(mode));
+                    }
                     reply(json!({}));
                 }
             }
@@ -368,16 +578,25 @@ impl Agent {
             Kind::Claude => "claude",
             Kind::Codex => "codex",
             Kind::Gemini => "gemini",
+            Kind::Kimi => "kimi",
+            Kind::Dsh => "dsh",
         }
     }
 
     fn fork(&mut self, id: &Value, params: &Value) {
-        let Some(src) = params["sessionId"]
-            .as_str()
-            .and_then(|s| self.sessions.get(s))
-        else {
-            return rpc_error(id, -32602, "unknown session");
+        let src_id = params["sessionId"].as_str().unwrap_or_default();
+        let loaded;
+        let src = match self.sessions.get(src_id) {
+            Some(s) => s,
+            None => match self.load(src_id, params) {
+                Some(s) => {
+                    loaded = s;
+                    &loaded
+                }
+                None => return rpc_error(id, -32602, "unknown session"),
+            },
         };
+        let src_cwd = src.cwd.clone();
         let at = params
             .pointer("/_meta/jetbrains/air/fork/messageId")
             .and_then(Value::as_str);
@@ -401,21 +620,38 @@ impl Agent {
         let turns = history.iter().map(|(t, _)| *t).max().unwrap_or(0);
         let mut cwd = params.clone();
         if cwd["cwd"].is_null() {
-            cwd["cwd"] = json!(src.cwd);
+            cwd["cwd"] = json!(src_cwd);
         }
         let kept = history.len();
         let sid = self.open(&cwd);
         let s = self.sessions.get_mut(&sid).unwrap();
         s.history = history;
         s.turns = turns;
+        self.save(&sid);
+        let options = match self.kind {
+            Kind::Claude => claude::options(params),
+            _ => Value::Null,
+        };
         self.log(
             "session/fork",
-            json!({"from": params["sessionId"], "sessionId": sid, "level": level, "messageId": at, "kept": kept, "turns": turns}),
+            json!({"from": params["sessionId"], "sessionId": sid, "level": level, "messageId": at, "kept": kept,
+                "turns": turns, "cwd": cwd["cwd"], "mcpServers": params["mcpServers"], "claude_options": options}),
         );
-        send(
-            &json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": sid,
-            "_meta": {"forkLevel": level, "kept": kept, "turns": turns}}}),
+        let result = self.with_modes(
+            json!({"sessionId": sid, "_meta": {"forkLevel": level, "kept": kept, "turns": turns}}),
         );
+        send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
+    }
+
+    /// RESULT, an answer that opens a session, with the session's `modes` where the personality reports them (Codex,
+    /// Kimi Code).
+    fn with_modes(&self, mut result: Value) -> Value {
+        match self.kind {
+            Kind::Codex => result["modes"] = codex::modes(),
+            Kind::Kimi => result["modes"] = kimi::modes(&self.argv),
+            _ => {}
+        }
+        result
     }
 
     fn say(&mut self, sid: &str, turn: u64, text: &str) {
@@ -481,11 +717,12 @@ impl Agent {
         let extras = match self.kind {
             Kind::Claude => claude::after_turn(&sid, turn, text.len()),
             Kind::Codex => codex::after_turn(&sid, turn, text.len()),
-            Kind::Gemini => gemini::after_turn(&sid, turn, text.len()),
+            Kind::Gemini | Kind::Kimi | Kind::Dsh => gemini::after_turn(&sid, turn, text.len()),
         };
         for (method, p) in extras {
             send(&json!({"jsonrpc": "2.0", "method": method, "params": p}));
         }
+        self.save(&sid);
         if let Some((code, message)) = self.fail.take() {
             return rpc_error(id, code, &message);
         }
@@ -573,8 +810,194 @@ impl Agent {
                     "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
                 );
             }
+            _ if head.starts_with("panel:") => panel::word(self, sid, turn, &head[6..], rest),
+            // Kimi Code switches its mode mid-turn, as its `mode` config option does (`session.ts:1138-1156`)
+            "mode" if self.kind == Kind::Kimi => self.update(sid, kimi::mode_update(rest)),
+            // an edit as Claude streams it: the path, then the input field by field, then the completion
+            "provider:edit-stream" if self.kind == Kind::Claude => {
+                let w = words(rest);
+                let [path, old, new] = w.as_slice() else {
+                    self.say(sid, turn, "usage: provider:edit-stream PATH OLD NEW\n");
+                    return false;
+                };
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                self.update(sid, fields);
+                let meta = json!({"claudeCode": {"toolName": "Edit"}});
+                let step = |raw: Value| json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "rawInput": raw, "_meta": meta});
+                self.update(sid, step(json!({"file_path": path, "old_string": old})));
+                self.update(
+                    sid,
+                    step(json!({"file_path": path, "old_string": old, "new_string": new})),
+                );
+                self.update(
+                    sid,
+                    completed_diffs(&tid, path, &[(old.as_str(), new.as_str())]),
+                );
+            }
+            // an edit behind a permission request that carries the diff; reported only when allowed
+            "provider:pending-edit" => {
+                let w = words(rest);
+                let [path, old, new] = w.as_slice() else {
+                    self.say(sid, turn, "usage: provider:pending-edit PATH OLD NEW\n");
+                    return false;
+                };
+                let diff = diff_content(path, &[(old.as_str(), new.as_str())]);
+                let answer = self.permission_with(
+                    sid,
+                    turn,
+                    "edit",
+                    &format!("Edit {path}"),
+                    json!({"locations": [{"path": path}], "content": diff}),
+                );
+                if answer.starts_with("allow") {
+                    let tid = self.tool_id(turn);
+                    let mut fields = self.edit_fields(path);
+                    fields["sessionUpdate"] = json!("tool_call");
+                    fields["toolCallId"] = json!(tid);
+                    fields["status"] = json!("pending");
+                    fields["content"] = diff_content(path, &[(old.as_str(), new.as_str())]);
+                    self.update(sid, fields);
+                    self.update(
+                        sid,
+                        completed_diffs(&tid, path, &[(old.as_str(), new.as_str())]),
+                    );
+                }
+                self.say(sid, turn, &format!("permission: {answer}"));
+            }
+            // Codex: one `Diff` per hunk, hunks given as OLD NEW pairs
+            "provider:diff-hunks" if self.kind == Kind::Codex => {
+                let w = words(rest);
+                if w.len() < 3 || w.len().is_multiple_of(2) {
+                    self.say(
+                        sid,
+                        turn,
+                        "usage: provider:diff-hunks PATH OLD NEW [OLD NEW ...]\n",
+                    );
+                    return false;
+                }
+                let path = w[0].clone();
+                let hunks: Vec<(&str, &str)> = w[1..]
+                    .chunks(2)
+                    .map(|p| (p[0].as_str(), p[1].as_str()))
+                    .collect();
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                fields["content"] = diff_content(&path, &hunks);
+                self.update(sid, fields);
+                self.update(sid, completed_diffs(&tid, &path, &hunks));
+            }
+            // Gemini: the whole file as old and new text, no rawInput; the editor reads it, then writes it
+            "provider:whole-diff" if self.kind == Kind::Gemini => {
+                let path = words(rest).into_iter().next().unwrap_or_default();
+                let abs = cwd.join(&path).to_string_lossy().into_owned();
+                let rid = self.request("fs/read_text_file", json!({"sessionId": sid, "path": abs}));
+                let old = self
+                    .response(rid)
+                    .and_then(|r| r["result"]["content"].as_str().map(String::from))
+                    .or_else(|| std::fs::read_to_string(cwd.join(&path)).ok())
+                    .unwrap_or_default();
+                let new = format!("{old}edited by ratatoskr-mock\n");
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                fields["content"] = diff_content(&path, &[(old.as_str(), new.as_str())]);
+                self.update(sid, fields);
+                let rid = self.request(
+                    "fs/write_text_file",
+                    json!({"sessionId": sid, "path": abs, "content": new}),
+                );
+                self.response(rid);
+                self.update(
+                    sid,
+                    completed_diffs(&tid, &path, &[(old.as_str(), new.as_str())]),
+                );
+            }
+            // an attempt with the agent's own edit tool, which fails (nothing is written)
+            "provider:native-edit" => {
+                let path = words(rest).into_iter().next().unwrap_or_default();
+                let tid = self.tool_id(turn);
+                let mut fields = self.edit_fields(&path);
+                fields["sessionUpdate"] = json!("tool_call");
+                fields["toolCallId"] = json!(tid);
+                fields["status"] = json!("pending");
+                self.update(sid, fields);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "failed",
+                    "content": [{"type": "content", "content": {"type": "text",
+                        "text": "blocked: the native edit tool is not available"}}]}),
+                );
+            }
+            // N cursor moves per second, for SECONDS (default 1): a read whose location advances one line per move
+            "moves" => {
+                let mut w = rest.split_whitespace();
+                let n: f64 = w.next().and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
+                let n = n.max(1.0);
+                let secs: f64 = w.next().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+                let total = (n * secs).round() as u64;
+                let tid = self.tool_id(turn);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": "Read mock-moves.txt",
+                    "kind": "read", "status": "pending", "rawInput": {"file_path": "mock-moves.txt"}}),
+                );
+                for line in 1..=total {
+                    self.update(
+                        sid,
+                        json!({"sessionUpdate": "tool_call_update", "toolCallId": tid,
+                        "locations": [{"path": "mock-moves.txt", "line": line}]}),
+                    );
+                    if self.sleep(sid, Duration::from_secs_f64(1.0 / n)) {
+                        return true;
+                    }
+                }
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed"}),
+                );
+            }
+            // Kimi Code's and DeepSeek Harness's tools ask or run as their locks say
+            _ if head.starts_with("provider:") && matches!(self.kind, Kind::Kimi | Kind::Dsh) => {
+                self.gated_tool(sid, turn, &head[9..], rest);
+            }
             _ if head.starts_with("provider:") => {
                 self.provider_tool(sid, turn, &head[9..], rest);
+            }
+            "fs:write" => {
+                // an edit the client writes: `fs/write_text_file` while the tool call is pending
+                let (rel, text) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                let content = text.replace("\\n", "\n");
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": format!("Write {rel}"),
+                    "kind": "edit", "status": "pending", "rawInput": {"path": rel}}),
+                );
+                let path = cwd.join(rel).to_string_lossy().into_owned();
+                let rid = self.request(
+                    "fs/write_text_file",
+                    json!({"sessionId": sid, "path": path, "content": content}),
+                );
+                let out = match self.response(rid) {
+                    Some(r) if r.get("error").is_none() => "written".to_string(),
+                    Some(r) => format!("refused: {}", r["error"]["message"]),
+                    None => "no answer".to_string(),
+                };
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+                );
             }
             "tool:write" => {
                 // a Write whose input is N bytes of file (no file is written)
@@ -596,6 +1019,24 @@ impl Agent {
                 let kind = if rest.is_empty() { "execute" } else { rest };
                 let answer = self.permission(sid, turn, kind, &format!("{kind} request"));
                 self.say(sid, turn, &format!("permission: {answer}"));
+            }
+            "ask:tool" | "ask:folded" | "ask:announced" => {
+                let call = serde_json::from_str(rest).unwrap_or_else(|_| json!({}));
+                let fold = match head {
+                    "ask:folded" => Fold::NoKind,
+                    "ask:announced" => Fold::Announced,
+                    _ => Fold::No,
+                };
+                let answer = self.permission_for(sid, turn, call, fold);
+                self.say(sid, turn, &format!("permission: {answer}"));
+            }
+            "ask:burst" => {
+                let (n, call) = rest.split_once(char::is_whitespace).unwrap_or((rest, "{}"));
+                let n: u64 = n.parse().unwrap_or(1);
+                let call: Value = serde_json::from_str(call.trim()).unwrap_or_else(|_| json!({}));
+                let answers = self.permission_burst(sid, turn, n, &call);
+                let allowed = answers.iter().filter(|a| a.starts_with("allow")).count();
+                self.say(sid, turn, &format!("burst: {allowed}/{n} allowed"));
             }
             "sleep-loop" => {
                 let cmd = "sleep 30; pgrep -f ratatoskr-mock-sleep-loop";
@@ -685,7 +1126,20 @@ impl Agent {
                 std::process::exit(3);
             }
             _ if head.starts_with("call:") => {
-                let r = self.mcp(sid, &head[5..], if rest.is_empty() { "{}" } else { rest });
+                let tool = &head[5..];
+                let r = self.mcp(sid, tool, if rest.is_empty() { "{}" } else { rest });
+                // a call that records a conclusion is also a tool call of the turn, as the agents show it: the hub
+                // finds the step the conclusion was recorded in from it
+                if matches!(tool, "record_decision" | "note_add") {
+                    self.tool(
+                        sid,
+                        turn,
+                        "other",
+                        &format!("mcp__drgnx__{tool}"),
+                        json!({}),
+                        &r,
+                    );
+                }
                 self.say(sid, turn, &format!("call: {r}"));
             }
             _ => {
@@ -724,6 +1178,7 @@ impl Agent {
             Kind::Claude => claude::tool_shape(what, arg),
             Kind::Codex => codex::tool_shape(what, arg),
             Kind::Gemini => gemini::tool_shape(what, arg),
+            Kind::Kimi | Kind::Dsh => None,
         };
         let Some(Value::Object(mut fields)) = shape else {
             self.say(sid, turn, &format!("no provider tool {what}\n"));
@@ -742,16 +1197,165 @@ impl Agent {
         );
     }
 
-    /// Ask the client; the chosen option's id, or `cancelled`.
-    fn permission(&mut self, sid: &str, turn: u64, kind: &str, title: &str) -> String {
+    fn tool_id(&mut self, turn: u64) -> String {
         let tid = format!("tc-{turn}-{}", self.next_out_id);
         self.next_out_id += 1;
-        let rid = self.request("session/request_permission", json!({"sessionId": sid,
-            "toolCall": {"toolCallId": tid, "title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}},
+        tid
+    }
+
+    /// The personality's `tool_call` fields for an edit of PATH (Kimi Code's and DeepSeek Harness's: their write
+    /// tool's, as `provider:write` reports it).
+    fn edit_fields(&self, path: &str) -> Value {
+        let own = |t: Option<(&'static str, Value, bool)>| t.map(|(_, f, _)| f).unwrap_or_default();
+        match self.kind {
+            Kind::Claude => claude::edit_shape(path),
+            Kind::Codex => codex::edit_shape(path),
+            Kind::Gemini => gemini::edit_shape(path),
+            Kind::Kimi => own(kimi::tool("write", path)),
+            Kind::Dsh => own(dsh::tool(&self.argv, "write", path)),
+        }
+    }
+
+    /// `permission` with the tool call's own fields (`rawInput`, `content`, `locations`) given: one request as
+    /// [`Agent::permission_for`] sends it (a fork's veto included).
+    fn permission_with(
+        &mut self,
+        sid: &str,
+        turn: u64,
+        kind: &str,
+        title: &str,
+        extra: Value,
+    ) -> String {
+        let mut call = json!({"title": title, "kind": kind, "status": "pending"});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            call[k] = v;
+        }
+        self.permission_for(sid, turn, call, Fold::No)
+    }
+
+    /// A tool of Kimi Code or DeepSeek Harness (`provider:WHAT ARG`): it asks the client when its lock says so (and
+    /// runs when allowed), else it runs; a run is logged `{"ran": NAME}` and completes its `tool_call`.  An unknown
+    /// WHAT says so.
+    fn gated_tool(&mut self, sid: &str, turn: u64, what: &str, arg: &str) {
+        let (tool, fold) = match self.kind {
+            Kind::Kimi => (kimi::tool(what, arg), Fold::NoKind),
+            _ => (dsh::tool(&self.argv, what, arg), Fold::IdOnly),
+        };
+        let Some((name, fields, asks)) = tool else {
+            self.say(sid, turn, &format!("no provider tool {what}\n"));
+            return;
+        };
+        if self.kind == Kind::Kimi && kimi::denied(name) {
+            self.say(sid, turn, &format!("{name}: denied by the lock\n"));
+            return;
+        }
+        if asks {
+            let answer = self.permission_for(sid, turn, fields, fold);
+            if !answer.starts_with("allow") {
+                self.say(sid, turn, &format!("{name}: {answer}\n"));
+                return;
+            }
+        } else {
+            let tid = format!("tc-{turn}-{}", self.next_out_id);
+            self.next_out_id += 1;
+            let mut update = fields.as_object().cloned().unwrap_or_default();
+            update.insert("sessionUpdate".into(), json!("tool_call"));
+            update.insert("toolCallId".into(), json!(tid));
+            update.insert("status".into(), json!("completed"));
+            self.update(sid, Value::Object(update));
+        }
+        self.log("ran", json!(name));
+        self.say(sid, turn, &format!("{name}: ran\n"));
+    }
+
+    /// N permission requests for CALL, all sent before the first answer is read (Claude issues its parallel tool calls
+    /// so); each one's chosen option id, or `cancelled`.
+    fn permission_burst(&mut self, sid: &str, turn: u64, n: u64, call: &Value) -> Vec<String> {
+        let mut pending = Vec::new();
+        for _ in 0..n {
+            let tid = format!("tc-{turn}-{}", self.next_out_id);
+            self.next_out_id += 1;
+            let mut c = call.clone();
+            c["toolCallId"] = json!(tid);
+            pending.push(self.request(
+                "session/request_permission",
+                json!({"sessionId": sid, "toolCall": c,
+                "options": [
+                    {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
+                    {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}),
+            ));
+        }
+        let mut answers = std::collections::HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while answers.len() < pending.len() && Instant::now() < deadline {
+            match self.rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(m)
+                    if m.get("method").is_none() && pending.iter().any(|p| m["id"] == json!(p)) =>
+                {
+                    let answer = m["result"]["outcome"]["optionId"]
+                        .as_str()
+                        .unwrap_or("cancelled")
+                        .to_owned();
+                    answers.insert(m["id"].as_u64().unwrap_or(0), answer);
+                }
+                Ok(m) => self.stash(m),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let got: Vec<String> = pending
+            .iter()
+            .map(|p| answers.remove(p).unwrap_or_else(|| "cancelled".into()))
+            .collect();
+        self.log("permission_burst", json!(got));
+        got
+    }
+
+    /// Ask the client; the chosen option's id, or `cancelled`.
+    fn permission(&mut self, sid: &str, turn: u64, kind: &str, title: &str) -> String {
+        let call = json!({"title": title, "kind": kind, "status": "pending", "rawInput": {"command": title}});
+        self.permission_for(sid, turn, call, Fold::No)
+    }
+
+    /// Ask the client about the tool call CALL (a `toolCall` without its id); the chosen option's id, or `cancelled`.
+    /// FOLD: with `NoKind` or `IdOnly`, a pending `tool_call` of CALL's shape goes first, and the request itself carries
+    /// no `kind` (Kimi Code), or nothing but the id (DeepSeek Harness).
+    fn permission_for(&mut self, sid: &str, turn: u64, call: Value, fold: Fold) -> String {
+        let tid = format!("tc-{turn}-{}", self.next_out_id);
+        self.next_out_id += 1;
+        let kind = call.get("kind").cloned().unwrap_or(Value::Null);
+        let mut call = match call {
+            Value::Object(o) => o,
+            _ => serde_json::Map::new(),
+        };
+        call.insert("toolCallId".into(), json!(tid));
+        let full = Value::Object(call.clone());
+        if fold != Fold::No {
+            let mut update = call.clone();
+            update.insert("sessionUpdate".into(), json!("tool_call"));
+            update.insert("status".into(), json!("pending"));
+            self.update(sid, Value::Object(update));
+            if fold != Fold::Announced {
+                call.remove("kind");
+            }
+        }
+        // a fork's own listener asks the hub before its confirmation, and a refusal vetoes the step there
+        if panel::offers(&self.argv, "before-tool") && panel::vetoed(self, sid, full) {
+            self.log("vetoed", kind);
+            return "reject_once".to_owned();
+        }
+        if fold == Fold::IdOnly {
+            call.retain(|k, _| k == "toolCallId");
+        }
+        let rid = self.request(
+            "session/request_permission",
+            json!({"sessionId": sid,
+            "toolCall": call,
             "options": [
                 {"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
                 {"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
-                {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}));
+                {"optionId": "reject_once", "name": "Reject", "kind": "reject_once"}]}),
+        );
         let answer = self.response(rid).map_or("cancelled".to_string(), |r| {
             r["result"]["outcome"]["optionId"]
                 .as_str()
@@ -764,87 +1368,92 @@ impl Agent {
 
     /// Call `tool` on the first stdio server of the session's `mcpServers`; its text, or why not.
     fn mcp(&mut self, sid: &str, tool: &str, args: &str) -> String {
-        let Some(spec) = self.sessions[sid].mcp.first().cloned() else {
-            return "no mcpServers".into();
-        };
-        let mut cmd = Command::new(spec["command"].as_str().unwrap_or("false"));
-        for a in spec["args"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            cmd.arg(a);
-        }
-        for e in spec["env"].as_array().into_iter().flatten() {
-            if let (Some(n), Some(v)) = (e["name"].as_str(), e["value"].as_str()) {
-                cmd.env(n, v);
-            }
-        }
-        let Ok(mut child) = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        else {
-            return "cannot start the MCP server".into();
-        };
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (tx, rx) = channel();
-        std::thread::spawn(move || {
-            for l in std::io::BufReader::new(stdout)
-                .lines()
-                .map_while(Result::ok)
-            {
-                if let Ok(v) = serde_json::from_str::<Value>(&l) {
-                    let _ = tx.send(v);
-                }
-            }
-        });
-        let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
-        let _ = stdin.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ratatoskr-mock", "version": "0.1.0"}}})).as_bytes());
-        let _ = stdin.write_all(
-            format!(
-                "{}\n",
-                json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            )
-            .as_bytes(),
-        );
-        let _ = stdin.write_all(
-            format!(
-                "{}\n",
-                json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {"name": tool, "arguments": args}})
-            )
-            .as_bytes(),
-        );
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut out = "no answer".to_string();
-        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            match rx.recv_timeout(left) {
-                Ok(v) if v["id"] == 2 => {
-                    out = v["result"]["content"][0]["text"]
-                        .as_str()
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            v["error"]["message"]
-                                .as_str()
-                                .unwrap_or("no text")
-                                .to_string()
-                        });
-                    break;
-                }
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
-        drop(stdin);
-        let _ = child.kill();
-        let _ = child.wait();
-        out
+        mcp_call(self.sessions[sid].mcp.first(), tool, args)
     }
+}
+
+/// Call `tool` with ARGS (JSON text) on the stdio MCP server SPEC (an `mcpServers` entry); its text, or why not.
+fn mcp_call(spec: Option<&Value>, tool: &str, args: &str) -> String {
+    let Some(spec) = spec else {
+        return "no mcpServers".into();
+    };
+    let mut cmd = Command::new(spec["command"].as_str().unwrap_or("false"));
+    for a in spec["args"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        cmd.arg(a);
+    }
+    for e in spec["env"].as_array().into_iter().flatten() {
+        if let (Some(n), Some(v)) = (e["name"].as_str(), e["value"].as_str()) {
+            cmd.env(n, v);
+        }
+    }
+    let Ok(mut child) = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return "cannot start the MCP server".into();
+    };
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        for l in std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Ok(v) = serde_json::from_str::<Value>(&l) {
+                let _ = tx.send(v);
+            }
+        }
+    });
+    let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
+    let _ = stdin.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ratatoskr-mock", "version": "0.1.0"}}})).as_bytes());
+    let _ = stdin.write_all(
+        format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        )
+        .as_bytes(),
+    );
+    let _ = stdin.write_all(
+        format!(
+            "{}\n",
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}})
+        )
+        .as_bytes(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut out = "no answer".to_string();
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(left) {
+            Ok(v) if v["id"] == 2 => {
+                out = v["result"]["content"][0]["text"]
+                    .as_str()
+                    .map(String::from)
+                    .unwrap_or_else(|| {
+                        v["error"]["message"]
+                            .as_str()
+                            .unwrap_or("no text")
+                            .to_string()
+                    });
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    out
 }
 
 fn sh(cwd: &PathBuf, cmd: &str) -> String {
@@ -864,8 +1473,22 @@ fn sh(cwd: &PathBuf, cmd: &str) -> String {
     }
 }
 
-/// POST a small body to URL (`http://HOST:PORT/PATH`); the status line's code, or 0.
+/// POST a small body to URL (`http://HOST:PORT/PATH`); the status line's code, or 0.  URL `env` is the agent's own
+/// gateway, as Claude Code reaches it: `$ANTHROPIC_BASE_URL/v1/messages` with `$ANTHROPIC_AUTH_TOKEN` as its bearer.
 fn llm_call(url: &str, prompt: &str) -> u16 {
+    let (url, auth) = if url == "env" {
+        let Ok(base) = std::env::var("ANTHROPIC_BASE_URL") else {
+            return 0;
+        };
+        let token = std::env::var("ANTHROPIC_AUTH_TOKEN").unwrap_or_default();
+        (
+            format!("{}/v1/messages", base.trim_end_matches('/')),
+            format!("Authorization: Bearer {token}\r\nanthropic-version: 2023-06-01\r\n"),
+        )
+    } else {
+        (url.to_owned(), String::new())
+    };
+    let url = url.as_str();
     let rest = url.strip_prefix("http://").unwrap_or(url);
     let (hostport, path) = match rest.split_once('/') {
         Some((h, p)) => (h, format!("/{p}")),
@@ -878,7 +1501,7 @@ fn llm_call(url: &str, prompt: &str) -> u16 {
     };
     let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {hostport}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     if s.write_all(req.as_bytes()).is_err() {

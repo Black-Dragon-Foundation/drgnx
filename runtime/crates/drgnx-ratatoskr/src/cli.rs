@@ -31,6 +31,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr machines report --machine M --ttl SECS [--json FILE|-]   (a machine's slots, from jobq)\n\
     \x20      ratatoskr runner list [--json] | add HOST --trust T [--name N] [--profile P] [--accept A] [--root DIR] [--prefix P]\n\
     \x20          | check NAME | bench NAME | trust NAME T | unbench NAME | remove NAME [--yes] | audit   (the runners)\n\
+    \x20      ratatoskr plugins install PATH [--replace] | list [--json] | remove NAME   (plugins; approve them in drgnx)\n\
     \x20      ratatoskr search index ROOT [--rebuild] [--now]   (build or rebuild a project's code index)\n\
     \x20      ratatoskr search query ROOT QUESTION... [-k N] [--scope code|tests|docs|all] [--json]\n\
     \x20      ratatoskr search mcp [ROOT]   (the MCP search tool on stdio, for an agent outside drgnx)\n\
@@ -38,6 +39,7 @@ pub const USAGE: &str = "usage: ratatoskr serve [--foreground] [--parent-pid PID
     \x20      ratatoskr mcp-bridge --outside --kind KIND [--cwd DIR]   (an agent outside drgnx: stdio to the hub)\n\
     \x20      ratatoskr embed-worker --model ID --dir D --device auto|cpu --device-cache FILE [--threads N] [--idle-ms N]\n\
     \x20          (Hrafn's embed worker; run by the hub only)\n\
+    \x20      ratatoskr recording lint DIR...   (the secret lint over recorded runs: bin/drgnx record lint)\n\
     \x20      ratatoskr sandbox run --spec FILE --result FILE [--tier full|reduced] [--bwrap PATH]\n\
     \x20          [--pause-before-spawn FIFO] [--landlock-omit PATH]... [--landlock-abi-cap N] [--settings-guards]\n\
     \x20          [--browser-probe ARG]... -- CMD...   (test builds only)";
@@ -108,11 +110,15 @@ pub enum Command {
     Machines(crate::machines_cli::MachinesCommand),
     /// `runner …`: the runners, a client of the running hub (`crate::runner_cli`).
     Runner(crate::runner_cli::RunnerCommand),
+    /// `plugins …`: installing plugins (`crate::plugins_cli`).
+    Plugins(crate::plugins_cli::PluginsCommand),
     /// `search …`: Hrafn from a terminal, and the MCP `search` tool on stdio (`crate::search_cli`).
     Search(crate::search_cli::SearchCommand),
     /// `embed-worker …`: Hrafn's embed worker, a child of the hub (`crate::search::worker`). `main` runs it before
     /// any tokio runtime.
     EmbedWorker(crate::search::worker::WorkerArgs),
+    /// `recording lint DIR…`: the secret lint over recorded runs (`crate::recording_cli`).
+    Recording(crate::recording_cli::RecordingCommand),
 }
 
 /// `store`'s subcommands.
@@ -399,8 +405,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         "job" => crate::job_cli::parse(p.raw_args().map_err(e)?).map(Command::Job),
         "machines" => crate::machines_cli::parse(p.raw_args().map_err(e)?).map(Command::Machines),
         "runner" => crate::runner_cli::parse(p.raw_args().map_err(e)?).map(Command::Runner),
+        "plugins" => crate::plugins_cli::parse(p.raw_args().map_err(e)?).map(Command::Plugins),
         "search" => crate::search_cli::parse(p.raw_args().map_err(e)?).map(Command::Search),
         "embed-worker" => embed_worker(&mut p).map(Command::EmbedWorker),
+        "recording" => {
+            crate::recording_cli::parse(p.raw_args().map_err(e)?).map(Command::Recording)
+        }
         other => Err(format!("unknown command {other:?}")),
     }
 }

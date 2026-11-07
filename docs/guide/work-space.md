@@ -70,6 +70,11 @@ arrives with the files picker.
   hub for nothing. `o` shows only the agents and branches that overlap. `1` to `6` collapse a layer to one thin row
   with its name and a count, `0` opens them all, `.` brings finished items back. Each of these is a layout you asked
   for, so the hub lays the map out again at once.
+- A layout you asked for **moves**: each card slides from where it was to its new place over 160 ms, cards that leave
+  fade out and new ones fade in. The compositor moves the pixels, so your keys act on the new layout from the first
+  frame and nothing waits for the motion. Nothing else moves the map: agents that arrive or finish change in place.
+  With reduced motion (your desktop's setting, or `drgnx-look-motion` set to `reduced`), in a terminal, and where
+  Nidhogg's compositor does not draw the frame (macOS for now), the map jumps to its new layout instead.
 - `/` narrows the map to the items matching your text: they keep their look, the rest dim, and Enter selects the first.
 - `Esc` clears the search; then the filters and collapsed layers; then closes the pane.
 - When an agent records a new conclusion, its card shows a **new** chip for four seconds.
@@ -144,10 +149,10 @@ A file in the worktree of an agent that is still alive (running, waiting, waitin
 with a "live · NAME" chip in the mode line, so you cannot write over what the agent is changing. Your own checkout,
 and the worktree of an agent that has finished, stay editable.
 
-**`W`** (or the keys that would make the buffer editable) takes the wheel: the agent is paused after the tool call it is
-in, the buffer becomes editable, and when you save, a message tells the agent which file you changed, so it reads it
-again before touching it. Resume the agent when you are done. Turning the Work space module off gives every such
-buffer back its old read-only state.
+**`W`** (or the keys that would make the buffer editable) takes the wheel, as **Take the Wheel from the Agent** does
+anywhere (see "Take the wheel" in the guide to agents in the editor): the agent stops after the step it is in, the
+buffer becomes editable once it has, and **W** again gives the wheel back with your edits. Turning the Work space
+module off gives every such buffer back its old read-only state.
 
 ### Into the code
 
@@ -174,7 +179,8 @@ only say so.
 
 **Who Is in This File** (`work-who-is-here`: `C-k h` in the VS Code profile, `C-c w h` in Emacs, `SPC a h` in Vim) works
 from any buffer that visits a file. It names the agents in the file, the way they are in it and their lines, selects the
-file on the map when the map shows it, and focuses the map. With nobody in it, the echo area says "No agent in this
+file on the map when the map shows it, and focuses the map. With the editor's agents on it also opens a small list
+window of them (RET follows the agent, `o` opens its panel, `q` closes the list). With nobody in it, the echo area says "No agent in this
 file" and nothing moves.
 
 ### The outline

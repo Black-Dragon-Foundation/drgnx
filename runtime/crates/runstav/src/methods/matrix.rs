@@ -53,6 +53,10 @@ pub enum Action {
     Machines,
     #[serde(rename = "job.container")]
     JobContainer,
+    // a job names keys: they reach the job's own process only, and only names on the project's
+    // `drgnx-runners-job-keys` list (a plain comment: a doc comment on one variant makes the schema a `oneOf`)
+    #[serde(rename = "job.keys")]
+    JobKeys,
     #[serde(rename = "network")]
     Network,
     #[serde(rename = "browser")]
@@ -71,11 +75,17 @@ pub enum Action {
     UserEmacs,
     #[serde(rename = "chat.project-read")]
     ChatProjectRead,
+    #[serde(rename = "plugin.abilities")]
+    PluginAbilities,
+    #[serde(rename = "chat.project-edit")]
+    ChatProjectEdit,
+    #[serde(rename = "huddles")]
+    Huddles,
 }
 
 impl Action {
     /// Every action, in the matrix's row order.
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 29] = [
         Action::AgentsStart,
         Action::AgentsModel,
         Action::AgentsControl,
@@ -92,6 +102,7 @@ impl Action {
         Action::CodeCiConfig,
         Action::Machines,
         Action::JobContainer,
+        Action::JobKeys,
         Action::Network,
         Action::Browser,
         Action::BrowserWeb,
@@ -101,6 +112,9 @@ impl Action {
         Action::UserPrivate,
         Action::UserEmacs,
         Action::ChatProjectRead,
+        Action::PluginAbilities,
+        Action::ChatProjectEdit,
+        Action::Huddles,
     ];
 
     /// The action's id, as the wire and the `agents-matrix` setting spell it.
@@ -122,6 +136,7 @@ impl Action {
             Action::CodeCiConfig => "code.ci-config",
             Action::Machines => "machines",
             Action::JobContainer => "job.container",
+            Action::JobKeys => "job.keys",
             Action::Network => "network",
             Action::Browser => "browser",
             Action::BrowserWeb => "browser.web",
@@ -131,6 +146,9 @@ impl Action {
             Action::UserPrivate => "user.private",
             Action::UserEmacs => "user.emacs",
             Action::ChatProjectRead => "chat.project-read",
+            Action::PluginAbilities => "plugin.abilities",
+            Action::ChatProjectEdit => "chat.project-edit",
+            Action::Huddles => "huddles",
         }
     }
 

@@ -4,7 +4,8 @@
 //! provider that sends no tool name (Codex's parsed calls, Gemini) is classified by kind, and Gemini's values, which
 //! come only from the title, are labelled `acp-title`.  Content is never kept, and no field is longer than
 //! [`FIELD_MAX`] bytes.  Pure: the caller takes the call's fields once the call completes, because `rawInput` is
-//! refined while it streams.
+//! refined while it streams.  An edit's lines come from its `diff` content and the file's text ([`edit_lines_now`],
+//! the one reader of a file here), never from `rawInput`.
 
 use norn::write::work::StepDetail;
 use serde_json::Value;
@@ -110,7 +111,7 @@ fn read_detail(
     locations: &[Value],
     raw: Option<&Value>,
 ) -> StepDetail {
-    let (lpath, lline) = first_location(locations);
+    let (lpath, _) = first_location(locations);
     let rpath = text(raw, &["file_path", "path", "absolute_path"]).map(cap);
     let mut d = base(tool, "read", "acp");
     d.path = lpath.or(rpath);
@@ -120,14 +121,12 @@ fn read_detail(
         d.path = t.split_whitespace().last().map(cap);
         d.origin = "acp-title".into();
     }
-    let offset = num(raw, "offset");
-    d.line_start = lline.or(offset.map(|o| o.max(1)));
+    let n32 = |k: &str| num(raw, k).and_then(|n| u32::try_from(n).ok());
+    let limit = n32("limit").filter(|l| *l > 0);
     // Claude's end line comes only from `limit`
-    if let (Some(start), Some(limit)) = (d.line_start.or(Some(1)), num(raw, "limit"))
-        && limit > 0
-    {
-        d.line_start = Some(start);
-        d.line_end = Some(start + limit - 1);
+    if let Some((start, end)) = crate::work::edit_lines::of_read(locations, n32("offset"), limit) {
+        d.line_start = Some(i64::from(start));
+        d.line_end = limit.map(|_| i64::from(end));
     }
     d
 }
@@ -187,6 +186,44 @@ fn edit_detail(tool: Option<&str>, locations: &[Value], raw: Option<&Value>) -> 
         .0
         .or_else(|| text(raw, &["file_path", "path"]).map(cap));
     d
+}
+
+/// The largest file an edit's lines are looked for in (a larger one is shown on the file only).
+pub const EDIT_TEXT_MAX: u64 = 8 << 20;
+
+/// An edit's lines, recorded in D (its `line_start` / `line_end`): where its `diff` items DIFFS (path, oldText,
+/// newText; their paths as the agent gave them, DIR: the session's folder) land in its file as the file is now
+/// ([`crate::work::edit_lines::of_call`]); the range, or none (not an edit, no item in its file, found nowhere once,
+/// or the file is larger than [`EDIT_TEXT_MAX`]). The one function here that reads a file: call it off the async
+/// threads.
+pub fn edit_lines_now(
+    d: &mut StepDetail,
+    dir: &std::path::Path,
+    diffs: Vec<(String, Option<String>, String)>,
+) -> Option<crate::work::edit_lines::EditRange> {
+    use crate::work::presence::place;
+    if d.kind.as_deref() != Some("edit") {
+        return None;
+    }
+    let file = place(dir, d.path.as_deref()?);
+    let items: Vec<(Option<String>, String)> = diffs
+        .into_iter()
+        .filter(|(p, _, _)| place(dir, p) == file)
+        .map(|(_, o, n)| (o, n))
+        .collect();
+    if items.is_empty() {
+        return None;
+    }
+    let text = match std::fs::metadata(&file) {
+        Ok(m) if m.len() > EDIT_TEXT_MAX => return None,
+        Ok(_) => std::fs::read_to_string(&file).ok()?,
+        // not there yet: a new file
+        Err(_) => String::new(),
+    };
+    let r = crate::work::edit_lines::of_call(&text, &items)?;
+    d.line_start = Some(i64::from(r.line));
+    d.line_end = Some(i64::from(r.line_end));
+    Some(r)
 }
 
 /// The detail of a completed tool call, or none when it names nothing to show.  TOOL_NAME is the provider's (Claude's

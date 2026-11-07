@@ -22,6 +22,8 @@ getrandom.workspace = true
 rustix.workspace = true
 secrecy.workspace = true
 zeroize.workspace = true
+# the row and patch types of hub-built views (`view-patch`), re-exported as `methods::view`
+drgnx-rows = { path = "../drgnx-rows", version = "0.1.0", features = ["schema"] }
 
 [dev-dependencies]
 skuld = { path = "../skuld", version = "0.1.0" }

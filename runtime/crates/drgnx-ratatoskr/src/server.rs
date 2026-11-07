@@ -114,6 +114,11 @@ pub async fn run(args: ServeArgs) -> Exit {
             return Exit::CannotStart;
         }
     };
+    // a recorded or replayed run: the recorder, or the replayer the providers are pointed at, before any setting is read
+    if let Err(e) = crate::recording::start(&env).await {
+        tracing::error!("cannot start: {e}");
+        return Exit::CannotStart;
+    }
     let (mut term, mut int) = match (
         signal(SignalKind::terminate()),
         signal(SignalKind::interrupt()),
@@ -220,6 +225,7 @@ pub async fn run(args: ServeArgs) -> Exit {
         config: paths::config_dir(&env),
         hub: hub_dir.clone(),
     });
+    front.extensions.configure(&env);
     front.search.bind(&front);
     if let Some(d) = front.dirs.get() {
         front
@@ -255,8 +261,21 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::clock::spawn("machines:run", crate::work::machines::run(front.clone()));
     // the sessions' writes and starts link to the asks behind them
     crate::clock::spawn("asks:run", crate::work::asks::run(front.clone()));
+    // a planning session's turn ends, the user's revisions and ends, through each session's order
+    crate::clock::spawn("say:run", crate::say::run(front.clone()));
+    // finished tasks, including part 1's history, become forecast samples
+    {
+        let f = front.clone();
+        crate::clock::spawn("forecast:backfill", async move {
+            crate::forecast::sweep(&f).await;
+        });
+    }
     // the Work map follows the store's records and the clock's minutes while a map is open
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
+    // the editors' buffer views follow the presence model from now on
+    front.core.buffers.bind(&front);
+    // an edit step's file is checked against the other worktrees' from now on
+    front.core.predict.bind(&front);
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings
@@ -270,6 +289,13 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::work::machines::seed(&front);
     // the runners recorded before this start are linked (in the background: an unreachable one delays nothing)
     crate::runners::methods::start(&front);
+    // the plugins installed in <data>/plugins: read now, their approval cards raised (nothing runs yet)
+    front.core.plugins.open(
+        paths::data_dir(&env).join("plugins"),
+        runtime.clone(),
+        front.settings.clone(),
+    );
+    crate::plugins::start(&front).await;
     front.core.runs.set_recovering(true);
     {
         let f = front.clone();
@@ -317,6 +343,11 @@ pub async fn run(args: ServeArgs) -> Exit {
     );
     crate::records::install_tool(&front);
     crate::clock::spawn("records:follow", crate::records::follow(front.clone()));
+    // a matrix change that makes a paired chat's chat.project-edit never closes its pair door at once
+    crate::clock::spawn(
+        "pair:follow-matrix",
+        crate::pair::door::follow_matrix(front.clone()),
+    );
     let mut git = crate::runner::git::HubGit::new(
         crate::sandbox::runs_root(&env),
         crate::runner::TreeMode::Snapshot,
@@ -889,8 +920,9 @@ fn nightly_backup(front: &Front) {
         return;
     }
     let g = g.clone();
+    let hub = front.dirs.get().map(|d| d.hub.clone());
     tokio::spawn(crate::backup_timer::guarded(async move {
-        crate::graph::run_backup(&g).await;
+        crate::graph::run_backup(&g, hub.as_deref()).await;
     }));
 }
 

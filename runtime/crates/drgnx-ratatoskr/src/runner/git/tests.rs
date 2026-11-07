@@ -500,6 +500,7 @@ async fn two_tasks_in_review_on_one_file_clash_with_their_lines() {
         carded: Default::default(),
         settled_subjects: Default::default(),
         open_clash_tasks: Default::default(),
+        predictions: vec![],
     };
     let mut index = clash::DiffIndex::new();
     index.insert("t1".into(), d1);

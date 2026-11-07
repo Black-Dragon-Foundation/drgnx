@@ -148,4 +148,30 @@
  (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
- (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8))
+ (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
+ ;; The Extensions view (design §13; harness/drgnx-perf-extensions.el): open 100 ms with no process, a search key 16 ms
+ ;; worst and 8 ms p50 over 7,150 rows, the details page 50 ms, the progress reads at most 4 a second (no two under
+ ;; 240 ms apart, the last write always read) with typing's p95 within 1 ms of idle, live activation 20 ms, install overhead 3 s.  PROVISIONAL: reported, never failed, until
+ ;; $DRGNX_PERF_LANDED names `ext-pass' (the combined gate pass judges them).  The scroll key's 16 ms is the input rule's;
+ ;; the 1 ms of typing is a first guess.  refresh-job and list-packages-compare report with no budget (the view must beat
+ ;; the package menu on each of its numbers: the :beats_* flags).  The hub's catalog-load and search are the Rust bench.
+ (extensions-open (:open_ms) 100 :report-only ext-pass) (extensions-open (:processes) 0 :report-only ext-pass)
+ (extensions-search (:key_p50_ms) 8 :report-only ext-pass) (extensions-search (:key_max_ms) 16 :report-only ext-pass)
+ (extensions-scroll (:key_max_ms) 16 :report-only ext-pass)
+ (extensions-details (:open_ms) 50 :report-only ext-pass)
+ (extensions-progress (:reads_too_close) 0 :report-only ext-pass) (extensions-progress (:last_unread) 0 :report-only ext-pass)
+ (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
+ (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
+ (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
+ (install-overhead (:overhead_ms) 3000 :report-only ext-pass)
+ ;; The Work space (design §13; docs/develop/perf.md, "The Work space's workloads"): 30 streaming mock agents in a real
+ ;; hub.  The rules between workloads (the map shown at most 1 ms over hidden; the mirror at most 1 ms over `typing')
+ ;; are `drgnx-perf-run--relative-fails'.  The Rust rows (vegvisir layout, shell parse, trace) are their crates' tests.
+ (work-nav (:input :p95) 16) (work-nav (:frame_kb) 2048) (work-nav (:stalls) 0)
+ (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
+ (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
+ (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
+ (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
+ (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
+ (work-typing-mirror (:input :p95) 16) (work-typing-mirror (:stalls) 0)
+ (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1))

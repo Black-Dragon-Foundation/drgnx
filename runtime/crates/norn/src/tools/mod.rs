@@ -12,12 +12,15 @@ use urdr::graph::{ReadPool, WriterHandle};
 use crate::deny::{DenyList, SharedDeny};
 use crate::store::CoordDb;
 
+pub mod extensions;
 pub mod graph;
 pub mod guard;
+pub mod huddle;
 pub mod identity;
 pub mod job;
 pub mod jobs;
 pub mod manager;
+pub mod pair;
 pub mod plan;
 pub mod read;
 pub mod records;
@@ -132,10 +135,50 @@ pub trait Hub: Send + Sync {
     /// The session SID waited on a job that runs (refused): the hub counts it and cancels the turn at the limit.
     fn wait_refused(&self, _sid: &str) {}
 
+    /// A paired chat SID's read of PATH (pair mode): the editor's text (unsaved edits included) or the disk's, or the
+    /// refusal's text.  The default (no hub): none.
+    fn pair_read(&self, _sid: &str, _path: String) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("pair mode is the hub's: none here".to_string()) })
+    }
+
+    /// A paired chat SID's write W, through the editor that has the file open: the editor's verdict as text, or the
+    /// refusal's.  The default (no hub): none.
+    fn pair_write(&self, _sid: &str, _w: pair::PairWrite) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("pair mode is the hub's: none here".to_string()) })
+    }
+
+    /// Session SID's reply in huddle HUDDLE: TEXT, its position, and the decision it PROPOSES, if any.  The answer is
+    /// the tool's text, or the refusal's.  The default (no hub): no huddles.
+    fn huddle_reply(
+        &self,
+        _sid: &str,
+        _huddle: String,
+        _text: String,
+        _proposal: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("huddles are the hub's: none here".to_string()) })
+    }
+
+    /// Session SID escalated (`escalate`): the hub may open a huddle about a clash it is in.  The default: nothing.
+    fn escalated(&self, _sid: &str) {}
+
     /// Session SID's call of the tool TOOL ended; its answer goes out once this returns.  The hub reads what the call
     /// wrote first (the ask it links to).  The default: nothing.
-    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+    fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
         Box::pin(async {})
+    }
+
+    /// Session SID calls the tool TOOL of the hub's server SERVER (`drgnx`) with ARGS, which the tool's schema
+    /// accepted: the hub's `before-tool` hooks run first. `Ok` runs it with those arguments (ARGS, or a hook's
+    /// change, which the caller checks against the schema again); `Err` refuses it with that text. The default: ARGS.
+    fn before_tool<'a>(
+        &'a self,
+        _sid: &'a str,
+        _server: &'static str,
+        _tool: &'a str,
+        args: serde_json::Value,
+    ) -> BoxFuture<'a, Result<serde_json::Value, String>> {
+        Box::pin(async move { Ok(args) })
     }
 
     /// The runtime settings the hub read itself (`settings.el`, the shipped defaults, the editor's overrides) as rows
@@ -143,6 +186,16 @@ pub trait Hub: Send + Sync {
     fn known_settings(&self, _names: Option<&[String]>) -> Vec<serde_json::Value> {
         Vec::new()
     }
+
+    /// What the Extensions catalog says of ID (`pkg:NAME`, `plugin:NAME`): its name and source; `None` for an id it
+    /// does not hold.  The default (a hub with no catalog): none.
+    fn extension_fact(&self, _id: &str) -> BoxFuture<'_, Option<extensions::ExtensionFact>> {
+        Box::pin(async { None })
+    }
+
+    /// A card a tool made or changed, as the `card` event the editors get (`{id, kind, title, state, data}`).  The
+    /// default (no editors): nothing.
+    fn card_event(&self, _event: serde_json::Value) {}
 }
 
 /// The clock the tools read (`float-time`): seconds since the epoch.
@@ -287,6 +340,11 @@ pub fn manager_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
     manager::tools()
 }
 
+/// The tools of [`pair::PAIR_TOOLS`], in that order: a chat in a project's (pair mode).
+pub fn pair_tools() -> Vec<Box<dyn mimir::Tool<Ctx>>> {
+    pair::tools()
+}
+
 #[cfg(test)]
 mod core_tests {
     use super::*;
@@ -294,12 +352,13 @@ mod core_tests {
 
     #[test]
     fn the_core_and_manager_tools_are_their_lists_and_new_names() {
-        let names = |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name()).collect::<Vec<_>>();
+        let names =
+            |v: Vec<Box<dyn Tool<Ctx>>>| v.iter().map(|t| t.name().to_owned()).collect::<Vec<_>>();
         assert_eq!(names(core_tools()), CORE_TOOLS);
         assert_eq!(names(manager_tools()), MANAGER_TOOLS);
         let served = names(tools());
         for n in CORE_TOOLS.iter().chain(&MANAGER_TOOLS) {
-            assert!(!served.contains(n), "{n} is already a tool");
+            assert!(!served.iter().any(|s| s == n), "{n} is already a tool");
         }
         for t in core_tools().iter().chain(&manager_tools()) {
             assert!(t.input_schema().is_object(), "{}", t.name());

@@ -14,6 +14,15 @@ ignore = [
   # paste is unmaintained, and finished: a proc-macro with no runtime code. It comes through tokenizers and gemm, and goes
   # when they drop it. Reviewed 2026-11-01; review again at tokenizers 1.0.
   "RUSTSEC-2024-0436",
+  # im 15.1.0, sized-chunks 0.6.5 and bitmaps 2.1.0 come through Loro (loro-internal 1.17.1; verdandi, the edit
+  # history), whose only non-test use is one im::HashMap<u64, i32> (its version vector), built on SparseChunk and Bits.
+  # They stay until Loro moves to imbl through an org fork, planned before launch. Reviewed 2026-11-06; review again
+  # at each Loro bump.
+  "RUSTSEC-2026-0248", # im: unmaintained (archived upstream); no code defect
+  "RUSTSEC-2023-0126", # im: unsound OrdSet insert; not reached, Loro never builds an OrdSet
+  "RUSTSEC-2026-0251", # sized-chunks: unmaintained (archived upstream); no code defect
+  "RUSTSEC-2026-0255", # sized-chunks: double free on a panicking Drop in Chunk/RingBuffer/InlineArray; not reached, only SparseChunk of u64/i32 is used
+  "RUSTSEC-2026-0247", # bitmaps: unmaintained (archived upstream); no code defect
 ]
 
 [licenses]
@@ -27,6 +36,14 @@ allow = [
 ]
 # Never: GPL-2.0-only, GPL-3.0-only, AGPL-*, OpenSSL, SSLeay, SSPL-*, BUSL-*, Commons-Clause.
 # MPL-2.0 / LGPL-* only by explicit exception with a reason.
+exceptions = [
+  # Loro's persistent collections (verdandi, the edit history): MPL-2.0 is file-level copyleft and allows a larger work
+  # under GPL-3.0-or-later; the crates are used unmodified from crates.io. imbl is MPL-2.0 too, so the exception stays
+  # after Loro moves to imbl, with imbl's crate names. Reviewed 2026-11-06.
+  { allow = ["MPL-2.0"], crate = "im" },
+  { allow = ["MPL-2.0"], crate = "sized-chunks" },
+  { allow = ["MPL-2.0"], crate = "bitmaps" },
+]
 
 [bans]
 multiple-versions = "warn"

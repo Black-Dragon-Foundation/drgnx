@@ -73,6 +73,102 @@ Falls back to the selected frame (a daemon's terminal frame, or batch)."
                   (or (equal (buffer-name) buffer) (equal (symbol-name major-mode) buffer))))
               (window-list (drgnx-uitest-root-frame) 'nomini)))
 
+;;;; A pointer under headless sway
+;; Headless sway (WLR_LIBINPUT_NO_DEVICES) has no input device, so its seat offers no pointer and no client ever gets
+;; one: `swaymsg seat - cursor set' moves the cursor, but Emacs is never told.  A virtual pointer (the
+;; wlr-virtual-pointer protocol, which sway offers) is a pointer device of the seat: once one exists the seat has the
+;; pointer capability, and a cursor move enters the surface under it.  The session's Emacs makes one, over its own
+;; Wayland socket, with the few messages below, and keeps the connection (the device) until it exits.
+
+(defvar drgnx-uitest--vpointer nil "The connection that holds this session's virtual pointer, or nil.")
+
+(defun drgnx-uitest--wl-u32 (n)
+  "N as the 4 little-endian bytes of the Wayland wire."
+  (unibyte-string (logand n 255) (logand (ash n -8) 255) (logand (ash n -16) 255) (logand (ash n -24) 255)))
+
+(defun drgnx-uitest--wl-string (s)
+  "S as a Wayland string: its length with the NUL, the bytes, the NUL, padding to 4."
+  (let ((b (concat (encode-coding-string s 'utf-8) (unibyte-string 0))))
+    (concat (drgnx-uitest--wl-u32 (length b)) b (make-string (% (- 4 (% (length b) 4)) 4) 0))))
+
+(defun drgnx-uitest--wl-message (id opcode &rest args)
+  "The request OPCODE on object ID with ARGS (each already on the wire)."
+  (let ((body (apply #'concat args)))
+    (concat (drgnx-uitest--wl-u32 id) (drgnx-uitest--wl-u32 (logior (ash (+ 8 (length body)) 16) opcode)) body)))
+
+(defun drgnx-uitest--wl-read-u32 (s p)
+  (logior (aref s p) (ash (aref s (+ p 1)) 8) (ash (aref s (+ p 2)) 16) (ash (aref s (+ p 3)) 24)))
+
+(defun drgnx-uitest--wl-events (proc)
+  "The whole events PROC has received so far, as (ID OPCODE ARGS-BYTES), taken out of its input."
+  (let ((in (process-get proc 'drgnx-in)) (p 0) (out nil))
+    (while (>= (- (length in) p) 8)
+      (let ((size (ash (drgnx-uitest--wl-read-u32 in (+ p 4)) -16)))
+        (if (> (+ p size) (length in))
+            (setq p (length in) in nil)    ; a partial message: never here with the replies waited for below
+          (push (list (drgnx-uitest--wl-read-u32 in p) (logand (drgnx-uitest--wl-read-u32 in (+ p 4)) 65535)
+                      (substring in (+ p 8) (+ p size)))
+                out)
+          (setq p (+ p size)))))
+    (process-put proc 'drgnx-in (if in (substring in p) ""))
+    (nreverse out)))
+
+(defun drgnx-uitest--wl-roundtrip (proc callback-id)
+  "Send `wl_display.sync' as CALLBACK-ID and wait (2 s at most) for its `done': (DONE . EVENTS), DONE nil on a time
+out, EVENTS those that came before it."
+  (process-send-string proc (drgnx-uitest--wl-message 1 0 (drgnx-uitest--wl-u32 callback-id)))
+  (let ((deadline (+ (float-time) 2.0)) (events nil) (done nil))
+    (while (and (not done) (< (float-time) deadline) (process-live-p proc))
+      (accept-process-output proc 0.05)
+      (dolist (e (drgnx-uitest--wl-events proc))
+        (if (and (= (car e) callback-id) (= (nth 1 e) 0)) (setq done t) (push e events))))
+    (cons done (nreverse events))))
+
+(defun drgnx-uitest--sway-vpointer ()
+  "Give headless sway's seat a pointer: a virtual pointer made over this Emacs's Wayland socket, kept open.
+t when there is one (made now or before), nil when the compositor offers no such protocol or refuses."
+  (or (and drgnx-uitest--vpointer (process-live-p drgnx-uitest--vpointer) t)
+      (when-let* ((display (getenv "WAYLAND_DISPLAY"))
+                  (path (if (file-name-absolute-p display) display
+                          (expand-file-name display (or (getenv "XDG_RUNTIME_DIR") ""))))
+                  ((file-exists-p path))
+                  (proc (ignore-errors
+                          (make-network-process :name "drgnx-uitest-vpointer" :family 'local :service path
+                                                :coding 'binary :noquery t
+                                                :filter (lambda (p s) (process-put p 'drgnx-in (concat (process-get p 'drgnx-in) s)))))))
+        (process-put proc 'drgnx-in "")
+        (process-send-string proc (drgnx-uitest--wl-message 1 1 (drgnx-uitest--wl-u32 2)))   ; get_registry → 2
+        (let* ((globals (cdr (drgnx-uitest--wl-roundtrip proc 3)))
+               (manager (seq-find (lambda (e)
+                                    (and (= (car e) 2) (= (nth 1 e) 0)
+                                         (let* ((a (nth 2 e)) (n (drgnx-uitest--wl-read-u32 a 4)))
+                                           (equal (substring a 8 (+ 8 n -1)) "zwlr_virtual_pointer_manager_v1"))))
+                                  globals)))
+          (if (not manager)
+              (progn (delete-process proc) nil)
+            (process-send-string
+             proc (concat (drgnx-uitest--wl-message 2 0 (drgnx-uitest--wl-u32 (drgnx-uitest--wl-read-u32 (nth 2 manager) 0))
+                                                    (drgnx-uitest--wl-string "zwlr_virtual_pointer_manager_v1")
+                                                    (drgnx-uitest--wl-u32 1) (drgnx-uitest--wl-u32 4))   ; bind → 4
+                          (drgnx-uitest--wl-message 4 0 (drgnx-uitest--wl-u32 0) (drgnx-uitest--wl-u32 5))))   ; pointer 5, default seat
+            (let ((after (drgnx-uitest--wl-roundtrip proc 6)))
+              (if (or (not (car after)) (seq-find (lambda (e) (and (= (car e) 1) (= (nth 1 e) 0))) (cdr after)))   ; wl_display.error
+                  (progn (delete-process proc) nil)
+                (setq drgnx-uitest--vpointer proc)
+                t)))))))
+
+(defun drgnx-uitest-pointer-set (x y)
+  "Move the compositor's pointer to the layout position X, Y (logical pixels): t when it moved.
+Only sway can be told: the session's seat gets a virtual pointer first (`drgnx-uitest--sway-vpointer', or no client
+would ever see the pointer), then `swaymsg \"seat - cursor set X Y\"' moves it.  Any other session returns
+`unsupported', so a row that needs a real pointer skips there.  `failed' when sway refused or no pointer could be made."
+  (if (and (getenv "SWAYSOCK") (executable-find "swaymsg"))
+      (if (and (drgnx-uitest--sway-vpointer)
+               (zerop (call-process "swaymsg" nil nil nil (format "seat - cursor set %d %d" x y))))
+          t
+        'failed)
+    'unsupported))
+
 (defun drgnx-uitest-posn (x y)
   "Position object for root-frame pixel X, Y."
   (posn-at-x-y x y (drgnx-uitest-root-frame)))
@@ -95,14 +191,19 @@ line and header line: `window-body-pixel-edges' counts a tab line as body."
 
 (defun drgnx-uitest-pos-xy (window pos)
   "Root-frame pixel (X . Y) in the middle of the character at POS in WINDOW, or nil if a
-click there would not land on POS (invisible, scrolled away, cut off at the right edge)."
+click there would not land on POS (invisible, scrolled away, cut off at the right edge).
+The middle is that glyph's own (`posn-object-width-height'), not half a column: in a
+proportional font (the Explorer's rows) a `t' is narrower than half the frame's column."
   (let* ((f (window-frame window))
          (origin (drgnx-uitest--text-origin window))
          (posn (and (not (with-current-buffer (window-buffer window) (invisible-p pos)))
                     (posn-at-point pos window)))
          (xy (and posn (posn-x-y posn)))
-         (x (and xy (+ (car origin) (car xy) (/ (frame-char-width f) 2))))
-         (y (and xy (+ (cdr origin) (cdr xy) (/ (frame-char-height f) 2))))
+         (wh (and posn (posn-object-width-height posn)))
+         (w (if (natnump (car wh)) (max 1 (car wh)) (frame-char-width f)))
+         (h (if (natnump (cdr wh)) (max 1 (cdr wh)) (frame-char-height f)))
+         (x (and xy (+ (car origin) (car xy) (/ w 2))))
+         (y (and xy (+ (cdr origin) (cdr xy) (/ h 2))))
          (back (and xy (posn-at-x-y x y f))))
     (and back (eq (posn-window back) window) (eql (posn-point back) pos) (cons x y))))
 

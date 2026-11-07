@@ -109,6 +109,8 @@
     (should (equal (funcall enc 'drgnx-agents-away-after 600) "600"))
     (should (equal (funcall enc 'drgnx-agents-job-memory "4G") "\"4G\""))
     (should (equal (funcall enc 'drgnx-agents-manager-context 0.7) "0.7"))
+    (should (equal (funcall enc 'drgnx-agents-model-prices '(("m" :in 1 :out 2 :cache-read 0.5 :as-of "2026-11-01")))
+                   "{\"m\":{\"in\":1,\"out\":2,\"cache_read\":0.5,\"as_of\":\"2026-11-01\"}}"))
     ;; the runners' per-project settings and Hrafn's model mirror, as their runtime types
     (should (equal (funcall enc 'drgnx-runners-send "heavy") "\"heavy\""))
     (should (equal (funcall enc 'drgnx-runners-heavy '("cargo test" "fleet")) "[\"cargo test\",\"fleet\"]"))
@@ -119,6 +121,18 @@
     (should (equal (funcall enc 'drgnx-runners-project-visibility "public") "\"public\""))
     (should (equal (funcall enc 'drgnx-search-model-mirror nil) "null"))
     (should (equal (funcall enc 'drgnx-search-model-mirror "https://m.test") "\"https://m.test\""))
+    ;; the plugin list and the hook rules (a rule's keys with `_', its symbols as strings)
+    (should (equal (funcall enc 'drgnx-agents-plugins '("deny-rm" "notes")) "[\"deny-rm\",\"notes\"]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules-off '("no-rm")) "[\"no-rm\"]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules nil) "[]"))
+    (should (equal (funcall enc 'drgnx-agents-hook-rules
+                            '((:id "no-rm" :point before-tool :tool-kinds (execute) :command "^rm " :verdict deny
+                                   :reason "no rm")
+                              (:point after-edit :paths ("**/*.lock") :verdict annotate :reason "a lock")))
+                   (concat "[{\"id\":\"no-rm\",\"point\":\"before-tool\",\"tool_kinds\":[\"execute\"],"
+                           "\"command\":\"^rm \",\"verdict\":\"deny\",\"reason\":\"no rm\"},"
+                           "{\"point\":\"after-edit\",\"paths\":[\"**/*.lock\"],\"verdict\":\"annotate\","
+                           "\"reason\":\"a lock\"}]")))
     ;; the agent browser's settings
     (should (equal (funcall enc 'drgnx-agents-browser-program nil) "null"))
     (should (equal (funcall enc 'drgnx-agents-browser-program "/usr/bin/chromium") "\"/usr/bin/chromium\""))

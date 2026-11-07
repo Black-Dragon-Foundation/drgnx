@@ -83,8 +83,8 @@ the tree is not ready — a large file's first parse still running on Nidhogg's 
 it and redraws once the tree is there); each
 position is worked out once, and again only when the text above the window's top changes. Scrolling inside the same
 scopes reuses their text (the scope lines are read and coloured once), and a comment block or a long string above the
-top is passed in one step, however many lines it has. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own; a buffer
-can add to the header the same way: `drgnx-chrome-header-tail`).
+top is passed in one step, however many lines it has. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own). It is one of the header's tail providers: add your own with
+`drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
 ## Markdown
 

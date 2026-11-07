@@ -1,0 +1,22 @@
+{"scenario": "rewind/codex-turn-level", "requires": ["v1", "test-hooks"], "doc": "A Codex chat spoke in two turns. The revert card for the end of the first turn offers a turn-level restore (Codex forks at the end of a turn), and applying it restores the conversation to that turn without a message of the user's."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work $ROOT/state && cd $ROOT/work && git init -q && echo base > a.txt && git add -A && git -c user.name=t -c user.email=t@t commit -q -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--state\" \"$ROOT/state\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "say first"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s1", "class": "think", "turn_id": "t1"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "say second"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-step", "data": {"session": "$sid", "step": {"seq": "$capture:s2", "class": "think", "turn_id": "t2"}}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "history/revert/preview", "params": {"session": "$sid", "seq": "$s1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"preview_id": "$capture:pid", "session": "$sid", "seq": "$s1", "level": "turn", "needs_message": false, "blocked": []}}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "history/revert/apply", "params": {"preview_id": "$pid", "mode": "keep-mine", "choices": []}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"session": "$sid", "conversation": {"state": "restored"}, "op": "$number"}}, "within_ms": 30000}

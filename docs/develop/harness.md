@@ -341,8 +341,9 @@ skip redisplay and hide the very jank we want to see.
 - **Pixels:** clicks take root-frame pixel coordinates — the same pixels as a screenshot (top-left = 0,0).
   `(posn-at-x-y x y root-frame)` turns them into the click position.
 - **Targets:** instead of pixels, name a window by its buffer name or major mode (e.g. `treemacs-mode`) and
-  some visible text; the click lands in the middle of the first character of the first visible occurrence.
-  An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
+  some visible text; the click lands in the middle of the first character of the first visible occurrence —
+  the middle of that glyph as drawn, so a narrow glyph in a proportional font (a `t` in the Explorer's UI
+  font is half a column) is hit too. An occurrence counts only if it is not invisible (folded) and a click at the computed pixel lands on it
   (same window, same position) — text cut off at the right edge of a truncated line is skipped. A buffer that
   is not shown, or text with no such occurrence, is an error — never a click somewhere else.
 - **Clicks** are `down-mouse-N` + a release; `count 2` adds `double-down-mouse-N` + `double-mouse-N`;
@@ -496,6 +497,7 @@ sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-
 | `(drgnx-uitest-region-equal-p A B RECT &key tolerance ignore-alpha)` | non-nil when every channel differs by at most `tolerance` (default 0) on RECT; nil for different sizes |
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
+| `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
 
@@ -1201,7 +1203,7 @@ peer and stay; the others say "not converted". The audit holds every other test 
 file, and `drgnx-lint/gate-exempt-only-shrinks` holds the rows to a constant in `lint-test-patterns-test.el` that
 only loses entries; `drgnx-lint/the-registers-equal-their-constants` holds the two equal, as for the pattern register.
 `drgnx-test-gate-unnamed-ok` is a stopgap until the hub's agent-session tasks run on its clock:
-`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files bind or set it.
+`drgnx-lint/gate-unnamed-ok-only-where-listed` lets only the two agents-mirror test files and the Say it test file bind or set it.
 `drgnx-test-gate-waiting-ok` (origins a barrier may find inside a real wait) is fenced the same way by
 `drgnx-lint/gate-waiting-ok-only-where-listed`: only the gate's own test binds it; a file that keeps a job running
 through a barrier on purpose is added by the owner's decision. A process

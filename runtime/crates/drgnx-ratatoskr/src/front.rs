@@ -15,6 +15,7 @@ use crate::coord::{self, Signals, ToolHub, Writer};
 use crate::dispatch::{self, Call, ErrorAnswerOrDrop, Refusals};
 use crate::gateway::Gate;
 use crate::hello::{self, Session};
+use crate::pair::open_set::OpenEv;
 use crate::sessions::{self, Sessions};
 use crate::store::WorkDb;
 use crate::version::COMMIT;
@@ -79,8 +80,14 @@ pub struct Front {
     pub settings: Arc<crate::settings::Settings>,
     /// The subscribers: the editors the agents' settings tools ask ([`crate::settings::agents`]).
     pub editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a paired chat's reads and writes of your checkout, through the editor ([`crate::pair`]).
+    pub pair: Arc<crate::pair::door::Door>,
+    /// The follow feed: where each followed session is, to the follow views ([`crate::editor::follow`]).
+    pub follows: Arc<crate::editor::follow::Follows>,
     /// Hrafn: the built-in model's worker, the open projects, the `search/*` methods ([`crate::search::methods`]).
     pub search: crate::search::Hub,
+    /// The Extensions view's catalog, the lock and the module table, merged in memory ([`crate::extensions`]).
+    pub extensions: crate::extensions::Hub,
     /// Test hooks (`--test-ignore-shutdown`): `shutdown` is answered and ignored, so `stop` reaches its signal.
     pub ignore_shutdown: AtomicBool,
     /// The store's other folders (home, config, `<state>/hub`), once the server opened it.
@@ -151,6 +158,10 @@ impl Front {
         let tool_list: Arc<[Box<dyn mimir::Tool<norn::tools::Ctx>>]> = norn::tools::tools().into();
         let matrix = crate::matrix_gate::MatrixGate::default();
         matrix.announce_to(editors.clone());
+        // one presence model: the door's writes show in it beside the sessions' own tool calls
+        let presence = Arc::<crate::work::presence::Live>::default();
+        let pair = crate::pair::door::Door::new(editors.clone(), presence.clone());
+        let follows = crate::editor::follow::Follows::new(editors.clone());
         Front {
             cap,
             pid: std::process::id(),
@@ -166,13 +177,17 @@ impl Front {
             gate,
             settings,
             editors,
+            pair,
+            follows,
             search: crate::search::Hub::default(),
+            extensions: crate::extensions::Hub::default(),
             ignore_shutdown: AtomicBool::new(false),
             dirs: OnceLock::new(),
             shell_env: crate::shell_env::ShellEnv::default(),
             core: crate::agent_core::Core {
                 budgets,
                 matrix,
+                presence,
                 ..Default::default()
             },
             browser_nevers: crate::browser::nevers::Nevers::default(),
@@ -288,8 +303,12 @@ impl Front {
     pub fn gone(&self, conn: u64) {
         lock_conns(&self.conns).remove(&conn);
         self.editors.gone(conn);
+        self.pair.editor_gone(conn);
+        self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.views.gone(conn);
+        self.core.buffers.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -337,6 +356,8 @@ impl Front {
             gateway_port: None,
             registrations: None,
             settings: Some(self.settings.current().status()),
+            recording: crate::recording::status(),
+            watch: Some(self.search.watch_status()),
         }
     }
 
@@ -419,6 +440,7 @@ impl Front {
             wal_bytes: None,
             last_backup: None,
             backup_ok: None,
+            history_backup: crate::backup_timer::last_history().map(|(_, ok)| ok),
             denied_in,
             batches: None,
             replays: None,
@@ -606,6 +628,29 @@ impl Front {
                     .collect();
                 Ok(json!(self.editors.explained(p.req, rows)))
             }
+            // the pair door: the editor's answers to pair-apply, pair-reconcile and pair-read (crate::pair::door)
+            Params::PairAnswer(p) => Ok(json!(self.pair.answer(s.conn, p))),
+            Params::PairReadAnswer(p) => Ok(json!(self.pair.read_answer(s.conn, p))),
+            // the files this editor has open (crate::pair::open_set)
+            Params::PairOpen(p) => Ok(json!(self.pair.open_ev(OpenEv::Open {
+                conn: s.conn,
+                file: opened(&p.file),
+                kind: p.kind,
+            }))),
+            Params::PairClosed(p) => Ok(json!(self.pair.open_ev(OpenEv::Closed {
+                conn: s.conn,
+                file: opened(&p.file),
+            }))),
+            Params::PairOpenSet(p) => Ok(json!(self.pair.open_ev(OpenEv::Set {
+                conn: s.conn,
+                files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
+            }))),
+            // hub-built rows (`view/*`)
+            Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
+            Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
+            Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
+            Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
+            Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -621,7 +666,21 @@ impl Front {
             | Params::AgentsEntriesSubscribe(_)
             | Params::AgentsEntriesUnsubscribe(_)
             | Params::AgentsToolInput(_)
+            | Params::AgentsToolOutput(_)
             | Params::AgentsPause(_)
+            | Params::AgentsContextDrop(_)
+            | Params::AgentsContextPin(_)
+            | Params::AgentsCompactPreview(_)
+            | Params::AgentsConfig(_)
+            | Params::AgentsExplain(_)
+            | Params::AgentsHuddleStart(_)
+            | Params::AgentsHuddleGet(_)
+            | Params::AgentsWheelTake(_)
+            | Params::AgentsWheelGive(_)
+            | Params::AgentsWheelSaved(_)
+            | Params::AgentsPair(_)
+            | Params::AgentsFollow(_)
+            | Params::AgentsUnfollow(_)
             | Params::AgentsProbe(_)
             | Params::MessagesRetract(_)
             | Params::ExecStart(_)
@@ -656,6 +715,12 @@ impl Front {
             | Params::BudgetGet(_)
             | Params::BudgetSet(_)
             | Params::PaceGet(_)
+            | Params::ForecastGet(_)
+            | Params::ForecastSession(_)
+            | Params::ForecastAccuracy(_)
+            | Params::SayStart(_)
+            | Params::SayRevise(_)
+            | Params::SayEnd(_)
             | Params::RecordsImport(_)
             | Params::RecordsStatus(_)
             | Params::RecordsProposals(_)
@@ -668,11 +733,34 @@ impl Front {
             | Params::RunnersCheck(_)
             | Params::RunnersBench(_)
             | Params::RunnersSet(_)
+            | Params::HistoryRegister(_)
+            | Params::HistoryBatch(_)
+            | Params::HistoryResync(_)
+            | Params::HistoryUnregister(_)
+            | Params::HistoryRevertPreview(_)
+            | Params::HistoryRevertApply(_)
+            | Params::HistoryFork(_)
+            | Params::HistoryForkDrop(_)
+            | Params::HistoryCompare(_)
+            | Params::HistoryBlame(_)
+            | Params::HistoryHunks(_)
+            | Params::HistoryTake(_)
+            | Params::HistoryRedo(_)
+            | Params::HistoryOpHunks(_)
+            | Params::HistoryRevertHunk(_)
             | Params::RunnersUnbench(_)
             | Params::RunnersRemove(_)
+            | Params::PluginsList(_)
+            | Params::PluginsApprove(_)
+            | Params::PluginsDisable(_)
+            | Params::RunnersKeys(_)
+            | Params::RunnersKeysHeld(_)
+            | Params::RunnersAudit(_)
             | Params::WorkConclusions(_)
             | Params::AgentsPresenceSubscribe(_)
             | Params::AgentsPresenceGet(_)
+            | Params::AgentsBufferWatch(_)
+            | Params::AgentsBufferUnwatch(_)
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
             | Params::WorkMapClose(_)
@@ -691,6 +779,13 @@ impl Front {
             | Params::SearchServerStart(_)
             | Params::SearchServerStop(_)
             | Params::SearchTyping(_)) => crate::search::methods::serve(self, &caller, p)
+                .await
+                .unwrap_or_else(|_| unserved(method)),
+            // the Extensions view's catalog (`extensions/*`)
+            p @ (Params::ExtensionsSearch(_)
+            | Params::ExtensionsDetails(_)
+            | Params::ExtensionsRows(_)
+            | Params::ExtensionsModules(_)) => crate::extensions::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),
             // the graph store's (`graph/*`, `tasks/*`); a settled card too (an access card becomes a grant)
@@ -741,6 +836,10 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            if let Some(me) = self.tool_hub.front() {
+                self.core.huddles.card_settled(&me, card).await;
+            }
+            self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result
             && e.code != ErrorCode::Internal
@@ -776,6 +875,11 @@ impl Front {
 fn unserved(method: &Method) -> Result<Value, Error> {
     tracing::error!(method = method.name, "a method reached no handler");
     Err(internal(format!("{} reached no handler", method.name)))
+}
+
+/// The file an editor names as open, resolved as the pair door resolves a write's path (a link to it is the file).
+fn opened(file: &runstav::types::AbsPath) -> PathBuf {
+    std::fs::canonicalize(file.as_str()).unwrap_or_else(|_| PathBuf::from(file.as_str()))
 }
 
 /// EVENT with DATA as the line a subscriber gets; none (logged) over 16 MiB.

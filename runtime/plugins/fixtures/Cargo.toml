@@ -1,0 +1,22 @@
+# Test plugins for `brokkr`, one component per binary (docs/develop/plugins.md, "Test fixtures"). Its own workspace: the
+# product workspace excludes it, so `cargo test --workspace` never builds it for the host. `brokkr::test_support`
+# builds it with `--target wasm32-wasip2 --release`; no binary is ever committed.
+[package]
+name = "plugin-fixtures"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+wit-bindgen = "=0.63.0"
+serde_json = "1"
+# wasi:http, for the one fixture that imports it
+wasip2 = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+
+[workspace]

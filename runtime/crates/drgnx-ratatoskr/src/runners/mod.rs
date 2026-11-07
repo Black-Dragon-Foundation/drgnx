@@ -7,18 +7,27 @@
 //! - [`attempts`]: the attempt state machine (nonces, `detached`, grace, reattach, requeue, late results), pure.
 //! - [`sync`]: a job's inputs frozen at submit, its trust from what the public origin has, and how its code reaches
 //!   a runner (origin, bundle or push; the overlay a runner may get).
+//! - [`keys`]: the job keys the user hands over, sent to a started attempt in `key` frames where trust allows, and
+//!   their audit (`key_sent`, `key_use`); [`redact`]: their bytes masked in what a runner returns.
+//! - [`returned`]: what a runner returns, checked before it touches the user's tree (paths, archives, patches), and
+//!   what a `shared` runner's results may not do.
+//! - [`cloud`]: cloud machines: the providers over plain HTTPS (AWS first), their credentials by command.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub mod attempts;
+pub mod cloud;
 pub mod health;
+pub mod keys;
 pub mod link;
 pub mod local;
 pub mod methods;
 pub mod queue;
+pub mod redact;
 #[cfg(all(unix, not(target_os = "android")))]
 pub mod registry;
+pub mod returned;
 pub mod ssh_config;
 pub mod sync;
 pub mod transport;
@@ -49,6 +58,8 @@ pub struct RunnerCfg {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CloudSsh {
     pub identity_agent: PathBuf,
+    /// The public half of the key in that agent: ssh pairs it with the certificate.
+    pub identity_file: PathBuf,
     pub certificate: PathBuf,
     pub known_hosts: PathBuf,
 }
@@ -92,7 +103,12 @@ impl RunnerCfg {
             ));
         }
         if let Some(c) = &self.cloud {
-            for p in [&c.identity_agent, &c.certificate, &c.known_hosts] {
+            for p in [
+                &c.identity_agent,
+                &c.identity_file,
+                &c.certificate,
+                &c.known_hosts,
+            ] {
                 config_path(p)?;
             }
         }
@@ -162,6 +178,7 @@ mod tests {
         ] {
             r.cloud = Some(CloudSsh {
                 identity_agent: bad.into(),
+                identity_file: "/run/id.pub".into(),
                 certificate: "/run/c.pub".into(),
                 known_hosts: "/run/k".into(),
             });

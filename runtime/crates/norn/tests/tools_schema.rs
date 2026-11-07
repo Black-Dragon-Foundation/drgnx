@@ -43,7 +43,13 @@ fn tool_names_are_the_lisp_names() {
         .filter(|n| {
             !matches!(
                 n.as_str(),
-                "settings_get" | "settings_change" | "report_submit" | "plan_read" | "plan_write"
+                "settings_get"
+                    | "settings_change"
+                    | "report_submit"
+                    | "plan_read"
+                    | "plan_write"
+                    | "extensions_suggest"
+                    | "huddle_reply"
             ) && !n.starts_with("job_")
         })
         .collect();
@@ -55,7 +61,7 @@ fn tool_names_are_the_lisp_names() {
 /// `tools/list`'s `tools` as `mimir` serves it: in name order, each with its description, input schema and (when it
 /// declares one) output schema.
 fn listing(mut all: Vec<Box<dyn Tool<Ctx>>>) -> Value {
-    all.sort_by_key(|t| t.name());
+    all.sort_by(|a, b| a.name().cmp(b.name()));
     Value::Array(
         all.iter()
             .map(|t| {
@@ -82,9 +88,14 @@ const BUDGET_BYTES_16: usize = 9_823;
 const BUDGET_JOBS: usize = 6_000;
 /// The three tools the rest of part 1 added for every worker (Task 21): `report_submit`, `plan_read`, `plan_write`.
 /// Their schemas come from the plan methods' types.  Measured after the schemas were trimmed (`guard::compact_schema`):
-/// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets).
-const BUDGET_PART1: usize = 4_105;
-const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS <= 40_000);
+/// 4,105 bytes together (report_submit 2,058, plan_write 1,756, plan_read 277, plus the list's own brackets); 4,266
+/// since a plan's task names its role, profile and body (161 bytes, no descriptions).
+const BUDGET_PART1: usize = 4_266;
+/// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
+const BUDGET_EXTENSIONS: usize = 800;
+/// `huddle_reply`, which every agent has (a huddle's position).
+const BUDGET_HUDDLE: usize = 800;
+const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS + BUDGET_HUDDLE <= 40_000);
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 
@@ -106,6 +117,20 @@ fn the_tool_list_fits_the_budget() {
     )})
     .to_string()
     .len();
+    let ext = json!({"tools": listing(norn::tools::extensions::tools())})
+        .to_string()
+        .len();
+    let huddle = json!({"tools": listing(norn::tools::huddle::tools())})
+        .to_string()
+        .len();
+    assert!(
+        huddle <= BUDGET_HUDDLE,
+        "huddle_reply is {huddle} bytes, over {BUDGET_HUDDLE}"
+    );
+    assert!(
+        ext <= BUDGET_EXTENSIONS,
+        "extensions_suggest is {ext} bytes, over {BUDGET_EXTENSIONS}"
+    );
     assert!(
         jobs <= BUDGET_JOBS,
         "the job tools are {jobs} bytes, over {BUDGET_JOBS}"
@@ -116,14 +141,14 @@ fn the_tool_list_fits_the_budget() {
     );
     // the numbers go in the ledger
     eprintln!(
-        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs and part 1's three: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1})"
+        "tools/list for the 23 tools: {bytes} bytes (budget {BUDGET_BYTES}); the 18, the jobs, part 1's three and extensions_suggest: {bytes16} (the 18 alone: budget {BUDGET_BYTES_16}; the 4 job tools {jobs} of {BUDGET_JOBS} + the 3 part-1 tools {part1} of {BUDGET_PART1} + extensions_suggest {ext} of {BUDGET_EXTENSIONS})"
     );
     assert!(
         bytes <= BUDGET_BYTES,
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
-    // the 18 alone: what the list weighs without the job tools and part 1's three
-    let base = bytes16 - jobs - part1;
+    // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
+    let base = bytes16 - jobs - part1 - ext - huddle;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

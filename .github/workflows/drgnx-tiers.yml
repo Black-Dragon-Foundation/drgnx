@@ -1,7 +1,9 @@
 # drgnx's Emacs-side tiers on one Nidhogg: the one definition of them. drgnx's ci.yml, gui.yml, tty.yml and macos.yml call it on
-# the pinned release (`nidhogg: release`); Nidhogg's CI calls it at a pinned commit on the tarballs its run just built
+# a released Nidhogg (`nidhogg: release`, the pin) or on Nidhogg's integration line (`nidhogg: line`, below); Nidhogg's CI calls it at a pinned commit on the tarballs its run just built
 # (`nidhogg: artifact`, the run's tarball-fedora-45 and tarball-macos), so a joint round of both repositories tests
-# each pair once. `tiers` picks the jobs; the others are skipped. Every job checks drgnx out into drgnx/ (in Nidhogg's
+# each pair once. While drgnx's next release is unreleased, drgnx's callers use `nidhogg: line`: the tarballs of
+# Nidhogg's green build of its integration branch's head (.github/ci/nidhogg-line), copied into this run by the
+# `nidhogg-line` job and installed as `artifact` installs them; no such build fails the run, never the release instead. `tiers` picks the jobs; the others are skipped. Every job checks drgnx out into drgnx/ (in Nidhogg's
 # run the caller's checkout is Nidhogg) and takes the local actions from there. docs/develop/ci.md, "The tiers workflow"
 name: drgnx tiers
 
@@ -13,7 +15,7 @@ on:
         type: string
         default: ""
       nidhogg:
-        description: "release: the images' pinned release (test/container/nidhogg.sh); artifact: this run's tarballs"
+        description: "release: the images' pinned release (test/container/nidhogg.sh); artifact: this run's tarballs; line: the tarballs of Nidhogg's green build of its integration branch's head (.github/ci/nidhogg-line)"
         type: string
         default: release
       tiers:
@@ -24,6 +26,13 @@ on:
         description: "Narrowed: the ERT selector of each test job (DRGNX_TEST_SELECTOR, an Emacs regexp or a selector form); empty: every test"
         type: string
         default: ""
+    secrets:
+      NIDHOGG_LINE_APP_ID:
+        description: "nidhogg: line: the App that reads Nidhogg's Actions artifacts (Actions: read, installed on nidhogg)"
+        required: false
+      NIDHOGG_LINE_APP_KEY:
+        description: "nidhogg: line: that App's private key"
+        required: false
     outputs:
       drgnx_commit:
         description: The drgnx commit tested
@@ -32,7 +41,102 @@ on:
 permissions:
   contents: read
 
+# On Nidhogg's own build (`line`, `artifact`) a test whose Nidhogg primitive is missing fails instead of skipping, as in
+# the local runs; empty otherwise (drgnx-test-require-nidhogg compares to "1"). bin/drgnx passes it into the containers.
+env:
+  DRGNX_NIDHOGG_STRICT: ${{ (inputs.nidhogg == 'line' || inputs.nidhogg == 'artifact') && '1' || '' }}
+
 jobs:
+  # nidhogg: line: Nidhogg's integration branch head (.github/ci/nidhogg-line), its newest build run whose tarball jobs passed, with the
+  # tarballs the asked tiers need, and those tarballs copied into this run under their own names, so every job
+  # installs them as `nidhogg: artifact` does. Reading another repository's artifacts needs a token even when it is
+  # public: an App token with Actions: read on nidhogg (docs/develop/ci.md, "Nidhogg's integration line")
+  nidhogg-line:
+    name: Nidhogg's integration line
+    if: ${{ inputs.nidhogg == 'line' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/ci
+          repository: ${{ inputs.drgnx_ref && 'Black-Dragon-Foundation/drgnx' || '' }}
+          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}
+          path: drgnx
+          persist-credentials: false
+      - name: drgnx_ref is a commit on one of drgnx's own branches
+        if: ${{ inputs.drgnx_ref != '' }}
+        env:
+          ASKED: ${{ inputs.drgnx_ref }}
+        run: |
+          case "$ASKED" in refs/pull/*|pull/*) echo "::error::drgnx_ref $ASKED is a pull request's, not a branch of drgnx's"; exit 1 ;; esac
+          sha=$(git -C drgnx rev-parse HEAD)
+          git clone -q --bare --no-tags --filter=tree:0 https://github.com/Black-Dragon-Foundation/drgnx.git "$RUNNER_TEMP/drgnx-branches"
+          [ -n "$(git -C "$RUNNER_TEMP/drgnx-branches" branch --contains "$sha" 2>/dev/null)" ] ||
+            { echo "::error::drgnx_ref $ASKED ($sha) is on none of drgnx's branches (a fork's or a pull request's commit)"; exit 1; }
+      - name: The tarballs the asked tiers need
+        id: want
+        env:
+          TIERS: ${{ inputs.tiers }}
+          APP_ID: ${{ secrets.NIDHOGG_LINE_APP_ID }}
+        run: |
+          [ -n "$APP_ID" ] || { echo "::error::nidhogg: line needs the NIDHOGG_LINE_APP_ID and NIDHOGG_LINE_APP_KEY secrets (docs/develop/ci.md, \"Nidhogg's integration line\")"; exit 1; }
+          linux=0 mac=0
+          for t in $TIERS; do if [ "$t" = macos ]; then mac=1; else linux=1; fi; done
+          names=""; [ "$linux" = 0 ] || names="tarball-fedora-45"; [ "$mac" = 0 ] || names="$names tarball-macos"
+          { echo "names=$names"; echo "linux=$linux"; echo "mac=$mac"; } >> "$GITHUB_OUTPUT"
+      - id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.NIDHOGG_LINE_APP_ID }}
+          private-key: ${{ secrets.NIDHOGG_LINE_APP_KEY }}
+          owner: Black-Dragon-Foundation
+          repositories: nidhogg
+          permission-actions: read
+      - name: Nidhogg's line head and its green build run
+        id: line
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          NAMES: ${{ steps.want.outputs.names }}
+        run: |
+          # shellcheck disable=SC2086
+          bash drgnx/.github/ci/nidhogg-line.sh $NAMES | tee -a "$GITHUB_OUTPUT"
+      - if: ${{ steps.want.outputs.linux == '1' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-fedora-45
+          path: ${{ runner.temp }}/line/fedora-45
+          repository: Black-Dragon-Foundation/nidhogg
+          run-id: ${{ steps.line.outputs.run }}
+          github-token: ${{ steps.token.outputs.token }}
+      - if: ${{ steps.want.outputs.mac == '1' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-macos
+          path: ${{ runner.temp }}/line/macos
+          repository: Black-Dragon-Foundation/nidhogg
+          run-id: ${{ steps.line.outputs.run }}
+          github-token: ${{ steps.token.outputs.token }}
+      - if: ${{ steps.want.outputs.linux == '1' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-fedora-45
+          path: ${{ runner.temp }}/line/fedora-45
+          if-no-files-found: error
+          retention-days: 1
+      - if: ${{ steps.want.outputs.mac == '1' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-macos
+          path: ${{ runner.temp }}/line/macos
+          if-no-files-found: error
+          retention-days: 1
+      - name: Summary
+        env:
+          SHA: ${{ steps.line.outputs.commit }}
+          RUN: ${{ steps.line.outputs.run }}
+        run: echo "Nidhogg's line at $SHA, build run https://github.com/Black-Dragon-Foundation/nidhogg/actions/runs/$RUN" >> "$GITHUB_STEP_SUMMARY"
+
   # the test binaries, built once for every Linux job that needs them (fetch-test-bins)
   bins-linux:
     name: Test binaries (Linux)
@@ -75,8 +179,8 @@ jobs:
   # failing: a :det test that really waits or starts a process is red (docs/develop/harness.md, "The audit")
   unit:
     name: Unit suite (Linux, Fedora 45)
-    needs: bins-linux
-    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' unit ') }}
+    needs: [bins-linux, nidhogg-line]
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' unit ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -110,7 +214,7 @@ jobs:
           containerfile: Containerfile
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: The pinned evil and kkp, for the modal and kitty tests (they skip without them)
         if: ${{ !cancelled() }}
         uses: ./drgnx/.github/actions/test-elpa
@@ -133,8 +237,8 @@ jobs:
   # Lisp path writes the tracker's database. docs/develop/ci.md
   no-lisp-writes:
     name: No Lisp writes work.db (gate mode)
-    needs: bins-linux
-    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') }}
+    needs: [bins-linux, nidhogg-line]
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' no-lisp-writes ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -164,7 +268,11 @@ jobs:
           containerfile: Containerfile
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
+      # the same packages as unit: test/no-skip.eld holds here too, and without them Quick Open's vertico rows skip
+      - name: The pinned evil, kkp, vertico and orderless, as unit has them (they skip without them)
+        if: ${{ !cancelled() }}
+        uses: ./drgnx/.github/actions/test-elpa
       - name: Unit suite in gate mode, the files in parallel (no :timing tests)
         if: ${{ !cancelled() }}
         working-directory: drgnx
@@ -184,8 +292,8 @@ jobs:
   # and the same variable replays it
   hub-chaos:
     name: Hub chaos (hub client and gateway, seeds 1-3)
-    needs: bins-linux
-    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' hub-chaos ') }}
+    needs: [bins-linux, nidhogg-line]
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' hub-chaos ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -215,7 +323,7 @@ jobs:
           containerfile: Containerfile
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: The hub-client and ai-gateway files under hub chaos, seeds 1 to 3 (no rerun)
         if: ${{ !cancelled() }}
         working-directory: drgnx
@@ -257,8 +365,8 @@ jobs:
   # need the hub start their own against the run's Ratatoskr (test/no-skip.eld)
   ui:
     name: GUI tests (headless mutter)
-    needs: bins-linux
-    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' ui ') }}
+    needs: [bins-linux, nidhogg-line]
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' ui ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90          # the Glitnir child-frame matrix (test/ui/childframe-chrome-test.el) runs here once Nidhogg ships it
     permissions:
@@ -288,7 +396,7 @@ jobs:
           containerfile: Containerfile.gui
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       # the pinned child-frame packages (test/container/childframe-packages.eld) are baked into this image, so the tier
       # reaches no archive; a row that finds them missing fails (bin/drgnx sets DRGNX_CHILDFRAME_REQUIRED)
       - name: The pinned evil and kkp, for the live tier's Vim-key tests (they skip without them)
@@ -306,7 +414,8 @@ jobs:
 
   scenario:
     name: Scenario tier, frame budget reported (headless mutter)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' scenario ') }}
+    needs: nidhogg-line
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' scenario ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -334,7 +443,7 @@ jobs:
           containerfile: Containerfile.gui
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: Scenario tier in test/container/Containerfile.gui (the frame budget reported, not judged)
         working-directory: drgnx
         env:
@@ -347,8 +456,8 @@ jobs:
   # bins-linux like the unit and GUI tiers'. Whatever that job said: without them only those scenarios fail
   perf:
     name: Perf lab (headless mutter)
-    needs: bins-linux
-    if: ${{ !cancelled() && contains(format(' {0} ', inputs.tiers), ' perf ') }}
+    needs: [bins-linux, nidhogg-line]
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' perf ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -378,7 +487,7 @@ jobs:
           containerfile: Containerfile.gui
           image: drgnx-test-gui
           variable: DRGNX_TEST_GUI_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: Perf lab in test/container/Containerfile.gui, judged against test/perf/budgets.eld
         working-directory: drgnx
         env:
@@ -397,7 +506,8 @@ jobs:
   # The terminal tier: Emacs in tmux sessions, in test/container/Containerfile.tty (Fedora 45). Needs no test binaries
   tty:
     name: Terminal tests (Fedora 45, tmux)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' tty ') }}
+    needs: nidhogg-line
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' tty ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -425,7 +535,7 @@ jobs:
           containerfile: Containerfile.tty
           image: drgnx-test-tty
           variable: DRGNX_TEST_TTY_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: The pinned kkp, for the kitty and keys tests (they skip without it)
         uses: ./drgnx/.github/actions/test-elpa
       - name: Terminal tier in test/container/Containerfile.tty
@@ -441,7 +551,8 @@ jobs:
   # below sets (DRGNX_TEST_IMAGE), one row per area's prefix (test/timing-rows.txt), 20 samples each
   timing:
     name: Timing tests (report only)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' timing ') }}
+    needs: nidhogg-line
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' timing ') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     permissions:
@@ -469,7 +580,7 @@ jobs:
           containerfile: Containerfile
           image: drgnx-test
           variable: DRGNX_TEST_IMAGE
-          nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}
+          nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}
       - name: Timing lane
         working-directory: drgnx
         env:
@@ -506,7 +617,8 @@ jobs:
   # with macOS's own bash 3.2. The test binaries are built here (one macOS job: no second macOS runner for them)
   macos:
     name: Unit suite and install plan (macOS 27)
-    if: ${{ contains(format(' {0} ', inputs.tiers), ' macos ') }}
+    needs: nidhogg-line
+    if: ${{ !cancelled() && needs.nidhogg-line.result != 'failure' && contains(format(' {0} ', inputs.tiers), ' macos ') }}
     runs-on: xcode-27
     timeout-minutes: 45
     env:
@@ -551,7 +663,7 @@ jobs:
         working-directory: drgnx
         run: /bin/bash install.sh --dry-run
       - name: This run's Nidhogg tarball
-        if: ${{ !cancelled() && inputs.nidhogg == 'artifact' }}
+        if: ${{ !cancelled() && (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tarball-macos
@@ -572,7 +684,7 @@ jobs:
           MODE: ${{ inputs.nidhogg }}
           NIDHOGG_DOWNLOADS: ${{ runner.temp }}/nidhogg-downloads
         run: |
-          if [ "$MODE" = artifact ]; then
+          if [ "$MODE" = artifact ] || [ "$MODE" = line ]; then
             tarball="$(ls "$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)"   # none: the step fails (never the release instead)
             /bin/bash test/container/nidhogg.sh macos "$tarball"
           else
@@ -583,6 +695,15 @@ jobs:
         with:
           path: ${{ runner.temp }}/nidhogg-downloads
           key: ${{ steps.nidhogg-tarball.outputs.cache-primary-key }}
+      # the hub runs only the git of the developer dir xcode-select's link names, and refuses the image's Xcode under
+      # the admin-writable /Applications: without the Command Line Tools no folder is a project, so the tests that make
+      # tasks through the hub find none (runtime.yml's macos job does the same before its tests)
+      - name: xcode-select points at the Command Line Tools (the git the hub trusts)
+        if: ${{ !cancelled() }}
+        run: |
+          xcode-select -p
+          sudo xcode-select -s /Library/Developer/CommandLineTools
+          xcode-select -p
       # the files a core each at once, a failed file rerun once, the :timing tests left out by name (docs/develop/ci.md).
       # Whatever the steps before said, once there is an Emacs: without Ratatoskr only the tests that need it fail
       - name: Unit suite, the files in parallel (no :timing tests)

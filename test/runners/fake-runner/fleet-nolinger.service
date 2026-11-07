@@ -1,0 +1,6 @@
+[Unit]
+Description=Turn linger off for runner (the fleet's linger drill)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/loginctl disable-linger runner

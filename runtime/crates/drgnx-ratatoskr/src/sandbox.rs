@@ -29,7 +29,7 @@ pub const ENV_DENY: &[&str] = &[
 ];
 
 /// What no spec may expose, for the hub `env` describes, as true names (GL-T2-2):
-/// - closed: drgnx's data, config and state dirs; every socket dir a hub may use (`<runtime>/drgnx`, `<state>/hub`,
+/// - closed: drgnx's data, config, cache and state dirs; every socket dir a hub may use (`<runtime>/drgnx`, `<state>/hub`,
 ///   `<tmp>/drgnx-hub-UID`); `DRGNX_DIR` (the checkout); Emacs's server dirs (`<tmp>/emacsUID`, `/tmp/emacsUID`,
 ///   `<runtime>/emacs`); and this binary's own dir (review M12), so no write bind can replace the helper;
 /// - `user_sockets`: `SSH_AUTH_SOCK` and the D-Bus session bus's `unix:path=`;
@@ -71,6 +71,8 @@ pub fn context_for(env: &Env, helper: Option<&Path>) -> Context {
     let mut closed = vec![
         paths::data_dir(env),
         paths::config_dir(env),
+        // the package cache a sync installs from (`<cache>/packages`): no job may plant a file there
+        paths::cache_dir(env),
         state.clone(),
         state.join("hub"),
         socket_dir.clone(),
@@ -659,10 +661,43 @@ pub fn remove_stubs(scratch: &Path, worktree: &Path) {
     let Ok(text) = std::fs::read_to_string(&list) else {
         return;
     };
+    remove_listed(text.lines(), worktree);
+    let _ = std::fs::remove_file(list);
+}
+
+/// How many stubs SCRATCH's list names now: a one-shot run in the session's tree (a commit) takes this mark before its
+/// launch and removes what it added after it ([`remove_stubs_since`]).
+pub fn stubs_mark(scratch: &Path) -> usize {
+    std::fs::read_to_string(stubs_file(scratch)).map_or(0, |t| t.lines().count())
+}
+
+/// Remove the stubs SCRATCH's list names after its first MARK lines (those one run made), as [`remove_stubs`] does,
+/// and keep the first MARK in the list: a one-shot run never ends a session, so nothing else would remove them.  The
+/// session's own stubs, made at its launch, stay: its sandbox may still have them bound.
+pub fn remove_stubs_since(scratch: &Path, worktree: &Path, mark: usize) {
+    let list = stubs_file(scratch);
+    let Ok(text) = std::fs::read_to_string(&list) else {
+        return;
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= mark {
+        return;
+    }
+    remove_listed(lines[mark..].iter().copied(), worktree);
+    let kept: String = lines[..mark].iter().map(|l| format!("{l}\n")).collect();
+    let _ = if kept.is_empty() {
+        std::fs::remove_file(&list)
+    } else {
+        std::fs::write(&list, kept)
+    };
+}
+
+/// The stubs LINES name in WORKTREE removed, when still empty and not in the git index.
+fn remove_listed<'a>(lines: impl Iterator<Item = &'a str>, worktree: &Path) {
     let index = git_dirs(worktree)
         .and_then(|g| std::fs::read(g.gitdir.join("index")).ok())
         .unwrap_or_default();
-    for line in text.lines() {
+    for line in lines {
         let p = Path::new(line);
         let Ok(rel) = p.strip_prefix(worktree) else {
             continue;
@@ -685,7 +720,6 @@ pub fn remove_stubs(scratch: &Path, worktree: &Path) {
             Ok(())
         };
     }
-    let _ = std::fs::remove_file(list);
 }
 
 /// A worktree's git folders: its own (`gitdir`; `.git` itself in a plain checkout) and the common one (`common`),
@@ -1175,6 +1209,60 @@ fn make_login_dir(p: &Path) -> Result<(), Refusal> {
     }
 }
 
+/// The lock's read-only files ([`crate::agents::lock::LaunchPlan::ro_files`]): one in the session dir RUN (the agent
+/// reads it and never writes it, on every target) is written there; one elsewhere is written to `lock/N-NAME` in
+/// SCRATCH and bound read-only at its path, which only the full tier can do: on another target the launch is refused,
+/// since the lock would not hold.
+fn lock_files(
+    plan: &crate::agents::lock::LaunchPlan,
+    run: &Path,
+    scratch: &Path,
+    target: gleipnir::Target,
+) -> Result<Vec<gleipnir::Bind>, Refusal> {
+    let setup = |path: &Path, message: String| Refusal {
+        rule: Rule::Setup,
+        path: Some(path.to_path_buf()),
+        message,
+    };
+    let write = |path: &Path, bytes: &[u8]| -> Result<(), Refusal> {
+        if let Some(parent) = path.parent() {
+            paths::private_dir(parent)
+                .map_err(|e| setup(parent, format!("{}: {e}", parent.display())))?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, bytes)
+            .and_then(|()| std::fs::rename(&tmp, path))
+            .map_err(|e| setup(path, format!("{}: {e}", path.display())))
+    };
+    let mut binds = Vec::new();
+    for (i, (dest, bytes)) in plan.ro_files.iter().enumerate() {
+        if dest.starts_with(run) {
+            write(dest, bytes)?;
+        } else if target == gleipnir::Target::LinuxBwrap {
+            let name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let source = scratch.join("lock").join(format!("{i}-{name}"));
+            write(&source, bytes)?;
+            binds.push(gleipnir::Bind {
+                mode: gleipnir::Mode::Ro,
+                source,
+                dest: dest.clone(),
+            });
+        } else {
+            return Err(setup(
+                dest,
+                format!(
+                    "the provider's lock binds {} read-only, which needs the sandbox's full tier",
+                    dest.display()
+                ),
+            ));
+        }
+    }
+    Ok(binds)
+}
+
 /// A session's spec ([`session_spec`]) and the program it runs ([`Toolchain::program`]).
 #[derive(Debug, Clone)]
 pub struct SessionSpec {
@@ -1265,6 +1353,7 @@ pub fn session_spec(
         })
         .collect();
     binds.extend(login_binds);
+    binds.extend(lock_files(plan, &run, scratch, target)?);
     let hub = run.join("hub.sock");
     // served by the session's provider proxy (`agents::net`), bound before the spawn
     let proxy = run.join(paths::SESSION_PROXY_SOCKET);
@@ -1321,6 +1410,10 @@ pub fn session_spec(
                     "ANTHROPIC_BASE_URL".into(),
                     format!("http://127.0.0.1:{port}"),
                 ));
+                // and every other variable the CLI reads it from (Kimi Code's, DeepSeek Harness's)
+                for k in &plan.gateway_url_env {
+                    vars.push((k.clone(), format!("http://127.0.0.1:{port}")));
+                }
                 for k in ["NO_PROXY", "no_proxy"] {
                     vars.push((k.into(), "127.0.0.1,localhost".into()));
                 }
@@ -1356,7 +1449,7 @@ pub fn session_spec(
     // a gateway session's base URL is its relay's, whatever else set one; a browser session's endpoint is the hub's
     // alone, and it gets no display and no runtime dir of the user's
     let hubs_own = |k: &str| {
-        (plan.gateway && k == "ANTHROPIC_BASE_URL")
+        (plan.gateway && (k == "ANTHROPIC_BASE_URL" || plan.gateway_url_env.iter().any(|g| g == k)))
             || (browser.is_some()
                 && (crate::browser::ENDPOINT_ENV.contains(&k) || NO_DISPLAY_ENV.contains(&k)))
     };

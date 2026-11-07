@@ -1,7 +1,7 @@
 //! The Linux side of a runner: what a scheduler reads about the machine ([`probe`]), the files two schedulers on one
 //! machine share ([`reserve`]), and the executor: the slice tree ([`slices`]), a job's unit ([`unit`]), job-exec
-//! ([`jobexec`]) and its `result.json` ([`result`]), the row parsers ([`parse`]), the one podman argv ([`podman`]), whether podman can run a networked job ([`netcheck`]) and
-//! jobq's shim ([`shim`]).
+//! ([`jobexec`]) and its `result.json` ([`result`]), live resizing ([`resize`]), the row parsers ([`parse`]), the one
+//! podman argv ([`podman`]), whether podman can run a networked job ([`netcheck`]) and jobq's shim ([`shim`]).
 //!
 //! systemd and the cgroup files are a desktop-distro fact, so those modules are `target_os = "linux"` only. Android
 //! (`target_os = "android"`) has no user manager to run jobs under: it gets none of them, and a runner there refuses
@@ -20,6 +20,8 @@ pub mod jobexec;
 pub mod probe;
 #[cfg(target_os = "linux")]
 pub mod reserve;
+#[cfg(target_os = "linux")]
+pub mod resize;
 #[cfg(target_os = "linux")]
 pub(crate) mod run;
 #[cfg(target_os = "linux")]

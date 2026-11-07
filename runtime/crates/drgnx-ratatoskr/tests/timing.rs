@@ -132,7 +132,7 @@ fn percentile(sorted: &[Duration], p: f64) -> Duration {
 }
 
 /// Ask every question ROUNDS times (after one warming round); the sorted times.
-async fn ask(store: &CodeStore, vectors: bool, rounds: usize) -> Vec<Duration> {
+async fn ask(store: &CodeStore, view: hrafn::View, vectors: bool, rounds: usize) -> Vec<Duration> {
     let now = |_: &str| None;
     let mut times = Vec::new();
     for round in 0..=rounds {
@@ -144,9 +144,15 @@ async fn ask(store: &CodeStore, vectors: bool, rounds: usize) -> Vec<Duration> {
             };
             let v = vector(10_000 + i as u64);
             let started = Instant::now();
-            let a = search(store, &q, vectors.then_some((MODEL, v.as_slice())), &now)
-                .await
-                .unwrap();
+            let a = search(
+                store,
+                &q,
+                view,
+                vectors.then_some((MODEL, v.as_slice())),
+                &now,
+            )
+            .await
+            .unwrap();
             let took = started.elapsed();
             assert!(!a.hits.is_empty(), "{text}");
             if round > 0 {
@@ -163,8 +169,8 @@ async fn query_row(chunks: usize) {
     let built = Instant::now();
     let store = synthetic(dir.path(), chunks).await;
     println!("{chunks} chunks built in {:?}", built.elapsed());
-    let keyword = ask(&store, false, 6).await;
-    let full = ask(&store, true, 6).await;
+    let keyword = ask(&store, hrafn::View::Base, false, 6).await;
+    let full = ask(&store, hrafn::View::Base, true, 6).await;
     for (what, t) in [
         ("keyword and symbol only", &keyword),
         ("with vectors", &full),
@@ -193,6 +199,119 @@ async fn query_p95_at_50k_chunks() {
 #[ignore = "timing: search/query p95 at 100,000 chunks"]
 async fn query_p95_at_100k_chunks() {
     query_row(100_000).await;
+}
+
+/// A worktree's search (H16 overlay design §7): p95 ≤ 50 ms, and ≤ 1.15× the same query in the base view.
+const WORKTREE_P95: Duration = Duration::from_millis(50);
+const WORKTREE_RATIO: f64 = 1.15;
+
+/// TREE's version of synthetic file F on LINE: the base's text with a line's own change.
+fn line_text(f: usize, line: usize) -> String {
+    format!(
+        "{}// line {line}: {}\n",
+        file_text(f),
+        VERBS[(f + line) % VERBS.len()]
+    )
+}
+
+/// Report-only (§11 `worktree-search-p95`): §7's fixture, 50,000 base chunks and 10 resident trees on 2 lines, each
+/// differing in about 32 % of the base's files (the measured p50 share), siblings sharing their line's content; the
+/// same questions in the base view and in a tree's. It prints both and the ratio, and never fails on them; the
+/// pinned island judges it. It also shows what `chunk.blob` after `embed_text` costs a row read by id.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "timing: search/query p95 in a worktree's view, report only"]
+async fn worktree_search_p95() {
+    let dir = tempfile::tempdir().unwrap();
+    let built = Instant::now();
+    let store = synthetic(dir.path(), 50_000).await;
+    let files = 25_000;
+    let mut trees = Vec::new();
+    for n in 0..10 {
+        let line = n / 5;
+        let t = store
+            .tree_open(
+                &format!("wt-{n}"),
+                &format!("/w/{n}"),
+                "/g",
+                hrafn::DoorKind::Cli,
+            )
+            .await
+            .unwrap();
+        for f in (0..files).filter(|f| (f * 31 + line * 17) % 100 < 32) {
+            let text = line_text(f, line);
+            let path = format!("src/m{f}.rs");
+            let (chunks, symbols) =
+                hrafn::chunk::chunk_file(&path, Lang::Rust, false, &text, hrafn::chunk::BUDGET);
+            let chunks = chunks
+                .into_iter()
+                .map(|c| hrafn::ChunkIn {
+                    start: c.start,
+                    end: c.end,
+                    line_start: c.line_start,
+                    line_end: c.line_end,
+                    symbol: c.symbol,
+                    key: hrafn::vec_key(hrafn::chunk::CHUNKER_VERSION, &c.embed_text),
+                    embed: c.embed,
+                    embed_text: c.embed_text,
+                    symbols: c.fts.symbols,
+                    doc: c.fts.doc,
+                    body: c.fts.body,
+                })
+                .collect();
+            let symbols = symbols
+                .into_iter()
+                .map(|y| hrafn::SymbolIn {
+                    name: y.name,
+                    kind: y.kind,
+                    start: y.start,
+                    end: y.end,
+                    chunk: y.chunk as usize,
+                    definer: y.definer,
+                    doc1: y.doc1,
+                })
+                .collect();
+            let row = hrafn::FileRow {
+                path,
+                blob: Some(format!("l{line}-{f}")),
+                class: "code".into(),
+                lang: "rust".into(),
+                generated: false,
+                size: text.len() as u64,
+                indexed_at: 1,
+            };
+            store
+                .write_file(hrafn::View::Tree(t), row, chunks, symbols)
+                .await
+                .unwrap();
+        }
+        trees.push(t);
+    }
+    let mut seed = 1_000_000u64;
+    loop {
+        let keys = missing(&store, MODEL, 5_000).await.unwrap();
+        if keys.is_empty() {
+            break;
+        }
+        let rows: Vec<([u8; 32], Vec<f32>)> = keys
+            .into_iter()
+            .map(|(k, _)| {
+                seed += 1;
+                (k, vector(seed))
+            })
+            .collect();
+        put_vectors(&store, MODEL, &rows).await.unwrap();
+    }
+    println!("50,000 chunks and 10 trees built in {:?}", built.elapsed());
+    let base = ask(&store, hrafn::View::Base, true, 6).await;
+    let tree = ask(&store, hrafn::View::Tree(trees[7]), true, 6).await;
+    let (b, t) = (percentile(&base, 0.95), percentile(&tree, 0.95));
+    println!(
+        "base view: p50 {:?} p95 {b:?}; worktree view: p50 {:?} p95 {t:?}; ratio {:.2} (targets {WORKTREE_P95:?}, \
+         {WORKTREE_RATIO})",
+        percentile(&base, 0.5),
+        percentile(&tree, 0.5),
+        t.as_secs_f64() / b.as_secs_f64()
+    );
 }
 
 /// The text files of drgnx's own checkout (this crate's workspace and the Lisp), as a project's listing.
@@ -324,6 +443,7 @@ async fn tier1_of_a_checkout_and_one_saved_file() {
             scope: Scope::Code,
             k: 5,
         },
+        hrafn::View::Base,
         None,
         &|_: &str| None,
     )

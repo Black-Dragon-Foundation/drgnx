@@ -9,12 +9,17 @@
 //! design document).  Changes reach the editors as `agent` and `agent-entries` events, at most one pair per session
 //! per 50 ms.
 
-mod turn_core;
+#[cfg(test)]
+pub(crate) mod attach_tests;
+pub(crate) mod panel;
+pub(crate) mod turn_core;
 
 use super::launch;
 use super::lock as plock;
 use super::queue::{Origin, Queued};
+use super::rewind::RestoreLevel;
 use super::transcript;
+use super::wheel::{self, Wheel};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use crate::matrix_gate::{ActionCtx, Gate, MatrixGate};
@@ -25,8 +30,9 @@ use hermod::{Conn, ConnOpts, Event, Incoming, SessionId};
 use norn::matrix::{Action, Who};
 use runstav::methods::Empty;
 use runstav::methods::agents::{
-    AgentOp, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission, PermissionParams,
-    RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript, Usage, Via,
+    AgentOp, AgentWheel, ById, DoParams, Entry, EntryType, Mode, MoveParams, Permission,
+    PermissionParams, RpcId, SendParams, SessionStatus, Snapshot, StartParams, Started, Transcript,
+    Usage, Via, WheelSaved, WheelState,
 };
 use runstav::methods::hub::{EnvVar, refused_env_name};
 use runstav::methods::matrix::{Role, Unit};
@@ -49,7 +55,9 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 /// A Stop that the agent has not answered by then ends its process.
 const STOP_ANSWER: Duration = Duration::from_secs(2);
 /// A session's network: the provider's alone, through its proxy (`super::net`); `Open` is never granted here.
-const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
+pub(crate) const SESSION_NET: launch::NetCell = launch::NetCell::ProviderOnly;
+/// How long a give waits for the editor's `agents/wheel/saved`.
+const WHEEL_SAVE_WAIT: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -129,6 +137,15 @@ impl Pending {
     }
 }
 
+/// An agent message's Markdown blocks, and what the editors have not been told of them yet.
+struct MdMessage {
+    entry: usize,
+    stream: super::markdown::Stream,
+    /// The editors have the whole `blocks` of the message (else the next event carries them, not a patch).
+    sent: bool,
+    patch: std::collections::BTreeMap<usize, super::markdown::Block>,
+}
+
 struct State {
     /// The turn, the queue, the Stop and the permission requests' choices (`turn_core.rs`).
     core: TurnCore,
@@ -143,6 +160,8 @@ struct State {
     open: Option<(EntryType, usize)>,
     /// Entries changed since the last event.
     dirty: BTreeSet<usize>,
+    /// The agent message still streaming, as Markdown blocks.
+    md: Option<MdMessage>,
     permissions: Vec<Pending>,
     usage: Option<Usage>,
     commands: Vec<Value>,
@@ -159,6 +178,11 @@ struct State {
     cur: Option<OpenStep>,
     stash: Option<OpenStep>,
     closed: Vec<ClosedStep>,
+    /// The tree taken before the running turn's prompt went: the next step that closes (the turn's first) carries it.
+    before: Option<String>,
+    /// The checkpoints of the edit steps closed since the agent's last served write, which their step's writer may
+    /// not have taken yet: the next write takes them first ([`crate::timeline::Snap::before_write`]).
+    edits: Vec<crate::timeline::EditCell>,
     /// The message id last seen in an update: the anchor of the steps that have none of their own (tool calls).
     last_mid: Option<String>,
     /// When the agent last sent an update (or its turn began): what the supervisor's `silent` rule reads.
@@ -168,12 +192,53 @@ struct State {
     max_repeat: u32,
     /// Tokens the finished turns used.
     tokens: u64,
+    /// What the budget booked from the agent's cost readings since the last turn ended.
+    turn_cost: f64,
     /// Turns started by this hub process (the snapshot's `turns`).
     turns: u64,
     /// The steps begun so far (each step's key).
     steps_begun: i64,
     /// Tool steps of a conclusion's drgnx tool begun since the reader last looked: (key, tool name).
     mcp_begun: Vec<(i64, String)>,
+    /// What the updates since the reader last looked tell the presence model, by tool call.
+    live_out: Vec<(String, LiveOut)>,
+    /// Who drives: the agent, or the user holding (or taking) its wheel ([`super::wheel`]).
+    wheel: Wheel,
+    /// The step snapshot taken when the hold began: what the give measures the user's changes from.
+    wheel_base: Option<String>,
+    /// The tool entry the last update changed, for the follow feed ([`crate::editor::follow`]).
+    follow_tool: Option<usize>,
+    /// The plan's `in_progress` entry, the follow feed's line when the agent sends plans.
+    plan_now: Option<String>,
+}
+
+/// What a tool call's update tells the presence model's live feed ([`crate::work::presence`]): taken under the state's
+/// lock, applied after it.
+#[derive(Clone, Debug)]
+enum LiveOut {
+    /// It runs: its detail as it stands now (the path as the agent gave it), its status, and its content's `diff` items
+    /// (path, oldText, newText): an edit's lines, and its `pending` while it has not landed.
+    At {
+        detail: Box<norn::write::work::StepDetail>,
+        status: crate::work::presence::CallStatus,
+        diffs: Diffs,
+    },
+    /// It failed, or it ended with no step of its own open: its live entry goes.
+    Gone,
+}
+
+/// A tool call's `diff` content items: (path, oldText, newText).
+type Diffs = Vec<(String, Option<String>, String)>;
+
+/// A tool call entry's ACP status (absent: pending).
+fn call_status(rest: &Map<String, Value>) -> crate::work::presence::CallStatus {
+    use crate::work::presence::CallStatus;
+    match rest.get("status").and_then(Value::as_str) {
+        Some("in_progress") => CallStatus::InProgress,
+        Some("completed") => CallStatus::Completed,
+        Some("failed") => CallStatus::Failed,
+        _ => CallStatus::Pending,
+    }
 }
 
 /// What a turn core step decided, with the permission requests it took out of the snapshot.
@@ -184,6 +249,8 @@ struct Stepped {
     answered: Vec<Pending>,
     /// To answer cancelled.
     cancelled: Vec<Pending>,
+    /// The turn the take stopped ended: the wheel is held now.
+    held: bool,
 }
 
 /// A step that has begun.
@@ -203,6 +270,14 @@ struct OpenStep {
     parent_tool: Option<String>,
 }
 
+impl OpenStep {
+    /// A tool call that changes files: its step gets a checkpoint.
+    fn is_edit(&self) -> bool {
+        self.class == StepClass::Tool
+            && matches!(self.tool_kind.as_deref(), Some("edit" | "delete" | "move"))
+    }
+}
+
 /// A step that ended, waiting to be written to the `step` table and announced.
 #[derive(Clone, Debug)]
 struct ClosedStep {
@@ -219,6 +294,17 @@ struct ClosedStep {
     detail: Option<norn::write::work::StepDetail>,
     /// A shell step's command, taken then too: the files it names are its presence ([`crate::work::presence`]).
     command: Option<String>,
+    /// The session's context size in tokens when the step closed: kept on a turn's last step and on a job wait.
+    context: Option<i64>,
+    /// On a turn's first step: the tree the worktree held before the prompt went to the agent, its checkpoint.
+    before: Option<String>,
+    /// A tool step's call had ended when the step closed (completed or failed); none: the step was cut (a wait, the
+    /// next call) while the call runs on, and its live presence entry still stands for it.
+    call_end: Option<crate::work::presence::CallStatus>,
+    /// A tool step's `diff` content items: where an edit's lines are found when the step is written.
+    diffs: Diffs,
+    /// On an edit step: its checkpoint, taken by the writer or before the agent's next write, whichever is first.
+    cell: Option<crate::timeline::EditCell>,
 }
 
 /// What a provider says of a tool call beyond ACP's fields: Claude's `_meta.claudeCode`.
@@ -253,16 +339,25 @@ impl State {
             cmd_counts: HashMap::new(),
             max_repeat: 0,
             tokens: 0,
+            turn_cost: 0.0,
             turns: 0,
             steps_begun: 0,
             mcp_begun: Vec::new(),
+            live_out: Vec::new(),
+            wheel: Wheel::Free,
+            wheel_base: None,
+            follow_tool: None,
+            plan_now: None,
             closed: Vec::new(),
+            before: None,
+            edits: Vec::new(),
             seq: 0,
             entries: Vec::new(),
             tools: HashMap::new(),
             tool_meta: HashMap::new(),
             open: None,
             dirty: BTreeSet::new(),
+            md: None,
             permissions: Vec::new(),
             usage: None,
             commands: Vec::new(),
@@ -271,9 +366,25 @@ impl State {
         }
     }
 
+    /// The budget booked DELTA of cost; the turn running owns it.
+    fn add_turn_cost(&mut self, delta: f64) {
+        self.turn_cost += delta;
+    }
+
+    /// What the turn that just ended cost: what the budget booked during it.  None when nothing was booked (an agent
+    /// that reports no cost, or a total that did not move), never 0.0.
+    fn take_turn_cost(&mut self) -> Option<f64> {
+        let cost = std::mem::take(&mut self.turn_cost);
+        (cost > 0.0).then_some(cost)
+    }
+
     /// Close the step running (if any) at END, carrying USE.
     fn step_close(&mut self, end: f64, turn_use: Option<TurnUse>) {
         if let Some(open) = self.cur.take() {
+            let context = (turn_use.is_some() || open.class == StepClass::JobWait)
+                .then(|| self.usage.as_ref().and_then(|u| u.used))
+                .flatten()
+                .map(|used| used as i64);
             let u = turn_use.unwrap_or_default();
             let mut detail = open.tool_id.as_deref().and_then(|id| self.tool_detail(id));
             // a subagent's step keeps its parent, with a detail of its own if it has none
@@ -292,9 +403,32 @@ impl State {
                     .parent_tool = Some(p.clone());
             }
             let command = open.tool_id.as_deref().and_then(|id| self.tool_command(id));
+            let call_end = open
+                .tool_id
+                .as_deref()
+                .and_then(|id| self.entries.get(*self.tools.get(id)?))
+                .map(|e| call_status(&e.rest))
+                .filter(|s| {
+                    use crate::work::presence::CallStatus;
+                    matches!(s, CallStatus::Completed | CallStatus::Failed)
+                });
+            let diffs = open
+                .tool_id
+                .as_deref()
+                .map(|id| self.tool_diffs(id))
+                .unwrap_or_default();
+            let cell = open.is_edit().then(|| {
+                let c = crate::timeline::EditCell::default();
+                self.edits.retain(|e| !e.is_done());
+                self.edits.push(c.clone());
+                c
+            });
             self.closed.push(ClosedStep {
+                cell,
                 detail,
                 command,
+                call_end,
+                diffs,
                 open,
                 end,
                 turn_id: u.turn_id,
@@ -303,6 +437,8 @@ impl State {
                 cache_read: u.cache_read,
                 cache_write: u.cache_write,
                 cost: u.cost,
+                context,
+                before: self.before.take(),
             });
         }
     }
@@ -322,6 +458,15 @@ impl State {
             locations,
             rest.get("rawInput"),
         )
+    }
+
+    /// The `diff` items of tool call ID's content as the entry holds it now.
+    fn tool_diffs(&self, id: &str) -> Diffs {
+        self.tools
+            .get(id)
+            .and_then(|i| self.entries.get(*i))
+            .map(|e| crate::work::edit_lines::diffs(e.rest.get("content")))
+            .unwrap_or_default()
     }
 
     /// The command of tool call ID when it is a shell step (kind `execute`, or Claude's `Bash`): `rawInput.command`, a
@@ -461,6 +606,7 @@ impl State {
                 self.wait_end();
             }
         }
+        out.held = wheel::turn_ended(&mut self.wheel, &fx);
         out.fx = fx;
         out
     }
@@ -496,6 +642,9 @@ impl State {
         self.entries.truncate(at);
         self.dirty.retain(|i| *i < at);
         self.tools.retain(|_, i| *i < at);
+        if self.md.as_ref().is_some_and(|m| m.entry >= at) {
+            self.md = None;
+        }
         self.open = None;
         self.cur = None;
         self.stash = None;
@@ -520,6 +669,7 @@ impl State {
                 .insert("length".into(), json!(joined.chars().count()));
             e.rest.insert("text".into(), json!(joined));
             self.dirty.insert(i);
+            self.md_follow(kind, i);
             return;
         }
         let mut rest = Map::new();
@@ -530,6 +680,33 @@ impl State {
         }
         let i = self.push(kind, rest);
         self.open = Some((kind, i));
+        self.md_follow(kind, i);
+    }
+
+    /// Entry I, an agent message, has more text: only its last block is parsed again, and the blocks that changed wait
+    /// for the next event.  The message before it is no longer followed.
+    fn md_follow(&mut self, kind: EntryType, i: usize) {
+        if kind != EntryType::Agent {
+            return;
+        }
+        if self.md.as_ref().is_none_or(|m| m.entry != i) {
+            self.md = Some(MdMessage {
+                entry: i,
+                stream: super::markdown::Stream::default(),
+                sent: false,
+                patch: Default::default(),
+            });
+        }
+        let text = self.entries[i]
+            .rest
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(m) = self.md.as_mut() {
+            for b in m.stream.update(text) {
+                m.patch.insert(b.block, b);
+            }
+        }
     }
 
     /// One `session/update` of the agent (its JSON), as entries, commands and usage.
@@ -589,6 +766,7 @@ impl State {
                     m.name = s("toolName").or(m.name.take());
                     m.parent = s("parentToolUseId").or(m.parent.take());
                 }
+                self.follow_tool = Some(idx);
                 let e = &mut self.entries[idx];
                 for k in [
                     "title",
@@ -599,7 +777,23 @@ impl State {
                     "rawInput",
                 ] {
                     if let Some(v) = u.get(k).filter(|v| !v.is_null()) {
-                        e.rest.insert(k.into(), v.clone());
+                        let mut v = v.clone();
+                        if k == "content" {
+                            // a huge output keeps its head and tail and the whole size
+                            match super::tool_output::fold(
+                                &mut v,
+                                super::tool_output::KEEP_HEAD,
+                                super::tool_output::KEEP_TAIL,
+                            ) {
+                                Some(total) => {
+                                    e.rest.insert("outputBytes".into(), json!(total));
+                                }
+                                None => {
+                                    e.rest.remove("outputBytes");
+                                }
+                            }
+                        }
+                        e.rest.insert(k.into(), v);
                     }
                 }
                 self.dirty.insert(idx);
@@ -609,6 +803,27 @@ impl State {
                     (s("title"), s("kind"), s("status"))
                 };
                 let id = u.get("toolCallId").and_then(Value::as_str).unwrap_or("");
+                // the live presence feed: a running call where it is now; one that ended gives way to its step's
+                // close, or goes now when no step of its own is open to close (cut by the next call)
+                {
+                    use crate::work::presence::CallStatus;
+                    let step_open = [self.cur.as_ref(), self.stash.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .any(|c| c.tool_id.as_deref() == Some(id));
+                    let out = match call_status(&self.entries[idx].rest) {
+                        CallStatus::Failed => Some(LiveOut::Gone),
+                        CallStatus::Completed => (!step_open).then_some(LiveOut::Gone),
+                        status => self.tool_detail(id).map(|detail| LiveOut::At {
+                            detail: Box::new(detail),
+                            status,
+                            diffs: self.tool_diffs(id),
+                        }),
+                    };
+                    if let Some(out) = out {
+                        self.live_out.push((id.to_string(), out));
+                    }
+                }
                 if self.cur.as_ref().and_then(|c| c.tool_id.as_deref()) != Some(id)
                     && !matches!(status.as_deref(), Some("completed" | "failed"))
                 {
@@ -654,6 +869,16 @@ impl State {
             }
             "plan" => {
                 self.open = None;
+                self.plan_now = u
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .and_then(|a| {
+                        a.iter()
+                            .find(|e| e.get("status") == Some(&json!("in_progress")))
+                    })
+                    .and_then(|e| e.get("content"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
                 let mut rest = Map::new();
                 rest.insert(
                     "entries".into(),
@@ -712,15 +937,27 @@ pub struct Session {
     mode: Option<Mode>,
     provider: Option<String>,
     enforced: bool,
+    /// The provider whose lock this session's mode switches are checked against ([`plock::refused_mode_switch`]),
+    /// and whether that lock holds (whatever the sandbox: `enforced` needs both).
+    locked_as: Option<crate::settings::profiles::Provider>,
+    lock_held: bool,
     enforced_why: Option<String>,
     /// Why its `browser` cell allows the browser but it has none (OD1 (b)).
     browser_why: Option<String>,
+    /// The plugins that run for it differ from the ones it started with ([`crate::sessions::Sessions::plugins_flag`]).
+    plugins_changed: Arc<AtomicBool>,
     capabilities: Option<Value>,
     conn: Conn,
     acp: SessionId,
     editors: Arc<crate::settings::agents::Editors>,
+    /// The pair door: a project chat's writes of the checkout go through the editor ([`crate::pair`]).
+    pair: Arc<crate::pair::door::Door>,
     /// The Work map: each snapshot reaches it too ([`crate::work::map`]).
     map: Arc<crate::work::map::Map>,
+    /// The presence model: its tool calls feed it as they run ([`Session::feed_live`]).
+    presence: Arc<crate::work::presence::Live>,
+    /// The follow feed: each tool call's place reaches it ([`crate::editor::follow`]).
+    follows: Arc<crate::editor::follow::Follows>,
     /// What the matrix decides at the permission seam: the gate, the settings it reads, the store its cards go to.
     gate: MatrixGate,
     settings: Arc<crate::settings::Settings>,
@@ -744,6 +981,9 @@ pub struct Session {
     state: Mutex<State>,
     /// Transcripts and the held queue on disk (none in unit tests).
     store: Option<transcript::Store>,
+    /// Step snapshots: a turn's tree is taken before its prompt goes, and the tree at a hold on its wheel (none: the
+    /// hub has no state folder).
+    snap: Option<crate::timeline::Snap>,
     /// Closed steps, in order, to the task that writes them to the `step` table.
     steps: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
     /// The count of those steps sent and written.
@@ -754,10 +994,26 @@ pub struct Session {
     asks: crate::work::asks::AskTx,
     /// Where its conclusions' tool steps go ([`crate::work::conclusions`]).
     stamps: Arc<crate::work::conclusions::Stamps>,
+    /// A planning session's turn ends go to Say it ([`crate::say`]).
+    say: crate::say::SayTx,
+    /// The front, for the hooks before a tool call (none until the front is bound: no hooks run).
+    tool_hub: Arc<crate::coord::ToolHub>,
+    /// Its Urdr project, resolved from its folder at the first hook run (`None` inside: no project).
+    project: std::sync::OnceLock<Option<String>>,
+    /// Which tool kinds its `before-tool` hooks see, as its lock made them at launch (and its adapter, when it offers
+    /// `before-tool`).
+    hooked: Option<runstav::methods::agents::Hooked>,
+    /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
+    panel: panel::Panel,
+    /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
+    /// agent is recorded there (none: the hub has no state folder).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
+    /// The hub's identities: this session holds one from its start until it ends ([`super::identity`]).
+    identities: Arc<super::identity::Pool>,
 }
 
-/// What `Conn::prompt` answered.
-struct TurnEnd(Result<hermod::PromptOutcome, hermod::Error>);
+/// What `Conn::prompt` answered for a turn.
+struct TurnEnd(u64, Result<hermod::PromptOutcome, hermod::Error>);
 
 /// Where a session's steps are written and announced.
 #[derive(Clone)]
@@ -781,6 +1037,8 @@ pub(crate) struct StepSink {
     pub map: Option<Arc<crate::work::map::Map>>,
     /// The trace supervisor: a shell step's close takes what its command opened (none: a test).
     pub traces: Option<Arc<crate::work::trace::Traces>>,
+    /// The conflict predictor: an edit step's file against the other worktrees' (none: a test).
+    pub predict: Option<Arc<crate::runner::predict::Live>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -797,27 +1055,53 @@ struct Ident {
     document: Option<PathBuf>,
 }
 
+/// How a launched agent gets its conversation: a new one, the recorded one again (`session/resume`, else
+/// `session/load`), or a fork of SOURCE at AT expected to restore LEVEL (`session/fork` in this new process).
+#[derive(Clone, Debug)]
+pub(crate) enum Attach {
+    New,
+    Resume(String),
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "made by the rewind and the fork")
+    )]
+    Fork {
+        source: String,
+        at: Option<hermod::ForkPoint>,
+        level: RestoreLevel,
+    },
+}
+
 /// A launched agent with its handshake done.
 struct Launched {
     conn: Conn,
     acp: SessionId,
+    /// The level an attach by fork really restored: its own, or `Summary` when the agent cannot fork or the fork failed
+    /// (a new conversation, LEVEL_WHY saying why).  None for a new or resumed conversation.
+    level: Option<RestoreLevel>,
+    level_why: Option<String>,
     caps: Option<Value>,
     enforced: bool,
+    /// Whether the provider's lock holds (`lock::plan`'s verdict, whatever the sandbox).
+    lock_held: bool,
     enforced_why: Option<String>,
     /// The token of the gateway registration this launch made (a gateway profile).
     gateway: Option<String>,
     /// Its provider proxy, bound before the spawn (and its browser's web proxy and CDP broker).
     net: Option<super::net::SessionNet>,
     browser_why: Option<String>,
+    hooked: Option<runstav::methods::agents::Hooked>,
 }
 
 /// Where a path may be read or written: inside the session's directory; a brainstorm writes its document only, and a
 /// chat in a project writes nothing (the hub serves `fs/write_text_file` outside the sandbox, which binds the project
-/// read-only).
+/// read-only).  While the user holds the session's wheel it writes nothing at all.
 pub(crate) struct Fence {
     pub cwd: PathBuf,
     pub document: Option<PathBuf>,
     pub read_only: bool,
+    /// The user holds the wheel ([`Fence::held`]).
+    pub held: bool,
 }
 
 fn normalize(p: &Path) -> PathBuf {
@@ -856,10 +1140,19 @@ fn resolve(p: &Path) -> PathBuf {
 }
 
 impl Fence {
+    /// Whether the user holds SESSION's wheel (the turn the take stopped has ended): every write of it is refused,
+    /// by this fence and by the pair door alike.
+    pub(crate) fn held(session: &Session) -> bool {
+        lock(&session.state).wheel == Wheel::Held
+    }
+
     fn check(&self, path: &str, write: bool) -> Result<PathBuf, String> {
         let p = Path::new(path);
         if !p.is_absolute() {
             return Err(format!("{path}: not an absolute path"));
+        }
+        if write && self.held {
+            return Err(format!("{path}: {}", wheel::HELD));
         }
         let real = resolve(p);
         if write && let Some(doc) = &self.document {
@@ -886,6 +1179,50 @@ impl Fence {
     }
 }
 
+/// Whether a session in ROLE (a BRAINSTORM, working in its SCRATCH folder) is a chat in a project, whose `fs/*` calls
+/// in the project go to the pair door: every other session keeps the fence and the inline write.
+fn is_project_chat(role: Role, brainstorm: bool, scratch: bool) -> bool {
+    role == Role::Chat && !brainstorm && !scratch
+}
+
+/// An ACP `fs/*` request's `path`.
+fn path_of(req: &Value) -> String {
+    req.get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+/// TEXT from the request's `line` (1-based), at most `limit` lines.
+fn slice_lines(text: String, req: &Value) -> String {
+    let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
+    let limit = req.get("limit").and_then(Value::as_u64);
+    if line == 1 && limit.is_none() {
+        return text;
+    }
+    let it = text.split_inclusive('\n').skip(line - 1);
+    match limit {
+        Some(n) => it.take(n as usize).collect(),
+        None => it.collect(),
+    }
+}
+
+/// The answer to an `fs/read_text_file`: GOT's text, or its error.
+fn answer_read(resp: hermod::Responder<ReadTextFileResponse>, got: Result<String, String>) {
+    match got {
+        Ok(content) => {
+            if let Ok(r) =
+                serde_json::from_value::<ReadTextFileResponse>(json!({"content": content}))
+            {
+                let _ = resp.respond(r);
+            }
+        }
+        Err(m) => {
+            let _ = resp.fail(-32602, &m);
+        }
+    }
+}
+
 pub(crate) fn find_profile(front: &Front, name: &str) -> Option<AgentProfile> {
     let cur = front.settings.current();
     let v = &cur.loaded.values;
@@ -907,6 +1244,7 @@ pub(super) struct Prepared {
     /// How its shell steps' opens are seen (`work::trace`).
     trace: crate::work::trace::TraceMode,
     browser: BrowserLaunch,
+    hooked: Option<runstav::methods::agents::Hooked>,
 }
 
 /// What a session's browser came to at its launch: the hub's side of it (the session has one), or why it has none
@@ -1014,6 +1352,13 @@ async fn spawn_spec(
         .argv
         .split_first()
         .ok_or_else(|| invalid("profile", "the profile has no command"))?;
+    // the lock's files where the sandbox would show them; Codex's /etc ones have no place outside a sandbox
+    for (path, bytes) in plan.ro_files.iter().filter(|(p, _)| !p.starts_with("/etc")) {
+        if let Some(d) = path.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        std::fs::write(path, bytes).map_err(|e| internal(format!("{}: {e}", path.display())))?;
+    }
     let mut pairs: Vec<(String, std::ffi::OsString)> = p
         .env
         .iter()
@@ -1264,6 +1609,9 @@ pub(super) async fn prepare(
     job: Option<&str>,
     module_env: &[(String, String)],
 ) -> Result<Prepared, Error> {
+    // while replaying a run, the agent is the ACP replayer of the recording (the rest of the launch is as live)
+    let replayed = crate::recording::replayed_profile(profile);
+    let profile = replayed.as_ref().unwrap_or(profile);
     // a gateway profile's agent reaches its provider only through the hub's gateway, with a token of its own
     let (profile, gateway, relayed) = match gateway_env(front, profile, role, sid, job).await? {
         Some((env, token, relayed)) => {
@@ -1293,7 +1641,24 @@ pub(super) async fn prepare(
         let (deny, ask) = plock::claude_deny_ask(&PathBuf::from(home).join(".claude"), cwd);
         plan = plan.with_claude_rules(deny, ask);
     }
-    plan = plan.with_codex_untrusted(profile, cwd);
+    // the kinds the before-tool hooks and rules of its plugin set at launch subscribe to: the lock makes the agent
+    // ask about them, so they reach the seam; a fork's lock `_meta` is its parent's
+    let project = session_project(front, sid, cwd).await;
+    let kinds = crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref());
+    let env = runstav::paths::Env::process();
+    let run = runstav::paths::make_session_dir(&env, &runstav::paths::socket_path(&env), sid)
+        .map_err(|e| internal(format!("session dir: {e}")))?;
+    plan = plan
+        .with_hook_asks(&kinds)
+        .with_locks(profile, &kinds, &plock::LockAt::new(cwd, &run))
+        .with_gateway_env(profile);
+    plan.make_home()
+        .map_err(|e| internal(format!("{}'s home: {e}", profile.name)))?;
+    let hooked = plock::hooked(profile, &kinds, &plan);
+    // a subscribed kind the agent would run unhooked: never started, whatever the role or preset
+    if let Some(why) = plock::unhooked_refusal(profile, hooked.as_ref()) {
+        return Err(refuse(&why));
+    }
     if gateway.is_some() {
         // the process gets the same variables the Claude options carry
         let extra: Vec<(String, String)> = profile
@@ -1329,6 +1694,15 @@ pub(super) async fn prepare(
     }
     let scratch = launch::scratch_dir(&runstav::paths::Env::process(), sid).unwrap_or_default();
     project_read_allowed(launch::kind(role, cwd, &scratch), &eff)?;
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        // its edits of the checkout go through the pair door only: Claude's own edit tools are off from the start
+        plan = plan.with_project_chat();
+        // paired from the start when the cell allows it; the user's toggle decides under an ask
+        front.pair.started(
+            sid,
+            norn::matrix::decide(&eff, Action::ChatProjectEdit, None),
+        );
+    }
     // the `browser` cell decides whether the session gets the browser (Allow or Ask: at first use, the broker asks)
     let cell = eff.cell(Action::Browser).verdict;
     let (spec, status, unsandboxed, browser) =
@@ -1342,11 +1716,26 @@ pub(super) async fn prepare(
         gateway,
         trace,
         browser,
+        hooked,
     })
 }
 
+/// Session SID's Urdr project: its plan's when a plan runs it, else the repository of CWD (`None` outside one). Runs
+/// git, off the hub's workers.
+async fn session_project(front: &Front, sid: &str, cwd: &Path) -> Option<String> {
+    if let Some(p) = ActionCtx::of_session(&front.core.runs.scopes(), sid).project {
+        return Some(p);
+    }
+    let cwd = cwd.to_path_buf();
+    crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+        .await
+        .ok()
+        .flatten()
+}
+
 /// The chain of a gateway profile kind (`drgnx-ai-agent-gateway-chain`): its provider, with the profile's model;
-/// `claude-openrouter` without a model follows the `agent` role.
+/// `claude-openrouter` without a model follows the `agent` role; `kimi-moonshot` and `dsh-deepseek` (Kimi Code's and
+/// DeepSeek Harness's own agents) go to Moonshot and DeepSeek.
 pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Option<String>)> {
     let kind = p.ai.as_deref().unwrap_or_default();
     let one = |id: &str, m: Option<String>| vec![(id.to_string(), m)];
@@ -1370,8 +1759,9 @@ pub(crate) fn gateway_chain(front: &Front, p: &AgentProfile) -> Vec<(String, Opt
         "claude-openrouter" => one("openrouter", p.model.clone()),
         "claude-ollama" => one("ollama", None),
         "claude-anthropic" => one("anthropic", None),
-        "claude-moonshot" => one("moonshot", p.model.clone()),
-        "claude-deepseek" => one("deepseek", p.model.clone()),
+        // Kimi Code and DeepSeek Harness on their vendors' Messages APIs; the retired Claude kinds still run
+        "kimi-moonshot" | "claude-moonshot" => one("moonshot", p.model.clone()),
+        "dsh-deepseek" | "claude-deepseek" => one("deepseek", p.model.clone()),
         _ => Vec::new(),
     }
 }
@@ -1476,6 +1866,21 @@ pub(crate) async fn open_as(
     parent: Option<String>,
     sid: Option<String>,
 ) -> Result<Started, Error> {
+    open_with(hub, front, p, caller, parent, sid, &Attach::New)
+        .await
+        .map(|(started, _)| started)
+}
+
+/// [`open_as`] on the conversation ATTACH names (a fork from a step): the session, and the level a fork landed at.
+pub(crate) async fn open_with(
+    hub: &super::Hub,
+    front: &Front,
+    p: StartParams,
+    caller: &Caller,
+    parent: Option<String>,
+    sid: Option<String>,
+    attach: &Attach,
+) -> Result<(Started, Option<RestoreLevel>), Error> {
     if caller.class != Class::User {
         return Err(refuse("only the user starts a session"));
     }
@@ -1525,7 +1930,7 @@ pub(crate) async fn open_as(
         role,
         &sid,
         &cwd,
-        None,
+        attach,
         (
             p.task.as_ref().map(|t| t.as_str()),
             p.job.as_ref().map(|j| j.as_str()),
@@ -1545,6 +1950,7 @@ pub(crate) async fn open_as(
         about: p.about.as_ref().map(|a| a.to_string()),
         document: p.document.as_ref().map(|d| PathBuf::from(d.as_str())),
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
     if let Some(store) = &s.store {
         // the module env too: a restart or resume of the session passes it again (`kept_env`)
@@ -1567,7 +1973,7 @@ pub(crate) async fn open_as(
     // its starter's ask is its own: the manager that started it, or the session that made its plan run
     s.asks.started(&s.id, s.parent.as_deref(), s.job.as_deref());
     s.changed();
-    Ok(Started { id: sid, name })
+    Ok((Started { id: sid, name }, level))
 }
 
 /// The `mcpServers` entry that gives the session SID the coordination tools (`job_start` among them): Ratatoskr's
@@ -1576,6 +1982,7 @@ pub(crate) async fn open_as(
 async fn bridge(
     front: &Front,
     profile: &AgentProfile,
+    who: Who,
     sid: &str,
     cwd: &Path,
     task: Option<&str>,
@@ -1584,6 +1991,8 @@ async fn bridge(
     let socket = match front.mcp.socket_of(sid) {
         Some(path) => path,
         None => {
+            // the columns its abilities run as, before the session opens (a `plugins.sock` is bound with it)
+            front.mcp.note_who(sid, who);
             // the tools act as the session id: the id a plan run claims its task for (`runner::tick::start`)
             let params = serde_json::from_value(json!({
                 "agent": sid,
@@ -1618,6 +2027,11 @@ async fn bridge(
     if let Some(search) = front.mcp.search_socket_of(sid) {
         servers.push(("drgnx-search", search));
     }
+    // the plugins' abilities, a server of their own: only for a session that starts with an enabled ability
+    // (`mcpServers` are fixed at `session/new`)
+    if let Some(plugins) = front.mcp.plugins_socket_of(sid) {
+        servers.push(("drgnx-plugins", plugins));
+    }
     servers
         .into_iter()
         .filter_map(|(name, socket)| {
@@ -1632,22 +2046,39 @@ async fn bridge(
         .collect()
 }
 
-/// PROFILE's agent in CWD: started in its sandbox, initialized, on a session (a new one, or EXISTING by
-/// `session/resume`, else `session/load` when the agent can only load) and its lock verified: a lock that does not
-/// hold kills the session.
+/// PROFILE's agent in CWD: started in its sandbox, initialized, on a conversation ATTACH names (a new one; the
+/// recorded one by `session/resume`, else `session/load` when the agent can only load; or a fork, which falls back to a
+/// new conversation at Summary level when the agent cannot fork or the fork fails) and its lock verified, after a fork
+/// as after `session/new`: a lock that does not hold kills the session.
 async fn launch(
     front: &Front,
     profile: &AgentProfile,
     role: Role,
     sid: &str,
     cwd: &Path,
-    existing: Option<&str>,
+    attach: &Attach,
     (task, job, module_env): (Option<&str>, Option<&str>, &[(String, String)]),
 ) -> Result<(Launched, tokio::sync::mpsc::Receiver<Event>), Error> {
     // the session's MCP session first: a sandboxed gateway profile's token is registered on its gateway.sock, which
     // needs it.  A launch refused before the spawn closes the one it opened (its socket and dir go with it)
     let opened = front.mcp.socket_of(sid).is_none();
-    let mcp = bridge(front, profile, sid, cwd, task, job).await;
+    // a Codex session whose hooks subscribe to a kind: its socket serves `before_tool`, which its lock's managed hook
+    // calls
+    if opened && profile.provider() == Some(crate::settings::profiles::Provider::Codex) {
+        let project = session_project(front, sid, cwd).await;
+        if crate::hook_points::subscribed_kinds(&front.core.plugins, project.as_deref())
+            .iter()
+            .any(|k| k != "drgnx")
+        {
+            front.mcp.mark_before_tool(sid);
+        }
+    }
+    // a chat in a project gets the pair tools from its start (read_file, edit_file, write_file), paired or not
+    let scratch = launch::scratch_path(&runstav::paths::Env::process(), sid);
+    if launch::kind(role, cwd, &scratch) == launch::Kind::Chat {
+        front.mcp.mark_project_chat(sid);
+    }
+    let mcp = bridge(front, profile, who_of(role, profile), sid, cwd, task, job).await;
     let prep = match prepare(front, profile, role, sid, cwd, job, module_env).await {
         Ok(p) => p,
         Err(e) => {
@@ -1679,7 +2110,12 @@ async fn launch(
         .traces
         .open(front, sid, cwd, &run, prep.trace.clone())
         .map_err(|e| internal(format!("the session's trace socket: {e}")))?;
-    let (conn, rx) = Conn::spawn(prep.spec, ConnOpts::default())
+    // while recording, the connection's lines, MCP calls and worktree changes go into the run (in spawn order)
+    let opts = ConnOpts {
+        tap: crate::recording::acp_tap(sid, job, &profile.name, &prep.spec, cwd),
+        ..ConnOpts::default()
+    };
+    let (conn, rx) = Conn::spawn(prep.spec, opts)
         .await
         .map_err(|e| internal(e.to_string()))?;
     let kill = || draugr::kill_group(conn.pid(), Duration::ZERO, &draugr::RealSignaller);
@@ -1712,13 +2148,41 @@ async fn launch(
     let meta = prep.plan.session_meta.clone();
     let init = async {
         let caps =
-            serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true}}))
-                .map_err(|e| hermod::Error::Decode(e.to_string()))?;
+            serde_json::from_value(json!({"fs": {"readTextFile": true, "writeTextFile": true},
+                                                 "_meta": panel::client_meta()}))
+            .map_err(|e| hermod::Error::Decode(e.to_string()))?;
         let info = conn.initialize(caps).await?;
         let caps = serde_json::to_value(&info.caps).ok();
-        let acp = match existing {
-            None => conn.new_session(cwd, mcp.clone(), meta).await?,
-            Some(id) => {
+        let mut landed = (None, None);
+        let acp = match attach {
+            Attach::New => conn.new_session(cwd, mcp.clone(), meta).await?,
+            Attach::Fork { source, at, level } => {
+                let fork = if super::rewind::can_fork(caps.as_ref()) {
+                    conn.fork_into(hermod::ForkInto {
+                        source: SessionId::new(source.clone()),
+                        cwd: cwd.to_path_buf(),
+                        mcp: mcp.clone(),
+                        at: at.clone(),
+                        meta: meta.clone(),
+                    })
+                    .await
+                    .map_err(|e| format!("the fork failed: {e}"))
+                } else {
+                    Err("the agent cannot fork a session".to_string())
+                };
+                match fork {
+                    Ok(id) => {
+                        landed = (Some(*level), None);
+                        id
+                    }
+                    Err(why) => {
+                        tracing::warn!(sid, "{why}: a new conversation, restored by a summary");
+                        landed = (Some(RestoreLevel::Summary), Some(why));
+                        conn.new_session(cwd, mcp.clone(), meta).await?
+                    }
+                }
+            }
+            Attach::Resume(id) => {
                 let sid = SessionId::new(id.to_string());
                 let can = |p: &str| {
                     caps.as_ref()
@@ -1739,9 +2203,9 @@ async fn launch(
                 sid
             }
         };
-        Ok::<_, hermod::Error>((caps, acp))
+        Ok::<_, hermod::Error>((caps, acp, landed))
     };
-    let (capabilities, acp) = match init.await {
+    let (capabilities, acp, (level, level_why)) = match init.await {
         Ok(x) => x,
         Err(e) => {
             kill().await;
@@ -1756,9 +2220,7 @@ async fn launch(
             return Err(internal(format!("{}: {e}{why}", profile.name)));
         }
     };
-    if prep.plan.enforced == plock::Enforced::Yes
-        && let Err(e) = plock::verify(&conn, &acp, profile).await
-    {
+    if let Err(e) = plock::verify(&conn, &acp, profile, &prep.plan, capabilities.as_ref()).await {
         kill().await;
         return Err(refuse(&format!("{}: {e}", profile.name)));
     }
@@ -1766,12 +2228,16 @@ async fn launch(
         Launched {
             conn,
             acp,
+            level,
+            level_why,
             caps: capabilities,
             enforced: prep.enforced,
+            lock_held: prep.plan.enforced == plock::Enforced::Yes,
             enforced_why: prep.enforced_why,
             gateway: prep.gateway,
             net,
             browser_why: prep.browser.why,
+            hooked: prep.hooked,
         },
         rx,
     ))
@@ -1785,6 +2251,14 @@ fn assemble(
     front: &Front,
     bus: tokio::sync::broadcast::Sender<AgentStep>,
 ) -> (Arc<Session>, tokio::sync::mpsc::UnboundedReceiver<TurnEnd>) {
+    if let Some(level) = l.level {
+        tracing::info!(
+            sid = i.id,
+            ?level,
+            why = l.level_why.as_deref(),
+            "attached by fork"
+        );
+    }
     let (done, done_rx) = tokio::sync::mpsc::unbounded_channel();
     let (steps, rx) = tokio::sync::mpsc::unbounded_channel();
     let flow = Arc::new(StepFlow::default());
@@ -1795,6 +2269,11 @@ fn assemble(
         agent: profile.name.clone(),
         provider: step_provider(profile),
         cwd: i.cwd.clone(),
+        acp: Some(l.acp.0.to_string()),
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
     };
     tokio::spawn(write_steps(
         rx,
@@ -1810,6 +2289,7 @@ fn assemble(
             presence: Some(front.core.presence.clone()),
             map: Some(front.core.map.clone()),
             traces: Some(front.core.traces.clone()),
+            predict: Some(front.core.predict.clone()),
         },
         ctx,
     ));
@@ -1825,11 +2305,26 @@ fn assemble(
             ),
         );
     }
+    // its identity: the lowest free ordinal of its workspace, and a handle unique there
+    let identities = front.core.agents.identities.clone();
+    let provider = profile.provider().and_then(|p| {
+        serde_json::to_value(p)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+    });
+    identities.take(
+        &super::identity::workspace_of(&i.cwd),
+        &i.id,
+        &super::identity::model_short(profile.model.as_deref(), provider.as_deref()),
+    );
     let scope = scope_of(i.role, &i.id);
     front.core.budgets.enroll(&scope);
     if let Some(m) = &i.parent {
         front.core.budgets.link(&scope, &scope_of(Role::Manager, m));
     }
+    let plugins_changed = front.mcp.plugins_flag(&i.id);
+    let panel = panel::Panel::new(l.caps.as_ref());
+    let hooked = l.hooked;
     let s = Arc::new(Session {
         id: i.id,
         started: i.started,
@@ -1854,13 +2349,19 @@ fn assemble(
         }),
         provider: profile.ai.clone(),
         enforced: l.enforced,
+        locked_as: profile.provider(),
+        lock_held: l.lock_held,
         enforced_why: l.enforced_why,
         browser_why: l.browser_why,
+        plugins_changed,
         capabilities: l.caps,
         conn: l.conn,
         acp: l.acp,
         editors: front.editors.clone(),
+        pair: front.pair.clone(),
         map: front.core.map.clone(),
+        presence: front.core.presence.clone(),
+        follows: front.follows.clone(),
         gate: front.core.matrix.clone(),
         settings: front.settings.clone(),
         writer: front.writer.clone(),
@@ -1875,11 +2376,22 @@ fn assemble(
         gated: AtomicU64::new(0),
         state: Mutex::new(State::new()),
         store: front.dirs.get().map(|d| transcript::Store::new(&d.hub)),
+        snap: crate::timeline::Snap::of(front),
         steps,
         flow,
         done,
         asks: front.core.asks.handle(),
         stamps: front.core.stamps.clone(),
+        say: front.core.say.handle(),
+        tool_hub: front.tool_hub.clone(),
+        project: std::sync::OnceLock::new(),
+        hooked,
+        panel,
+        history: front
+            .dirs
+            .get()
+            .map(|d| (front.core.history.clone(), d.hub.clone())),
+        identities,
     });
     (s, done_rx)
 }
@@ -1900,7 +2412,7 @@ pub(crate) async fn resume_all(hub: &super::Hub, front: &Front) {
 }
 
 /// A recorded session: sid, name, profile, role, cwd, task, job, acp id, parent, started.
-type Row = (
+pub(crate) type Row = (
     String,
     String,
     String,
@@ -1914,7 +2426,7 @@ type Row = (
 );
 
 /// The recorded sessions (only ONLY when given), oldest first.
-async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
+pub(crate) async fn read_rows(hub: &super::Hub, only: Option<&str>) -> Vec<Row> {
     let Some(db) = hub.db() else {
         return Vec::new();
     };
@@ -1965,13 +2477,19 @@ pub(crate) async fn rotate(hub: &super::Hub, front: &Front, sid: &str, first: St
     let Ok(old) = hub.find(sid) else {
         return false;
     };
-    old.close_now().await;
-    gateway_gone(front, sid).await;
-    let _ = front.mcp.close(sid).await;
+    close_for_swap(front, &old).await;
     let Some(row) = read_rows(hub, Some(sid)).await.into_iter().next() else {
         return false;
     };
     resume_row_with(hub, front, row, Some(first)).await
+}
+
+/// OLD's agent ends so another conversation can take its hub session (a rotation, a rewind): its transcript and queue
+/// kept on disk, its gateway registration and MCP session closed.  Its row stays.
+pub(crate) async fn close_for_swap(front: &Front, old: &Session) {
+    old.close_now().await;
+    gateway_gone(front, &old.id).await;
+    let _ = front.mcp.close(&old.id).await;
 }
 
 /// Session SID's recorded role is now ROLE (the user made it a manager).
@@ -2054,7 +2572,7 @@ impl Session {
                     .is_some_and(|m| mids.contains(m))
             })
             .take(cap)
-            .map(|(i, e)| (i as u64, e.clone()))
+            .map(|(i, e)| (i as u64, super::wire::with_blocks(e.clone())))
             .collect()
     }
 }
@@ -2068,6 +2586,40 @@ async fn resume_row(hub: &super::Hub, front: &Front, row: Row) -> bool {
 /// [`resume_row`], or with FIRST (a manager's restart or rotation, Task 25): a new agent session in the same hub
 /// session, no `session/resume`, that is told FIRST (its digest and open decisions) instead of [`RESTART_NOTICE`].
 async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Option<String>) -> bool {
+    let again = match first {
+        Some(f) => Again::Fresh(f),
+        None => Again::Resume,
+    };
+    relaunch(hub, front, row, again).await.is_ok()
+}
+
+/// How [`relaunch`] brings a recorded session back.
+pub(crate) enum Again {
+    /// Its recorded conversation (`session/resume`, else `session/load`), else a fresh one told what happened.
+    Resume,
+    /// A fresh conversation told this first (a manager's restart or rotation).
+    Fresh(String),
+    /// A fork (a rewind): ATTACH, its new conversation told TOLD first when the fork lands at its own level.  When it
+    /// lands at Summary instead (the agent cannot fork, or the fork failed), it is told SUMMARY and the user's
+    /// MESSAGE; with no message the summary waits, held, at the queue's front, so no turn starts unasked.
+    #[cfg_attr(not(test), allow(dead_code, reason = "made by the rewind"))]
+    Fork {
+        attach: Attach,
+        told: Option<String>,
+        summary: String,
+        message: Option<String>,
+    },
+}
+
+/// ROW's session running again as AGAIN says, under its own id, row, transcript and queue: the level a fork landed at
+/// (none for any other way back), or why it is not running.  The row's conversation is written only once the launch
+/// has landed, so a launch that fails leaves the row as it was, resumable.
+pub(crate) async fn relaunch(
+    hub: &super::Hub,
+    front: &Front,
+    row: Row,
+    again_how: Again,
+) -> Result<Option<RestoreLevel>, Error> {
     let (sid, name, profile_name, role, cwd, task, job, acp, parent, at) = row;
     // a worker a manager started gets back what the manager delegated, before its first tool call
     if parent.is_some() {
@@ -2078,7 +2630,10 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
             sid,
             "session not resumed: no agent profile {profile_name:?}"
         );
-        return false;
+        return Err(invalid(
+            "profile",
+            format!("no agent profile {profile_name:?}"),
+        ));
     };
     let store = front.dirs.get().map(|d| transcript::Store::new(&d.hub));
     let meta = store
@@ -2106,7 +2661,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     let role_of = serde_json::from_value(json!(role)).unwrap_or(Role::Chat);
     // what the editor's modules added at its start goes again
     let env = kept_env(front, &sid, &meta);
-    let again = |existing: Option<String>| {
+    let again = |attach: Attach| {
         let (front, profile, sid, cwd, task, job, env) = (
             front,
             profile.clone(),
@@ -2123,7 +2678,7 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 role_of,
                 &sid,
                 Path::new(&cwd),
-                existing.as_deref(),
+                &attach,
                 (task.as_deref(), job.as_deref(), &env),
             )
             .await
@@ -2132,18 +2687,24 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     // `session/resume`, else `session/load` (both inside `launch`), else the summary handoff of Task 26, else a fresh
     // session that is told what happened (its transcript stays)
     let mut handoff: Option<String> = None;
-    let tried = match first {
-        Some(_) => None,
-        None => Some(again(Some(acp.clone())).await),
+    let tried = match &again_how {
+        Again::Resume => Some(again(Attach::Resume(acp.clone())).await),
+        Again::Fresh(_) | Again::Fork { .. } => None,
     };
     let (l, rx, fresh) = match tried {
-        None => match again(None).await {
-            Ok((l, rx)) => (l, rx, true),
-            Err(e) => {
-                tracing::warn!(sid, "session not started afresh: {}", e.message);
-                return false;
+        None => {
+            let attach = match &again_how {
+                Again::Fork { attach, .. } => attach.clone(),
+                _ => Attach::New,
+            };
+            match again(attach).await {
+                Ok((l, rx)) => (l, rx, true),
+                Err(e) => {
+                    tracing::warn!(sid, "session not started afresh: {}", e.message);
+                    return Err(e);
+                }
             }
-        },
+        }
         Some(Ok((l, rx))) => (l, rx, false),
         Some(Err(e)) if e.code == ErrorCode::Internal => {
             tracing::warn!(
@@ -2152,28 +2713,56 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
                 e.message
             );
             // the summary handoff (Task 26): a new session on the same hub id, told what the old one left
-            handoff =
-                Some(super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref()).await);
-            match again(None).await {
+            handoff = Some(
+                super::handoff::summary(front, &sid, Path::new(&cwd), task.as_deref(), None).await,
+            );
+            match again(Attach::New).await {
                 Ok((l, rx)) => (l, rx, true),
                 Err(e) => {
                     tracing::warn!(sid, "session not resumed: {}", e.message);
-                    return false;
+                    return Err(e);
                 }
             }
         }
         Some(Err(e)) => {
             tracing::warn!(sid, "session not resumed: {}", e.message);
-            return false;
+            return Err(e);
         }
     };
+    let level = l.level;
     let (s, done) = assemble(ident, &profile, l, front, hub.step_bus());
-    // a manager's restart or rotation is told FIRST; any other fresh start the notice and the summary handoff
-    let told = fresh.then(|| match (first, handoff) {
-        (Some(f), _) => f,
-        (None, Some(h)) => format!("{RESTART_NOTICE}\n\n{h}"),
-        (None, None) => RESTART_NOTICE.to_string(),
-    });
+    // a manager's restart or rotation is told FIRST; a fork what its level needs; any other fresh start the notice
+    // and the summary handoff
+    let (told, hold, reattach) = match again_how {
+        Again::Fork {
+            attach,
+            told,
+            summary,
+            message,
+        } => {
+            let wanted = match attach {
+                Attach::Fork { level, .. } => Some(level),
+                _ => Some(RestoreLevel::Summary),
+            };
+            if level == wanted {
+                (told, false, true)
+            } else {
+                match message {
+                    Some(m) => (Some(format!("{summary}\n\n{m}")), false, true),
+                    None => (Some(summary), true, true),
+                }
+            }
+        }
+        Again::Fresh(f) => (fresh.then_some(f), false, false),
+        Again::Resume => (
+            fresh.then(|| match handoff {
+                Some(h) => format!("{RESTART_NOTICE}\n\n{h}"),
+                None => RESTART_NOTICE.to_string(),
+            }),
+            false,
+            false,
+        ),
+    };
     if fresh && let Some(db) = hub.db() {
         insert_row(db, &s).await;
     }
@@ -2189,7 +2778,26 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
         }
         None => Default::default(),
     };
-    lock(&s.state).core.resume(queue, paused, told);
+    // a fork's first words come through the core's reattach, after the queue the swap kept
+    let (resume_told, reattach_told) = if reattach {
+        (None, Some(told))
+    } else {
+        (told, None)
+    };
+    lock(&s.state)
+        .core
+        .resume(queue, paused || hold, resume_told);
+    // the user held its wheel when the hub ended: still held, from the same snapshot
+    if let Some(store) = &s.store
+        && let (true, base) = store.load_wheel(&sid)
+    {
+        let mut st = lock(&s.state);
+        st.wheel = Wheel::Held;
+        st.wheel_base = base;
+        st.core.set_wheel(true);
+        drop(st);
+        s.pair.hold(&sid, true);
+    }
     // a job it started still runs (re-attached before the sessions): it waits for it as before the restart
     let waiting = s.has_jobs();
     {
@@ -2205,8 +2813,11 @@ async fn resume_row_with(hub: &super::Hub, front: &Front, row: Row, first: Optio
     if waiting {
         s.close_when_idle();
     }
-    s.next();
-    true
+    match reattach_told {
+        Some(told) => s.reattach(told),
+        None => s.next(),
+    }
+    Ok(level)
 }
 
 /// The session SID if it was closed while it waited on a job: resumed now (its agent started again on the same
@@ -2259,66 +2870,79 @@ struct StepCtx {
     provider: Option<String>,
     /// The worktree its edits are snapshotted from.
     cwd: PathBuf,
+    /// The agent conversation its steps run in.
+    acp: Option<String>,
+    /// The projects' edit histories and the hub's state folder, to name the record a step anchors (none: a test).
+    history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
 }
 
-/// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
-/// and on the hub's step channel.  Best effort: a store that is not ready loses the row, not the announcement.
-async fn write_steps(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
-    sink: StepSink,
-    ctx: StepCtx,
-) {
+/// The most closed steps one transaction of [`write_steps`] takes.
+const STEP_BATCH: usize = 256;
+
+/// A closed step's row: what `step` gets at its open and at its close, and its detail.
+type StepRow = (
+    norn::write::steps::StepNew,
+    norn::write::steps::StepEnd,
+    Option<norn::write::work::StepDetail>,
+);
+
+fn step_row(c: &ClosedStep, sink: &StepSink, ctx: &StepCtx) -> StepRow {
     use norn::write::steps as table;
-    let caller = Caller {
-        class: Class::Service,
-        sid: None,
-        job: None,
-        conn_id: 0,
+    let class_name = serde_json::to_value(c.open.class)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let (plan, project) = sink
+        .scopes
+        .as_ref()
+        .and_then(|s| s.get(&ctx.session))
+        .map_or((None, None), |(p, j)| (Some(p), j));
+    let new = table::StepNew {
+        session: format!("session:{}", ctx.session),
+        task: ctx.task.clone(),
+        plan,
+        project,
+        agent: Some(format!("agent:{}", ctx.agent)),
+        provider: ctx.provider.clone(),
+        class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
+        start: c.open.start,
+        tool: c.open.tool.clone(),
+        tool_kind: c.open.tool_kind.clone(),
+        message_id: c.open.message_id.clone(),
+        turn_id: c.turn_id.clone(),
+        snapshot: None,
+        log_version: None,
+        acp: ctx.acp.clone(),
     };
-    let mut local = 0u64;
-    let mut turn_start = true;
-    while let Some(c) = rx.recv().await {
-        local += 1;
-        let class_name = serde_json::to_value(c.open.class)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_default();
-        let (plan, project) = sink
-            .scopes
-            .as_ref()
-            .and_then(|s| s.get(&ctx.session))
-            .map_or((None, None), |(p, j)| (Some(p), j));
-        let new = table::StepNew {
-            session: format!("session:{}", ctx.session),
-            task: ctx.task.clone(),
-            plan,
-            project,
-            agent: Some(format!("agent:{}", ctx.agent)),
-            provider: ctx.provider.clone(),
-            class: table::StepClass::parse(&class_name).unwrap_or(table::StepClass::Think),
-            start: c.open.start,
-            tool: c.open.tool.clone(),
-            tool_kind: c.open.tool_kind.clone(),
-            message_id: c.open.message_id.clone(),
-            turn_id: c.turn_id.clone(),
-            snapshot: None,
-            log_version: None,
-        };
-        let mut end = table::StepEnd {
-            end: c.end,
-            tokens_in: c.tokens_in,
-            tokens_out: c.tokens_out,
-            cache_read: c.cache_read,
-            cache_write: c.cache_write,
-            cost: c.cost,
-            cost_unit: c.cost.map(|_| "usd".to_string()),
-            snapshot: None,
-            log_version: None,
-        };
-        let detail = c.detail.clone();
-        let (id, seq, log_version) = match sink
-            .writer
-            .write(&caller, "agents/step", move |tx| {
+    let end = table::StepEnd {
+        end: c.end,
+        tokens_in: c.tokens_in,
+        tokens_out: c.tokens_out,
+        cache_read: c.cache_read,
+        cache_write: c.cache_write,
+        cost: c.cost,
+        cost_unit: c.cost.map(|_| "usd-est".to_string()),
+        snapshot: None,
+        log_version: None,
+        context: c.context,
+    };
+    (new, end, c.detail.clone())
+}
+
+/// A written step's id, seq and log version.
+type StepIds = (i64, i64, Option<i64>);
+
+/// ROWS in one transaction, in order: each one's ids.
+async fn write_rows(
+    sink: &StepSink,
+    caller: &Caller,
+    rows: Vec<StepRow>,
+) -> Result<Vec<StepIds>, norn::store::CoordError> {
+    use norn::write::steps as table;
+    sink.writer
+        .write(caller, "agents/step", move |tx| {
+            let mut out = Vec::with_capacity(rows.len());
+            for (new, mut end, detail) in rows {
                 let id = table::open(tx, new)?;
                 end.log_version = Some(norn::write::meta::version(tx.sql())? as i64);
                 let log_version = end.log_version;
@@ -2330,152 +2954,285 @@ async fn write_steps(
                 let seq: i64 =
                     tx.sql()
                         .query_row("select seq from step where id = ?1", [id], |r| r.get(0))?;
-                Ok((id, seq, log_version))
-            })
-            .await
-        {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(sid = ctx.session, "step not recorded: {e}");
-                (0, local as i64, None)
+                out.push((id, seq, log_version));
             }
-        };
-        ctx.flow.written.send_modify(|w| *w += 1);
-        let snapshot = anchor(
-            &sink,
-            &ctx,
-            &caller,
-            id,
-            seq,
-            c.turn_id.as_deref(),
-            &c.open,
-            turn_start,
-        )
-        .await;
-        turn_start = c.turn_id.is_some();
-        let step = Step {
-            id,
-            session: ctx.session.clone(),
-            task: ctx.task.clone(),
-            plan: None,
-            project: None,
-            agent: Some(ctx.agent.clone()),
-            provider: ctx.provider.clone(),
-            seq: seq as u64,
-            class: c.open.class,
-            start: c.open.start,
-            end: Some(c.end),
-            tool: c.open.tool,
-            tool_kind: c.open.tool_kind,
-            message_id: c.open.message_id,
-            turn_id: c.turn_id,
-            snapshot,
-            log_version: log_version.map(|v| v as u64),
-            tokens_in: Some(c.tokens_in as u64),
-            tokens_out: Some(c.tokens_out as u64),
-            cache_read: Some(c.cache_read as u64),
-            cache_write: Some(c.cache_write as u64),
-            cost: c.cost,
-            cost_unit: None,
-            detail: c.detail.as_ref().map(crate::work::detail::wire),
-        };
-        // the files the step was in: the presence model (a shell step's command looked up off the async threads)
-        if let Some(live) = &sink.presence
-            && id != 0
-            && (c.detail.is_some() || c.command.is_some())
-        {
-            let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
-            let files = crate::clock::blocking(move || {
-                crate::work::presence::touches_of_step(d.as_ref(), cmd.as_deref(), &dir)
-            })
-            .await
-            .unwrap_or_default();
-            if !files.is_empty() {
-                let changed = live.apply(crate::work::presence::PresenceEv::Step {
-                    session: ctx.session.clone(),
-                    step: id,
-                    at: step.start,
-                    files,
-                });
-                if let Some(map) = &sink.map {
+            Ok(out)
+        })
+        .await
+}
+
+/// An edit step's lines: where its diff content is in the file now (off the async threads), set on its detail before
+/// its row is made.  Answers the edit's column.
+async fn edit_lines(c: &mut ClosedStep, cwd: &std::path::Path) -> Option<u32> {
+    if c.diffs.is_empty() {
+        return None;
+    }
+    let d = c.detail.clone()?;
+    let (dir, diffs) = (cwd.to_path_buf(), std::mem::take(&mut c.diffs));
+    let (d, r) = crate::clock::blocking(move || {
+        let mut d = d;
+        let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+        (d, r)
+    })
+    .await
+    .ok()?;
+    c.detail = Some(d);
+    r.map(|r| r.col)
+}
+
+/// Write a session's closed steps to the `step` table in order, and announce each as an `agent-step` event (editors)
+/// and on the hub's step channel.  The steps that closed while the last were written go in one transaction (the
+/// graph writer holds each transaction open a moment for more requests: one per step made a long turn's steps wait
+/// that long each).  Best effort: a store that is not ready loses the rows, not the announcements; a batch that fails
+/// is written again one step at a time, so a bad row loses only itself.
+async fn write_steps(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
+    sink: StepSink,
+    ctx: StepCtx,
+) {
+    let caller = Caller {
+        class: Class::Service,
+        sid: None,
+        job: None,
+        conn_id: 0,
+    };
+    let mut local = 0u64;
+    let mut turn_start = true;
+    while let Some(first) = rx.recv().await {
+        let mut batch = vec![first];
+        while batch.len() < STEP_BATCH {
+            match rx.try_recv() {
+                Ok(c) => batch.push(c),
+                Err(_) => break,
+            }
+        }
+        let mut cols = Vec::with_capacity(batch.len());
+        for c in &mut batch {
+            cols.push(edit_lines(c, &ctx.cwd).await);
+        }
+        let rows = batch.iter().map(|c| step_row(c, &sink, &ctx)).collect();
+        let written: Vec<Result<StepIds, norn::store::CoordError>> =
+            match write_rows(&sink, &caller, rows).await {
+                Ok(ids) => ids.into_iter().map(Ok).collect(),
+                Err(e) if batch.len() == 1 => vec![Err(e)],
+                Err(_) => {
+                    let mut each = Vec::with_capacity(batch.len());
+                    for c in &batch {
+                        each.push(
+                            write_rows(&sink, &caller, vec![step_row(c, &sink, &ctx)])
+                                .await
+                                .map(|mut v| v.remove(0)),
+                        );
+                    }
+                    each
+                }
+            };
+        for ((c, row), edit_col) in batch.into_iter().zip(written).zip(cols) {
+            local += 1;
+            let (id, seq, log_version) = match row {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::warn!(sid = ctx.session, "step not recorded: {e}");
+                    (0, local as i64, None)
+                }
+            };
+            ctx.flow.written.send_modify(|w| *w += 1);
+            let (snapshot, head, history_op) = anchor(
+                &sink,
+                &ctx,
+                &caller,
+                id,
+                seq,
+                c.turn_id.as_deref(),
+                &c.open,
+                (turn_start, c.before.as_deref(), c.cell.as_ref()),
+                c.end,
+            )
+            .await;
+            turn_start = c.turn_id.is_some();
+            let step = Step {
+                id,
+                session: ctx.session.clone(),
+                task: ctx.task.clone(),
+                plan: None,
+                project: None,
+                agent: Some(ctx.agent.clone()),
+                provider: ctx.provider.clone(),
+                seq: seq as u64,
+                class: c.open.class,
+                start: c.open.start,
+                end: Some(c.end),
+                tool: c.open.tool,
+                tool_kind: c.open.tool_kind,
+                message_id: c.open.message_id,
+                turn_id: c.turn_id,
+                snapshot,
+                log_version: log_version.map(|v| v as u64),
+                tokens_in: Some(c.tokens_in as u64),
+                tokens_out: Some(c.tokens_out as u64),
+                cache_read: Some(c.cache_read as u64),
+                cache_write: Some(c.cache_write as u64),
+                cost: c.cost,
+                cost_unit: c.cost.map(|_| Unit::UsdEst),
+                detail: c.detail.as_ref().map(crate::work::detail::wire),
+                acp: ctx.acp.clone(),
+                head,
+                history_op: history_op.map(|op| op as u64),
+                undone_by: None,
+                revertible: history_op.is_some(),
+                hooks: Vec::new(),
+            };
+            // the files the step was in: the presence model (a shell step's command looked up off the async threads).  A
+            // tool call's own file is its live entry while it runs: the call's end replaces that with the step's entry
+            // (none when it failed), and a step cut while its call runs on leaves it standing.
+            if let Some(live) = &sink.presence
+                && (c.detail.is_some() || c.command.is_some() || c.open.tool_id.is_some())
+            {
+                use crate::work::presence::{self as presence, CallStatus};
+                let (d, cmd, dir) = (c.detail.clone(), c.command.clone(), ctx.cwd.clone());
+                let (mine, mut files) = crate::clock::blocking(move || {
+                    (
+                        d.as_ref()
+                            .map(|d| presence::touches_of_detail(d, &dir))
+                            .unwrap_or_default(),
+                        presence::touches_of_step(None, cmd.as_deref(), &dir),
+                    )
+                })
+                .await
+                .unwrap_or_default();
+                let mut changed = Vec::new();
+                match (&c.open.tool_id, c.call_end) {
+                    (Some(call), Some(end)) => {
+                        let closed = mine
+                            .into_iter()
+                            .next()
+                            .filter(|_| end == CallStatus::Completed && id != 0)
+                            .map(|t| presence::Entry {
+                                session: ctx.session.clone(),
+                                file: t.file,
+                                mode: t.mode,
+                                line: t.line,
+                                line_end: c
+                                    .detail
+                                    .as_ref()
+                                    .and_then(|d| d.line_end)
+                                    .and_then(|l| u32::try_from(l).ok()),
+                                col: edit_col,
+                                source: t.source,
+                                step: id,
+                                at: step.start,
+                                live: false,
+                                tool_call: None,
+                            });
+                        changed.extend(live.close_live(&ctx.session, call, closed));
+                    }
+                    (Some(_), None) => {}
+                    (None, _) => files.extend(mine),
+                }
+                if id != 0 && !files.is_empty() {
+                    changed.extend(live.apply(presence::PresenceEv::Step {
+                        session: ctx.session.clone(),
+                        step: id,
+                        at: step.start,
+                        files,
+                    }));
+                }
+                if !changed.is_empty()
+                    && let Some(map) = &sink.map
+                {
                     map.presence(&live.now_in(&changed));
                 }
             }
-        }
-        // the step's class is the agent card's activity
-        if let Some(map) = &sink.map
-            && id != 0
-        {
-            map.step(&ctx.session, id, &step.class, step.start);
-        }
-        // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
-        // overlaps, also once the edit is no longer in flight
-        if let Some(map) = &sink.map
-            && step.snapshot.is_some()
-        {
-            map.edited(&ctx.session).await;
-        }
-        // a shell step closed: what its traced command opened goes out once its listener ended too
-        if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
-            && id != 0
-        {
-            traces
-                .step_closed(&ctx.session, id, cmd.clone(), step.start)
-                .await;
-        }
-        // a conclusion's tool step is written, or the turn ended: the stamps that are due
-        if let Some(stamps) = &sink.stamps {
-            use crate::work::conclusions::StampEv;
-            let mut due = Vec::new();
-            if c.open.mcp && id != 0 {
-                due.extend(stamps.step(StampEv::StepClosed {
-                    session: ctx.session.clone(),
-                    step: c.open.key,
-                    id,
-                }));
+            // the step's class is the agent card's activity
+            if let Some(map) = &sink.map
+                && id != 0
+            {
+                map.step(&ctx.session, id, &step.class, step.start);
             }
-            if step.turn_id.is_some() {
-                due.extend(stamps.step(StampEv::TurnEnd {
-                    session: ctx.session.clone(),
-                }));
+            // a snapshot was taken (an edit, or the turn's first step): the worktree's changed files reach the map's
+            // overlaps, also once the edit is no longer in flight
+            if let Some(map) = &sink.map
+                && step.snapshot.is_some()
+            {
+                map.edited(&ctx.session).await;
             }
-            crate::work::conclusions::put(&sink.writer, due).await;
-        }
-        // a spec an agent just wrote is stored at once, not at the next scan
-        if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
-            && d.kind.as_deref() == Some("edit")
-            && let Some(p) = &d.path
-        {
-            crate::work::specs::on_written(
-                &sink.writer,
-                tools,
-                sink.asks.as_ref(),
-                &ctx.session,
-                &ctx.cwd.join(p),
-            )
-            .await;
-        }
-        // a shell step may have committed: link the new commits to the decisions this session recorded
-        if let Some(task) = &ctx.task
-            && step.class == StepClass::Tool
-            && matches!(step.tool_kind.as_deref(), None | Some("execute"))
-        {
-            crate::runner::effects::link_new_commits(&sink.writer, &ctx.session, task, &ctx.cwd)
+            // an edit step closed on a file: the conflict predictor checks it against the other worktrees' changes there
+            if let (Some(predict), Some(d)) = (&sink.predict, &c.detail)
+                && id != 0
+                && d.kind.as_deref() == Some("edit")
+                && let Some(p) = d.path.as_deref().filter(|p| !p.is_empty())
+            {
+                predict.edited(&ctx.session, ctx.cwd.join(p));
+            }
+            // a shell step closed: what its traced command opened goes out once its listener ended too
+            if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
+                && id != 0
+            {
+                traces
+                    .step_closed(&ctx.session, id, cmd.clone(), step.start)
+                    .await;
+            }
+            // a conclusion's tool step is written, or the turn ended: the stamps that are due
+            if let Some(stamps) = &sink.stamps {
+                use crate::work::conclusions::StampEv;
+                let mut due = Vec::new();
+                if c.open.mcp && id != 0 {
+                    due.extend(stamps.step(StampEv::StepClosed {
+                        session: ctx.session.clone(),
+                        step: c.open.key,
+                        id,
+                    }));
+                }
+                if step.turn_id.is_some() {
+                    due.extend(stamps.step(StampEv::TurnEnd {
+                        session: ctx.session.clone(),
+                    }));
+                }
+                crate::work::conclusions::put(&sink.writer, due).await;
+            }
+            // a spec an agent just wrote is stored at once, not at the next scan
+            if let (Some(tools), Some(d)) = (&sink.tools, &c.detail)
+                && d.kind.as_deref() == Some("edit")
+                && let Some(p) = &d.path
+            {
+                crate::work::specs::on_written(
+                    &sink.writer,
+                    tools,
+                    sink.asks.as_ref(),
+                    &ctx.session,
+                    &ctx.cwd.join(p),
+                )
                 .await;
+            }
+            // a shell step may have committed: link the new commits to the decisions this session recorded
+            if step.class == StepClass::Tool
+                && matches!(step.tool_kind.as_deref(), None | Some("execute"))
+            {
+                crate::runner::effects::link_new_commits(
+                    &sink.writer,
+                    &ctx.session,
+                    ctx.task.as_deref(),
+                    &ctx.cwd,
+                )
+                .await;
+            }
+            let ev = AgentStep {
+                session: ctx.session.clone(),
+                step,
+            };
+            sink.editors.broadcast("agent-step", json!(ev));
+            let _ = sink.bus.send(ev);
         }
-        let ev = AgentStep {
-            session: ctx.session.clone(),
-            step,
-        };
-        sink.editors.broadcast("agent-step", json!(ev));
-        let _ = sink.bus.send(ev);
     }
     // no more rows will come: whoever waits for one stops waiting
     ctx.flow.written.send_replace(u64::MAX);
 }
 
 /// The anchors a step gets once it is written: the turn id on the turn's earlier steps (it arrives with the turn's
-/// last), and a snapshot of the worktree after a completed edit and at the turn's first step.  Best effort.
+/// last), and a snapshot of the worktree after a completed edit and at the turn's first step (BEFORE: the tree taken
+/// before the turn's prompt went, else the worktree now; CELL: an edit's, the tree taken before the agent's next write
+/// when the session served one first), with the worktree's commit then (from its ref files).  Best effort; answers the
+/// snapshot and the commit.
 #[allow(clippy::too_many_arguments)]
 async fn anchor(
     sink: &StepSink,
@@ -2485,33 +3242,67 @@ async fn anchor(
     seq: i64,
     turn: Option<&str>,
     open: &OpenStep,
-    turn_start: bool,
-) -> Option<String> {
+    (turn_start, before, cell): (bool, Option<&str>, Option<&crate::timeline::EditCell>),
+    end: f64,
+) -> (Option<String>, Option<String>, Option<i64>) {
     if id == 0 {
-        return None;
+        // the row is lost: an edit's checkpoint would be a tree no step keeps, so the agent's next write takes none
+        if let Some(c) = cell {
+            c.close().await;
+        }
+        return (None, None, None);
     }
-    let edit = open.class == StepClass::Tool
-        && matches!(open.tool_kind.as_deref(), Some("edit" | "delete" | "move"));
+    let edit = open.is_edit();
+    let turn_start = turn_start || before.is_some();
+    let history_op = if edit || turn_start {
+        newest_record(ctx, end).await
+    } else {
+        None
+    };
     let snapshot = match (&sink.snap, edit || turn_start) {
         (Some(s), true) => {
-            s.after_edit(&ctx.session, &ctx.cwd, seq as u64, &sink.editors)
-                .await
+            let before = before.filter(|_| !edit);
+            s.after_edit(
+                &ctx.session,
+                &ctx.cwd,
+                seq as u64,
+                (before, cell),
+                &sink.editors,
+            )
+            .await
         }
         _ => None,
     };
-    if snapshot.is_none() && turn.is_none() {
-        return None;
+    if snapshot.is_none() && turn.is_none() && history_op.is_none() {
+        return (None, None, None);
     }
-    let (turn, tree, sid) = (
+    let head = match &snapshot {
+        Some(_) => {
+            let wt = ctx.cwd.clone();
+            crate::clock::blocking(move || crate::timeline::snapshot::head_of(&wt))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+    let (turn, tree, sid, head_) = (
         turn.map(str::to_string),
         snapshot.clone(),
         format!("session:{}", ctx.session),
+        head.clone(),
     );
     let r = sink
         .writer
         .write(caller, "agents/step", move |tx| {
             if let Some(t) = &tree {
                 tx.sql().execute("update step set snapshot = ?2 where id = ?1", (id, t))?;
+            }
+            if let Some(h) = &head_ {
+                norn::write::steps::set_head(tx, id, h)?;
+            }
+            if let Some(op) = history_op {
+                norn::write::steps::set_history_op(tx, id, op)?;
             }
             if let Some(t) = &turn {
                 tx.sql().execute(
@@ -2525,7 +3316,24 @@ async fn anchor(
     if let Err(e) = r {
         tracing::warn!(sid = ctx.session, "step anchors not recorded: {e}");
     }
-    snapshot
+    (snapshot, head, history_op)
+}
+
+/// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
+/// text to.  None when the session has no history (a folder that is no git worktree, a test, a history that fails).
+async fn newest_record(ctx: &StepCtx, end: f64) -> Option<i64> {
+    let (hubs, state) = ctx.history.clone()?;
+    let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
+    crate::clock::blocking(move || {
+        let (hub, _) = hubs.of_tree(&state, &cwd).ok()?;
+        hub.with(|h| h.last_caused_by(&sid, end))
+            .ok()
+            .flatten()
+            .map(|op| op.0)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 async fn insert_row(db: &urdr::Handle, s: &Session) {
@@ -2649,6 +3457,11 @@ async fn record_entities(front: &Front, caller: &Caller, s: &Session) {
 
 impl Session {
     /// The budget scope of this session.
+    /// The project its plan run works under: the plugins and rules of that project apply.
+    pub(crate) fn project(&self) -> Option<String> {
+        self.scopes.get(&self.id).and_then(|(_, project)| project)
+    }
+
     pub(crate) fn scope(&self) -> runstav::methods::timeline::BudgetScope {
         scope_of(self.role, &self.id)
     }
@@ -2768,7 +3581,10 @@ impl Session {
     /// caller's.
     fn perform(self: &Arc<Self>, s: Stepped) {
         for p in s.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
+        }
+        if s.held {
+            self.wheel_held();
         }
         for e in s.fx {
             match e {
@@ -2838,10 +3654,24 @@ impl Session {
         let (seq, entries) = {
             let mut st = lock(&self.state);
             let idx: Vec<usize> = std::mem::take(&mut st.dirty).into_iter().collect();
-            let entries: Vec<(u64, Entry)> = idx
+            let mut entries: Vec<(u64, Entry)> = idx
                 .into_iter()
                 .filter_map(|i| st.entries.get(i).map(|e| (i as u64, e.clone())))
                 .collect();
+            // an agent message arrives as Markdown blocks: all of them the first time (and for a new subscriber), after
+            // that the patch of the ones that changed
+            if let Some(m) = st.md.as_mut()
+                && let Some((_, e)) = entries.iter_mut().find(|(i, _)| *i == m.entry as u64)
+            {
+                if !m.sent {
+                    e.rest.insert("blocks".into(), json!(m.stream.blocks()));
+                    m.sent = true;
+                } else if !m.patch.is_empty() {
+                    let patch: Vec<_> = m.patch.values().collect();
+                    e.rest.insert("patch".into(), json!(patch));
+                }
+                m.patch.clear();
+            }
             (st.seq, entries)
         };
         let snapshot = self.snapshot();
@@ -2872,9 +3702,35 @@ impl Session {
     /// Connection CONN gets this session's entries from now on; the change number they continue from.
     pub(crate) fn subscribe_entries(&self, conn: u64) -> u64 {
         // the number is read under the same lock the dirty set is drained under, so no entry falls between
-        let st = lock(&self.state);
+        let mut st = lock(&self.state);
         self.editors.subscribe_entries(&self.id, conn);
+        // the next event of the message streaming now carries all its blocks, whoever had the earlier ones
+        if let Some(m) = st.md.as_mut() {
+            m.sent = false;
+        }
         st.seq
+    }
+
+    /// Bytes FROM..TO of tool call TOOL_CALL's output, at most a page of them.
+    pub(crate) fn tool_output(
+        &self,
+        tool_call: &str,
+        from: u64,
+        to: u64,
+    ) -> Option<super::tool_output::Page> {
+        let st = lock(&self.state);
+        let idx = *st.tools.get(tool_call)?;
+        let rest = &st.entries.get(idx)?.rest;
+        let parts = rest
+            .get("content")
+            .map(super::tool_output::text_parts)
+            .unwrap_or_default();
+        let kept: u64 = parts.iter().map(|p| p.len() as u64).sum();
+        let total = rest
+            .get("outputBytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(kept);
+        Some(super::tool_output::page(&parts, total, from, to))
     }
 
     /// The raw input of tool call TOOL_CALL, capped.
@@ -2885,9 +3741,19 @@ impl Session {
         Some(super::wire::capped_tool_input(raw))
     }
 
+    /// Its running step's title (none between steps).
+    pub fn doing(&self) -> Option<String> {
+        lock(&self.state).cur.as_ref().and_then(|c| c.tool.clone())
+    }
+
     pub fn snapshot(&self) -> Snapshot {
+        let identity = self.identities.get(&self.id);
         let st = lock(&self.state);
         Snapshot {
+            ordinal: identity.as_ref().map(|i| i.ordinal),
+            handle: identity.as_ref().map(|i| i.handle.clone()),
+            monogram: identity.map(|i| i.monogram),
+            last_active: Some(st.last_update),
             id: self.id.clone(),
             name: Some(self.name.clone()),
             profile: Some(self.profile.clone()),
@@ -2898,7 +3764,8 @@ impl Session {
             via: Some(self.via),
             mode: self.mode,
             queue: st.core.queue().texts(),
-            paused: st.core.paused().then_some(true),
+            // a take holds the queue at once, though the turn it stops ends after its tool call
+            paused: (st.core.paused() || st.wheel != Wheel::Free).then_some(true),
             permissions: st.permissions.iter().map(|p| p.public.clone()).collect(),
             reviews: Vec::new(),
             usage: st.usage.clone(),
@@ -2911,6 +3778,7 @@ impl Session {
             enforced: Some(self.enforced),
             enforced_why: self.enforced_why.clone(),
             browser_why: self.browser_why.clone(),
+            plugins_changed: self.plugins_changed.load(Ordering::SeqCst),
             role: Some(self.role),
             provider: self.provider.clone(),
             parent: self.parent.clone(),
@@ -2921,6 +3789,11 @@ impl Session {
                 Some(self.live.ids(&self.id).join(","))
                     .filter(|j| st.core.status() == SessionStatus::Waiting && !j.is_empty())
             },
+            hooked: self.hooked.clone(),
+            panel: self.panel.snapshot(),
+            waiting: self.pair.waiting(&self.id),
+            paired: self.pair.paired_now(&self.id),
+            held_by: (st.wheel != Wheel::Free).then(|| "user".to_string()),
         }
     }
 
@@ -2929,7 +3802,12 @@ impl Session {
         let st = lock(&self.state);
         Transcript {
             session: snap,
-            entries: st.entries.clone(),
+            entries: st
+                .entries
+                .iter()
+                .cloned()
+                .map(super::wire::with_blocks)
+                .collect(),
             seq: st.seq,
         }
     }
@@ -2940,6 +3818,7 @@ impl Session {
             document: self.document.clone(),
             read_only: self.role == Role::Chat
                 && self.cwd != launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+            held: Fence::held(self),
         }
     }
 
@@ -2965,11 +3844,21 @@ impl Session {
             let Some(ev) = ev else { break };
             self.handle(ev).await;
         }
+        // the agent is gone: a follow view keeps where it was, a new follow starts from nothing
+        self.follows.session_gone(&self.id);
     }
 
     async fn handle(self: &Arc<Self>, ev: Event) {
         {
             match ev {
+                Event::Ext { method, params } if method.starts_with("_drgnx/") => {
+                    panel::notification(self, &method, params);
+                }
+                Event::Request(Incoming::Ext {
+                    method,
+                    params,
+                    resp,
+                }) => panel::request(self.clone(), method, params, resp),
                 Event::Ext { method, params } => {
                     if let Some((provider, share, resets)) =
                         crate::budget::meter_of(&method, &params)
@@ -2982,30 +3871,60 @@ impl Session {
                 }
                 Event::Update { update, .. } => {
                     if let Ok(v) = serde_json::to_value(&update) {
+                        // a switch to a mode the lock refuses ends the session, as one reported at its start does
+                        if let Some(plock::LockBroken(why)) =
+                            plock::refused_mode_switch(self.locked_as, self.lock_held, &v)
+                        {
+                            tracing::warn!(sid = %self.id, "session ended, its lock broken: {why}");
+                            let s = self.clone();
+                            crate::clock::spawn(
+                                "session:lock-broken",
+                                async move { s.end(true).await },
+                            );
+                            return;
+                        }
                         if let Some(total) = v
                             .pointer("/cost/amount")
                             .and_then(Value::as_f64)
                             .filter(|_| v.get("sessionUpdate") == Some(&json!("usage_update")))
                         {
-                            let hits = self.budgets.spend_total_in(
+                            let booked = self.budgets.spend_total_in(
                                 &self.scope(),
                                 "usd-est",
                                 &self.acp.0,
                                 Unit::UsdEst,
                                 total,
                             );
-                            self.budgets.notify(hits);
+                            lock(&self.state).add_turn_cost(booked.delta);
+                            self.budgets.notify(booked.hits);
                         }
-                        let (stepped, begun) = {
+                        let (stepped, begun, live_out, moved) = {
                             let mut st = lock(&self.state);
                             st.apply(&v);
                             let begun = std::mem::take(&mut st.mcp_begun);
+                            let live_out = std::mem::take(&mut st.live_out);
+                            let moved = st.follow_tool.take().and_then(|i| {
+                                crate::editor::follow::of_tool(
+                                    &self.id,
+                                    &self.cwd,
+                                    &st.entries[i].rest,
+                                    st.plan_now.as_deref(),
+                                )
+                            });
                             (
                                 std::mem::take(&mut st.tool_ended)
                                     .then(|| st.turn_step(TurnEvent::ToolCompleted)),
                                 begun,
+                                live_out,
+                                moved,
                             )
                         };
+                        self.hook_own_edits(&v);
+                        // the cursor moves as the call runs, before its step closes
+                        self.feed_live(live_out).await;
+                        if let Some(m) = moved {
+                            self.follows.moved(m);
+                        }
                         // a conclusion's tool step began: the stamp core pairs it with its MCP call
                         for (key, tool_name) in begun {
                             let s = self
@@ -3041,6 +3960,19 @@ impl Session {
                 }
                 Event::Request(Incoming::ReadFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // the pair door asks the editor: on a task of its own, so this loop never waits on one
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-read", async move {
+                            let got = match me.pair_read(path_of(&v)).await {
+                                Ok(text) => Ok(slice_lines(text, &v)),
+                                Err(m) => Err(m),
+                            };
+                            answer_read(resp, got);
+                        });
+                        return;
+                    }
                     match self.read_file(&v).await {
                         Ok(content) => {
                             if let Ok(r) = serde_json::from_value::<ReadTextFileResponse>(
@@ -3056,18 +3988,52 @@ impl Session {
                 }
                 Event::Request(Incoming::WriteFile(req, resp)) => {
                     let v = serde_json::to_value(&req).unwrap_or_default();
-                    match self.write_file(&v).await {
-                        Ok(()) => {
-                            if let Ok(r) =
-                                serde_json::from_value::<WriteTextFileResponse>(json!({}))
-                            {
-                                let _ = resp.respond(r);
+                    let path = v.get("path").and_then(Value::as_str).unwrap_or("");
+                    if self.project_chat() && self.in_project(path) {
+                        // a chat's write of its project goes through the pair door, on a task of its own
+                        let me = self.clone();
+                        crate::clock::spawn("session:pair-write", async move {
+                            let w = norn::tools::pair::PairWrite::Whole {
+                                path: path_of(&v),
+                                content: v
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            };
+                            let r = me.pair_write(w).await;
+                            match r {
+                                Ok(_) => {
+                                    if let Ok(ok) =
+                                        serde_json::from_value::<WriteTextFileResponse>(json!({}))
+                                    {
+                                        let _ = resp.respond(ok);
+                                    }
+                                }
+                                Err(m) => {
+                                    let _ = resp.fail(-32602, &m);
+                                }
+                            }
+                        });
+                        return;
+                    }
+                    // in a task of its own: the after-edit hooks may take their whole budget, and this loop
+                    // must keep serving the agent's other events meanwhile
+                    let me = self.clone();
+                    crate::clock::spawn("session:write", async move {
+                        match me.write_file(&v).await {
+                            Ok(()) => {
+                                if let Ok(r) =
+                                    serde_json::from_value::<WriteTextFileResponse>(json!({}))
+                                {
+                                    let _ = resp.respond(r);
+                                }
+                            }
+                            Err((code, m)) => {
+                                let _ = resp.fail(code, &m);
                             }
                         }
-                        Err(m) => {
-                            let _ = resp.fail(-32602, &m);
-                        }
-                    }
+                    });
                 }
                 Event::Exit {
                     code,
@@ -3090,6 +4056,8 @@ impl Session {
                         self.schedule();
                         return;
                     }
+                    // it is no longer live: its ordinal and handle are free
+                    self.identities.free(&self.id);
                     let stepped = {
                         let mut st = lock(&self.state);
                         st.exit =
@@ -3110,6 +4078,139 @@ impl Session {
                     self.schedule();
                 }
             }
+        }
+    }
+
+    /// What the updates said of the running tool calls, into the presence model's live feed (and the map's presence).
+    async fn feed_live(&self, outs: Vec<(String, LiveOut)>) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
+        let mut changed = Vec::new();
+        for (call, out) in outs {
+            match out {
+                LiveOut::At {
+                    detail,
+                    status,
+                    diffs,
+                } => {
+                    // an edit with diff content that has not landed is pending, on the lines it will change
+                    let pending = !diffs.is_empty()
+                        && matches!(status, CallStatus::Pending | CallStatus::InProgress);
+                    let Some(mut update) = self.live_update(*detail, diffs, status).await else {
+                        continue;
+                    };
+                    if pending && update.mode == Mode::Edit {
+                        update.mode = Mode::Pending;
+                    }
+                    changed.extend(self.presence.apply_live(&self.id, &call, update));
+                }
+                LiveOut::Gone => changed.extend(self.presence.close_live(&self.id, &call, None)),
+            }
+        }
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// A running call's presence from its DETAIL: its file and line, and for an edit with DIFFS the lines they change
+    /// in the file now (found off the async threads); none when it names no file.
+    async fn live_update(
+        &self,
+        detail: norn::write::work::StepDetail,
+        diffs: Diffs,
+        status: crate::work::presence::CallStatus,
+    ) -> Option<crate::work::presence::LiveUpdate> {
+        let dir = self.cwd.clone();
+        let (detail, range) = if diffs.is_empty() {
+            (detail, None)
+        } else {
+            let (dir, fallback) = (dir.clone(), detail.clone());
+            crate::clock::blocking(move || {
+                let mut d = detail;
+                let r = crate::work::detail::edit_lines_now(&mut d, &dir, diffs);
+                (d, r)
+            })
+            .await
+            .unwrap_or((fallback, None))
+        };
+        let t = crate::work::presence::touches_of_detail(&detail, &dir)
+            .into_iter()
+            .next()?;
+        Some(crate::work::presence::LiveUpdate {
+            path: t.file,
+            mode: t.mode,
+            line: t.line,
+            line_end: detail.line_end.and_then(|l| u32::try_from(l).ok()),
+            col: range.map(|r| r.col),
+            status,
+            source: t.source,
+            at: crate::clock::wall_secs(),
+        })
+    }
+
+    /// A permission request whose tool call carries `diff` content: the edit it asks for shows as pending on its lines
+    /// from now until the request is answered ([`Session::settle`]).
+    async fn feed_pending(&self, req: &Value) {
+        use crate::work::presence::CallStatus;
+        use runstav::methods::work::PresenceMode as Mode;
+        let Some(tool) = req.get("toolCall") else {
+            return;
+        };
+        let Some(call) = tool.get("toolCallId").and_then(Value::as_str) else {
+            return;
+        };
+        let diffs = crate::work::edit_lines::diffs(tool.get("content"));
+        let Some(path) = tool
+            .pointer("/locations/0/path")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| diffs.first().map(|d| d.0.clone()))
+        else {
+            return;
+        };
+        let detail = norn::write::work::StepDetail {
+            kind: Some("edit".into()),
+            path: Some(path),
+            origin: "acp".into(),
+            ..Default::default()
+        };
+        let Some(mut update) = self.live_update(detail, diffs, CallStatus::Pending).await else {
+            return;
+        };
+        update.mode = Mode::Pending;
+        let changed = self.presence.apply_live(&self.id, call, update);
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
+        }
+    }
+
+    /// Permission request P answered with ANSWER (none: cancelled), and its pending presence settled: refused, the call
+    /// will not run and its entry goes; allowed, the call's own updates carry it on (an id the agent has not reported
+    /// is the request's own: its entry goes, the call left open).
+    fn settle(&self, p: Pending, answer: Option<String>) {
+        let allowed = answer.as_deref().is_some_and(|a| {
+            p.options
+                .iter()
+                .any(|(id, k)| id == a && k.starts_with("allow"))
+        });
+        let call = p
+            .public
+            .tool
+            .as_ref()
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        reply(p.resp, answer);
+        let Some(call) = call else { return };
+        let changed = if !allowed {
+            self.presence.close_live(&self.id, &call, None)
+        } else if lock(&self.state).tools.contains_key(&call) {
+            Vec::new()
+        } else {
+            self.presence.withdraw_live(&self.id, &call)
+        };
+        if !changed.is_empty() {
+            self.map.presence(&self.presence.now_in(&changed));
         }
     }
 
@@ -3137,7 +4238,8 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        // The matrix decides first: allowed answers at once, never refuses at once, an ask waits for the user.
+        // The matrix decides, after the before-tool hooks where any subscribe: allowed answers at once, never refuses
+        // at once, an ask waits for the user.
         let s = self.clone();
         tokio::spawn(async move {
             if s.has_jobs() && is_wait_loop(req.get("toolCall")) {
@@ -3157,7 +4259,33 @@ impl Session {
                 reply(resp, pick_reject(&options));
                 return;
             }
+            // Codex's read-only mode asks before an apply_patch; in a project chat an approved patch would run
+            // outside its sandbox, so the edit is refused and the chat is pointed to the drgnx edit tools
+            if s.project_chat()
+                && s.locked_as == Some(crate::settings::profiles::Provider::Codex)
+                && req.pointer("/toolCall/kind").and_then(Value::as_str) == Some("edit")
+            {
+                {
+                    let mut st = lock(&s.state);
+                    let mut rest = Map::new();
+                    rest.insert("text".into(), json!(plock::PAIR_NATIVE_EDIT_HINT));
+                    st.push(EntryType::Error, rest);
+                }
+                s.changed();
+                reply(resp, pick_reject(&options));
+                return;
+            }
             let (action, facts) = classify(req.get("toolCall"));
+            match s
+                .seam_hooks(req.get("toolCall"), action, &facts, &options, turn)
+                .await
+            {
+                SeamHooks::Answer(option) => {
+                    reply(resp, option);
+                    return;
+                }
+                SeamHooks::Today | SeamHooks::Decide => {}
+            }
             let ctx = ActionCtx {
                 facts,
                 ..ActionCtx::of_session(&s.scopes, &s.id)
@@ -3169,10 +4297,15 @@ impl Session {
             match gate {
                 Gate::Never(_) => reply(resp, pick_reject(&options)),
                 Gate::Allow if pick_allow(&options).is_some() => reply(resp, pick_allow(&options)),
-                Gate::Ask(card) if card > 0 => {
-                    s.hold_permission(&req, options, resp, Some(card), turn)
+                gate => {
+                    // held for the user: an edit it asks for is pending meanwhile
+                    s.feed_pending(&req).await;
+                    let card = match gate {
+                        Gate::Ask(card) if card > 0 => Some(card),
+                        _ => None,
+                    };
+                    s.hold_permission(&req, options, resp, card, turn)
                 }
-                _ => s.hold_permission(&req, options, resp, None, turn),
             }
         });
     }
@@ -3228,7 +4361,7 @@ impl Session {
             });
             if !fx.contains(&TurnEffect::Hold { request }) {
                 drop(st);
-                reply(pending.resp, None);
+                self.settle(pending, None);
                 // nobody answers its card either
                 self.withdraw_later(Self::withdrawn(&fx));
                 return;
@@ -3279,7 +4412,7 @@ impl Session {
                     drop(st);
                     for p in std::mem::take(&mut stepped.answered) {
                         let answer = p.option(allow, option);
-                        reply(p.resp, answer);
+                        self.settle(p, answer);
                     }
                     self.perform(stepped);
                     self.changed();
@@ -3336,7 +4469,7 @@ impl Session {
         let allow = gate == Gate::Allow;
         for p in waiting {
             let answer = p.option(allow, chosen);
-            reply(p.resp, answer);
+            self.settle(p, answer);
         }
         self.changed();
     }
@@ -3420,6 +4553,155 @@ impl Session {
         Ok(())
     }
 
+    /// The user takes the wheel ([`super::wheel`]): the turn running stops after its tool call, no turn starts until
+    /// the give, and once no turn runs the wheel is held.  A second take changes nothing.
+    pub(crate) fn wheel_take(self: &Arc<Self>) -> Result<(), Error> {
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let (taken, fx) =
+                wheel::take(&mut st.wheel, &mut st.core).map_err(|m| invalid("id", m))?;
+            if taken == wheel::Taken::Already {
+                return Ok(());
+            }
+            let mut stepped = st.stepped(fx);
+            stepped.held |= taken == wheel::Taken::Held;
+            stepped
+        };
+        // a paired chat's door closes at the take: its writes still queued in an editor are dropped
+        self.pair.hold(&self.id, true);
+        self.persist_wheel();
+        self.perform(stepped);
+        self.changed();
+        Ok(())
+    }
+
+    /// The wheel is held (the turn the take stopped has ended, or none ran): the boundary first (the edit history's,
+    /// and the step snapshot for the files it does not track; [`wheel::HeldAt`]), kept with the hold for a restart,
+    /// then `agent-wheel held`.
+    fn wheel_held(self: &Arc<Self>) {
+        let me = self.clone();
+        crate::clock::spawn("session:wheel-held", async move {
+            let tree = match &me.snap {
+                Some(s) => s.wheel_held(&me.id, &me.cwd).await,
+                None => None,
+            };
+            let op = me.history_boundary().await;
+            lock(&me.state).wheel_base = wheel::HeldAt { tree, op }.to_store();
+            me.persist_wheel();
+            me.changed();
+            me.editors.broadcast(
+                "agent-wheel",
+                json!(AgentWheel {
+                    id: me.id.clone(),
+                    state: WheelState::Held,
+                }),
+            );
+        });
+    }
+
+    /// The user gives the wheel back: refused until held.  A session in a worktree of its own has the editor save
+    /// its buffers there first (refused while one stays unsaved); then the user's changes since the hold go to the
+    /// agent first ([`wheel::give_text`]), its queue after, and `agent-wheel free`.
+    pub(crate) async fn wheel_give(self: &Arc<Self>) -> Result<(), Error> {
+        let base = {
+            let st = lock(&self.state);
+            wheel::can_give(st.wheel).map_err(refuse)?;
+            wheel::HeldAt::from_store(st.wheel_base.as_deref())
+        };
+        let snapshot = if wheel::saves_on_give(self.role) {
+            let cwd = self.cwd.to_string_lossy().into_owned();
+            let unsaved = self
+                .editors
+                .wheel_save(&self.id, &cwd, WHEEL_SAVE_WAIT)
+                .await;
+            if !unsaved.is_empty() {
+                return Err(refuse(&format!(
+                    "not given back: save these files first: {}",
+                    unsaved.join(", ")
+                )));
+            }
+            match (&self.snap, &base.tree) {
+                (Some(s), Some(b)) => s
+                    .changes_since(&self.id, &self.cwd, b)
+                    .await
+                    .unwrap_or_default(),
+                _ => String::new(),
+            }
+        } else {
+            // a chat works in the user's checkout: its edits there reach it from the edit history only
+            String::new()
+        };
+        // the files the editor tracks from the edit history (an agent's op before the boundary is not in it); the
+        // snapshot only for the rest
+        let (history, tracked) = match base.op {
+            Some(op) => self.history_changes(op).await,
+            None => (String::new(), Vec::new()),
+        };
+        let diff = format!("{history}{}", wheel::untracked_only(&snapshot, &tracked));
+        let stepped = {
+            let mut st = lock(&self.state);
+            let st = &mut *st;
+            let fx = wheel::give(&mut st.wheel, &mut st.core, wheel::give_text(&diff))
+                .map_err(refuse)?;
+            st.wheel_base = None;
+            st.stepped(fx)
+        };
+        self.pair.hold(&self.id, false);
+        self.persist_wheel();
+        self.perform(stepped);
+        self.editors.broadcast(
+            "agent-wheel",
+            json!(AgentWheel {
+                id: self.id.clone(),
+                state: WheelState::Free,
+            }),
+        );
+        Ok(())
+    }
+
+    /// The edit history's boundary of a hold in this session's worktree ([`crate::history::Hub::boundary`]); none
+    /// when the folder has no history.
+    async fn history_boundary(&self) -> Option<i64> {
+        let (hubs, state) = self.history.as_ref()?;
+        let (hub, _) = hubs.of_tree(state, &self.cwd).ok()?;
+        let now = crate::clock::wall_secs();
+        crate::clock::blocking(move || hub.boundary(now))
+            .await
+            .ok()?
+            .map_err(|e| tracing::info!(sid = self.id, "no history boundary for the hold: {e}"))
+            .ok()
+    }
+
+    /// The user's changes since record OP in the files the editor tracks in this session's worktree, and those files
+    /// ([`crate::history::Hub::changes_since`]).
+    async fn history_changes(&self, op: i64) -> (String, Vec<String>) {
+        let Some((hubs, state)) = &self.history else {
+            return (String::new(), Vec::new());
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return (String::new(), Vec::new());
+        };
+        match crate::clock::blocking(move || hub.changes_since(&tree, op)).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                tracing::warn!(sid = self.id, "the changes since the hold not read: {e}");
+                (String::new(), Vec::new())
+            }
+            Err(_) => (String::new(), Vec::new()),
+        }
+    }
+
+    /// The hold on the wheel, kept for a restart.
+    fn persist_wheel(&self) {
+        let Some(store) = &self.store else { return };
+        let st = lock(&self.state);
+        let held = st.wheel != Wheel::Free;
+        if let Err(e) = store.save_wheel(&self.id, held, st.wheel_base.as_deref()) {
+            tracing::warn!(sid = self.id, "the wheel's hold not kept: {e}");
+        }
+    }
+
     /// What the supervisor reads of this session.
     pub(crate) fn observe(&self) -> crate::supervisor::Obs {
         let st = lock(&self.state);
@@ -3440,6 +4722,7 @@ impl Session {
                 .as_ref()
                 .and_then(|u| Some(u.used? / u.size.filter(|s| *s > 0.0)?)),
             jobs: self.live.ids(&self.id),
+            held: st.wheel != Wheel::Free,
         }
     }
 
@@ -3497,6 +4780,163 @@ impl Session {
     /// turn; hermod cannot inject into a running one).
     pub(crate) fn steer_in(self: &Arc<Self>, text: String) {
         self.turn_event(TurnEvent::QueueEdited(QueueEdit::SteerIn(text)));
+    }
+
+    /// The front, once bound and while it lives (the hooks before a tool call reach the plugins through it).
+    pub(crate) fn front(&self) -> Option<Arc<Front>> {
+        self.tool_hub.front()
+    }
+
+    /// Where a `before-tool` point of this session runs AT: its project, folder, role, profile, job and task.
+    pub(crate) async fn hook_site(&self, at: crate::hook_points::At) -> crate::hook_points::Site {
+        let project = match self.project.get() {
+            Some(p) => p.clone(),
+            None => {
+                let p = match ActionCtx::of_session(&self.scopes, &self.id).project {
+                    Some(p) => Some(p),
+                    None => {
+                        let cwd = self.cwd.clone();
+                        crate::clock::blocking(move || norn::project::resolve(&cwd).map(|r| r.id))
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                };
+                let _ = self.project.set(p.clone());
+                p
+            }
+        };
+        crate::hook_points::Site {
+            at,
+            session: self.id.clone(),
+            project,
+            root: Some(self.cwd.clone()),
+            role: serde_json::to_value(self.role)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned)),
+            profile: Some(self.profile.clone()),
+            job: self.job.clone(),
+            task: self.task.clone(),
+        }
+    }
+
+    /// The tool call TOOL of a permission request as the hooks see it, with what this session folded of the same
+    /// `toolCallId` (its kind, when the request has none; the adapter's tool name, else, for a request with no title
+    /// of its own (DeepSeek Harness sends the id only), the folded call's one-word title) and its step.
+    pub(crate) fn tool_call_info(&self, tool: Option<&Value>) -> crate::hook_points::ToolCallInfo {
+        let id = tool
+            .and_then(|t| t.get("toolCallId"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let untitled = tool.and_then(|t| t.get("title")).is_none();
+        let (kind, name, step) = {
+            let st = lock(&self.state);
+            let folded = st.tools.get(id).and_then(|i| st.entries.get(*i));
+            let kind = folded
+                .and_then(|e| e.rest.get("kind"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let title = folded
+                .filter(|_| untitled)
+                .and_then(|e| e.rest.get("title"))
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty() && !t.contains(char::is_whitespace))
+                .map(str::to_owned);
+            let name = st.tool_meta.get(id).and_then(|m| m.name.clone()).or(title);
+            let step = st
+                .cur
+                .as_ref()
+                .filter(|c| !id.is_empty() && c.tool_id.as_deref() == Some(id))
+                .map(|c| c.key);
+            (kind, name, step)
+        };
+        crate::hook_points::ToolCallInfo::from_acp(tool, kind.as_deref(), name.as_deref(), step)
+    }
+
+    /// The step running now (`step.seq`), if any.
+    pub(crate) fn current_step(&self) -> Option<i64> {
+        lock(&self.state).cur.as_ref().map(|c| c.key)
+    }
+
+    /// A hook's note TEXT (from SOURCE, `rule:ID` or `plugin:NAME@…`) under STEP: a `note` entry of the transcript.
+    pub(crate) fn hook_note(
+        self: &Arc<Self>,
+        step: Option<i64>,
+        source: Option<String>,
+        text: String,
+    ) {
+        let mut rest = Map::new();
+        rest.insert("text".into(), json!(text));
+        if let Some(s) = step {
+            rest.insert("step".into(), json!(s));
+        }
+        if let Some(s) = source {
+            rest.insert("source".into(), json!(s));
+        }
+        lock(&self.state).push(EntryType::Note, rest);
+        self.changed();
+    }
+
+    /// The `before-tool` hooks at the seam, for the request TOOL that `classify` read as ACTION with FACTS during
+    /// TURN (design addendum §4.1, "The seam, step by step"):
+    /// - a hub tool's step is hooked at its server, not here (its row says so);
+    /// - nothing subscribed: today's seam ([`SeamHooks::Today`]: no `dry`, no row);
+    /// - else the matrix's `dry` (the settings read again first): Never refuses with no hook run; on Allow or Ask
+    ///   the hooks run. A deny answers the reject option and makes no card; a turn cancelled meanwhile answers
+    ///   `cancelled`; a `dry` Allow answers Allow with no `decide`; a `dry` Ask goes to `decide`.
+    async fn seam_hooks(
+        self: &Arc<Self>,
+        tool: Option<&Value>,
+        action: Action,
+        facts: &runstav::methods::matrix::Facts,
+        options: &[(String, String)],
+        turn: u64,
+    ) -> SeamHooks {
+        use crate::hook_points::{self as points, At};
+        let Some(front) = self.front() else {
+            return SeamHooks::Today;
+        };
+        let call = self.tool_call_info(tool);
+        if call.kind == "other" && points::hub_tool_name(call.name.as_deref()) {
+            let site = self.hook_site(At::Seam).await;
+            points::hub_tool_at_the_seam(&front, &site, &call).await;
+            return SeamHooks::Today;
+        }
+        let site = self.hook_site(At::Seam).await;
+        let Some(prepared) = points::prepare(&front.core.plugins, &site, &call) else {
+            return SeamHooks::Today;
+        };
+        self.gate.refresh_from(&self.settings);
+        let ctx = ActionCtx {
+            facts: facts.clone(),
+            ..ActionCtx::of_session(&self.scopes, &self.id)
+        };
+        let (g, who, at) = (self.gate.clone(), self.who(), now());
+        // a store that fails asks the user, as `decide` does
+        let verdict = self
+            .writer
+            .db
+            .read(move |c| Ok(g.dry(c, &who, action, &ctx, at).verdict))
+            .await
+            .unwrap_or(runstav::methods::matrix::Verdict::Ask);
+        if verdict == runstav::methods::matrix::Verdict::Never {
+            return SeamHooks::Answer(pick_reject(options));
+        }
+        let cell = norn::matrix::Cell {
+            verdict,
+            limit: None,
+        };
+        let out = points::run(&front, &site, &call, prepared, Some(cell)).await;
+        if !lock(&self.state).core.asks_in(turn) {
+            return SeamHooks::Answer(None);
+        }
+        match out.decision {
+            norn::hooks::Decision::Deny(_) => SeamHooks::Answer(pick_reject(options)),
+            norn::hooks::Decision::Proceed { .. } if pick_allow(options).is_some() => {
+                SeamHooks::Answer(pick_allow(options))
+            }
+            _ => SeamHooks::Decide,
+        }
     }
 
     /// First call for decision-log version V: true (the gate tells the agent once per version).
@@ -3567,6 +5007,27 @@ impl Session {
         });
     }
 
+    /// What its agent answered to `initialize` (`agentCapabilities`).
+    #[cfg_attr(not(test), allow(dead_code, reason = "read by the rewind"))]
+    pub(crate) fn capabilities(&self) -> Option<&Value> {
+        self.capabilities.as_ref()
+    }
+
+    /// Its conversation is about to be swapped (a rewind): the running turn is cancelled and cut off, a prompt that
+    /// has not reached the agent goes back to the queue, and the queue is kept on disk for the session that follows.
+    #[cfg_attr(not(test), allow(dead_code, reason = "called by the rewind"))]
+    pub(crate) fn detach(self: &Arc<Self>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Detach);
+        self.perform(fx);
+    }
+
+    /// Its new conversation is live (a rewind's): TOLD first, then the queue as the swap kept it.  Also a revert's
+    /// that stopped before anything changed: the same conversation goes on.
+    pub(crate) fn reattach(self: &Arc<Self>, told: Option<String>) {
+        let fx = lock(&self.state).turn_step(TurnEvent::Reattach { told });
+        self.perform(fx);
+    }
+
     pub(crate) async fn close_now(&self) {
         self.closed.store(true, Ordering::SeqCst);
         self.flush_transcript();
@@ -3581,25 +5042,325 @@ impl Session {
         let text = tokio::fs::read_to_string(&real)
             .await
             .map_err(|e| format!("{path}: {e}"))?;
-        let line = req.get("line").and_then(Value::as_u64).unwrap_or(1).max(1) as usize;
-        let limit = req.get("limit").and_then(Value::as_u64);
-        if line == 1 && limit.is_none() {
-            return Ok(text);
-        }
-        let it = text.split_inclusive('\n').skip(line - 1);
-        Ok(match limit {
-            Some(n) => it.take(n as usize).collect(),
-            None => it.collect(),
-        })
+        Ok(slice_lines(text, req))
     }
 
-    async fn write_file(&self, req: &Value) -> Result<(), String> {
+    /// A chat in a project (not its scratch folder, not a brainstorm): its edits of the checkout go through the pair
+    /// door, its own tools see the checkout read-only.
+    pub(crate) fn project_chat(&self) -> bool {
+        is_project_chat(
+            self.role,
+            self.document.is_some(),
+            self.cwd == launch::scratch_path(&runstav::paths::Env::process(), &self.id),
+        )
+    }
+
+    /// Whether PATH (absolute) is inside the session's project: a chat's `fs/*` call there goes to the pair door.
+    fn in_project(&self, path: &str) -> bool {
+        let p = Path::new(path);
+        p.is_absolute() && resolve(p).starts_with(resolve(&self.cwd))
+    }
+
+    /// The session's matrix cells now.
+    async fn cells_now(&self) -> Result<norn::matrix::Effective, String> {
+        let who = Who {
+            role: Some(self.role),
+            agent: Some(self.profile.clone()),
+            provider: self.provider.clone(),
+        };
+        self.gate
+            .effective_now(
+                &self.settings,
+                &self.writer,
+                who,
+                ActionCtx::of_session(&self.scopes, &self.id),
+            )
+            .await
+            .map_err(|e| format!("the matrix: {e:?}"))
+    }
+
+    /// The chat's read of PATH through the pair door (`read_file`, `fs/read_text_file` in the project).
+    pub(crate) async fn pair_read(&self, path: String) -> Result<String, String> {
+        if !self.project_chat() {
+            return Err(
+                "read_file is a chat's in a project; read the file with your own tools".into(),
+            );
+        }
+        let eff = self.cells_now().await?;
+        self.pair
+            .read(&self.id, &self.cwd, &eff, &path)
+            .await
+            .map(|s| s.text)
+            .map_err(|r| r.0)
+    }
+
+    /// The chat's write W through the pair door (`edit_file`, `write_file`, `fs/write_text_file` in the project).
+    pub(crate) async fn pair_write(
+        &self,
+        w: norn::tools::pair::PairWrite,
+    ) -> Result<String, String> {
+        use crate::pair::door::WriteKind;
+        use norn::tools::pair::PairWrite;
+        if !self.project_chat() {
+            return Err("only a chat in your project edits your checkout through drgnx".into());
+        }
+        let eff = self.cells_now().await?;
+        // the step the write is made in: the editor's change, and the disk's record, carry it into the history
+        let step = self.current_step().unwrap_or(0);
+        let (path, kind) = match w {
+            PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
+            PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
+        };
+        self.pair
+            .write_with(
+                &self.id,
+                step,
+                &self.cwd,
+                &eff,
+                &path,
+                kind,
+                self.disk_record(step),
+            )
+            .await
+            .map_err(|r| r.0)
+    }
+
+    /// The record of a pair write to a file open nowhere, before it lands on disk: the agent's operations in its
+    /// project's history, as [`Self::record_write`] makes them, caused by STEP (best effort: no history, no record).
+    fn disk_record(&self, step: i64) -> Option<crate::pair::disk::Record> {
+        let (hubs, state) = self.history.clone()?;
+        let (cwd, sid) = (self.cwd.clone(), self.id.clone());
+        Some(Box::new(move |real: &Path, bytes: &[u8]| {
+            let Some(rel) = real
+                .strip_prefix(resolve(&cwd))
+                .ok()
+                .and_then(|r| r.to_str())
+                .filter(|r| !r.is_empty())
+            else {
+                return;
+            };
+            let Ok((hub, tree)) = hubs.of_tree(&state, &cwd) else {
+                return;
+            };
+            let cause = verdandi::Cause {
+                session: Some(sid.clone()),
+                step: Some(step.to_string()),
+                ..Default::default()
+            };
+            if let Err(e) =
+                hub.on_agent_write(&tree, rel, bytes, &sid, cause, crate::clock::wall_secs())
+            {
+                tracing::info!(sid, "the agent's write is not in the history: {e}");
+            }
+        }))
+    }
+
+    /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once
+    /// and queues a note to the agent, cancelling nothing.
+    pub(crate) async fn pair_toggle(self: &Arc<Self>, on: bool) -> Result<(), Error> {
+        if !self.project_chat() {
+            return Err(refuse("pair mode is a chat's in a project"));
+        }
+        let eff = self.cells_now().await.map_err(|e| refuse(&e))?;
+        self.pair
+            .toggle(&self.id, on, &eff)
+            .map_err(|r| refuse(&r.0))?;
+        if !on {
+            self.prompt(crate::pair::door::OFF_NOTE.to_string(), Origin::Hub)?;
+        }
+        self.changed();
+        Ok(())
+    }
+
+    /// The matrix may have changed: this chat's `chat.project-edit` decided again; one that became never closes its
+    /// pair door now ([`crate::pair::door::Door::recheck`]), cancelling nothing.
+    pub(crate) async fn pair_recheck(self: &Arc<Self>) {
+        if !self.project_chat() {
+            return;
+        }
+        let Ok(eff) = self.cells_now().await else {
+            return;
+        };
+        if self.pair.recheck(&self.id, &eff) {
+            self.changed();
+        }
+    }
+
+    /// The agent's `fs/write_text_file`: the after-edit hooks see the content first. A deny refuses the write (-32000),
+    /// a change is what gets written (and the agent is told), a note goes under the step. What is written goes to the
+    /// project's edit history first ([`Self::record_write`]).
+    async fn write_file(self: &Arc<Self>, req: &Value) -> Result<(), (i64, String)> {
         let path = req.get("path").and_then(Value::as_str).unwrap_or("");
-        let content = req.get("content").and_then(Value::as_str).unwrap_or("");
-        let real = self.fence().check(path, true)?;
+        let mut content = req
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let real = self.fence().check(path, true).map_err(|m| (-32602, m))?;
+        if let Some(front) = self.front() {
+            let old = tokio::fs::read_to_string(&real).await.unwrap_or_default();
+            let diff = similar::TextDiff::from_lines(old.as_str(), content.as_str())
+                .unified_diff()
+                .to_string();
+            let edit = crate::hook_points::EditInfo {
+                path: real.clone(),
+                diff: Some(diff),
+                content: Some(content.clone()),
+                step: None,
+            };
+            let out = crate::hook_points::after_edit(&front, self, &edit).await;
+            self.note_all(&out.annotations);
+            if let Some((_, reason)) = crate::hook_points::refusal_of(&out) {
+                return Err((-32000, crate::hook_points::refusal_message(&reason)));
+            }
+            if let Some((new, hook)) = crate::hook_points::changed_content(&out) {
+                content = new;
+                self.steer_in(crate::hook_points::change_notice(&hook, path));
+            }
+        }
+        // the edit steps closed since the last write hold the tree as it is now, before this one (after the hooks:
+        // a refused write leaves them for the next)
+        let cells = std::mem::take(&mut lock(&self.state).edits);
+        if let Some(s) = &self.snap
+            && !cells.is_empty()
+        {
+            s.before_write(&self.id, &self.cwd, cells).await;
+        }
+        // the edit history records what is written: the content after the hooks' change, never a refused write
+        self.record_write(&real, &content).await;
         tokio::fs::write(&real, content)
             .await
-            .map_err(|e| format!("{path}: {e}"))
+            .map_err(|e| (-32602, format!("{path}: {e}")))
+    }
+
+    /// Notes from the hooks, shown in the transcript under the step.
+    fn note_all(self: &Arc<Self>, notes: &[String]) {
+        if notes.is_empty() {
+            return;
+        }
+        {
+            let mut st = lock(&self.state);
+            for n in notes {
+                let mut rest = Map::new();
+                rest.insert("text".into(), json!(n));
+                st.push(EntryType::Notice, rest);
+            }
+        }
+        self.changed();
+    }
+
+    /// An edit the agent made itself just completed: the hooks may only note or deny it. Off the turn, in a task of
+    /// its own. A deny is steered to the agent and marks the step refused; the file stays.
+    fn hook_own_edits(self: &Arc<Self>, update: &Value) {
+        if update.get("sessionUpdate") != Some(&json!("tool_call_update"))
+            || update.get("status") != Some(&json!("completed"))
+            || self.front().is_none()
+        {
+            return;
+        }
+        let id = update
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let edits: Vec<(PathBuf, String)> = update
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|c| c.get("type") == Some(&json!("diff")))
+            .filter_map(|c| {
+                let path = c.get("path")?.as_str()?;
+                let new = c.get("newText").and_then(Value::as_str).unwrap_or("");
+                let old = c.get("oldText").and_then(Value::as_str).unwrap_or("");
+                let diff = similar::TextDiff::from_lines(old, new)
+                    .unified_diff()
+                    .to_string();
+                Some((PathBuf::from(path), diff))
+            })
+            .collect();
+        if edits.is_empty() {
+            return;
+        }
+        let me = self.clone();
+        crate::clock::spawn("session:after-edit", async move {
+            let Some(front) = me.front() else {
+                return;
+            };
+            for (path, diff) in edits {
+                let shown = path.display().to_string();
+                let edit = crate::hook_points::EditInfo {
+                    path,
+                    diff: Some(diff),
+                    content: None,
+                    step: None,
+                };
+                let out = crate::hook_points::after_edit(&front, &me, &edit).await;
+                me.note_all(&out.annotations);
+                if let Some((hook, reason)) = crate::hook_points::refusal_of(&out) {
+                    me.mark_refused(&id, &hook, &reason);
+                    me.steer_in(format!(
+                        "drgnx refused your edit of {shown}; the hook {hook} said: «{reason}»"
+                    ));
+                }
+            }
+        });
+    }
+
+    /// The step of TOOL_ID is marked refused by hook HOOK (the timeline and the edits ledger read it).
+    fn mark_refused(self: &Arc<Self>, tool_id: &str, hook: &str, reason: &str) {
+        {
+            let mut st = lock(&self.state);
+            if let Some(i) = st.tools.get(tool_id).copied() {
+                st.entries[i].rest.insert(
+                    "refused_by_hook".into(),
+                    json!({"hook": hook, "reason": reason}),
+                );
+                st.dirty.insert(i);
+            }
+        }
+        self.changed();
+    }
+
+    /// The agent's write of CONTENT to REAL (a path the fence allowed), recorded in its project's history before the
+    /// file is written, so the watcher's event about it finds the version known: operations by the agent's peer on its
+    /// worktree's branch, one `agent_step` record caused by this session.  A folder that is no git worktree, a path
+    /// outside it (a brainstorm's document) or a history that fails leave the write as it is: best effort.
+    async fn record_write(&self, real: &Path, content: &str) {
+        let Some((hubs, state)) = &self.history else {
+            return;
+        };
+        let Some(rel) = real
+            .strip_prefix(resolve(&self.cwd))
+            .ok()
+            .and_then(|r| r.to_str())
+            .filter(|r| !r.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return;
+        };
+        let cause = verdandi::Cause {
+            session: Some(self.id.clone()),
+            ..Default::default()
+        };
+        let (sid, bytes, now) = (
+            self.id.clone(),
+            content.as_bytes().to_vec(),
+            crate::clock::wall_secs(),
+        );
+        let r = crate::clock::blocking(move || {
+            hub.on_agent_write(&tree, &rel, &bytes, &sid, cause, now)
+        })
+        .await;
+        if let Ok(Err(e)) = r {
+            tracing::info!(
+                sid = self.id,
+                "the agent's write is not in the history: {e}"
+            );
+        }
     }
 
     /// Cancel the turn and end the process group.
@@ -3704,6 +5465,12 @@ impl Session {
         if !send {
             return;
         }
+        // the turn's first step holds the tree as it is before the agent hears of the turn: taken by the step writer
+        // once that step is written, it could already hold the turn's first write
+        if let Some(s) = &self.snap {
+            let tree = s.before_turn(&self.id, &self.cwd).await;
+            lock(&self.state).before = tree;
+        }
         // its entry is the agent's now: in the transcript file first, then off the queue on disk (a hub that dies
         // between the two runs the prompt again at the next start; it never loses it)
         self.flush_transcript();
@@ -3727,11 +5494,11 @@ impl Session {
         let blocks = serde_json::from_value(json!([block])).unwrap_or_default();
         let out = self.conn.prompt(&self.acp, blocks, None).await;
         // the reader task ends the turn, after the updates the agent sent before its answer
-        let _ = self.done.send(TurnEnd(out));
+        let _ = self.done.send(TurnEnd(turn, out));
     }
 
     fn finish_turn(self: &Arc<Self>, end: TurnEnd) {
-        let out = end.0;
+        let TurnEnd(turn, out) = end;
         let mut message: Option<String> = None;
         let jobs = self.has_jobs();
         // ENDING as the step saw it, under its lock: a hub that begins ending after the step ends what it started
@@ -3760,21 +5527,28 @@ impl Session {
                     rest.insert("stop".into(), json!(format!("{:?}", o.stop)));
                     st.push(EntryType::Stop, rest);
                     used = turn_use(o);
+                    used.cost = st.take_turn_cost();
                     let tokens = (used.tokens_in + used.tokens_out) as f64;
                     st.tokens += tokens as u64;
                     self.spend(vec![(Unit::Tokens, tokens)]);
                     TurnEvent::PromptDone {
+                        turn,
                         cancelled: serde_json::to_value(o.stop).ok() == Some(json!("cancelled")),
                         jobs,
                     }
                 }
-                Err(hermod::Error::Closed) => TurnEvent::PromptFailed { closed: true, jobs },
+                Err(hermod::Error::Closed) => TurnEvent::PromptFailed {
+                    turn,
+                    closed: true,
+                    jobs,
+                },
                 Err(e) => {
                     rest.insert("text".into(), json!(e.to_string()));
                     // the editor tells this error, which ends the turn, from one inside a turn (a refused wait)
                     rest.insert("stop".into(), json!("Error"));
                     st.push(EntryType::Error, rest);
                     TurnEvent::PromptFailed {
+                        turn,
                         closed: false,
                         jobs,
                     }
@@ -3785,6 +5559,9 @@ impl Session {
             let stepped = st.turn_step(ev);
             (stepped, st.core.ending())
         };
+        // a planning session's answer (empty when the turn failed) goes to Say it; any other chat pays one lookup
+        self.say
+            .turn_ended(&self.id, message.as_deref().unwrap_or(""));
         if let Some(m) = message.filter(|m| {
             (m.contains("drgnx-report") || m.contains("drgnx-conclusion")) && self.task.is_some()
         }) {
@@ -3837,7 +5614,7 @@ impl Session {
             return;
         }
         for p in stepped.cancelled {
-            reply(p.resp, None);
+            self.settle(p, None);
         }
         self.changed();
     }
@@ -3905,6 +5682,16 @@ fn is_wait_loop(tool: Option<&Value>) -> bool {
         || words
             .windows(2)
             .any(|p| p[0] == "tail" && matches!(p[1], "-f" | "-F" | "--follow"))
+}
+
+/// What the `before-tool` hooks at the seam left to do ([`Session::seam_hooks`]).
+enum SeamHooks {
+    /// Nothing subscribed: the seam as it was before hooks (`decide`).
+    Today,
+    /// The hooks ran and none denied, and the matrix asks: `decide` makes the card (or a grant allows).
+    Decide,
+    /// The answer is decided: the option, or none ("cancelled").
+    Answer(Option<String>),
 }
 
 /// The reject option of OPTIONS (once preferred), else none (the answer is "cancelled").
@@ -4013,6 +5800,8 @@ pub async fn send(f: &Front, c: &Caller, p: SendParams) -> Result<bool, Error> {
 }
 
 pub async fn stop(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    // a planning session's planning stops with it (Say it)
+    f.core.say.stopped(p.id.as_str());
     // a turn running is cancelled (the session stays); an idle or starting session is ended: its token and socket go
     let ends = f
         .core
@@ -4066,6 +5855,60 @@ pub fn tool_input(
     })
 }
 
+/// `agents/wheel/take`: the user takes the session's wheel.
+pub fn wheel_take(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user takes an agent's wheel"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_take()?;
+    Ok(true)
+}
+
+/// `agents/wheel/give`: the user gives the session's wheel back.
+pub async fn wheel_give(f: &Front, c: &Caller, p: ById) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user gives an agent's wheel back"));
+    }
+    f.core.agents.find(p.id.as_str())?.wheel_give().await?;
+    Ok(true)
+}
+
+/// `agents/wheel/saved`: the editor's answer to `wheel-save`.
+pub fn wheel_saved(f: &Front, _: &Caller, p: WheelSaved) -> Result<bool, Error> {
+    let unsaved = p.unsaved.iter().map(|a| a.as_str().to_string()).collect();
+    Ok(f.editors.wheel_saved(p.req, unsaved))
+}
+
+/// `agents/pair`: the user turns pair mode on or off for a chat in a project.
+pub async fn pair(
+    f: &Front,
+    c: &Caller,
+    p: runstav::methods::pair::PairToggle,
+) -> Result<bool, Error> {
+    if c.class != Class::User {
+        return Err(refuse("only the user turns pair mode on or off"));
+    }
+    f.core.agents.find(p.id.as_str())?.pair_toggle(p.on).await?;
+    Ok(true)
+}
+
+/// `agents/tool-output`: a range of a tool call's output, at most a page.
+pub fn tool_output(
+    f: &Front,
+    _: &Caller,
+    p: runstav::methods::agents::ToolOutputParams,
+) -> Result<runstav::methods::agents::ToolOutput, Error> {
+    let s = f.core.agents.find(p.id.as_str())?;
+    let page = s
+        .tool_output(&p.tool_call, p.from, p.to)
+        .ok_or_else(|| invalid("tool_call", "a tool call of this session"))?;
+    Ok(runstav::methods::agents::ToolOutput {
+        text: page.text,
+        total_bytes: page.total_bytes,
+        truncated: page.truncated,
+    })
+}
+
 /// `agents/pause`: the turn is cancelled once the tool call running now completes.
 pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
     f.core.agents.cancel_after_tool(p.id.as_str())?;
@@ -4073,6 +5916,7 @@ pub fn pause(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
 }
 
 pub async fn kill(f: &Front, _: &Caller, p: ById) -> Result<bool, Error> {
+    f.core.say.stopped(p.id.as_str());
     let r = f.core.agents.kill(p.id.as_str()).await;
     if r.is_ok() {
         gateway_gone(f, p.id.as_str()).await;
@@ -4230,7 +6074,7 @@ pub async fn move_session(
         }
         crate::clock::sleep(Duration::from_millis(50)).await;
     }
-    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref()).await;
+    let text = super::handoff::summary(front, id, &old.cwd, old.task.as_deref(), None).await;
     let start: StartParams = serde_json::from_value(json!({
         "profile": profile,
         "cwd": old.cwd,
@@ -4315,10 +6159,42 @@ pub fn fuzz_apply(updates: &[Value]) {
     assert_eq!(st.seq, updates.len() as u64);
 }
 
+/// The fuzz target `drgnx_context`'s entry (feature `fuzzing`): PARAMS as an agent's `_drgnx/context` notification
+/// and as its `_drgnx/before_tool` request, from a session `s1` that offers both features. Nothing may panic; a
+/// breakdown that is taken respects the bounds (at most 8 parts, 200 items each, a message within 256 KiB) and
+/// survives a round trip; a message from another session is never taken.
+#[cfg(feature = "fuzzing")]
+pub fn fuzz_context(params: &Value) {
+    let features = ["context".to_owned(), "before-tool".to_owned()];
+    if let Ok(ctx) = panel::check_context(&features, "s1", "_drgnx/context", params.clone()) {
+        assert!(params.to_string().len() <= 256 * 1024);
+        assert_eq!(params.get("sessionId"), Some(&Value::from("s1")));
+        assert!(ctx.parts.len() <= 8);
+        let again = serde_json::to_value(&ctx).expect("a taken breakdown encodes");
+        let mut back = again.clone();
+        back["sessionId"] = Value::from("s1");
+        assert_eq!(
+            panel::check_context(&features, "s1", "_drgnx/context", back).ok(),
+            Some(ctx)
+        );
+    }
+    if let Ok(call) =
+        panel::check_before_tool(&features, "s1", "_drgnx/before_tool", params.clone())
+    {
+        assert_eq!(params.get("sessionId"), Some(&Value::from("s1")));
+        assert!(call.is_object());
+    }
+    if params.get("sessionId") != Some(&Value::from("s2")) {
+        assert!(panel::check_context(&features, "s2", "_drgnx/context", params.clone()).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::Budgets;
     use runstav::methods::agents::SessionStatus;
+    use runstav::methods::timeline::BudgetScope;
 
     #[tokio::test]
     async fn rekey_runs_before_the_first_prompt() {
@@ -4415,6 +6291,94 @@ mod tests {
         v
     }
 
+    /// A cost reading TOTAL of conversation CONV, as `Session::handle` books it: the budget's delta is also the turn's.
+    fn read_cost(b: &Budgets, st: &mut State, conv: &str, total: f64) {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        let booked = b.spend_total_in(&scope, "usd-est", conv, Unit::UsdEst, total);
+        st.add_turn_cost(booked.delta);
+    }
+
+    fn spent_est(b: &Budgets) -> f64 {
+        let scope: BudgetScope = serde_json::from_value(json!({"worker": "w1"})).unwrap();
+        b.view(&scope)
+            .spent
+            .into_iter()
+            .find(|l| l.unit == Unit::UsdEst)
+            .map_or(0.0, |l| l.amount)
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_turns_cost_is_what_the_budget_booked_in_it() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "c1", 0.10);
+        let first = st.take_turn_cost().unwrap();
+        assert!((first - 0.10).abs() < 1e-9, "{first}");
+        read_cost(&b, &mut st, "c1", 0.25);
+        let second = st.take_turn_cost().unwrap();
+        assert!((second - 0.15).abs() < 1e-9, "{second}");
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_step_keeps_the_context_at_its_close() {
+        let mut st = State::new();
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), None);
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 300000, "size": 1000000}),
+        ));
+        st.step_begin(StepClass::Think, None);
+        st.step_close(now(), Some(TurnUse::default()));
+        st.step_begin(StepClass::JobWait, None);
+        st.step_close(now(), None);
+        st.step_begin(StepClass::Tool, None);
+        st.step_close(now(), None);
+        let got: Vec<Option<i64>> = st.closed.iter().map(|c| c.context).collect();
+        assert_eq!(got, [None, Some(300000), Some(300000), None]);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn no_cost_reported_leaves_the_step_unpriced() {
+        let mut st = State::new();
+        st.apply(&upd(
+            json!({"sessionUpdate": "usage_update", "used": 10, "size": 100}),
+        ));
+        assert_eq!(st.take_turn_cost(), None);
+        let b = Budgets::default();
+        read_cost(&b, &mut st, "c1", 0.10);
+        st.take_turn_cost();
+        // a turn in which the total did not move has no cost, not 0.0
+        read_cost(&b, &mut st, "c1", 0.10);
+        assert_eq!(st.take_turn_cost(), None);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn the_step_and_the_budget_book_the_same_delta() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        // a new conversation starts at its own first reading, even above the old total
+        read_cost(&b, &mut st, "b", 0.30);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.30).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
+    // test-pattern: D
+    #[test]
+    fn a_fork_that_reports_its_parents_total_is_booked_alike() {
+        let (b, mut st) = (Budgets::default(), State::new());
+        read_cost(&b, &mut st, "a", 0.10);
+        let one = st.take_turn_cost().unwrap();
+        read_cost(&b, &mut st, "b", 0.15);
+        let two = st.take_turn_cost().unwrap();
+        assert!((two - 0.15).abs() < 1e-9, "{two}");
+        assert!((spent_est(&b) - (one + two)).abs() < 1e-9);
+    }
+
     #[test]
     fn chunks_of_one_message_join_into_one_entry() {
         let mut st = State::new();
@@ -4507,6 +6471,8 @@ mod tests {
             agent: "mock".into(),
             provider: None,
             cwd: PathBuf::new(),
+            acp: None,
+            history: None,
         };
         let sink = StepSink {
             writer: writer.clone(),
@@ -4520,6 +6486,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -4548,6 +6515,11 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
+                before: None,
+                call_end: None,
+                diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }
@@ -4587,6 +6559,355 @@ mod tests {
         );
     }
 
+    // test-pattern: D
+    /// Steps that closed while the writer was busy go to the step table in one transaction, not one each: the graph
+    /// writer holds a batch open for its linger after the first request, and one write per step made a long turn's
+    /// steps wait that long each (a 10,000-step turn took minutes to be readable).
+    #[tokio::test]
+    async fn queued_steps_are_written_in_one_transaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(64);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let flow: Arc<StepFlow> = Arc::default();
+        let ctx = StepCtx {
+            flow: flow.clone(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+            acp: None,
+            history: None,
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        for i in 0..50 {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: f64::from(i),
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: f64::from(i) + 0.5,
+                turn_id: None,
+                tokens_in: 0,
+                tokens_out: 0,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+                detail: None,
+                command: None,
+                context: None,
+                before: None,
+                call_end: None,
+                diffs: Vec::new(),
+                cell: None,
+            })
+            .unwrap();
+        }
+        let before = writer.signals.writes();
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let mut seqs = Vec::new();
+        for _ in 0..50 {
+            seqs.push(seen.recv().await.unwrap().step.seq);
+        }
+        assert_eq!(seqs, (1..=50).collect::<Vec<u64>>(), "every step, in order");
+        assert_eq!(
+            writer.signals.writes() - before,
+            1,
+            "the 50 queued steps are one transaction"
+        );
+        assert_eq!(*flow.written.borrow(), 50, "and all count as written");
+    }
+
+    // test-pattern: D
+    #[tokio::test]
+    async fn the_step_event_carries_the_unit() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: Some("task:7".into()),
+            agent: "mock".into(),
+            provider: None,
+            cwd: PathBuf::new(),
+            acp: None,
+            history: None,
+        };
+        let sink = StepSink {
+            writer: writer.clone(),
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for cost in [Some(0.15), None] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Think,
+                    start: 10.0,
+                    tool: None,
+                    tool_kind: None,
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end: 11.0,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost,
+                detail: None,
+                command: None,
+                context: None,
+                before: None,
+                call_end: None,
+                diffs: Vec::new(),
+                cell: None,
+            })
+            .unwrap();
+        }
+        let priced = seen.recv().await.unwrap().step;
+        let unpriced = seen.recv().await.unwrap().step;
+        assert_eq!(priced.cost_unit, Some(Unit::UsdEst));
+        assert_eq!(unpriced.cost_unit, None);
+    }
+
+    // test-pattern: D
+    #[tokio::test]
+    async fn an_edit_step_anchors_the_history_record_of_its_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.path().join("state")).unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                    .args(["-c", "commit.gpgsign=false"])
+                    .args(args)
+                    .current_dir(&work)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        let hubs = Arc::new(crate::history::wire::Hubs::default());
+        let state = dir.path().join("state");
+        let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
+        let cause = verdandi::Cause {
+            session: Some("a1".into()),
+            ..Default::default()
+        };
+        let made = hub
+            .on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
+            .unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: work.clone(),
+            acp: None,
+            history: Some((hubs.clone(), state)),
+        };
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        tokio::spawn(write_steps(rx, sink, ctx));
+        for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
+            tx.send(ClosedStep {
+                open: OpenStep {
+                    class: StepClass::Tool,
+                    start: end - 0.5,
+                    tool: Some(format!("{kind} a.txt")),
+                    tool_kind: Some(kind.into()),
+                    tool_id: None,
+                    message_id: None,
+                    key: 0,
+                    mcp: false,
+                    parent_tool: None,
+                },
+                end,
+                turn_id: None,
+                tokens_in: 1,
+                tokens_out: 1,
+                cache_read: 0,
+                cache_write: 0,
+                cost: None,
+                detail: None,
+                command: None,
+                context: None,
+                before: None,
+                call_end: None,
+                diffs: Vec::new(),
+                cell: None,
+            })
+            .unwrap();
+        }
+        let edit = seen.recv().await.unwrap().step;
+        let read = seen.recv().await.unwrap().step;
+        assert_eq!(edit.history_op, Some(made[0].op as u64));
+        assert!(edit.revertible);
+        assert_eq!(read.history_op, None, "a read step anchors no record");
+    }
+
+    // test-pattern: D (the step's row cannot be written: its store's folder is a file)
+    #[tokio::test]
+    async fn an_edit_step_whose_row_is_lost_closes_its_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("not-a-folder"), "").unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("not-a-folder/work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let wt = dir.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join("a.txt"), "edited").unwrap();
+        let snap = crate::timeline::Snap::for_test(
+            dir.path().join("cp"),
+            Arc::new(crate::settings::Settings::new()),
+        );
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: Some(snap.clone()),
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: wt.clone(),
+            acp: None,
+            history: None,
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(write_steps(rx, sink, ctx));
+        let cell = crate::timeline::EditCell::default();
+        tx.send(ClosedStep {
+            open: OpenStep {
+                class: StepClass::Tool,
+                start: 1.0,
+                tool: Some("Edit a.txt".into()),
+                tool_kind: Some("edit".into()),
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 2.0,
+            turn_id: None,
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: None,
+            command: None,
+            context: None,
+            call_end: None,
+            diffs: Vec::new(),
+            cell: Some(cell.clone()),
+            before: None,
+        })
+        .unwrap();
+        // the step is announced though its row is lost
+        seen.recv().await.unwrap();
+        assert!(cell.is_done(), "the lost step's checkpoint is closed");
+        // so the agent's next write takes no tree for it
+        snap.before_write("a1", &wt, vec![cell]).await;
+        let repo = crate::timeline::snapshot::repo_of(&dir.path().join("cp"), &wt);
+        let refs = if repo.exists() {
+            let out = std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(&repo)
+                .args(["for-each-ref", "--format=%(refname)"])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        } else {
+            String::new()
+        };
+        assert_eq!(refs, "", "no tree is held for a step nobody keeps");
+    }
+
     /// Three steps of a turn through the writer: a think, an edit tool call, the turn's last think (with the turn id).
     async fn written_turn(
         dir: &Path,
@@ -4612,6 +6933,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         let ctx = StepCtx {
             flow: Arc::default(),
@@ -4620,6 +6942,8 @@ mod tests {
             agent: "mock".into(),
             provider: None,
             cwd: wt.clone(),
+            acp: None,
+            history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let done = tokio::spawn(write_steps(rx, sink, ctx));
@@ -4650,6 +6974,11 @@ mod tests {
                 cost: None,
                 detail: None,
                 command: None,
+                context: None,
+                before: None,
+                call_end: None,
+                diffs: Vec::new(),
+                cell: None,
             })
             .unwrap();
         }
@@ -4798,6 +7127,30 @@ mod tests {
         assert_eq!(st.core.status(), SessionStatus::Starting);
     }
 
+    /// [D] Only a chat in a project goes to the pair door: a worker's or a manager's `fs/write_text_file` keeps the
+    /// session fence and its inline write, as do a chat in its scratch folder and a brainstorm.
+    #[test]
+    fn a_workers_fs_write_keeps_the_fence() {
+        for role in [Role::Worker, Role::Manager] {
+            assert!(!is_project_chat(role, false, false), "{role:?}");
+        }
+        assert!(!is_project_chat(Role::Chat, false, true), "a scratch chat");
+        assert!(!is_project_chat(Role::Chat, true, false), "a brainstorm");
+        assert!(is_project_chat(Role::Chat, false, false));
+        // the fence still writes a worker's own worktree inline
+        let dir = tempfile::tempdir().unwrap();
+        let f = Fence {
+            cwd: dir.path().to_path_buf(),
+            document: None,
+            read_only: false,
+            held: false,
+        };
+        assert!(
+            f.check(&dir.path().join("a.rs").to_string_lossy(), true)
+                .is_ok()
+        );
+    }
+
     #[test]
     fn the_fence_keeps_files_inside_the_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -4809,6 +7162,7 @@ mod tests {
             cwd: cwd.clone(),
             document: None,
             read_only: false,
+            held: false,
         };
         let s = |p: &Path| p.to_string_lossy().into_owned();
         assert!(f.check(&s(&cwd.join("a.txt")), true).is_ok());
@@ -4817,6 +7171,16 @@ mod tests {
         assert!(f.check(&s(&cwd.join("../secret")), false).is_err());
         assert!(f.check(&s(&cwd.join("link")), false).is_err());
         assert!(f.check("relative.txt", false).is_err());
+        // while the user holds the wheel nothing is written; reads stay
+        let held = Fence {
+            cwd: cwd.clone(),
+            document: None,
+            read_only: false,
+            held: true,
+        };
+        let refused = held.check(&s(&cwd.join("a.txt")), true).unwrap_err();
+        assert!(refused.contains(wheel::HELD), "{refused}");
+        assert!(held.check(&s(&cwd.join("a.txt")), false).is_ok());
     }
 
     #[test]
@@ -4827,6 +7191,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: Some(doc.clone()),
             read_only: true,
+            held: false,
         };
         assert!(f.check(&doc.to_string_lossy(), true).is_ok());
         assert!(
@@ -4847,6 +7212,7 @@ mod tests {
             cwd: dir.path().to_path_buf(),
             document: None,
             read_only: true,
+            held: false,
         };
         let src = dir.path().join("src.rs");
         assert!(f.check(&src.to_string_lossy(), false).is_ok());

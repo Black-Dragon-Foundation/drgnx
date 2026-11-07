@@ -204,6 +204,7 @@ mod tests {
                 repo: "p".into(),
                 url: "https://example.org/p.git".into(),
                 commit: "c0ffee".into(),
+                cred: Some("DEPLOY".into()),
             },
             Frame::Start {
                 r: r(),

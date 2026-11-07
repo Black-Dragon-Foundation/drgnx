@@ -275,3 +275,73 @@ fn coalescing_in_every_order() {
         },
     );
 }
+
+/// [D] A session whose job runs on a runner is drawn running on that runner's machine: the "runs on" edge points at
+/// the runner, and the agent's card carries the job.
+#[test]
+fn runner_job_runs_on_edge_points_at_the_runner() {
+    let row: runstav::methods::exec::ExecRow = serde_json::from_value(json!({
+        "id": "x1", "session": "s1", "kind": "other", "cwd": "/w", "name": "suite", "status": "running",
+        "started": 100.0, "timebox_s": 360, "machine": "desktop"
+    }))
+    .expect("a job row");
+    let job = job_fact(&row, vec!["token".into()]);
+    assert_eq!(job.runner.as_deref(), Some("desktop"));
+    assert_eq!(
+        (job.name.as_str(), job.limit_min, job.keys.as_slice()),
+        ("suite", Some(6), ["token".to_string()].as_slice())
+    );
+    let snap: Snapshot =
+        serde_json::from_value(json!({"id": "s1", "name": "A"})).expect("a snapshot");
+    let sess = Sess {
+        snap,
+        kids: Vec::new(),
+        place: None,
+        seq: 1,
+        state: State::Running,
+        since: 0,
+        job: Some(job),
+    };
+    let mut core = Core::new();
+    let runner = vegvisir::RunnerFact {
+        trust: "mine".into(),
+        state: "ready".into(),
+        jobs: 1,
+        icon: "server".into(),
+        cost: None,
+    };
+    let desk = Machine {
+        machine: "desktop".into(),
+        slots: Vec::new(),
+        local: false,
+    };
+    core.step(Event::Machines(vec![machine_fact(
+        &desk,
+        Some((&runner, 16)),
+    )]));
+    for ev in sess.facts() {
+        core.step(ev);
+    }
+    let edge = core
+        .model()
+        .edges()
+        .into_iter()
+        .find(|e| e.kind == vegvisir::EdgeKind::RunsOn)
+        .expect("a runs-on edge");
+    assert_eq!(
+        (edge.from.0.as_str(), edge.to.0.as_str()),
+        ("agent:s1", "machine:desktop")
+    );
+    let items = core.model().items();
+    let m = &items[&ItemId("machine:desktop".into())];
+    assert_eq!(m.fields.slots, Some((1, 16)));
+    assert_eq!(
+        m.fields.runner.as_ref().map(|r| r.icon.as_str()),
+        Some("server")
+    );
+    let a = &items[&ItemId("agent:s1".into())];
+    assert_eq!(
+        a.fields.job.as_ref().map(|j| j.name.as_str()),
+        Some("suite")
+    );
+}

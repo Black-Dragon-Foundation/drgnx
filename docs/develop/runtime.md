@@ -25,6 +25,8 @@ runtime/
 - **`cargo deny check`** runs all four sections (advisories, licenses, bans, sources) on every push and daily. `deny.toml`
   bans OpenSSL and native-tls (one TLS stack), async-std and smol (one runtime), `h2` (HTTP/1.1 only) and `aws-lc-sys`
   (the ring provider), and denies yanked, unmaintained and unsound crates; an exception is an explicit, dated `ignore`.
+  The licence exceptions are Loro's three MPL-2.0 collection crates (`im`, `sized-chunks`, `bitmaps`; the edit history),
+  each named in `deny.toml` with its reason.
 
 ### Crate names
 
@@ -36,6 +38,7 @@ runtime/
 | `draugr` (formerly `drgnx-proc`) | spawning (explicit environments, own process groups, one exit) and the orphan reaper ([hub.md](hub.md#ratatoskrs-children-draugr)); passed fds, the pinned spawner and the git runner ([below](#draugr-passed-fds-and-git)) |
 | `gleipnir` | the sandbox: the spec and its validation, bwrap, Landlock, seccomp, Seatbelt, the relay and the CONNECT proxy; self-contained ([gleipnir.md](gleipnir.md)) |
 | `eitri` | file access that never follows a link: opens pinned by fd, bounded reads, writes by rename, root-owned programs; generic, used by `gleipnir` and `draugr` ([below](#eitri-no-link-file-access)) |
+| `brokkr` | the plugin host: plugin manifests, the approval hash, the install scan, the agent-tools WIT world, and the WASM host (wasmtime 48) that runs plugins on a guest runtime of its own ([plugins.md](plugins.md)) |
 | `gleipnir-escape` | test tooling, never shipped: the probe binary and the escape harness ([gleipnir.md](gleipnir.md), "Proving it") |
 | `mimir` | a tools-only MCP server for both protocol eras (`initialize`, and the stateless 2026-07-28) and the bridge's redial; self-contained, pure Rust |
 | `norn` | `work.db`'s coordination writer, its readers and the 16 coordination tools on `mimir` ([coordination.md](coordination.md)); drgnx's policy over `urdr::graph` (closed kinds and links, the personal-notes deny-list, scopes, grants, trust marking, projects), the schema 6 → 7 migration, the tracker and its tools ([store.md](store.md)); pure Rust but for urdr's bundled SQLite, so off the Android cross-check |
@@ -48,6 +51,7 @@ runtime/
 | `forseti` | the scheduler core: the job model, priority, admission, the memory cap and ladder, kill classes, expected times, placement and fairness; pure, `serde` only, shared by the hub, the runners and jobq ([forseti.md](forseti.md)) |
 | `sleipnir` | the runner: the Linux machine probe and runner contract, the reservation files two schedulers share, the executor; its `linux` and `sync` features are blocking, never tokio, so jobq takes them ([sleipnir.md](sleipnir.md)) |
 | `vegvisir` | the Work space's map core: its model (items in six layers, edges, chains, overlaps, needs-you) and its layout, stepped by typed events with effects out; pure, `serde` only ([work-space.md](work-space.md)) |
+| `verdandi` | the edit history: `history.db` (records, documents, branches) on urdr's store, a Loro document per tracked file and branch, the operation log and its settle rule, span revert on element ids; no hub or editor type ([history.md](history.md)) |
 | `skuld` | test support, never shipped: every order of a pure core, and the one real-time wait Rust tests may use ([below](#every-order-skuld)); crates name it under `[dev-dependencies]` only |
 | `heimdall` | the CDP broker's pure part: envelope parsing over `serde_json`'s `RawValue` (params never re-encoded), routing one browser connection between the agent and the hub by session owner, the refusal list, downloads, cleanup when the agent goes, and the pipe's NUL and frame codecs; no I/O, std and serde only, built for Android too ([hub.md](hub.md#the-cdp-broker)) |
 | `drgnx-px` | a networked container job's relay sidecar: the channel's frames, its pure state machine and writer order, the shell both ends run, the `drgnx-px` binary, and the owner's end on gleipnir's proxy; tokio current-thread, libc ([drgnx-px.md](drgnx-px.md)) |
@@ -163,17 +167,30 @@ It is generic (no drgnx type) and sits on `agent-client-protocol-schema` (the ty
 tail). There is no SDK role framework.
 
 - **Tasks.** A connection is one child, a writer task (lines to its stdin), a reader task (lines from its stdout) and
-  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail })` returns the `Conn`
+  a watchdog that waits for the child. `Conn::spawn(spec, ConnOpts { deadline, stderr_tail, tap })` returns the `Conn`
   (cheap to clone; dropping every clone closes the child's stdin) and the event receiver, which the owner drains
   (1024 events buffer).
+- **The line tap** (`ConnOpts::tap`, a `LineTap`; a recording's, [recordings.md](recordings.md)): `line(Dir, line,
+  instant)` for every line, `In` on the writer task before it is written, `Out` on the reader task before it is
+  handled, so each direction keeps the wire's order and an answer is never seen before its request; `exit(code,
+  signal, stderr)` once, after the last line, with the tail `Exit` carries. `ConnOpts` is `Clone`, no longer `Copy`.
 - **Calls.** `initialize` (always without the `terminal` capability; `terminal/*` requests from an agent get -32601),
-  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork`. Every
+  `new_session`, `load_session`, `resume_session`, `close_session`, `set_mode`, `prompt`, `cancel`, `fork_into`. Every
   call except `prompt` has the connection's `deadline`: a missed one fails that call with `Error::Deadline`, and the
   connection keeps working. A `prompt` ends by the agent's answer, `cancel`, or the child's exit (`Error::Closed`).
   `PromptOutcome` carries the stop reason, the turn's token usage and `_meta.turnId` when the agent sends one.
-- **Fork.** `fork(sid, Some(ForkPoint { message_id }))` sends `session/fork` with
-  `_meta.jetbrains.air.fork {version: 1, messageId}`; without a point, a plain fork. The new session starts in the
-  directory of the session it forks (the connection remembers the `cwd` of every session it opened or loaded).
+  `ext_request(method, params, deadline)` sends an extension request (`_drgnx/context/drop` …) and returns the
+  agent's result as it is, for the caller to check.
+  `reported_mode(sid)` is the mode (`modes.currentModeId`) the answer that opened the session on this connection
+  reported (`session/new`, `load`, `resume` or `fork`), or `None` when it reported none: the mode a lock checks,
+  never the one it asked for.
+- **Fork.** `fork_into(ForkInto { source, cwd, mcp, at, meta })` sends `session/fork` with `{sessionId, cwd,
+  mcpServers, _meta}`: the new session gets its tools (without `mcpServers` a forked agent has no drgnx tools) and the
+  caller's `_meta` (a lock's options; without them the fork has no lock). With `at: Some(ForkPoint { message_id })`
+  the point `_meta.jetbrains.air.fork {version: 1, messageId}` is merged into that `_meta`, key by key; without one, a
+  plain fork of the session's end. The source need not be a session this connection opened: a fresh process forks what
+  the agent kept on disk, which is how the hub always forks (a new process per fork, so the lock is applied and
+  verified at launch).
 - **Events.** `Update { at, sid, update, message_id }`: `at` is the receipt time in seconds since the epoch, taken
   when the line is read and never going backwards; `message_id` is the `messageId` of a message or thought chunk.
   `Request(Incoming)`: `Permission`, `ReadFile` or `WriteFile`, each with a `Responder`. A responder dropped
@@ -181,9 +198,13 @@ tail). There is no SDK role framework.
   `is_cancelled()` is true. `Exit { code, signal, stderr }` comes exactly once, after every update the child wrote
   (the reader gets two seconds to drain), with the last `stderr_tail` characters of stderr; calls still waiting fail
   with `Error::Closed`.
-- Unknown notifications are ignored; unknown requests get -32601.
-- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children; the mock agent is
-  `ratatoskr-mock acp`.
+- A notification or a request outside the schema whose method starts with `_` (an agent's extension) comes as
+  `Event::Ext { method, params }` or `Incoming::Ext { method, params, resp }`, its params unchecked: the owner checks
+  and answers them (the hub: `docs/develop/hub.md`, "The _drgnx/panel extension"). Other unknown notifications are
+  ignored; other unknown requests get -32601.
+- **Tests.** `runtime/crates/hermod/tests/conn.rs` runs scripted `/bin/sh` children, and for a fork the mock agent
+  `ratatoskr-mock acp --state DIR` (`RATATOSKR_MOCK`, else beside the test binary, built there when missing): two
+  processes on one state folder show a fork on a connection that never saw the session.
 
 ## eitri: no-link file access
 
@@ -205,6 +226,13 @@ cap }`, `Escapes`, `Untrusted { path, why }`, `Unsupported` or `Io`.
   with `O_CREAT | O_EXCL | O_NOFOLLOW` and `mode` (at most 0o777, less the umask), writes, `fsync`s and `renameat`s
   it over `rel`. A link at `rel` is replaced, never followed; anything else that is not a regular file is
   `NotRegular`. The temporary file is removed on every error.
+- **`remove_beneath(dir, rel)`** opens the parent with `open_beneath` (a link in any component before the leaf is
+  refused) and `unlinkat`s the leaf at the parent's held fd: a leaf that is a link goes as a link, and what it names
+  is never touched. A leaf already gone is done; a directory is `NotRegular`.
+- **`symlink_beneath(dir, rel, target)`** opens the parent the same way, makes the link at `.eitri-<16 hex>` with
+  `symlinkat` (the target copied as bytes, never resolved; empty or with a NUL byte refused) and `renameat`s it over
+  `rel`: an old leaf that is a link or a regular file is replaced, never followed. The same on Linux and macOS (no
+  `openat2` branch).
 - **`trusted_program(candidates)`** returns the first candidate that only root can change, as a `TrustedProgram {
   path, dev, ino }`: an absolute path with no `.` or `..`, opened with `open_path`, a regular file with an execute
   bit, owned by uid 0 and not group- or world-writable, in directories up to `/` that are owned by uid 0 and not
@@ -465,6 +493,13 @@ A `Refusal { status, kind, message }` answers with the Lisp's body, `{"type":"er
 A key is read per attempt and goes only into the upstream request's sensitive header; logs name providers, never keys
 or tokens.
 
+**The tap** (`engine::Tap`, `Gateway::set_tap`; a recording's, [recordings.md](recordings.md)): one `begin(Sent)` per
+attempt sent upstream (provider, session, the client's path, step N of M, the headers without the sensitive ones, the
+body sent and the client's own body when the rewrite changed it, both with every held key replaced by `$SECRET`
+through `Keys::scrub`), then `head`, each chunk as read from upstream (key-scrubbed too) and `end`: `Complete` (also a
+head the chain moved on from), `Dropped` (no head, or the provider broke off) or `ClientLeft { chunk }`. The exchange is
+ended before the upstream body is dropped.
+
 **Listeners** (`listen`): `serve_tcp(gw, listener, port)` for the loopback listener and `serve_unix(gw, listener,
 ListenerId::Session(SID))` for a session's socket; the caller binds them. hyper's HTTP/1.1 server with keep-alive
 (the token is checked on every request), a 30 s header-read timeout and a 64 KiB head (longer is 431). At most 64
@@ -475,7 +510,7 @@ classes, the proptest `admit_never_panics` over random targets and headers), `re
 `gateway-test.el` and `gateway-openrouter-test.el` cases by name), `keys::tests` and `tests/engine.rs`: a client over
 TCP or a session socket, the gateway on its listener and `ratatoskr-mock llm` as the provider (fallback, the literal
 last step, streaming first chunk first, spend once, the budget, a hang-up, need-keys, keep-alive, the drained
-refusal, the connection cap, the editor's pass-through). It finds the mock at `RATATOSKR_MOCK`, else beside its own
+refusal, the connection cap, the editor's pass-through, the tap's lines and a hang-up's `client-left`). It finds the mock at `RATATOSKR_MOCK`, else beside its own
 binary, so build it first: `cargo build -p domr --bin ratatoskr-mock` (a workspace `cargo test` builds it anyway).
 
 ## Every order: skuld
@@ -654,7 +689,7 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
 
 **`ratatoskr-mock`** (`conformance/src/bin/`, std only; `$MOCK` is its path, beside `domr`) stands in for the network:
 
-- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE]` is a scripted ACP agent on stdio
+- `acp --as claude|codex|gemini [--script FILE] [--log FILE] [--llm URL] [--refuse-mode MODE] [--state DIR]` is a scripted ACP agent on stdio
   (`conformance/src/mock_acp/`, the stand-in for the outside agents' CLIs; wire of `agent-client-protocol-schema
   =1.12.0`). A prompt's lines are its program: `tool:read|edit PATH`, `tool:exec CMD`, `tool:write N` (a Write of N bytes of input), `ask:permission KIND`,
   `call:MCPTOOL JSON` (through the first stdio server of `mcpServers`), `decide TEXT` (`record_decision`),
@@ -663,8 +698,36 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `_meta.turnId` (`t1`, …); chunks carry `messageId`; the terminal capability is never used. Personalities: claude
   (`close fork list resume`; logs `_meta.claudeCode.options`; forks after a message; `usage_update` with cost and
   `_claude/rateLimit`), codex (same set; logs `-c` overrides of argv; forks at a turn; `usage_update` and
-  `_codex/rateLimits`), gemini (`loadSession` only; the rest answers -32601). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the `agent-locks` rows); other modes are accepted. `--log` is JSONL; `--llm URL` POSTs
-  to a `ratatoskr-mock llm` once per turn, so its log counts requests.
+  `_codex/rateLimits`; its answers that open a session report `modes` as codex-acp 2.5.0 picks them: one of its four
+  mode ids from `INITIAL_AGENT_MODE`, `agent` for an unset or unknown one, and `session/set_mode` to an unknown id is
+  -32602; a `CODEX_CONFIG` with `approval_policy = "untrusted"` fails `session/new`, as Codex 0.165 refuses it), gemini
+  (`loadSession` only; the rest answers -32601; its log's `admin_policy` says whether an `--admin-policy` file passes
+  Gemini CLI 0.67's loader, `loaded`, or would be dropped, `dropped: WHY`; the session starts either way, as Gemini's
+  does; `--panel-policy engine|short` is drgnx's fork, which answers an `initialize` offering `_drgnx/panel` version 1
+  with `adminPolicy {loaded, rules}`, `short` one rule fewer, beside any `--panel` features), kimi (its answers that
+  open a session report its four modes, `default` current, or MODE with `--start-mode MODE`; `session/set_mode` to
+  another id is -32602, and a switch, or the prompt word `mode MODE`, sends a `current_mode_update`), dsh (an overlay
+  `--patch` names is read as DeepSeek Harness 0.2.2 reads it: one that is not a top-level list of loader patches stops
+  it before it speaks ACP, exit 1; its log has the policy, sandbox mode and asked kinds). `--panel FEATURES` (a comma
+  list) adds drgnx's `_drgnx/panel` extension to any personality, as the org's adapter forks do: `initialize`
+  advertises the features, the client's `_drgnx/context/drop|pin` and `_drgnx/compact/preview` are answered and logged
+  (`{"panel": …}`), and the words `panel:context JSON`, `panel:contexts N`, `panel:before-tool JSON`, `panel:big N`,
+  `panel:raw METHOD JSON` and `panel:preview JSON` send the extension's messages (answers logged as
+  `{"before_tool": …}`). `--refuse-mode MODE` refuses `session/set_mode` to MODE (a lock that does not hold; the
+  `agent-locks` rows); other modes are accepted. `--log` is JSONL, each object's keys in the order the mock writes
+  them however it was built (domr turns on serde_json's `preserve_order`), so a row may match a logged object as text;
+  `--llm URL` POSTs
+  to a `ratatoskr-mock llm` once per turn, so its log counts requests; `--llm env` POSTs to the agent's own gateway
+  instead (`$ANTHROPIC_BASE_URL/v1/messages`, bearer `$ANTHROPIC_AUTH_TOKEN`, as Claude Code on a gateway profile).
+  `--state DIR` keeps each session's history in
+  `DIR/<sessionId>.json` (at its start and after every turn); `session/fork` and `session/resume` read a session this
+  process does not hold from there, so a second process forks or resumes it (ids skip the ones the folder holds). A
+  fork's log line names `from`, `level`, `messageId`, `kept`, `turns`, `cwd`, `mcpServers` and `claude_options`.
+- `acp --replay DIR --as KIND [--speed N] [--misses FILE] [--roots JSON] [--strict]` is an outside agent replayed
+  from a recording's `acp/<n>.jsonl` (`mock_acp/replay.rs`, [recordings.md](recordings.md#the-acp-replayer)): it
+  claims a recorded connection, waits for each line the hub sent live, answers as the agent did, makes its MCP calls,
+  lands its worktree changes and re-sends its model calls through the gateway; anything else is a miss (-32099, a
+  line in FILE, exit 3). A hub started with `DRGNX_REPLAY` gives every agent profile this command.
 - `http-serve PORT TEXT` prints `MOCK-HTTP-PORT N` and serves on 127.0.0.1:PORT (0: any free port) a page whose title
   and text are TEXT, and `/download`, TEXT as an attachment: an agent's dev server inside its sandbox, or a site on the
   host's loopback.
@@ -685,6 +748,12 @@ while marked fails the run, so the mark goes as soon as its task lands. A row is
   `{"request": {method, path, headers (lower-case names), body}}` per request, then `{"closed": true}` when the client
   hangs up before the answer ended (with `--print-closed`, the mock also prints `MOCK-LLM-CLOSED` then, for a test to
   wait on). It ends when `--parent` is gone.
+- `llm --replay DIR [--speed N] [--misses FILE] [--parent PID]` prints `MOCK-LLM-PORT N` and answers `/p/ID/REST`
+  from a recording's `llm.jsonl` ([recordings.md](recordings.md)): the request's match key, recomputed with the
+  current normalizers, picks the first unused exchange recorded with it, answered chunked with its status, stored
+  headers and chunks (each after its recorded gap times N, default 0) and ended as live ended. None: 500
+  `x-drgnx-replay: miss`, a `replay_miss` error naming the nearest exchange and its first differing path, and a line in
+  FILE. A hub started with `DRGNX_REPLAY` starts it and points every provider at it.
 - `proxy [--log FILE]` prints `MOCK-PROXY-PORT N`; `CONNECT host:port` is logged (`{"connect": "host:port"}`) and
   tunnelled, anything else gets 405 (`{"refused": "METHOD TARGET"}`).
 - `hf --dir DIR [--log FILE] [--cut FILE BYTES] [--bad FILE] [--location URL] [--no-range]` is the model host. It prints
@@ -793,6 +862,7 @@ Rows with `"requires": ["v1"]` (all of them) run against Ratatoskr:
 | `reaper/` | `a-recorded-orphan-is-killed-at-start` (`linux`: the row plants a `runtime.db` record for a live process of its own group, as an older hub's Emacs child left one; the next hub kills it within 4 s and logs it), `a-row-without-a-pid-is-dropped-and-kills-nothing` (NULL rows in `runtime.db`: removed, nothing signalled) |
 | `mcp/` | the coordination tools on session sockets and outside bridges ([hub.md](hub.md#sessions-and-their-sockets)): `the-session-directory-is-private`, `a-gone-owners-sessions-are-closed` (a `spawn`ed owner killed), `a-closed-session-is-gone`, `an-unknown-tool-is-32602`, `a-fifth-connection-is-closed`, `a-session-socket-is-its-identity` (an `agent` argument changes nothing), `an-outside-bridge-is-ext-and-unverified`, `sessions-come-back-after-a-restart`, `bad-argument-is-a-tool-error-with-its-path`, `modern-and-legacy-handshakes`, `tool-writes-are-broadcast-as-events`, `drgnx-agent-in-the-environment-is-ignored`; with `test-hooks`: `attach-needs-service-or-gets-not-allowed` |
 | `bridge/` | `ratatoskr mcp-bridge` ([hub.md](hub.md#the-mcp-bridge)), a copy of the hub under test (`install_bin`) run by `spawn_conn`: `outside-refuses-an-untrusted-directory` (the socket's directory at 0755: exit 1, the reason on stderr); more: `survives-a-hub-restart` and `survives-a-hub-restart-modern` (the gate rows: a TERM, a start on the same root, the next call works; both eras), `an-in-flight-call-is-an-error-never-a-retry` (a call to a STOPped hub, then KILL: the went-away tool error, one event after the restart), `a-call-while-away-waits-then-errors`, `tools-list-from-the-cache-while-away`, `drgnx-agent-in-the-environment-is-ignored`, `outside-is-service-class-and-ext`, `stdin-eof-ends-it`; with `test-hooks` (`--bridge-backoff-ms`, `--bridge-give-up-ms`): `gives-up` |
+| `panel/` | what the agent panel reads from the hub: `tool-output-pages` (a 600000-byte output reaches the editor as head, tail and `outputBytes`; `agents/tool-output` pages it, 256 KiB at most, `truncated` only when the answer is short) |
 
 All rows run with one command:
 
@@ -869,6 +939,12 @@ budgets (a recorded baseline, not a regression gate); the `agents-*` rows check 
 | `find` | `tasks/find` on 10^5 tasks: a word 1,000 hold, and a word one holds | 20 each |
 | `agents-streaming-20` | 20 mock agents stream at once (25 chunks and 25 tool calls each) with an editor subscribed, 100 `ping` round trips meanwhile. **Budgets in the row** (`/proc`, Linux only): the hub's CPU (utime + stime) under 40 % of one core over the window, resident set under 400 MB. The ping samples are the keystroke-latency proxy (p95 < 16 ms, judged on the desktop lane) |
 | `agents-idle-20` | 20 idle mock agents for 10 s: the hub's CPU under 3 % of one core (budget in the row) |
+| `hook-overhead` | one permission request (an edit the matrix allows), `permission-bare` with no rule subscribed and `permission-hooked` with one annotating rule; the added cost is the difference of the p95s, bound 5 ms | 100 each |
+| `hook-overhead-parallel` | eight permission requests sent before the first answer is read (`ask:burst 8`, as Claude issues parallel tool calls), `burst-bare` and `burst-hooked`; none is refused as busy (the turn says `burst: 8/8 allowed`), same 5 ms bound on the difference | 50 each |
+| `ability-20-sessions` | 20 sessions started with a plugin ability (each holds a `drgnx-plugins` server): the `ping` round trip, `ping-no-sessions` before and `ping-20-ability-sessions` with them idle; bound 100 ms | 200 each |
+
+The three plugin rows only measure; their bounds are judged at the gate, from a run pinned with `DRGNX_PERF_CPUS=4`
+(`builder-run.sh perf-exclusive.sh …`), never from a whole-machine run.
 
 The writer-level group-commit number, with `secure_delete` on and off, is `urdr`'s ignored bench
 (`cargo test -p urdr --bench group_commit --release -- --ignored --nocapture`).
@@ -947,16 +1023,83 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v1:
+0600, migrations as data). Schema v3:
 
 | Table | Holds |
 |---|---|
-| `file` | path, git blob, class, language, generated flag, size, indexed time |
-| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `tree` | the worktrees with an overlay: `key` (history's worktree id), root, git dir, branch, head, `seeded_from`, git `door` (`cli`/`gix`), `state` (`seeding`, `live`, `stale`, `unwatched`), `last_used` |
+| `file` | one row per `(tree, path)`: git blob, class, language, generated flag, size, indexed time. `tree = 0` is the base checkout; a worktree has rows only where its blob differs from the base's, a NULL blob marking a path it does not have. The only per-tree table |
+| `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
-| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `symbol`, `symbol_fts` | defined names with kind, span, `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+**Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
+the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
+a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept (its
+chunks, FTS rows and symbols deleted) when no `file` row names it any more. There is no reference counter; the
+`file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
+its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
+`(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
+with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `vec` are untouched, so nothing is
+re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
+`stale`.
+
+**Worktree overlays** (`hrafn::overlay`). A worktree T's rows are the paths where its admitted blob differs from the
+base's: a row naming T's blob, or a tombstone (NULL blob) where the base has the path and T does not admit it.
+`seed`, `rediff` and `recheck(paths)` take a `Cx` (store, tree, root, T's git door, the base's `Config` and deny-list
+check) and are idempotent. A seed or re-diff looks only at the paths that can differ: the symmetric difference of T's
+HEAD tree and the base rows (by blob, no read), T's stat-dirty and untracked paths, and T's current rows; a path
+stat-clean at a committed blob equal to the base's is decided without a read. Admission runs on T's own bytes with
+the base's rules, so a file can be admitted in one view and not the other. A link is never admitted in any view,
+through either door: a committed link is refused by its mode and a link on disk by the read, both before any hash
+(the CLI door's `hash-object` would hash the target's content, gix the target's name). A blob the gix door marks
+uncertain always gets its row. The door hashes the file as it is when it runs, so after the hash the file is read
+again: a hash is kept only while the file still holds the bytes read (and chunked), a file that changed is hashed
+again, and one still changing after three rounds is left to the hint its write sends. A seed marks the tree `seeding` and, in its last transaction, `live` with `head`,
+`branch` and `seeded_from`; one cut short is simply run again. Tier 1 moves every tree that is not seeding in the same
+transaction as each base change (a tree whose row equals the new base content loses it; a tree with no row gets one
+naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
+chunks a `(path, blob)` a worktree already stores.
+
+**Views.** `hrafn::search(store, query, view, qvec, now)` and `hrafn::lag(store, model, view)` take a `View`: `Base`,
+or `Tree(id)`, the base with T's rows over it. A path resolves to one `file` row per view (T's over the base's: at
+most two primary-key probes), and a chunk or symbol is seen when that row names its blob; every route (the pinned,
+name, path, keyword and vector lists, and a hit's metadata) applies it before its `limit`, and the vector scan takes
+the first chunk of a key the view sees. A tombstone hides the base's file; a tree's new file is in that tree only.
+`now` reads the view's root (the caller builds it), so a hit is found again in T's file. The lag is the view's: the
+base's counts the base's content only, and a tree's adds its rows' chunks and takes away the base chunks it
+shadows, read through `chunk_path_blob (path, blob, embed, key)`; its line starts "worktree: N files differ from the
+base". `tests/view_query.rs` holds the plan rows: no route scans `chunk`, `symbol` or `file`.
+
+**Worktrees in the hub** (`search::project`). `Project::view_for(root, touched)` resolves a query's root: the main
+checkout (or a folder in it) is the base; a linked worktree is registered under history's `WorktreeId` (the same key
+its watcher events and `file-version` records carry, and `tree.key` in the store), joins the project's one watcher,
+and is seeded on first use, on the blocking pool under tier 1's lock. While it seeds the base answers ("worktree
+being indexed"). A `stale` or `unwatched` tree answers at once from its rows and starts a check (a re-diff: HEAD,
+the stat-based status, its overlay paths), at most one per `CHECK_TTL` (5 s). At most `RESIDENT_CAP` (16) trees hold
+rows; the least recently used goes first (`tree.last_used` is strictly increasing). On `ENOSPC`, or past the budget
+(half of `max_user_watches`), the least recently used other tree gives its watch up and is checked at query time;
+doctor names it. Watcher events of a tree re-check its paths, its git events re-diff it, and an overflow marks every
+tree stale and re-diffs it. The history feed (`Project::feed`, attached when history first watches a tree of the
+project) re-checks each version's path; a lagged receiver marks the trees stale and re-diffs them. The hourly sweep
+drops the overlay of a worktree `git worktree list` no longer shows, or whose folder is gone, and of one unused for
+14 days, but never a `locked` one. Opening the store marks every tree that is not seeding `stale`. `search/query`
+answers from the root's view (`base: true` asks for the base) with `view: {worktree?, differing_files, state}`, and
+`search/status` lists `trees` and the `watch` budget.
+
+**The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
+is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
+built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
+the project again.
+
+**Ranked files in a view** (`hrafn::rank`). In a tree the file set is the base's paths less the tree's tombstones plus
+its new paths: `base_paths` is the one shared list, `delta(view)` reads only the tree's rows, and `rank(base, delta,
+query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
+ranked query of render offload Task 21 (`search/files`) builds on these.
 
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
@@ -985,6 +1128,31 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 `*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
 
 `coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
+
+### The git door per tree
+
+Each checkout Hrafn indexes reaches git through a `TreeGit` door (`hrafn::door`): `head` (the commit and the branch
+HEAD names), `tree_diff(a, b)` (no rename detection: a rename is a deletion and an addition), `stat_status` (tracked
+paths that may differ from HEAD, and untracked files under the standard excludes), `ls_tree(commit)`, `blobs(paths)`
+and `filtered(paths)` (the paths whose `.gitattributes` or `core.autocrlf` name a conversion: `filter`, `text`, `eol`,
+`ident`, `working-tree-encoding`). Gitlinks (submodule entries) are never reported. `as_git` gives the same door as
+the file list's `Git`, so the full listing runs on it too.
+
+`DoorKind::for_tree(touched)` picks the door, and `door(kind)` builds it; the kind is stored with the tree (`cli`,
+`gix`).
+
+- **`GitCli`** (user trees) runs the `git` executable. Its blobs come from `hash-object` with the repository's
+  filters, as the base's do, so they are never uncertain.
+- **`GixDoor`** (trees a sandboxed agent has worked in) is in-process and read-only, on `gix` (pinned exactly, with
+  only the `sha1`, `index` and `dirwalk` features). It opens the repository isolated (its own config only: no
+  environment, no global or system config, never the git binary), reads refs, the index, trees and attributes, and
+  hashes the raw bytes (equal to `git hash-object --no-filters`; a link's blob is its target). It runs no filter
+  driver, hook or fsmonitor, never opens a submodule and writes nothing, not even the index. Its status is stat-only:
+  an index entry whose stat differs from `lstat`, or is racy, is reported as possibly dirty and costs one read later.
+  A blob whose path `filtered` names is marked `uncertain`, so the overlay writes its row rather than trusting a raw
+  hash against a filtered one. Files are read beneath the tree's root with no link followed (`eitri`). `history` and
+  `show` (the eval's) are not served. A user-wide `core.excludesFile` or `core.attributesFile` is not read; the
+  errors that leaves are false differences (an extra untracked file, an extra row), never missed ones.
 
 ### Chunks and symbols
 
@@ -1090,7 +1258,17 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
 - **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
   due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
-  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. A project without watches diffs the blobs at query time
+  One watcher instance per project (`hrafn::HostWatch`, feature `host`) feeds it and serves the main checkout and its
+  worktrees: inotify driven directly on Linux and Android (mask without `IN_OPEN` and `IN_MODIFY`), `notify`'s FSEvents
+  on macOS. Events are tagged with their tree (`File{tree, rel}`, `Git{tree}`, `Lock{tree, held}`, `Overflow`; the longest
+  registered root wins, a ref change wakes only the trees on that branch or whose HEAD moved); only the main checkout's
+  own events arm its `Settle`, and a queue overflow marks every tree stale. It watches only what can be indexed: one non-recursive
+  watch per directory git does not ignore (one `ls-files --others --ignored --directory` at open; `target/` and
+  `.claude/worktrees/` get none), a directory created later is checked with `check-ignore` and added with the files
+  already in it, and of the gitdir only itself and `refs/`, never `objects/`. When the user's inotify budget is spent
+  (`ENOSPC`) the watches already added are dropped and the project runs unwatched, never silently: the state is in
+  `status.watch` (`{max_user_watches, projects: [{root, watched, error?}]}`), the hub logs it, and `doctor` prints a
+  `watch:` line per unwatched project. A project without watches diffs the blobs at query time
   (`fresh::diff`, at most 2,000 differences named).
 - **The device (`hrafn_embed::device`).** A cached choice whose key (model, `ENGINE_VERSION`, each adapter's name and
   driver) matches; on battery the CPU path with nothing measured or cached; otherwise the first adapter of `order`
@@ -1113,7 +1291,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **A project (`search/project.rs`).** The store is `<state>/code/<id>.db`, `id` the first 16 hex characters of the
   sha256 of the main checkout's real path, so a linked worktree shares its main checkout's store. A root the deny-list
   refuses is refused before anything is listed; inside an allowed root every file is checked again. Tier 2 sends requests
-  of 8 missing keys to each embedder; between requests it waits while typing holds (3 s from the last `note_typing`) and,
+  of 8 missing keys to each embedder that answers: a server whose own address accepts no connection (the default TEI
+  at 127.0.0.1:8080 when it is not running) gets no request in that pass and does not make tier 2 `Failed`, so tier 2
+  ends `Idle` once the others are done, and the server is asked again at the next change. Between requests it waits while typing holds (3 s from the last `note_typing`) and,
   on battery, until AC or `index_now`. Its state (`Stopped`, `Idle`, `Running`, `Typing`, `Battery`, `Failed`) and the
   vectors written are published for `search/status`. Its embedders are `DocEmbedder`s: the built-in model's worker and
   each server that answers, every one filling its own model's `vec` rows.
@@ -1128,7 +1308,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
   tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes.
+  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question
@@ -1247,6 +1427,9 @@ runs each binary as `cargo fuzz run` does (`-artifact_prefix=runtime/fuzz/artifa
 | `saga_plan` | text through `saga::plan::parse` and `render`: the output equals the input |
 | `saga_deferred` | the same through `saga::deferred` |
 | `saga_org` | the same through `saga::org` (`board.org`) |
+| `plugin_manifest` | bytes through `brokkr::manifest::parse`: no panic, and a manifest that is taken keeps its limits (at most 16 hosts, `kv_bytes` within 1 MiB, one hook per point, a deadline within the point's budget, an object schema, a qualified ability name that fits) |
+| `hook_rules` | JSON through `norn::hooks::parse_rules` (`drgnx-agents-hook-rules`): no panic, and a list that is taken has unique ids of 1 to 32 `[a-z0-9-]` and a reason on every rule |
+| `drgnx_context` | JSON as an agent's `_drgnx/context` notification and `_drgnx/before_tool` request through the hub's checks (size, own session, schema with unknown fields refused): no panic, a breakdown that is taken respects its bounds and round-trips, one from another session is never taken |
 | `cdp_envelope` | bytes as one browser connection through heimdall: NUL-split under a limit the first byte picks, each message's first byte choosing the agent, the browser or the agent's close; every envelope parses or is refused without a panic, whatever goes to the browser is a command with an id and no NUL, and no refused method from the agent reaches it; the same bytes through the frame decoder whole and in two pieces give the same frames |
 | `px_frames` | bytes, cut into chunks of a size the first byte picks, through the relay's frame decoder (`drgnx_px::frame::Decoder`): no panic, never more than one frame's bytes held, and the frames it returns re-encode to exactly the bytes it consumed; no seed corpus ([drgnx-px.md](drgnx-px.md)) |
 | `px_owner` | bytes as the relay sidecar's output into the owner's end (`drgnx_px::owner::run`), its input a sink: no panic, and it ends at the output's end (a partial frame included), by a violation or with the ids used up, never a stall; no seed corpus ([drgnx-px.md](drgnx-px.md)) |

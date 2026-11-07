@@ -231,7 +231,7 @@ keys); every binding is undone after."
                                             "View: Command Palette"))
                   "")))
        (drgnx-palette))
-     (should (string-search "C-c p" annotation)))))
+     (should (string-search "Ctrl C P" annotation)))))                    ; the key as keycaps
 
 (ert-deftest drgnx-keys/a-broken-settings-el-is-not-an-error ()
   ;; the default stack applies; the applier (not the keys) says what is wrong with the file
@@ -902,7 +902,7 @@ keys); every binding is undone after."
     (work-take-wheel "W" drgnx-work-live-file-mode-map) (work-files "e" drgnx-work-map-mode-map)
     (work-diffs "d" drgnx-work-map-mode-map) (work-diff-quit "q" drgnx-work-diff-mode-map)
     (work-diff-accept-hunk "a" drgnx-work-diff-mode-map) (work-diff-reject-hunk "D" drgnx-work-diff-mode-map)
-    (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
+    (work-job-log "l" drgnx-work-detail-mode-map) (work-who-is-here "C-k h" nil) (work-left "<left>" drgnx-work-lens-map) (work-right "<right>" drgnx-work-lens-map)
     (work-why "<up>" drgnx-work-lens-map) (work-touches "<down>" drgnx-work-lens-map)
     (work-next-agent "TAB" drgnx-work-lens-map) (work-previous-agent "<backtab>" drgnx-work-lens-map)
     (work-open "RET" drgnx-work-lens-map) (work-open-beside "S-<return>" drgnx-work-lens-map)
@@ -964,7 +964,14 @@ The commands of modules that need no installed package are in it, the later stag
                               agent-settings-add agent-settings-edit agent-settings-remove agent-settings-toggle
                               agent-settings-new-skill agent-settings-open-file agent-settings-other
                               agent-settings-openrouter agent-settings-report
+                              ;; P9's plugins page: keys in its own page map only
+                              plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
+                              ;; the Extensions list: its open key and its own keys
+                              extensions-open extensions-search extensions-details extensions-install extensions-update
+                              extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
+                              extensions-cancel extensions-show-log
+                              extensions-trust-install extensions-trust-cancel ; the trust card's own keys
                               quit preferences edit-line-start edit-line-end edit-buffer-start edit-buffer-end edit-word-left
                               edit-word-right edit-delete-word-back edit-delete-line-back edit-copy edit-cut edit-paste
                               code-next-problem code-previous-problem ; M12d: F8 / S-F8
@@ -974,7 +981,22 @@ The commands of modules that need no installed package are in it, the later stag
                               settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
                               ;; settings Task 26: the Settings page took C-, from Modules, and its own keys
                               preferences-settings settings-page-tab settings-page-group settings-page-search
-                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert))
+                              settings-page-reset settings-page-history settings-page-open-source settings-page-convert
+                              agents-follow       ; part 3: the agent line's follow key
+                              agents-here-follow agents-here-panel agents-here-quit   ; part 3: the who-is-here list
+                              agents-follow-here agents-follow-resume agents-follow-stop agents-follow-panel   ; part 3: the follow window
+                              agents-follow-wheel agents-take-wheel agents-give-wheel   ; part 3: the wheel
+                              agents-panel agents-panel-toggle agents-panel-older agents-panel-toggle-type
+                              agents-panel-preset-1 agents-panel-preset-2 agents-panel-preset-3 agents-panel-make-default
+                              agents-panel-send agents-panel-stop agents-panel-pause agents-panel-resume
+                              agents-panel-edit-queued agents-panel-drop-queued agents-panel-pair
+                              agents-panel-accept agents-panel-reject agents-panel-allow agents-panel-always
+                              agents-panel-pin agents-panel-ledger
+                              agents-panel-output-search agents-panel-output-open agents-panel-output-more
+                              agents-panel-revert-here agents-panel-fork-here
+                              agents-panel-chip agents-panel-revoke-always
+                              agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
+                              agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open))   ; part 3: the agent panel
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

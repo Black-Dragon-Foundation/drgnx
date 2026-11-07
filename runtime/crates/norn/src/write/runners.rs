@@ -37,6 +37,16 @@ fn hub_only(tx: &WTx<'_>, kind: &str) -> Result<(), CoordError> {
 /// Make the record KIND:NAME with DATA, or replace its data (one that was removed is made again); answers its id.
 pub fn put(tx: &mut WTx<'_>, kind: &str, name: &str, data: Value) -> Result<String, CoordError> {
     hub_only(tx, kind)?;
+    put_record(tx, kind, name, data)
+}
+
+/// Make the record KIND:NAME with DATA, or replace its data; the caller checked who writes it.
+pub(crate) fn put_record(
+    tx: &mut WTx<'_>,
+    kind: &str,
+    name: &str,
+    data: Value,
+) -> Result<String, CoordError> {
     let id = format!("{kind}:{name}");
     match entity::by_id(tx.sql(), &id)? {
         Some(e) => {

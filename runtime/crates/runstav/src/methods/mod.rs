@@ -3,25 +3,33 @@
 //! ([`coord`]), the graph store ([`graph`]), the settings' history ([`settings`]), the tracker for the editor
 //! ([`tasks`]) and the coordination tools' sockets ([`mcp`]); the agent core's (agent system part 1): jobs
 //! ([`exec`]), the permissions matrix ([`matrix`]), plans, briefs and reports ([`plans`]), records ([`records`]) and
-//! time, budgets and the supervisor ([`timeline`]).  [`crate::registry`] puts them in one sorted table.
+//! time, budgets and the supervisor ([`timeline`]); the Extensions view's catalog ([`extensions`]).  [`crate::registry`] puts them in one sorted table.
 
 pub mod agents;
 pub mod config;
 pub mod coord;
+pub mod editor;
 pub mod exec;
+pub mod extensions;
+pub mod forecast;
 pub mod gateway;
 pub mod graph;
+pub mod history;
 pub mod hub;
 pub mod jobs;
 pub mod matrix;
 pub mod mcp;
+pub mod pair;
 pub mod plans;
+pub mod plugins;
 pub mod records;
 pub mod runners;
+pub mod say;
 pub mod search;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
+pub mod view;
 pub mod work;
 
 use crate::registry::Method;
@@ -197,8 +205,19 @@ params! {
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
     AgentsToolInput(agents::ToolInputParams),
+    AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
+    AgentsHuddleStart(agents::HuddleStart),
+    AgentsHuddleGet(agents::ById),
+    AgentsWheelTake(agents::ById),
+    AgentsWheelGive(agents::ById),
+    AgentsWheelSaved(agents::WheelSaved),
     AgentsProbe(agents::ProbeParams),
+    AgentsContextDrop(agents::ContextDropParams),
+    AgentsContextPin(agents::ContextPinParams),
+    AgentsCompactPreview(agents::ById),
+    AgentsConfig(agents::ConfigParams),
+    AgentsExplain(agents::ExplainParams),
     ExecStart(exec::StartParams),
     ExecGet(exec::ById),
     ExecList(exec::ListParams),
@@ -219,6 +238,12 @@ params! {
     BudgetGet(timeline::BudgetGetParams),
     BudgetSet(timeline::BudgetSetParams),
     PaceGet(timeline::PaceParams),
+    ForecastGet(forecast::ForecastParams),
+    ForecastSession(forecast::SessionForecastParams),
+    ForecastAccuracy(forecast::AccuracyParams),
+    SayStart(say::SayStart),
+    SayRevise(say::SayRevise),
+    SayEnd(say::SayById),
     RecordsImport(records::ImportParams),
     RecordsStatus(records::ByPath),
     RecordsProposals(records::ByPath),
@@ -228,12 +253,19 @@ params! {
     WorkConclusions(work::ConclusionsParams),
     AgentsPresenceSubscribe(work::PresenceSubscribe),
     AgentsPresenceGet(work::PresenceGet),
+    AgentsBufferWatch(editor::BufferWatch),
+    AgentsBufferUnwatch(editor::BufferUnwatch),
     WorkMapSubscribe(work::MapSubscribe),
     WorkMapSet(work::MapSet),
     WorkMapClose(work::MapClose),
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
+    ViewEnv(view::ViewEnv),
+    ViewResync(view::ViewResync),
+    ViewGlyphs(view::ViewGlyphs),
+    ViewMeasured(view::ViewMeasured),
+    ViewClose(view::ViewClose),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -249,8 +281,41 @@ params! {
     RunnersCheck(runners::ByName),
     RunnersBench(runners::ByName),
     RunnersSet(runners::SetParams),
+    HistoryRegister(history::RegisterParams),
+    HistoryBatch(history::BatchParams),
+    HistoryResync(history::ResyncParams),
+    HistoryUnregister(history::UnregisterParams),
+    HistoryRevertPreview(history::RevertPreviewParams),
+    HistoryRevertApply(history::RevertApplyParams),
+    HistoryFork(history::ForkParams),
+    HistoryForkDrop(history::ForkDropParams),
+    HistoryCompare(history::CompareParams),
+    HistoryBlame(history::BlameParams),
+    HistoryHunks(history::BranchHunksParams),
+    HistoryTake(history::TakeParams),
+    HistoryRedo(history::RedoParams),
+    HistoryOpHunks(history::OpHunksParams),
+    HistoryRevertHunk(history::RevertHunkParams),
     RunnersUnbench(runners::ByName),
     RunnersRemove(runners::RemoveParams),
+    ExtensionsSearch(extensions::SearchParams),
+    ExtensionsDetails(extensions::DetailsParams),
+    ExtensionsRows(extensions::RowsParams),
+    ExtensionsModules(extensions::ModulesParams),
+    PluginsList(Empty),
+    PluginsApprove(plugins::ApproveParams),
+    PluginsDisable(plugins::DisableParams),
+    RunnersKeys(runners::KeysParams),
+    RunnersKeysHeld(Empty),
+    RunnersAudit(runners::AuditParams),
+    PairAnswer(pair::PairAnswer),
+    PairReadAnswer(pair::PairReadAnswer),
+    PairOpen(pair::OpenParams),
+    PairClosed(pair::ClosedParams),
+    PairOpenSet(pair::OpenSetParams),
+    AgentsPair(pair::PairToggle),
+    AgentsFollow(editor::FollowParams),
+    AgentsUnfollow(editor::UnfollowParams),
 }
 
 /// Every method, in no order.
@@ -269,10 +334,18 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(matrix::methods());
     v.extend(plans::methods());
     v.extend(timeline::methods());
+    v.extend(forecast::methods());
+    v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
+    v.extend(view::methods());
+    v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(runners::methods());
+    v.extend(extensions::methods());
+    v.extend(plugins::methods());
+    v.extend(history::methods());
+    v.extend(pair::methods());
     v
 }
 

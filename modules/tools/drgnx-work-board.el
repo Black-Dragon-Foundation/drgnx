@@ -29,7 +29,6 @@
 (declare-function drgnx-work-map-select "drgnx-work-map")
 (declare-function drgnx-work-map-buffer "drgnx-work-map")
 (declare-function drgnx-work-lens-string "drgnx-work-map")
-(declare-function drgnx-work-map--fit "drgnx-work-map")
 (declare-function drgnx-work-map--card-face "drgnx-work-map")
 (declare-function drgnx-work-map--state-word "drgnx-work-map")
 (declare-function drgnx-work-map--state "drgnx-work-map")
@@ -148,8 +147,8 @@ sideways to the nearest column that has cards, at the same height or the last ca
 (defvar-local drgnx-work-board--plans nil "The plans the board is scoped to; nil: every task.")
 (defvar-local drgnx-work-board--gen 0 "The refresh in flight; an answer to an older one is dropped.")
 
-(defface drgnx-work-bar '((t :inherit highlight)) "The done part of a card's progress bar." :group 'drgnx-work-space)
-(defface drgnx-work-bar-rest '((t :inherit secondary-selection)) "The rest of a card's progress bar."
+(defface drgnx-work-bar '((t :inherit drgnx-selected)) "The done part of a card's progress bar." :group 'drgnx-work-space)
+(defface drgnx-work-bar-rest '((t :inherit drgnx-selected-quiet)) "The rest of a card's progress bar."
   :group 'drgnx-work-space)
 
 (defvar drgnx-work-board-mode-map
@@ -248,7 +247,7 @@ sideways to the nearest column that has cards, at the same height or the last ca
          (face (drgnx-work-map--card-face 3 line)) (class (drgnx-work-board--class (plist-get card :id)))
          (closing (propertize " " 'display `(space :align-to (,right)) 'face (if class (list class face) face))))
     (if (< line 2)
-        (let ((text (copy-sequence (drgnx-work-map--fit (nth line (drgnx-work-board--lines card)) (- right left 10)))))
+        (let ((text (copy-sequence (drgnx-view-fit (nth line (drgnx-work-board--lines card)) (- right left 10)))))
           (add-face-text-property 0 (length text) face t text)
           (when class (add-face-text-property 0 (length text) class nil text))
           (add-text-properties 0 (length text) (list 'drgnx-work-id (plist-get card :id)) text)

@@ -1,0 +1,5 @@
+{
+  "name": "change-edit",
+  "version": "0.1.0",
+  "hooks": [{"point": "after-edit", "verdicts": ["change"], "deadline_ms": 1000}]
+}

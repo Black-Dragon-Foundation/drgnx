@@ -932,3 +932,101 @@ fn bench_runs_capped_and_under_2_minutes() {
         "the bench's container is left"
     );
 }
+
+// ---- live resizing ----
+
+use sleipnir::linux::resize;
+
+/// [C] A grow reaches the container. The job fills 56 MiB of its 64 MiB cap (tmpfs, no swap) and announces it in its
+/// log; past 85 % with room, it grows to its maximum, and the container's cgroup, its systemd scope and podman all
+/// say 128 MiB, still with no swap. A shrink below what it uses is refused, by the rule and again by `apply` on the
+/// live reading, and the cap stays; a shrink to above its use comes down in both places.
+#[test]
+#[ignore = "runner-host"]
+fn grow_reaches_the_container() {
+    let j = job_dir();
+    slices::ensure_tree(ROOT, forseti::Profile::Dedicated).unwrap();
+    let log = j.dir.join("g1.log");
+    unit::start(&unit_req(
+        "sltest-g1-1",
+        "g1",
+        &log,
+        podman_run(
+            "g1",
+            &j.source,
+            &j.target,
+            "64M",
+            &[
+                "sh",
+                "-c",
+                "head -c 56m /dev/zero > /tmp/fill && echo filled && exec sleep 600",
+            ],
+        ),
+    ))
+    .unwrap();
+    let name = "sltest-run-g1";
+    running_pid(name);
+    skuld::wait_until("the container's fill", 120, || {
+        std::fs::read_to_string(&log)
+            .ok()
+            .filter(|l| l.contains("filled"))
+            .map(|_| ())
+    });
+    let cg = resize::container_cgroup(name).unwrap();
+    let job = resize::Sized {
+        job: forseti::JobId("g1".into()),
+        container: name.into(),
+        machine: "runner".into(),
+        cap_mib: 64,
+        current_mib: resize::current_mib(&cg).unwrap(),
+        max_mib: 128,
+    };
+    assert!(job.current_mib >= 56, "{job:?}");
+    let budget = forseti::Budget {
+        mem_mib: 4096,
+        cpu: 1.0,
+    };
+    let r = resize::grow(&job, &budget, None).expect("past 85 % with room");
+    assert_eq!(r.to_mib, 128);
+    resize::apply(&r).unwrap();
+    let scope = resize::scope_of(&cg).expect("the container's scope");
+    let bytes = |mib: u64| (mib * 1024 * 1024).to_string();
+    let read = |f: &str| {
+        std::fs::read_to_string(cg.join(f))
+            .unwrap()
+            .trim()
+            .to_string()
+    };
+    let shown = |unit: &str| {
+        run(
+            "systemctl",
+            &["--user", "show", "-p", "MemoryMax", "--value", unit],
+        )
+    };
+    let inspected = || run("podman", &["inspect", "-f", "{{.HostConfig.Memory}}", name]);
+    assert_eq!(
+        (read("memory.max"), shown(&scope), inspected()),
+        (bytes(128), bytes(128), bytes(128)),
+        "the cgroup, the scope {scope}, podman"
+    );
+    assert_eq!(read("memory.swap.max"), "0");
+    let grown = resize::Sized {
+        cap_mib: 128,
+        current_mib: resize::current_mib(&cg).unwrap(),
+        ..job.clone()
+    };
+    assert!(resize::shrink(&grown, 32).is_err());
+    let forced = resize::Resize {
+        job: grown.job.clone(),
+        container: name.into(),
+        from_mib: 128,
+        to_mib: 32,
+    };
+    assert!(resize::apply(&forced).is_err(), "a shrink below use forced");
+    assert_eq!(read("memory.max"), bytes(128));
+    let back = resize::shrink(&grown, 64).unwrap();
+    resize::apply(&back).unwrap();
+    assert_eq!((read("memory.max"), shown(&scope)), (bytes(64), bytes(64)));
+    slices::stop(&slices::job_slice(ROOT, "g1").unwrap()).unwrap();
+    stopped_with_its_slice(name);
+}

@@ -10,6 +10,7 @@ use crate::types::{Bounded, Id, null_as_empty};
 use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// What a step was spent on.
 #[derive(
@@ -115,6 +116,25 @@ pub struct Step {
     /// What the step read, searched or fetched (tool steps).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<StepDetail>,
+    /// The agent conversation (ACP session id) the step ran in: a session runs another one after a revert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<String>,
+    /// The worktree's commit when the step's snapshot was taken, read from its ref files: the agent's claim, a hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// The edit history's record the step anchors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_op: Option<u64>,
+    /// The revert record that abandoned the step (the session went back to a step before it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undone_by: Option<u64>,
+    /// Whether "Revert to here" can act on the step: it has an edit history record and its checkpoint is kept.
+    #[serde(default)]
+    pub revertible: bool,
+    /// Its provenance: each hook point run on it, as the hub's own `hook` row records it (`{point, records:
+    /// [{source, verdict, ms, reason?}], outcome, …}`), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<Value>,
 }
 
 /// What a timeline covers.

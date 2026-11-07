@@ -46,12 +46,30 @@ fn defaults_parse() {
     assert_eq!(d.roles[3].chain[0].model, None);
     assert_eq!(d.profiles.len(), 7);
     assert_eq!(d.profiles[0].name, "claude");
-    assert!(
-        d.profiles
-            .iter()
-            .all(|p| p.job_safe && p.command == ["claude-agent-acp"])
+    // Kimi and DeepSeek run their own agents; only the Claude Code profiles are job-safe
+    for p in &d.profiles {
+        assert_eq!(p.job_safe, p.command == ["claude-agent-acp"], "{}", p.name);
+    }
+    let (kimi, deepseek) = (&d.profiles[3], &d.profiles[4]);
+    assert_eq!(
+        (kimi.name.as_str(), kimi.command.as_slice()),
+        ("kimi", ["kimi", "acp"].map(String::from).as_slice())
     );
-    assert_eq!(d.profiles[3].model.as_deref(), Some("kimi-k3"));
+    assert_eq!(kimi.provider(), Some(profiles::Provider::Kimi));
+    assert_eq!(kimi.model.as_deref(), Some("kimi-k3"));
+    assert_eq!(
+        (deepseek.name.as_str(), deepseek.command.as_slice()),
+        (
+            "deepseek",
+            ["dsh", "--profile", "acp"].map(String::from).as_slice()
+        )
+    );
+    assert_eq!(deepseek.provider(), Some(profiles::Provider::DeepSeek));
+    assert_eq!(
+        d.profiles.iter().filter(|p| p.job_safe).count(),
+        5,
+        "claude, OpenRouter, Ollama, Kimi and DeepSeek via OpenRouter"
+    );
     // the strict defaults
     assert_eq!(d.values.agents_mcp, ["coordination"]);
     assert_eq!(d.values.agents_default, None);
@@ -132,6 +150,40 @@ fn browser_settings_refuse_bad_values() {
     assert_eq!(l.values.agents_browser_memory_high, 99);
 }
 
+/// Pure (D): a row of the price table in settings.el reaches the hub's values, with the dated shipped rows beside it
+/// when the file does not name the table at all.
+#[test]
+fn a_row_in_settings_reaches_the_hub() {
+    let dir = config(
+        r#" (drgnx-agents-model-prices (("my-model" :in 1 :out 2 :cache-read 0.1 :write-5m 1.5 :write-1h 2)))
+"#,
+    );
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems, []);
+    let rows = &l.values.agents_model_prices;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].key, "my-model");
+    assert_eq!((rows[0].input, rows[0].output), (1.0, 2.0));
+    assert_eq!(rows[0].cache_read, Some(0.1));
+    assert_eq!(rows[0].write_1h, Some(2.0));
+    // no table in the file: the shipped one
+    let none = config("");
+    let l = Settings::load(none.path(), &Kv::default());
+    assert!(!l.values.agents_model_prices.is_empty());
+}
+
+/// Pure (D): a negative price is refused and the shipped table stays.
+#[test]
+fn a_negative_price_falls_back_to_the_shipped_table() {
+    let dir = config(" (drgnx-agents-model-prices ((\"x\" :in -1 :out 2)))\n");
+    let l = Settings::load(dir.path(), &Kv::default());
+    assert_eq!(l.problems.len(), 1, "{:?}", l.problems);
+    assert_eq!(
+        l.values.agents_model_prices,
+        defaults().values.agents_model_prices
+    );
+}
+
 #[test]
 fn only_runtime_names_decode() {
     let dir = config(
@@ -162,8 +214,9 @@ fn only_runtime_names_decode() {
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
     // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts; and
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
-    // the runners' six per-project settings; and the proxies' pinned names; and Hrafn's 5; and the agent browser's 8)
-    assert_eq!(RUNTIME_NAMES.len(), 43);
+    // the runners' eight per-project settings; and the proxies' pinned names; and Hrafn's 6; and the agent browser's 8;
+    // and the model price table; and the plugin list with the hook rules and their off list)
+    assert_eq!(RUNTIME_NAMES.len(), 50);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")

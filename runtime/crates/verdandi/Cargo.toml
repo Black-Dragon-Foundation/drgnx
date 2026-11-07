@@ -1,0 +1,18 @@
+[package]
+name = "verdandi"
+description = "The edit history: history.db (records, documents, branches) and a Loro document per tracked file, with no hub or editor type"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+loro.workspace = true
+urdr = { path = "../urdr", version = "0.1.0" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# the 3-way check's private folder
+tempfile.workspace = true

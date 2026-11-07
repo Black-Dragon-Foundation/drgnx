@@ -17,7 +17,7 @@
   '(drgnx-agents-matrix drgnx-agents-away-after drgnx-agents-wait-refusals drgnx-agents-close-idle-after
                         drgnx-agents-checkpoint-cap drgnx-agents-job-memory drgnx-agents-job-cpus drgnx-agents-net-hosts
                         drgnx-agents-container-images drgnx-agents-silent-after drgnx-agents-repeat-limit
-                        drgnx-agents-no-progress-tokens drgnx-agents-manager-context
+                        drgnx-agents-no-progress-tokens drgnx-agents-manager-context drgnx-agents-model-prices
                         drgnx-agents-browser-program drgnx-agents-browser-local-ports
                         drgnx-agents-browser-deny-hosts drgnx-agents-browser-max-message drgnx-agents-browser-idle
                         drgnx-agents-browser-once-window drgnx-agents-session-memory
@@ -58,6 +58,28 @@
       (should (stringp (plist-get meta :runtime)))
       (should (string-match-p "never set by a workspace"
                               (drgnx-settings-workspace--refusal (make-drgnx-settings-entry :var var :value 1)))))))
+
+(ert-deftest drgnx-agents-matrix/plugin-settings-are-the-users-alone ()
+  ;; the plugin list and the hook rules: per project, never from a repository's file or an agent, only in W2
+  (dolist (var '(drgnx-agents-plugins drgnx-agents-hook-rules drgnx-agents-hook-rules-off))
+    (let ((meta (drgnx-setting-meta var)) (entry (make-drgnx-settings-entry :var var :value nil)))
+      (should (eq (plist-get meta :scope) 'project))
+      (should (eq (plist-get meta :workspace) 'never))
+      (should (eq (plist-get meta :agents) 'never))
+      (should (eq (plist-get meta :on-error) 'strict))
+      (should (stringp (plist-get meta :runtime)))
+      (should (string-match-p "never set by a workspace" (drgnx-settings-workspace--refusal entry 'shared)))
+      (should (string-match-p "never set by a workspace" (drgnx-settings-workspace--refusal entry)))
+      (should-not (drgnx-settings-workspace--refusal entry 'private))
+      (should-not (drgnx-setting-check var (default-value var)))))
+  (should (eq (plist-get (drgnx-setting-meta 'drgnx-agents-plugins) :merge) 'replace))
+  (should (eq (plist-get (drgnx-setting-meta 'drgnx-agents-hook-rules) :merge) 'append))
+  (should-not (drgnx-schema-check drgnx-agents-hook-rules-schema
+                                  '((:id "no-rm" :point before-tool :tool-kinds ("execute") :command "^rm "
+                                         :verdict deny :reason "no rm")
+                                    (:point after-edit :paths ("**/*.lock") :verdict annotate :reason "a lock changed"))))
+  (should (drgnx-schema-check drgnx-agents-hook-rules-schema '((:point before-tool :verdict change :reason "x"))))
+  (should (drgnx-schema-check drgnx-agents-hook-rules-schema '((:point before-tool :verdict deny)))))
 
 (ert-deftest drgnx-agents-matrix/settings-change-tool-refuses-it ()
   ;; the editor's last gate refuses what is marked `:agents never' (docs/guide/agents.md, "Changing settings")

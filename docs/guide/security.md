@@ -391,6 +391,10 @@ The store keeps every version of what is written into it. When a secret or a per
 - Then the store file is compacted, so the old bytes leave the file and its write-ahead log. If a drgnx editor still
   has the store open for reading, the log cannot be emptied yet: you are told so, and you can run the clean-up again
   after closing it.
+- A **revert honours the lock**: it restores only what the agent could have written itself. The protected paths (`.git`,
+  the provider's configuration folders, `.envrc`, `mise.toml`) and the credential patterns are never restored, a link is
+  restored as a link and never followed, and the restore of a sandboxed agent's tree runs inside its sandbox. A checkpoint
+  can therefore never widen a sandbox. `history.db` is a privacy door like the store: the personal-notes deny-list applies to it.
 - **Copies outside the store** are listed, not changed silently: the dated backups and the pre-upgrade copies
   (`backup/work-pre7-*.db`, `work.db.schema5`, and the `work.db.schema7-*` files a rollback set aside) that still
   hold the text, which you can have deleted; exports, which are
@@ -416,6 +420,8 @@ Three rows are about the agent's own browser, which runs inside its sandbox ([ag
   asks; Balanced allows it for managers and workers and asks for chats; Autonomous allows it.
 - **`browser.web`**: that browser may open any public site (HTTPS and plain HTTP, ports 80 and 443). Only
   Autonomous allows it; the other presets ask.
+- **`plugin.abilities`**: an approved plugin's tools (its abilities) are offered to the session and may run. Never
+  hides them; Ask shows a card with the tool and its arguments for every call.
 - **`browser.private`**: that browser may reach a private address you name (your LAN, your tailnet, this computer).
   It asks in every preset, Autonomous included, and an Allow you write for it still asks: no setting turns this
   card off.
@@ -424,6 +430,21 @@ A session's project and plan are those of the task it works on (a plan run's, or
 A chat started in a project (the Agents panel, Review Branch) sees the project read-only (a linked worktree's
 repository too, so it can run `git log` and `git diff`) and writes only a scratch folder of its own; with `chat.project-read` set to Never for it, such a start is refused (start the chat without a
 project).
+
+- **`chat.project-edit`** (pair mode): a chat in your project may edit your own checkout, live, through the editor
+  that has the file open. Cautious never; Balanced asks, which here means the Pair toggle is yours to turn on;
+  Autonomous allows it, so chats start paired. It replaces the chat's `code.edit`, which stays Never: the chat's own
+  edit tools and commands still cannot write the checkout. The hub's door also needs `chat.project-read`, and it
+  never writes `.git/`, the agents' own configuration (`.claude`, `.codex`, `.gemini`, `.envrc`, `mise.toml`), a CI
+  or build file (`.github/`, `Makefile*`, `build.rs`, `*.sh`: `code.ci-config` is Never for chats), a credential
+  file, or anything outside the checkout, links resolved. Every file the hub serves a chat (its `read_file`, an ACP
+  `fs/read_text_file`) skips the same credential files the sandbox hides.
+
+- **`huddles`**: when two agents' work clashes (their changes will conflict when they merge, or their decisions
+  contradict) the hub may open a huddle: each states its position, at most twice, and you decide. Balanced and
+  Autonomous allow it; Cautious asks first (a card, nothing prompts). A reply reaches the other agent quoted, as that
+  agent's text, never as an instruction, and no reply answers a card; an agreement is a card for you, never a
+  recorded decision. A clash against a decision never opens one.
 
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
   hash), never the agent's own description. The same question open twice is one card. An agent's permission request
@@ -455,7 +476,9 @@ project).
     `chatgpt.com` and `auth.openai.com`; Gemini's API, `oauth2.googleapis.com` and `cloudcode-pa.googleapis.com`;
   - the hosts you list under `agents-net-hosts` for the session's network tier (`provider-only`; none by default).
 
-  Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
+  A plugin's HTTP is not the agent's: it reaches only the hosts its approved manifest names, and where the session's
+  network is not open, only those you also list on the `plugin` tier of `agents-net-hosts`
+  ([plugins.md](plugins.md)). Anything else is refused. Each refused host is recorded once per session as an event (`proxy-denied`, with the
   host), so you can see what an agent tried to reach; it never raises a card. Optional traffic a CLI sends
   (telemetry, error reports, update checks) is refused the same way; Claude is told not to send it
   (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, [agents.md](agents.md#jobs-and-your-claude-settings)). To let a session reach another host, add it to
@@ -484,6 +507,10 @@ project).
   a machine restart ends running networked jobs, the machine's SSH and REST ports are never opened by a grant, and
   gvproxy forwards ports that containers publish to the Mac's loopback, so a container you run yourself with `-p`
   is reachable from the Mac as usual.
+- **Keyed jobs** (`job.keys`): a job naming keys may name only those on the project's `drgnx-runners-job-keys` list,
+  and an agent's needs the matrix's `job.keys` too (ask under Cautious and Balanced; allowed for the manager and workers
+  under Autonomous; never for chat). The values reach the job on a runner of yours in memory only, are never sent to a
+  `shared` runner, and are masked in the log the hub keeps ([runners.md](runners.md#keys)).
 
 ### Answering a browser card
 
@@ -516,6 +543,17 @@ again, so the agent's retry goes through without a second card.
   the narrowest answer (once) and Deny is Refuse.
 - A grant is yours alone (an agent cannot write one), and switching the row to Never ends it at once.
 
+### Hooks never widen
+
+Your hook rules and your plugins' hooks ([plugins.md](plugins.md#rules-and-hooks)) look at a step after the matrix
+has, and they can only narrow what it says. A hook's `allow` means "no objection": a step the matrix asks about is
+still asked about, and a step it refuses is refused before any hook runs. A hook can turn Allow or Ask into a refusal,
+never the other way. A hook that fails (it times out, crashes, is busy, or answers something its manifest did not
+declare) refuses the step too, unless it is declared advisory, and then its failure is a note under the step. Only
+at the hub's own tools may a hook change a call, only for the tools it names, and the tool checks the changed
+arguments, against its schema and its own matrix checks, before anything runs; at the permission seam a change is a
+failure ([plugins.md](plugins.md#before-a-tool-call)).
+
 ## Checking it
 
 `drgnx doctor` has a `security` line. It names the Emacs security issues that apply to your version (CVE numbers)
@@ -535,14 +573,31 @@ if it were locked.
 | Provider | The lock | Where it comes from |
 |---|---|---|
 | Claude Code | policy-tier settings (no bypass or auto mode, only drgnx's hooks and permission rules, plus the deny and ask rules of your Claude settings), strict MCP config, Claude's own sandbox off (drgnx's is the boundary), mode `default` | `_meta.claudeCode.options` of the adapter |
-| Codex | `-c approval_policy={ granular = {…} }` with every category (`sandbox_approval`, `rules`, `mcp_elicitations`, `request_permissions`, `skill_approval`) asked of drgnx, `approvals_reviewer = "user"`, `sandbox_mode = "danger-full-access"` (Gleipnir is the one sandbox) | [Codex configuration reference](https://developers.openai.com/codex/config-reference); codex-acp takes `-c` overrides ([source](https://github.com/zed-industries/codex-acp/blob/main/src/lib.rs)) |
-| Gemini CLI | `--approval-mode default`; any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options) |
+| Codex (codex-acp 2.x) | its environment, never argv (codex-acp ignores `-c`, and a profile's own `-c` is dropped): `INITIAL_AGENT_MODE=read-only`, codex-acp's mode whose every turn has approvals `on-request` by you (never a reviewer model) in Codex's read-only sandbox, inside drgnx's, so a write or a network call asks; `CODEX_CONFIG` with the same policy, `web_search = "disabled"`, every MCP server's tools `prompt` and the worktree `untrusted`; inside the sandbox, read-only, `/etc/codex/requirements.toml` (only that policy and sandbox, only managed hooks: a turn in another mode is refused by Codex) and `/etc/codex/config.toml` (a managed PreToolUse hook calling drgnx's `before_tool`). codex-acp takes a mode it does not know for its auto-review mode without a word, so the session is refused unless codex-acp says it is in `read-only` | codex-acp 2.5.0 `src/index.ts` (the environment it reads), `src/AgentMode.ts` (its four modes and the fallback), `src/CodexAcpClient.ts` (each turn's policy); Codex 0.165 `config/src/config_requirements.rs`, `config/src/loader/mod.rs` (the requirements and System layers), `hooks/src/engine/discovery.rs` (`mcp_tool` hooks, managed only) |
+| Gemini CLI | `--approval-mode default` (any `--yolo`, `-y` or `--approval-mode` in the profile's command is dropped); with a hook subscribed, `--admin-policy` with a file drgnx writes: the subscribed kinds' tools and every MCP tool `ask_user`, the tools of subagents and the bundled docs (which never ask) refused. Gemini drops a policy file whose rules miss a field its loader needs and runs on without it, saying so only on its stderr at exit, so drgnx checks the file as that loader does before it starts Gemini: a file that would not load is never passed, and a session with a hook subscribed is refused. drgnx's Gemini CLI build also says, when it starts, whether the file loaded and how many of its rules Gemini holds: a session it reports as not loaded, or holding fewer rules than drgnx wrote, is refused. It counts the rules by the file's name, so drgnx names the file after a hash of its content (`drgnx-<hash>.toml`), a name no system policy file has by accident | [Gemini CLI reference](https://www.mintlify.com/google-gemini/gemini-cli/reference/cli-options); Gemini CLI 0.67 `packages/core/src/policy/config.ts` (the admin tier, and that a `.toml` in `/etc/gemini-cli/policies` makes it ignore `--admin-policy`), `toml-loader.ts` (the fields every rule needs, and that a file without them is dropped) |
+| Kimi Code | `KIMI_CODE_HOME` is a folder of drgnx's own (`agents/kimi-code` in its state folder): its `config.toml`, bound read-only, has `default_permission_mode = "manual"`, `default_plan_mode = false` and an ask rule for each subscribed kind's tools (which beats Kimi's own approval of reads); `--yolo`, `-y`, `--yes`, `--auto-approve` and `--auto` are dropped; mode `default`. Plan mode is refused, because Kimi writes its plan file there without asking the hooks: a session that reports it at the start is not started, and one that switches to it is ended. A switch Kimi's engine makes without telling the client (none does today) would go unseen | Kimi Code `docs/en/configuration/config-files.md`, `env-vars.md`, `agent-core-v2` `permissionPolicyService.ts` |
+| DeepSeek Harness | `DSH_HOME` is a folder of drgnx's own (`agents/dsh`); `--patch` with an overlay, a list of loader patches: the `sandbox-policy` mode `danger-full-access` and, apart from it, the `approval` policy `ask` (the shipped bundle ties that mode to a policy that refuses every ask), and drgnx's ask plugin inserted for the subscribed kinds. Not enforced until that plugin ships with drgnx's DeepSeek Harness build | DeepSeek Harness 0.2.2 `apps/cli/src/args.ts`, `packages/boot/app-boot/src/index.ts` (the overlay format), `packages/bundle/base/cordis.patch.yml`, `packages/core/tools/src/pipeline.ts` |
 
 Gateway profiles of Claude (a profile with `:ai`) in the worker and manager roles also get
-`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes.
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`; chats keep five minutes. Gateway profiles of Kimi Code and DeepSeek Harness get
+the gateway's address and the session's own token in the variables they read (`KIMI_MODEL_BASE_URL`,
+`KIMI_MODEL_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_API_KEY`), never a provider key.
 
 In every worktree `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks` and `mise.toml` are read-only for the agent.
+Of Kimi Code's and DeepSeek Harness's own folders the agent may write only its login (`credentials`), sessions, logs
+and locks.
 
-An agent drgnx has no lock for (set `:provider claude|codex|gemini` in its profile, or name the CLI in its command)
-is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex counts as
-enforced only once its lock has passed the sandboxed-launch and laundering checks; until then it is "not enforced".
+The files a lock binds at a fixed path (Codex's `/etc/codex` pair, Kimi Code's `config.toml`) need the sandbox's
+full tier: on another, such a session is not started. The files drgnx writes for one session (Gemini's admin policy,
+DeepSeek's overlay) live in that session's own folder, which its agent reads and never writes.
+
+**A hook never misses a step it subscribes to.** When a before-tool hook or rule subscribes to a kind, the lock makes
+the agent ask about it, or the agent's own hook calls drgnx (Codex's managed hook, which fails open on a timeout:
+its approvals still fail closed), or the tool is withheld (Codex's hosted web search, Gemini's subagents). An agent
+that would still run such a step unseen (one with no lock, a Gemini whose system policy shadows drgnx's) is not
+started, and the refusal names the kinds and why. The session's details list which kinds are hooked, and how.
+
+An agent drgnx has no lock for (set `:provider claude|codex|gemini|kimi|deepseek` in its profile, or name the CLI in
+its command) is shown as "not enforced": it is not started as a worker under the Cautious and Balanced presets. Codex
+counts as enforced only once its lock has passed the sandboxed-launch and laundering checks, and DeepSeek Harness
+once drgnx's ask plugin ships with its fork; until then they are "not enforced".

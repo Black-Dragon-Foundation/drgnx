@@ -75,6 +75,8 @@ pub fn tools_for(sets: ToolSets) -> Vec<Box<dyn Tool<Ctx>>> {
         all.extend(super::graph::tools());
     }
     all.extend(super::settings::tools());
+    all.extend(super::extensions::tools());
+    all.extend(super::huddle::tools());
     all
 }
 
@@ -1302,11 +1304,11 @@ struct Brief {
 }
 
 impl Tool<Ctx> for Brief {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.inner.name()
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         self.inner.description()
     }
 

@@ -10,11 +10,15 @@ use std::path::Path;
 /// The sysfs root the hub reads.
 pub const SYS: &str = "/sys";
 
-/// On battery, by this platform's rule. ROOT is the sysfs root (ignored on macOS).
+/// On battery, by this platform's rule. ROOT is the sysfs root. On macOS only [`SYS`] means the machine (`pmset`):
+/// any other ROOT is a test's stand-in sysfs (`--test-power-root`), read by the sysfs rule there too, so the battery
+/// rows hold on a Mac as on Linux.
 pub fn on_battery(root: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let _ = root;
+        if root != Path::new(SYS) {
+            return sysfs_on_battery(root);
+        }
         std::process::Command::new("pmset")
             .args(["-g", "ps"])
             .output()

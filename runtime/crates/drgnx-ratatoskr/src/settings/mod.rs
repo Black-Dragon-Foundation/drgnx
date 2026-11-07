@@ -110,6 +110,11 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-agents-no-progress-tokens", "u64", OnError::Strict),
     setting("drgnx-agents-manager-context", "f64", OnError::Strict),
     setting(
+        "drgnx-agents-model-prices",
+        "Vec<ModelPrice>",
+        OnError::Strict,
+    ),
+    setting(
         "drgnx-agents-browser-program",
         "Option<String>",
         OnError::Strict,
@@ -139,6 +144,12 @@ pub const RUNTIME: &[RuntimeSetting] = &[
         OnError::Strict,
     ),
     setting("drgnx-runners-shared-overlay", "bool", OnError::Strict),
+    setting("drgnx-runners-job-keys", "Vec<String>", OnError::Strict),
+    setting(
+        "drgnx-runners-origin-key",
+        "Option<String>",
+        OnError::Strict,
+    ),
     setting(
         "drgnx-sandbox-proxy-pinned-addresses",
         "ProxyPins",
@@ -153,6 +164,14 @@ pub const RUNTIME: &[RuntimeSetting] = &[
     setting("drgnx-search-include", "Vec<String>", OnError::Strict),
     setting("drgnx-search-exclude", "Vec<String>", OnError::Strict),
     setting("drgnx-search-off", "bool", OnError::Strict),
+    setting("drgnx-search-base", "Option<String>", OnError::Strict),
+    setting("drgnx-agents-plugins", "Vec<String>", OnError::Strict),
+    setting("drgnx-agents-hook-rules", "Vec<HookRule>", OnError::Strict),
+    setting(
+        "drgnx-agents-hook-rules-off",
+        "Vec<String>",
+        OnError::Strict,
+    ),
 ];
 
 /// The names of [`RUNTIME`].
@@ -198,6 +217,8 @@ pub struct RuntimeValues {
     pub agents_repeat_limit: u32,
     pub agents_no_progress_tokens: u64,
     pub agents_manager_context: f64,
+    /// What a model costs, by model-id prefix or provider name (the forecast's rates).
+    pub agents_model_prices: Vec<ModelPrice>,
     /// The browser an agent session gets (an absolute path), or none to find one.
     pub agents_browser_program: Option<String>,
     /// The ports on the sandbox's own loopback that a session with the browser lets its agent and browser connect to
@@ -226,6 +247,10 @@ pub struct RuntimeValues {
     pub runners_project_visibility: String,
     /// A shared runner may get a project's uncommitted files, once each passes the secret scan (per project).
     pub runners_shared_overlay: bool,
+    /// The keys a project's jobs may name, by name (per project): any other is refused at submit.
+    pub runners_job_keys: Vec<String>,
+    /// The name of a project's read-only deploy key or token for its private origin (per project).
+    pub runners_origin_key: Option<String>,
     pub sandbox_proxy_pins: ProxyPins,
     /// Where models come from instead of the Hugging Face host.
     pub search_model_mirror: Option<String>,
@@ -236,6 +261,40 @@ pub struct RuntimeValues {
     pub search_include: Vec<String>,
     pub search_exclude: Vec<String>,
     pub search_off: bool,
+    /// The checkout a project's search base is built from (none: the main checkout). Per project.
+    pub search_base: Option<String>,
+    /// The plugins that run, in hook order (`drgnx-agents-plugins`). A project's list replaces it
+    /// ([`overrides::PER_PROJECT`]); a plugin runs only when the user approved it too ([`crate::plugins`]).
+    pub agents_plugins: Vec<String>,
+    /// The user's hook rules as a JSON list of rule objects (`drgnx-agents-hook-rules`), checked by [`hook_rules`]; a
+    /// project's rules are added to these.
+    pub agents_hook_rules: Value,
+    /// The ids of rules a project switches off (`drgnx-agents-hook-rules-off`).
+    pub agents_hook_rules_off: Vec<String>,
+}
+
+/// A hook rule list as the settings hold it, checked by `norn::hooks::parse_rules` (a rule's keys may be written with
+/// `-`, as in the Lisp, or `_`); the list with `_` keys. A bad one is its JSON path and why. `null` is no rules.
+pub(crate) fn hook_rules(v: &Value) -> Result<Value, (String, String)> {
+    let fixed = match v {
+        Value::Null => json!([]),
+        Value::Array(rules) => Value::Array(
+            rules
+                .iter()
+                .map(|r| match r {
+                    Value::Object(o) => Value::Object(
+                        o.iter()
+                            .map(|(k, x)| (k.replace('-', "_"), x.clone()))
+                            .collect(),
+                    ),
+                    other => other.clone(),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    };
+    norn::hooks::parse_rules(&fixed).map_err(|e| (e.path, e.message))?;
+    Ok(fixed)
 }
 
 /// The browser program setting: absolute, or none.
@@ -298,6 +357,52 @@ pub type SilentAfter = Vec<(String, u64)>;
 /// `drgnx-sandbox-proxy-pinned-addresses`: the names the proxies (a session's provider proxy, a container job's)
 /// resolve to a fixed address instead of asking DNS, in order.
 pub type ProxyPins = Vec<(String, std::net::IpAddr)>;
+
+/// One row of `drgnx-agents-model-prices`: US dollars per million tokens for a model-id prefix or a provider name.  A
+/// cache price left out is the input price (as OpenRouter documents for a missing cache price).
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ModelPrice {
+    /// The alist key.
+    #[serde(skip)]
+    pub key: String,
+    #[serde(rename = "in")]
+    pub input: f64,
+    #[serde(rename = "out")]
+    pub output: f64,
+    pub cache_read: Option<f64>,
+    pub write_5m: Option<f64>,
+    pub write_1h: Option<f64>,
+    /// The date the row was read off the provider's page (`2026-11-01`).
+    pub as_of: Option<String>,
+}
+
+/// The rows of the price table with their keys, each price a finite number of 0 or more.
+pub(crate) fn prices(pairs: Vec<(String, ModelPrice)>) -> Result<Vec<ModelPrice>, String> {
+    pairs
+        .into_iter()
+        .map(|(key, mut p)| {
+            p.key = key;
+            let all = [
+                Some(p.input),
+                Some(p.output),
+                p.cache_read,
+                p.write_5m,
+                p.write_1h,
+            ];
+            match all
+                .into_iter()
+                .flatten()
+                .find(|x| !(x.is_finite() && *x >= 0.0))
+            {
+                Some(_) => Err(format!(
+                    "{}: a price is dollars per million tokens, a number of 0 or more",
+                    p.key
+                )),
+                None => Ok(p),
+            }
+        })
+        .collect()
+}
 
 /// An `agents-matrix` value that is valid, as a message when it is not.
 pub(crate) fn check_matrix(v: &Value) -> Result<(), String> {
@@ -396,6 +501,10 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(node)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(node)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(node)?,
+        "drgnx-agents-model-prices" => {
+            let profiles::Alist(pairs) = de::<profiles::Alist<ModelPrice>>(node)?;
+            values.agents_model_prices = prices(pairs).map_err(|m| Bad::at(node, None, m))?;
+        }
         "drgnx-runners-send" => {
             let v: String = de(node)?;
             if !["all", "heavy", "none"].contains(&v.as_str()) {
@@ -414,6 +523,8 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
             values.runners_project_visibility = v;
         }
         "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(node)?,
+        "drgnx-runners-job-keys" => values.runners_job_keys = de(node)?,
+        "drgnx-runners-origin-key" => values.runners_origin_key = de(node)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let profiles::Alist(pairs) = de::<profiles::Alist<std::net::IpAddr>>(node)?;
             values.sandbox_proxy_pins = pairs;
@@ -423,6 +534,17 @@ pub(crate) fn decode(name: &str, node: &Node, values: &mut RuntimeValues) -> Res
         "drgnx-search-include" => values.search_include = de(node)?,
         "drgnx-search-exclude" => values.search_exclude = de(node)?,
         "drgnx-search-off" => values.search_off = de(node)?,
+        "drgnx-search-base" => values.search_base = de(node)?,
+        "drgnx-agents-plugins" => values.agents_plugins = de(node)?,
+        "drgnx-agents-hook-rules" => {
+            let v: Value = de(node)?;
+            values.agents_hook_rules = hook_rules(&v).map_err(|(path, message)| Bad {
+                path: (!path.is_empty()).then_some(path),
+                message,
+                span: node.span,
+            })?;
+        }
+        "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(node)?,
         "drgnx-agents-browser-program" => {
             let v = de(node)?;
             check_browser_program(&v).map_err(|m| Bad::at(node, None, m))?;
@@ -688,6 +810,18 @@ impl Settings {
             None => overrides::to_json(name, &self.current().loaded.values)?,
         };
         Some((value, seen))
+    }
+
+    /// NAME's value in PROJECT's own set, or none when PROJECT never sent one for it (unlike [`Self::effective`], which
+    /// falls back to the global value): a setting a project's value is added to, not put in place of.
+    pub fn project_value(&self, name: &str, project: &str) -> Option<Value> {
+        let overrides = self.overrides.lock().expect("settings");
+        overrides
+            .scope(Some(project))?
+            .iter()
+            .rev()
+            .find(|o| o.name == name)
+            .map(|o| o.value.clone())
     }
 
     /// `config/settings`: LIST is the whole set of PROJECT (none: global), kept as the last good one.  A name that

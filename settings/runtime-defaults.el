@@ -21,8 +21,8 @@
    ;; the agent gateway only (Claude Code with your own Anthropic API key): no editor feature asks it
    (anthropic :name "Anthropic API" :kind anthropic :url "https://api.anthropic.com/v1" :key-env "ANTHROPIC_API_KEY"
               :auth x-api-key :caps () :messages t)
-   ;; Kimi and DeepSeek on their own Anthropic-compatible APIs (Claude Code agents only; Bearer through
-   ;; ANTHROPIC_AUTH_TOKEN, as both vendors' Claude Code guides have it)
+   ;; Kimi and DeepSeek on their own Anthropic-compatible APIs, for their own agents (Kimi Code, DeepSeek Harness)
+   ;; through the gateway; Bearer, as both vendors' guides have it
    (moonshot :name "Moonshot (Kimi)" :kind anthropic :url "https://api.moonshot.ai/anthropic" :key-env "MOONSHOT_API_KEY"
              :caps () :messages t)
    (deepseek :name "DeepSeek" :kind anthropic :url "https://api.deepseek.com/anthropic" :key-env "DEEPSEEK_API_KEY"
@@ -49,23 +49,27 @@
 
  ;; Profiles drgnx offers without setup; :ai names the provider environment the agent gets when it starts
  ;; (`drgnx-ai-agent-env'); :job-safe, that a job may run it (`drgnx-job-safe-p': Claude Code, whose job sessions
- ;; ignore a repository's own settings).
+ ;; ignore a repository's own settings).  A vendor with an agent of its own runs that agent (Kimi Code, DeepSeek
+ ;; Harness), never Claude Code on the vendor's endpoint; Claude Code on a model that is not Claude gets no tool search,
+ ;; which such models do not speak.
  (drgnx-agents-builtin-profiles
   (("claude" :command ("claude-agent-acp") :mode queue :job-safe t
     :doc "Claude through the unmodified agent (subscription or API key)")
    ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
     :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-   ("claude (Ollama)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-ollama
+   ("claude (Ollama)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue :job-safe t
+    :ai claude-ollama
     :doc "Claude Code on a local Ollama model")
-   ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-moonshot :model "kimi-k3"
-    :doc "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
-   ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-deepseek :model "deepseek-v4-pro"
-    :doc "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
-   ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-    :model "moonshotai/kimi-k3"
+   ("kimi" :command ("kimi" "acp") :mode queue :provider kimi :ai kimi-moonshot :model "kimi-k3"
+    :doc "Kimi Code, Moonshot's own agent, on Kimi through Moonshot's API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
+   ("deepseek" :command ("dsh" "--profile" "acp") :mode queue :provider deepseek :ai dsh-deepseek
+    :model "deepseek-v4-pro"
+    :doc "DeepSeek Harness, DeepSeek's own agent, on DeepSeek through its API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
+   ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
     :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
-   ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
-    :model "deepseek/deepseek-v4-pro"
+   ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "deepseek/deepseek-v4-pro"
     :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")))
 
  ;; The strict defaults: every `:on-error strict' setting, the value the runtime uses when settings.el does not read.
@@ -91,6 +95,12 @@
  (drgnx-agents-repeat-limit 3)
  (drgnx-agents-no-progress-tokens 20000)
  (drgnx-agents-manager-context 0.7)
+ (drgnx-agents-model-prices
+  (("claude-fable-5-1" :in 10 :out 50 :cache-read 0.25 :write-5m 12.5 :write-1h 20 :as-of "2026-11-01")
+   ("claude-opus-5-5" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01")
+   ("claude-sonnet-5-5" :in 2 :out 10 :cache-read 0.1 :write-5m 2.5 :write-1h 4 :as-of "2026-11-01")
+   ("claude-haiku-5-5" :in 0.5 :out 2.5 :cache-read 0.05 :write-5m 0.625 :write-1h 1 :as-of "2026-11-01")
+   ("claude" :in 4 :out 20 :cache-read 0.2 :write-5m 5 :write-1h 8 :as-of "2026-11-01")))
  (drgnx-agents-browser-program nil)
  (drgnx-agents-browser-local-ports (3000 3001 4173 4200 5000 5173 8000 8080 8888))
  (drgnx-agents-browser-deny-hosts nil)
@@ -105,8 +115,14 @@
  (drgnx-runners-weight 1.0)
  (drgnx-runners-project-visibility "private")
  (drgnx-runners-shared-overlay nil)
+ (drgnx-runners-job-keys nil)
+ (drgnx-runners-origin-key nil)
  (drgnx-search-model-mirror nil)
  (drgnx-search-builtin t)
  (drgnx-search-include nil)
  (drgnx-search-exclude nil)
- (drgnx-search-off nil))
+ (drgnx-search-off nil)
+ (drgnx-search-base nil)
+ (drgnx-agents-plugins nil)
+ (drgnx-agents-hook-rules nil)
+ (drgnx-agents-hook-rules-off nil))

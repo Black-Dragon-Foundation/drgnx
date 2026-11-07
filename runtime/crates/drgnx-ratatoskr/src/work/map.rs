@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::time::Duration;
 use vegvisir::layout::{self, Layout};
 use vegvisir::{
-    CardFact, CardKind, Core, Delta, Density, Effect, Event, Filters, GraphFact, ItemId, Kind,
-    MachineFact, Mode, PresenceEntry, PresenceFact, RefFact, SessionFact, State, StepFact, ViewKey,
-    ViewOp, ViewState,
+    CardFact, CardKind, Core, Delta, Density, Effect, Event, Filters, GraphFact, ItemId, JobFact,
+    Kind, MachineFact, Mode, PresenceEntry, PresenceFact, RefFact, RunnerFact, SessionFact, State,
+    StepFact, ViewKey, ViewOp, ViewState,
 };
 
 /// At most one delta per view this often (ms).
@@ -251,6 +251,8 @@ struct Sess {
     seq: u64,
     state: State,
     since: u64,
+    /// The job it started that runs or waits now (`Map::jobs`).
+    job: Option<JobFact>,
 }
 
 impl Sess {
@@ -297,10 +299,11 @@ impl Sess {
             branch,
             worktree,
             base: None,
-            machine: None,
+            machine: self.job.as_ref().and_then(|j| j.runner.clone()),
             spend,
             context,
             progress: None,
+            job: self.job.clone(),
         })];
         // a subagent shares its parent's tree and branch (the core takes them from the parent) and its state
         for (i, k) in self.kids.iter().enumerate() {
@@ -320,6 +323,7 @@ impl Sess {
                 spend: None,
                 context: None,
                 progress: None,
+                job: None,
             }));
         }
         out
@@ -421,18 +425,46 @@ fn mode(m: PresenceMode) -> Mode {
     match m {
         PresenceMode::Listed => Mode::Listed,
         PresenceMode::Read => Mode::Read,
+        // an edit about to land changed nothing yet: the map shows the agent in the file, as a read
+        PresenceMode::Pending => Mode::Read,
         PresenceMode::Write => Mode::Write,
         PresenceMode::Edit => Mode::Edit,
     }
 }
 
-fn machine_fact(m: &Machine) -> MachineFact {
+/// A machine as the map holds it. A runner's load is its jobs over its cores (RUNNER: its fact and its cores).
+pub(crate) fn machine_fact(m: &Machine, runner: Option<(&RunnerFact, u32)>) -> MachineFact {
+    let (slots, used) = match runner {
+        Some((r, cores)) => (cores, r.jobs),
+        None => (
+            u32::try_from(m.slots.len()).unwrap_or(u32::MAX),
+            u32::try_from(m.slots.iter().filter(|s| s.holder.is_some()).count())
+                .unwrap_or(u32::MAX),
+        ),
+    };
     MachineFact {
         name: m.machine.clone(),
-        slots: u32::try_from(m.slots.len()).unwrap_or(u32::MAX),
-        used: u32::try_from(m.slots.iter().filter(|s| s.holder.is_some()).count())
-            .unwrap_or(u32::MAX),
+        slots,
+        used,
         reported: !m.local,
+        runner: runner.map(|(r, _)| r.clone()),
+    }
+}
+
+/// A job row as its session's card and its machine's queue show it; KEYS are the names sent to it.
+pub(crate) fn job_fact(row: &runstav::methods::exec::ExecRow, keys: Vec<String>) -> JobFact {
+    use runstav::methods::exec::ExecStatus;
+    let running = row.status == ExecStatus::Running;
+    JobFact {
+        id: row.id.clone(),
+        name: row.name.clone().unwrap_or_else(|| row.id.clone()),
+        runner: row.machine.clone().filter(|_| running),
+        state: if running { "running" } else { "waiting" }.into(),
+        started: row.started.max(0.0) as u64,
+        limit_min: row
+            .timebox_s
+            .map(|s| u32::try_from(s.div_ceil(60)).unwrap_or(u32::MAX)),
+        keys,
     }
 }
 
@@ -452,7 +484,11 @@ fn chips(m: &vegvisir::Model) -> Vec<Value> {
         .filter(|it| it.kind == Kind::Machine)
         .map(|it| {
             let (used, total) = it.fields.slots.unwrap_or((0, 0));
-            json!({"kind": "machine", "item": it.id, "label": it.label, "used": used, "total": total})
+            let mut chip = json!({"kind": "machine", "item": it.id, "label": it.label, "used": used, "total": total});
+            if let Some(cost) = it.fields.runner.as_ref().and_then(|r| r.cost.as_ref()) {
+                chip["cost"] = json!(cost);
+            }
+            chip
         })
         .collect()
 }
@@ -521,6 +557,7 @@ impl Map {
                     seq: g.next_seq,
                     state,
                     since: now,
+                    job: None,
                 },
             );
         }
@@ -705,15 +742,36 @@ impl Map {
     }
 
     /// The machine registry changed.
-    pub fn machines(self: &Arc<Self>, list: &[Machine]) {
+    pub fn machines(self: &Arc<Self>, facts: Vec<MachineFact>) {
         if !self.open() {
             return;
         }
-        let facts: Vec<MachineFact> = list.iter().map(machine_fact).collect();
         let mut g = lock(&self.inner);
         let keys: Vec<String> = g.spaces.keys().cloned().collect();
         for k in keys {
             self.feed(&mut g, &k, vec![Event::Machines(facts.clone())]);
+        }
+    }
+
+    /// The jobs the sessions run or wait for, as LOOK finds them (a session's id in, its job out). A session whose
+    /// job changed (started, placed, ended) is fed again, so its "runs on" edge follows the job.
+    pub fn jobs(self: &Arc<Self>, look: &dyn Fn(&str) -> Option<JobFact>) {
+        if !self.open() {
+            return;
+        }
+        let mut g = lock(&self.inner);
+        let ids: Vec<String> = g.sessions.keys().cloned().collect();
+        for id in ids {
+            let job = look(&id);
+            let Some(s) = g.sessions.get_mut(&id) else {
+                continue;
+            };
+            if s.job == job {
+                continue;
+            }
+            s.job = job;
+            let evs = s.facts();
+            self.feed_sessions(&mut g, &id, evs);
         }
     }
 
@@ -1065,7 +1123,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapFram
     // the seed: the store's records and refs, the machines, the sessions and who is in which file now
     let (records, cards) = read_store(f).await;
     let refs = refs_of(f, &p.workspace).await;
-    let machines = crate::work::machines::list_now(f);
+    let machines = crate::work::machines::facts_now(f);
     let sessions: Vec<(Snapshot, Vec<crate::work::subagents::Child>)> = f
         .core
         .agents
@@ -1097,7 +1155,7 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapFram
     let mut seed = records;
     seed.extend(Map::card_events(&mut g, cards));
     seed.push(Event::Refs(refs));
-    seed.push(Event::Machines(machines.iter().map(machine_fact).collect()));
+    seed.push(Event::Machines(machines));
     for (snap, kids) in &sessions {
         if let Some(evs) = Map::note_session(&mut g, snap, kids)
             && g.sessions[&snap.id].under(&g.spaces[&ws].roots)

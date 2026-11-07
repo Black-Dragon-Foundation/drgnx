@@ -1,0 +1,31 @@
+{"scenario": "adapters/dsh-rebase", "requires": ["v1", "test-hooks"], "doc": "[C] The part of the DeepSeek Harness fork's rebase check (the plan's list of nine) that the personality can answer: (1) the fork boots with drgnx's overlay (`--profile acp --patch FILE`), which the personality refuses to do on anything but the top-level patch list dsh 0.2.2 reads; (2) the approval policy is `ask` under the full-access sandbox mode; (4) the fork's permission request, and its `_drgnx/before_tool`, carry the tool call's kind, so a refused read is vetoed before the confirmation. It also pins the advertised features (context, drop, before-tool; no pin) and the methods behind them. Checks 3 and 5 to 9 (typechecks, the tool-to-kind table, `contextBreakdown`, the session format, `DEEPSEEK_BASE_URL`, the keyless snapshot run) read the fork's own source and runner, so they run in the fork's checkout, not here (DEFERRED P9-DSH-REBASE-LIVE-1); this row names which of its own checks broke."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"fork\" :provider deepseek :command (\"$MOCK\" \"acp\" \"--as\" \"dsh\" \"--panel\" \"before-tool,context,drop\" \"--log\" \"$ROOT/acp.log\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-reads", "point": "before-tool", "tool-kinds": ["read"], "verdict": "deny", "reason": "no reads"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"policy\":\"ask\"", "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"session": {"id": "$sid", "panel": {"features": ["context", "drop", "before-tool"]}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "panel:context {\"used\": 500, \"size\": 128000, \"parts\": [{\"kind\": \"system\", \"tokens\": 100}, {\"kind\": \"tools\", \"tokens\": 150}, {\"kind\": \"conversation\", \"tokens\": 250}]}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent", "data": {"id": "$sid", "session": {"panel": {"context": {"used": 500}}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/context-drop", "params": {"id": "$sid", "item": "t1"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 15000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/context-pin", "params": {"id": "$sid", "item": "f1", "pinned": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params", "message": "this agent does not offer it"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/compact-preview", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "error": {"code": "invalid-params", "message": "this agent does not offer it"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "agents/send", "params": {"id": "$sid", "text": "provider:read a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": true}}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "{\"vetoed\":\"other\"}", "within_ms": 30000}
+{"do": "file_grep", "paths": ["$ROOT/acp.log"], "absent": "{\"ran\":\"read\"}"}
+{"do": "file", "path": "$ROOT/acp.log", "contains": "\"method\":\"_drgnx/context/drop\"", "within_ms": 10000}

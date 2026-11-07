@@ -26,6 +26,7 @@ mimir = { path = "../crates/mimir", features = ["fuzzing"] }
 bifrost = { path = "../crates/bifrost", default-features = false }
 http = "1"
 norn = { path = "../crates/norn" }
+brokkr = { path = "../crates/brokkr" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
 drgnx-px = { path = "../crates/drgnx-px" }
 tokio = { version = "1.54", features = ["rt", "io-util", "time", "sync"] }
@@ -243,6 +244,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "plugin_manifest"
+path = "fuzz_targets/plugin_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "px_owner"
 path = "fuzz_targets/px_owner.rs"
 test = false
@@ -250,8 +258,22 @@ doc = false
 bench = false
 
 [[bin]]
+name = "hook_rules"
+path = "fuzz_targets/hook_rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "px_mux"
 path = "fuzz_targets/px_mux.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "drgnx_context"
+path = "fuzz_targets/drgnx_context.rs"
 test = false
 doc = false
 bench = false

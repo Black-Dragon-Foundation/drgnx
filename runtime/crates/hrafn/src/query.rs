@@ -16,6 +16,7 @@
 use crate::index::{Lag, lag};
 use crate::schema::encode_symbol;
 use crate::store::{CodeStore, StoreError};
+use crate::tree::View;
 use rusqlite::{Connection, params};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -126,8 +127,17 @@ pub struct Answer {
 }
 
 impl Answer {
-    /// The line that ends a text answer: what lags, and which model answered.
+    /// The line that ends a text answer: which view answered (a worktree's says how many files differ), what lags,
+    /// and which model answered.
     pub fn lag_line(&self) -> String {
+        let view = match self.lag.differing_files {
+            Some(n) => format!("worktree: {n} files differ from the base; "),
+            None => String::new(),
+        };
+        format!("{view}{}", self.vectors_line())
+    }
+
+    fn vectors_line(&self) -> String {
         let l = &self.lag;
         let stale = if l.dirty_files > 0 {
             format!("; {} files changed since indexing", l.dirty_files)
@@ -218,12 +228,38 @@ fn ids(c: &Connection, sql: &str, p: impl rusqlite::Params) -> rusqlite::Result<
     c.prepare(sql)?.query_map(p, |r| r.get(0))?.collect()
 }
 
-fn pinned(c: &Connection, name: &str) -> rusqlite::Result<Vec<i64>> {
+/// The `file` row (alias `f`) through which a view sees a row (alias ROW) of `chunk` or `symbol`: its path's row in
+/// the view, the tree's over the base's (`?V` is the view's tree, 0 for the base, so the base view reads one row). The
+/// row is visible when `f.blob = ROW.blob`; a tombstone (NULL) matches nothing. At most two primary-key probes of
+/// `file` per candidate. Every route applies it **before** its `limit` (H16 overlay design §4), and the view's tree is
+/// each statement's last parameter.
+macro_rules! seen_through {
+    ($row:literal, $view:literal) => {
+        concat!(
+            "file f on f.path = ",
+            $row,
+            ".path and f.tree = (select max(o.tree) from file o where o.tree in (0, ",
+            $view,
+            ") and o.path = ",
+            $row,
+            ".path)"
+        )
+    };
+}
+
+/// An exact name's definitions in the view (?1 the name).
+pub const PINNED_SQL: &str = concat!(
+    "select s.chunk, s.kind, f.class, s.path from symbol s cross join ",
+    seen_through!("s", "?2"),
+    " where s.name = ?1 and f.blob = s.blob"
+);
+
+fn pinned(c: &Connection, name: &str, view: View) -> rusqlite::Result<Vec<i64>> {
     let mut rows: Vec<(i64, String, String, String)> = c
-        .prepare(
-            "select s.chunk, s.kind, f.class, s.path from symbol s join file f on f.path = s.path where s.name = ?1",
-        )?
-        .query_map([name], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .prepare(PINNED_SQL)?
+        .query_map(params![name, view.tree()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
         .collect::<Result<_, _>>()?;
     rows.sort_by(|a, b| {
         (a.2 == "test", kind_rank(&a.1), &a.3, a.0).cmp(&(
@@ -238,15 +274,28 @@ fn pinned(c: &Connection, name: &str) -> rusqlite::Result<Vec<i64>> {
 
 /// The symbols whose name starts with ?1 (a `like` pattern), on the `symbol_name_nc` index: `like` ignores case, so
 /// only an index of the same collation serves it (a scan of `symbol` was 18 ms at 50,000 chunks).
-pub const NAME_PREFIX_SQL: &str =
-    "select chunk from symbol where name like ?1 escape '\\' order by length(name) limit 30";
+///
+/// `cross join` keeps `symbol` the outer loop: without statistics the planner would walk every file row and probe its
+/// symbols instead.
+pub const NAME_PREFIX_SQL: &str = concat!(
+    "select s.chunk from symbol s cross join ",
+    seen_through!("s", "?2"),
+    " where s.name like ?1 escape '\\' and f.blob = s.blob order by length(s.name) limit 30"
+);
+pub const NAME_EXACT_SQL: &str = concat!(
+    "select s.chunk from symbol s cross join ",
+    seen_through!("s", "?2"),
+    " where s.name = ?1 and f.blob = s.blob limit 30"
+);
+pub const NAME_TRIGRAM_SQL: &str = concat!(
+    "select s.chunk from symbol_fts join symbol s on s.id = symbol_fts.rowid cross join ",
+    seen_through!("s", "?2"),
+    " where symbol_fts match ?1 and f.blob = s.blob limit 30"
+);
 
-fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
-    let mut out = ids(
-        c,
-        "select chunk from symbol where name = ?1 limit 30",
-        [token],
-    )?;
+fn names(c: &Connection, token: &str, view: View) -> rusqlite::Result<Vec<i64>> {
+    let v = view.tree();
+    let mut out = ids(c, NAME_EXACT_SQL, params![token, v])?;
     let like = format!(
         "{}%",
         token
@@ -254,13 +303,9 @@ fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    out.extend(ids(c, NAME_PREFIX_SQL, [like])?);
+    out.extend(ids(c, NAME_PREFIX_SQL, params![like, v])?);
     if token.chars().count() >= 3 {
-        out.extend(ids(
-            c,
-            "select s.chunk from symbol_fts f join symbol s on s.rowid = f.rowid where symbol_fts match ?1 limit 30",
-            [quoted(token)],
-        )?);
+        out.extend(ids(c, NAME_TRIGRAM_SQL, params![quoted(token), v])?);
     }
     Ok(out)
 }
@@ -268,31 +313,41 @@ fn names(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
 /// The first chunk of each file whose path holds ?1 (the `file` table has a row per file; the `chunk` table has one per
 /// chunk, each with its text: a scan of it for a `like` was 7 ms per token at 50,000 chunks).
 pub const PATH_ANY_SQL: &str = "select id from (
-       select (select min(c.id) from chunk c where c.path = f.path) as id, f.path as p
-       from file f where lower(f.path) like ?1 escape '\\')
+       select (select min(c.id) from chunk c where c.path = f.path and c.blob = f.blob) as id, f.path as p
+       from file f where f.tree in (0, ?2) and f.blob is not null and lower(f.path) like ?1 escape '\\'
+         and f.tree = (select max(o.tree) from file o where o.tree in (0, ?2) and o.path = f.path))
      where id is not null order by length(p) limit 30";
 /// The same for a path whose file name is ?1 or starts with it (`/name.` in ?1, `name.` in ?2).
 pub const PATH_NAME_SQL: &str = "select id from (
-       select (select min(c.id) from chunk c where c.path = f.path) as id, f.path as p
-       from file f where lower(f.path) like ?1 escape '\\' or lower(f.path) like ?2 escape '\\')
+       select (select min(c.id) from chunk c where c.path = f.path and c.blob = f.blob) as id, f.path as p
+       from file f where f.tree in (0, ?3) and f.blob is not null
+         and (lower(f.path) like ?1 escape '\\' or lower(f.path) like ?2 escape '\\')
+         and f.tree = (select max(o.tree) from file o where o.tree in (0, ?3) and o.path = f.path))
      where id is not null order by length(p) limit 30";
 
-fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
+fn paths(c: &Connection, token: &str, view: View) -> rusqlite::Result<Vec<i64>> {
     let t = token.to_lowercase();
     let like = |s: &str| {
         s.replace('\\', "\\\\")
             .replace('%', "\\%")
             .replace('_', "\\_")
     };
-    let (sql, arg) = if t.contains('/') || t.contains('.') {
-        (PATH_ANY_SQL, format!("%{}%", like(&t)))
+    if t.contains('/') || t.contains('.') {
+        ids(
+            c,
+            PATH_ANY_SQL,
+            params![format!("%{}%", like(&t)), view.tree()],
+        )
     } else {
-        (PATH_NAME_SQL, format!("%/{}.%", like(&t)))
-    };
-    if sql.contains("?2") {
-        ids(c, sql, params![arg, format!("{}.%", like(&t))])
-    } else {
-        ids(c, sql, [arg])
+        ids(
+            c,
+            PATH_NAME_SQL,
+            params![
+                format!("%/{}.%", like(&t)),
+                format!("{}.%", like(&t)),
+                view.tree()
+            ],
+        )
     }
 }
 
@@ -302,11 +357,16 @@ fn paths(c: &Connection, token: &str) -> rusqlite::Result<Vec<i64>> {
 /// per vector: 37 s for 16,000 chunks.)
 pub const NEAREST_SQL: &str = "select key, dims, vec from vec where model = ?1";
 
-/// The first live chunk of a content key (none: the vector is kept for a file that is gone).
-const FIRST_CHUNK_SQL: &str = "select min(id) from chunk where key = ?1 and embed = 1";
+/// The first visible chunk of a content key (none: the vector is kept for a file that is gone, or only a worktree
+/// has the content).
+pub const FIRST_CHUNK_SQL: &str = concat!(
+    "select min(c.id) from chunk c cross join ",
+    seen_through!("c", "?2"),
+    " where c.key = ?1 and c.embed = 1 and f.blob = c.blob"
+);
 
 /// The nearest chunks of MODEL to the query vector V: Hamming over the sign bits, then the int8 dot product.
-fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>> {
+fn nearest(c: &Connection, model: &str, v: &[f32], view: View) -> rusqlite::Result<Vec<i64>> {
     let (qbits, qints, _) = urdr::graph::search::vec::quantize(v);
     let mut heap: BinaryHeap<(u32, i64)> = BinaryHeap::with_capacity(SCAN + 1);
     {
@@ -329,7 +389,9 @@ fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>>
                 continue;
             }
             let key = r.get_ref(0)?.as_blob()?;
-            let Some(id) = first.query_row([key], |r| r.get::<_, Option<i64>>(0))? else {
+            let Some(id) =
+                first.query_row(params![key, view.tree()], |r| r.get::<_, Option<i64>>(0))?
+            else {
                 continue;
             };
             if !full {
@@ -360,7 +422,20 @@ fn nearest(c: &Connection, model: &str, v: &[f32]) -> rusqlite::Result<Vec<i64>>
     Ok(scored.into_iter().map(|s| s.0).collect())
 }
 
-fn lists(c: &Connection, text: &str, qvec: Option<(&str, &[f32])>) -> rusqlite::Result<Lists> {
+/// The keyword list (?1 the MATCH, ?2 its length). FTS5 gives no top-N guarantee, so the whole match set is scored;
+/// with shared content that set is about the distinct content, not trees times content.
+pub const KEYWORD_SQL: &str = concat!(
+    "select chunk_fts.rowid from chunk_fts join chunk c on c.id = chunk_fts.rowid cross join ",
+    seen_through!("c", "?3"),
+    " where chunk_fts match ?1 and f.blob = c.blob order by bm25(chunk_fts, 5, 5, 2, 1) limit ?2"
+);
+
+fn lists(
+    c: &Connection,
+    text: &str,
+    qvec: Option<(&str, &[f32])>,
+    view: View,
+) -> rusqlite::Result<Lists> {
     let tokens: Vec<String> = text.split_whitespace().map(str::to_string).collect();
     let mut out = Lists::default();
     if tokens.is_empty() {
@@ -368,34 +443,30 @@ fn lists(c: &Connection, text: &str, qvec: Option<(&str, &[f32])>) -> rusqlite::
     }
     let whole = tokens.len() == 1;
     if whole {
-        out.pinned = pinned(c, &tokens[0])?;
+        out.pinned = pinned(c, &tokens[0], view)?;
     }
     let mut named = Vec::new();
     for t in tokens.iter().filter(|t| identifier_like(t, whole)) {
-        named.extend(names(c, t)?);
+        named.extend(names(c, t, view)?);
     }
     if !named.is_empty() {
         out.ranked.push(("name", named));
     }
     let mut on_paths = Vec::new();
     for t in tokens.iter().filter(|t| t.chars().count() >= 3) {
-        on_paths.extend(paths(c, t)?);
+        on_paths.extend(paths(c, t, view)?);
     }
     if !on_paths.is_empty() {
         out.ranked.push(("path", on_paths));
     }
     if let Some(m) = fts_match(&tokens, whole) {
         // a MATCH the engine cannot read (a stray operator) is no list, not an error
-        if let Ok(found) = ids(
-            c,
-            "select rowid from chunk_fts where chunk_fts match ?1 order by bm25(chunk_fts, 5, 5, 2, 1) limit ?2",
-            params![m, LIST as i64],
-        ) {
+        if let Ok(found) = ids(c, KEYWORD_SQL, params![m, LIST as i64, view.tree()]) {
             out.ranked.push(("keyword", found));
         }
     }
     if let Some((model, v)) = qvec {
-        out.ranked.push(("vector", nearest(c, model, v)?));
+        out.ranked.push(("vector", nearest(c, model, v, view)?));
     }
     Ok(out)
 }
@@ -410,12 +481,16 @@ struct Meta {
     generated: bool,
 }
 
-fn meta(c: &Connection, id: i64) -> rusqlite::Result<Option<Meta>> {
-    let mut st = c.prepare(
-        "select c.path, c.line_start, c.line_end, c.symbol, c.embed_text, f.class, f.generated
-         from chunk c join file f on f.path = c.path where c.id = ?1",
-    )?;
-    let mut rows = st.query([id])?;
+/// A hit's chunk and the class of the view's file row it is seen through; none when the view does not see it.
+pub const META_SQL: &str = concat!(
+    "select c.path, c.line_start, c.line_end, c.symbol, c.embed_text, f.class, f.generated from chunk c cross join ",
+    seen_through!("c", "?2"),
+    " where c.id = ?1 and f.blob = c.blob"
+);
+
+fn meta(c: &Connection, id: i64, view: View) -> rusqlite::Result<Option<Meta>> {
+    let mut st = c.prepare(META_SQL)?;
+    let mut rows = st.query(params![id, view.tree()])?;
     Ok(match rows.next()? {
         Some(r) => Some(Meta {
             path: r.get(0)?,
@@ -488,6 +563,7 @@ fn reanchor(h: &Hit, embed_text: &str, text: &str) -> Result<Option<(u32, u32)>,
 pub async fn search(
     store: &CodeStore,
     q: &Query,
+    view: View,
     qvec: Option<(&str, &[f32])>,
     now: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Answer, StoreError> {
@@ -500,6 +576,7 @@ pub async fn search(
                 c,
                 &text,
                 owned.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
+                view,
             )?;
             let mut score: HashMap<i64, f64> = HashMap::new();
             let mut routes: HashMap<i64, Vec<&'static str>> = HashMap::new();
@@ -527,7 +604,7 @@ pub async fn search(
                 .collect();
             let mut metas: HashMap<i64, Meta> = HashMap::new();
             for (id, ..) in order.iter().chain(&rest) {
-                if let Some(m) = meta(c, *id)? {
+                if let Some(m) = meta(c, *id, view)? {
                     metas.insert(*id, m);
                 }
             }
@@ -588,7 +665,7 @@ pub async fn search(
         }
     }
     let model = qvec.map(|(m, _)| m.to_string());
-    let lag = lag(store, model.as_deref()).await?;
+    let lag = lag(store, model.as_deref(), view).await?;
     let notice = model
         .is_none()
         .then(|| "no embedding model answered".to_string());
@@ -598,4 +675,91 @@ pub async fn search(
         model,
         notice,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::door::DoorKind;
+    use crate::store::{ChunkIn, FileRow, SymbolIn, vec_key};
+
+    /// N chunks of PATH, each defining one symbol `needle`.
+    fn needles(path: &str, n: usize) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
+        let chunks = (0..n)
+            .map(|i| {
+                let text = format!("{path} {i}");
+                ChunkIn {
+                    start: 0,
+                    end: 1,
+                    line_start: i as u32 + 1,
+                    line_end: i as u32 + 1,
+                    symbol: Some("needle".into()),
+                    key: vec_key(1, &text),
+                    embed: true,
+                    embed_text: text,
+                    symbols: "needle".into(),
+                    doc: String::new(),
+                    body: "needle".into(),
+                }
+            })
+            .collect();
+        let symbols = (0..n)
+            .map(|i| SymbolIn {
+                name: "needle".into(),
+                kind: "function".into(),
+                start: 0,
+                end: 1,
+                chunk: i,
+                definer: "defun".into(),
+                doc1: None,
+            })
+            .collect();
+        (chunks, symbols)
+    }
+
+    fn row(path: &str, blob: &str) -> FileRow {
+        FileRow {
+            path: path.into(),
+            blob: Some(blob.into()),
+            class: "code".into(),
+            lang: "elisp".into(),
+            generated: false,
+            size: 1,
+            indexed_at: 1,
+        }
+    }
+
+    /// Pattern D. 40 symbols named `needle` that only a worktree has, written first so they come first in every index:
+    /// the Base view's name routes still return 30 base hits each, none of them the tree's.
+    #[tokio::test]
+    async fn base_view_filters_before_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
+        let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
+        let (c, y) = needles("t.el", 40);
+        s.write_file(View::Tree(t), row("t.el", "T"), c, y)
+            .await
+            .unwrap();
+        let (c, y) = needles("b.el", 35);
+        let base: HashSet<i64> = s
+            .write_file(View::Base, row("b.el", "B"), c, y)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        let found = s
+            .handle()
+            .read(|c| Ok(names(c, "needle", View::Base)?))
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 90, "30 from each of the three name routes");
+        assert!(found.iter().all(|id| base.contains(id)), "{found:?}");
+        let pinned = s
+            .handle()
+            .read(|c| Ok(pinned(c, "needle", View::Base)?))
+            .await
+            .unwrap();
+        assert_eq!(pinned.len(), 35);
+        assert!(pinned.iter().all(|id| base.contains(id)));
+    }
 }

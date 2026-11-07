@@ -1055,6 +1055,18 @@ mod tests {
         names: &[(&str, Vec<Vec<SocketAddr>>)],
         redirect: &[(SocketAddr, SocketAddr)],
     ) -> Rig {
+        let redirect: HashMap<SocketAddr, SocketAddr> = redirect.iter().copied().collect();
+        rig_with(cfg, names, move |a| {
+            tcp_connect(redirect.get(&a).copied().unwrap_or(a))
+        })
+    }
+
+    /// As [`rig`], with CONNECT making each connection the proxy asks for (after it is recorded).
+    fn rig_with(
+        cfg: ProxyConfig,
+        names: &[(&str, Vec<Vec<SocketAddr>>)],
+        connect: impl Fn(SocketAddr) -> Connecting + Send + Sync + 'static,
+    ) -> Rig {
         let resolver = Arc::new(Table {
             map: names
                 .iter()
@@ -1063,11 +1075,10 @@ mod tests {
             calls: AtomicUsize::new(0),
         });
         let attempts = Arc::new(Mutex::new(Vec::new()));
-        let redirect: HashMap<SocketAddr, SocketAddr> = redirect.iter().copied().collect();
         let seen = attempts.clone();
         let connect: Connect = Arc::new(move |a: SocketAddr| -> Connecting {
             seen.lock().unwrap().push(a);
-            tcp_connect(redirect.get(&a).copied().unwrap_or(a))
+            connect(a)
         });
         let (tx, events) = mpsc::channel(64);
         let handle = start_with(cfg, resolver.clone(), tx, connect);
@@ -1119,22 +1130,6 @@ mod tests {
                 (self.conns() == 0).then_some(())
             })
             .await;
-        }
-    }
-
-    /// A proxy whose upstream connections `connect` opens; no name resolves.
-    fn rig_with(cfg: ProxyConfig, connect: Connect) -> Rig {
-        let resolver = Arc::new(Table {
-            map: HashMap::new(),
-            calls: AtomicUsize::new(0),
-        });
-        let (tx, events) = mpsc::channel(64);
-        Rig {
-            handle: start_with(cfg, resolver.clone(), tx, connect),
-            events,
-            dir: tempfile::Builder::new().prefix("glp-").tempdir().unwrap(),
-            attempts: Arc::default(),
-            resolver,
         }
     }
 
@@ -1642,12 +1637,9 @@ mod tests {
     #[tokio::test]
     async fn listed_but_unreachable_is_502() {
         // a listed public name whose addresses refuse, one that does not resolve, and one whose answer is empty
-        // (no address at all is unreachable, not private)
-        // a socket bound but never listening: a connection to it is refused, and the port stays held for the test (a
-        // dropped listener's port went back to the kernel, which could hand it to another test's listener: 200)
-        let held = tokio::net::TcpSocket::new_v4().unwrap();
-        held.bind(SocketAddr::new(IpAddr::V4(LOOP), 0)).unwrap();
-        let closed_port = held.local_addr().unwrap();
+        // (no address at all is unreachable, not private). The refusal is the connector's own, on every system: a
+        // dropped listener's port went back to the kernel, which could hand it to another test's listener (200), and
+        // a port bound but never listening refuses on Linux but drops the SYN on macOS (the connect hangs)
         let cfg = ProxyConfig {
             allow: vec![
                 t("gone.test:443"),
@@ -1657,13 +1649,13 @@ mod tests {
             ..ProxyConfig::default()
         };
         let public = SocketAddr::new(IpAddr::V4(PUBLIC), 443);
-        let mut r = rig(
+        let mut r = rig_with(
             cfg,
             &[
                 ("gone.test", vec![vec![public]]),
                 ("empty.test", vec![vec![]]),
             ],
-            &[(public, closed_port)],
+            |_| Box::pin(async { Err(io::Error::from(io::ErrorKind::ConnectionRefused)) }),
         );
         let p = r.listen(1);
         for target in ["gone.test:443", "nowhere.test:443", "empty.test:443"] {
@@ -1671,6 +1663,7 @@ mod tests {
             assert_eq!(code, 502, "{target}");
             assert!(closed(&mut s).await);
         }
+        assert_eq!(r.attempts(), vec![public], "only gone.test has an address");
         assert!(r.said().is_empty());
     }
 
@@ -2036,7 +2029,7 @@ mod tests {
             max_conns: 128,
             ..up_and_hole(up.port(), hole)
         };
-        let r = rig_with(cfg, connect);
+        let r = rig_with(cfg, &[], move |a| connect(a));
         let tx = r.relay(1);
         // the job's ends stay open throughout: only the owner's word that a stream is gone frees its place
         let mut jobs = Vec::new();
@@ -2074,7 +2067,7 @@ mod tests {
             connect_timeout: Duration::from_millis(300),
             ..up_and_hole(1, hole)
         };
-        let r = rig_with(cfg, connect);
+        let r = rig_with(cfg, &[], move |a| connect(a));
         let p = r.listen(1);
         let (mut s, code) = connect_to(&p, "hole.test:443").await;
         assert_eq!(code, 502);

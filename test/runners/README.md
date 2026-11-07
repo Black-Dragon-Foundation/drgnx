@@ -5,7 +5,7 @@ systemd as PID 1, the user `runner` (lingering, with the `memory pids cpu` contr
 and rootless podman inside. A fleet is N of them plus one harness container on one podman network.
 
 ```
-fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]...
+fleet.sh up --runners N [--max-sessions K] [--no-linger | --no-linger-on I] [--sshd-opt OPT]... [--cloud MOCKBIN]
 fleet.sh exec I -- CMD...      # in runner I (1-based), as `runner`, with its user manager's environment
 fleet.sh check I               # runner I's controllers are delegated as the caps need (`up` checks every runner)
 fleet.sh put FILE...           # copy files to /fleet/share in every runner (read-only there)
@@ -98,9 +98,69 @@ cargo test -p drgnx-ratatoskr --features fleet --test fleet_runners --no-run
 
 `test` copies the `sleipnir` binary beside the test's `deps/` into the share and tells the rows where the share is
 (`DRGNX_FLEET_SHARE`); each row installs it into its own runner root as a bundle (`<root>/bin/<name>/sleipnir`).
-A runner's `/proc/pressure`, `/proc/meminfo` and disk are the host's, so each row also writes `test-machine.json`
-into its root: a quiet machine with room, whose figures the `test-hooks` build admits on (`sleipnir.md`, "The machine
-probe"). A busy or nearly full host never refuses a row's job.
+A runner's `/proc/pressure`, `/proc/meminfo`, disk and power supplies are the host's, so each row also writes
+`test-machine.json` into its root: a quiet machine with room (and, for a `workstation` runner, on mains power), whose
+figures the `test-hooks` build admits on (`sleipnir.md`, "The machine probe"). A busy or nearly full host never
+refuses a row's job; a row that wants the runner busy or full rewrites the file.
 Runner 1 lingers and runner 2 (`--no-linger-on 2`) doesn't. The rows can't be root in a runner, so a row that turns
 linger on writes `enable-linger` into the share: the image's `fleet-linger.path` sees it and runs
-`loginctl enable-linger runner`.
+`loginctl enable-linger runner`. A row that turns it off writes `disable-linger` (`fleet-nolinger.path`), and removes
+the file once `loginctl` says so. The share is every runner's, so either file turns linger on or off on all of them.
+
+## The link drills
+
+`drgnx-ratatoskr`'s `tests/fleet_drills.rs` holds the drills: rows that break the hub's link to a runner mid-job (a
+master told `-O stop`, the connection frozen 3 minutes under a keyed job with a network grant, `serve` stopped 5
+minutes, the hub restarted with and without the editor, a changed host key, linger turned off between two `hello`s) or
+let the runner's own guards stop a job (disk below the floor, the memory ladder), and four jobs over one link's three
+sessions. Each proves its outcome from state: the job's attempts in the hub's `runtime.db`, the queue's rows, the
+runner's own log and attempt record, no key bytes on the runner, the job's proxy's answers. `drills.sh` runs every row
+5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot (`test` shares the relay sidecar
+`drgnx-px-<arch>-linux-musl` too, for the networked job):
+
+```
+cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
+cargo build -p sleipnir --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key
+cargo build -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
+DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
+```
+
+It prints one line per run and `ROW PASSED/N` per row, keeps each run's log under `.claude/tmp/drills/`, and exits 0
+only when every run passed. The rows play the hub with its own parts (the transport, the link session, the queue on a
+`runtime.db`); the time a cut or a suspend lasts is the queue's clock moved on, never a wait. `--timing` adds the
+fleet throughput row (a 40-job set on 2 runners within 0.6 × its wall on 1), a timing row the timing lane only names.
+
+## Cloud machines
+
+`up --cloud MOCKBIN` adds a mock cloud: `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock") in a
+container `<prefix>-<run>-cloud` on the fleet's network, driving a podman API socket of the run's own
+(`podman system service`, stopped by `down` by its PID). Each machine the hub starts through it is a fake runner
+`<prefix>-<run>-cloud-<id>`, so `down` removes them too; `test` passes the harness
+`DRGNX_TEST_CLOUD_ENDPOINT_AWS=http://<prefix>-<run>-cloud:8080/`. Nothing leaves the fleet's network.
+
+A machine gets `DRGNX_FAKE_CLOUD_METADATA` (its metadata URL at the mock), which turns on the image's
+`fleet-cloud-init.service`: what the real image does at first boot. It makes new host keys, reads the CA and the
+principal from its user-data (IMDSv2: `drgnx-ca: …` and `drgnx-principal: …` lines), makes sshd certificate-only
+(`TrustedUserCAKeys`, `AuthorizedPrincipalsFile`, `AuthorizedKeysFile none`, `MaxAuthTries 2`), and prints its host
+keys on its console the way cloud-init's `write-ssh-key-fingerprints` does: the fingerprints through
+`logger -s -t cloud-init`, then the keys. A container has no serial port and systemd as its PID 1 sends nothing to
+`podman logs`, so the console is the file `/run/fleet-console`, which the mock reads (`podman exec … cat`) and serves as
+`GetConsoleOutput`. The rows are `drgnx-ratatoskr`'s `tests/fleet_cloud.rs` (features `fleet,test-hooks`):
+
+```
+cargo build -p domr --bin ratatoskr-mock                                                  # in the dev container
+cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_cloud --no-run
+fleet.sh up --runners 0 --cloud runtime/target/debug/ratatoskr-mock
+DRGNX_FLEET_TEST_BIN=runtime/target/debug/deps/fleet_cloud-HASH fleet.sh test --test-threads=1
+```
+
+A machine also gets what a runner gets (the mock's `--run-opt`: the devices and caps for rootless podman, the share and
+the base image), so the cloud drills
+(`mod cloud`) install the shared `sleipnir` in a runner root on it and run its watchdog as a user unit with
+`--clock-file` and a `--poweroff-cmd` that posts the mock's `poweroff` knob for that machine: a limit comes due when a
+row writes the clock, and the power-off ends the instance as `InstanceInitiatedShutdownBehavior=terminate` does. The
+drills: a spot notice requeues with no strike and no red, through to the machine taken back; with the hub gone, an
+idle machine ends at its idle time and a busy one at the unattended lifetime after the hub's last contact; with the
+credentials expired nothing starts, the sweeper pauses, a machine's watchdog still ends it, and the sweeper's first
+pass after the login ends what is past its lifetime. Build `sleipnir` with `test-hooks` first (`test` shares it).

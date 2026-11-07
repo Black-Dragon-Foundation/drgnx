@@ -1,0 +1,608 @@
+//! The hub's side of the editor's tracking: `register` a buffer's file, `batch` its changes, `resync` its text,
+//! `unregister` it.  A batch's changes are character offsets in the document's LF text, applied as the batch's origin's
+//! peer: the user's, or `agent:<session>#<step>` for a change an agent made in the buffer (the session's peer; its
+//! record's cause names the session and the step, one record per step).  `revert:<op>` is the user's change
+//! applying a hunk's revert (`history/revert/hunk`): its operations are one `revert` record naming OP.
+
+use super::capture::{diff, is_secret};
+use super::{Buffer, Hub, Tree, blob};
+use norn::deny::{DenyList, Verdict};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use verdandi::redact::redact;
+use verdandi::{Change, DocId, Error, PeerId, Result};
+
+/// A batch with more inserted bytes than this is refused with `split-required`: the editor splits it.
+pub const BATCH_MAX: usize = 1 << 20;
+
+/// One change of a batch: OLD_LEN characters at START replaced by INSERTED, made by ORIGIN (`user`, `agent:<session>`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BatchChange {
+    pub start: usize,
+    pub old_len: usize,
+    pub inserted: String,
+    pub origin: String,
+}
+
+/// A hunk's revert an editor applied in one batch: the record it reverts, the user's peer, the operations' spans.
+type HunkRevert = (verdandi::OpId, PeerId, Vec<(DocId, verdandi::Span)>);
+
+/// What `register` answers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Registered {
+    pub doc: i64,
+    pub tracked: bool,
+    /// Why the file is not tracked: `personal`, `secret` or `ignored`.
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchReply {
+    Ok,
+    /// The buffer and the document disagree: send the whole text (`resync`).
+    Resync,
+}
+
+/// The hash a batch carries: SHA-256, in hex, of the buffer's whole text after the batch.
+pub fn hash(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// OLD_LEN characters of TEXT at START replaced by INSERTED.
+fn splice(text: &mut String, start: usize, old_len: usize, inserted: &str) {
+    let at = |n: usize| text.char_indices().nth(n).map_or(text.len(), |(i, _)| i);
+    let (from, to) = (at(start), at(start + old_len));
+    text.replace_range(from..to, inserted);
+}
+
+/// ORIGIN's peer key, its author and the cause its records carry: `agent:SESSION#STEP` is SESSION's peer, its records
+/// caused by SESSION at STEP; an agent origin without a step is refused.
+fn author_of(origin: &str) -> Result<(String, Value, verdandi::Cause)> {
+    Ok(match origin.strip_prefix("agent:") {
+        Some(rest) => {
+            let Some((s, step)) = rest.rsplit_once('#').filter(|(s, n)| {
+                !s.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+            }) else {
+                return Err(Error::Refused(format!(
+                    "{origin}: an agent's origin is agent:SESSION#STEP"
+                )));
+            };
+            let cause = verdandi::Cause {
+                session: Some(s.to_owned()),
+                step: Some(step.to_owned()),
+                ..Default::default()
+            };
+            (
+                format!("agent:{s}"),
+                json!({"kind": "agent", "session": s}),
+                cause,
+            )
+        }
+        None if origin == "user" => (
+            "user".to_owned(),
+            json!({"kind": "user"}),
+            Default::default(),
+        ),
+        None => (
+            format!("origin:{origin}"),
+            json!({"kind": "origin", "name": origin}),
+            Default::default(),
+        ),
+    })
+}
+
+impl Hub {
+    /// Track REL of TREE for BUFFER_ID, unless it is a personal file (DENY), a credentials file or ignored by git.
+    pub fn register(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        buffer_id: &str,
+        deny: &DenyList,
+    ) -> Result<Registered> {
+        let no = |why: &str| Registered {
+            doc: 0,
+            tracked: false,
+            reason: Some(why.to_owned()),
+        };
+        if matches!(deny.check(&tree.root.join(rel)), Verdict::Denied { .. }) {
+            return Ok(no("personal"));
+        }
+        if is_secret(rel) {
+            return Ok(no("secret"));
+        }
+        if blob::is_ignored(&tree.git_dir, &tree.root, rel) {
+            return Ok(no("ignored"));
+        }
+        let mut g = self.lock();
+        let branch = tree.branch_in(&mut g.h)?;
+        let doc = g.h.doc_for(rel)?;
+        g.h.activate(doc, branch, || {
+            Ok(super::capture::base_text(tree, rel).unwrap_or_default())
+        })?;
+        g.buffers.insert(
+            buffer_id.to_owned(),
+            Buffer {
+                doc,
+                branch,
+                raw: None,
+                file: tree.root.join(rel),
+                version: 0,
+            },
+        );
+        Ok(Registered {
+            doc: doc.0,
+            tracked: true,
+            reason: None,
+        })
+    }
+
+    /// Apply CHANGES to BUFFER_ID's document, each as its origin's peer.  Refused as `split-required` when they insert
+    /// more than [`BATCH_MAX`] bytes.  The document's text must then hash to REGION_HASH, else the buffer is out of
+    /// step and wants a `resync`.  VERSION is the buffer's version once the batch is in (the editor's count of its
+    /// drains): the version the frames of its file name from now on.
+    pub fn batch(
+        &self,
+        buffer_id: &str,
+        changes: &[BatchChange],
+        region_hash: &str,
+        version: u64,
+        now: f64,
+    ) -> Result<BatchReply> {
+        if changes.iter().map(|c| c.inserted.len()).sum::<usize>() > BATCH_MAX {
+            return Err(Error::Refused("split-required".into()));
+        }
+        // every origin is read before anything is applied: a malformed one refuses the batch whole
+        for c in changes.iter().filter(|c| !c.origin.starts_with("revert:")) {
+            author_of(&c.origin)?;
+        }
+        let mut g = self.lock();
+        let (doc, branch, mut raw) = {
+            let b = g
+                .buffers
+                .get_mut(buffer_id)
+                .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
+            b.version = version;
+            (b.doc, b.branch, b.raw.take())
+        };
+        g.h.activate(doc, branch, || Ok(String::new()))?;
+        // the line authors, in step before the operations (each one keeps them in step)
+        let _ = g.kept_ranges(doc, branch);
+        let mut spans = Vec::new();
+        // the editor applying a hunk's revert (`history/revert/hunk`): the user's operations, in one `revert` record
+        let mut reverts: Vec<HunkRevert> = Vec::new();
+        for c in changes {
+            let reverting = c
+                .origin
+                .strip_prefix("revert:")
+                .and_then(|n| n.parse().ok())
+                .map(verdandi::OpId)
+                .filter(|op| g.h.op(*op).is_ok());
+            let (key, author, cause) = author_of(if reverting.is_some() {
+                "user"
+            } else {
+                &c.origin
+            })?;
+            let peer = g.peer(branch, &key, &author)?;
+            let inner = &mut *g;
+            let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
+            // a key in the change never reaches the document; the buffer's own text is kept beside it in memory
+            let inserted = redact(&c.inserted);
+            if inserted != c.inserted && raw.is_none() {
+                raw = Some(ad.text());
+            }
+            if let Some(r) = raw.as_mut() {
+                splice(r, c.start, c.old_len, &c.inserted);
+            }
+            let ch = Change {
+                start: c.start,
+                old_len: c.old_len,
+                inserted,
+            };
+            let before = ad.frontier();
+            let applied = ad.apply(peer, &ch);
+            if applied.is_ok() {
+                super::kept_op(
+                    &mut inner.kept,
+                    (doc, branch),
+                    &key,
+                    &ch,
+                    &before,
+                    ad.frontier(),
+                );
+            }
+            match (applied, reverting) {
+                (Ok(s), Some(op)) => match reverts.iter_mut().find(|r| r.0 == op) {
+                    Some(r) => r.2.extend(s.into_iter().map(|s| (doc, s))),
+                    None => reverts.push((op, peer, s.into_iter().map(|s| (doc, s)).collect())),
+                },
+                (Ok(s), None) => spans.extend(s.into_iter().map(|s| (peer, s, cause.clone()))),
+                // a change outside the text: the buffer is not the document
+                (Err(Error::Refused(_)), _) => return Ok(BatchReply::Resync),
+                (Err(e), _) => return Err(e),
+            }
+        }
+        for (peer, s, cause) in spans {
+            g.settler.change_caused(doc, peer, &[s], now, cause);
+        }
+        for (op, peer, s) in reverts {
+            g.h.record_hunk_revert(op, s, peer, now)?;
+        }
+        let text = g.h.activate(doc, branch, || Ok(String::new()))?.text();
+        // the key is gone from the buffer (or the two agree again): nothing to keep apart
+        let raw = raw.filter(|r| redact(r) != *r);
+        let seen = hash(raw.as_deref().unwrap_or(&text));
+        if let Some(b) = g.buffers.get_mut(buffer_id) {
+            b.raw = raw;
+        }
+        Ok(if seen == region_hash {
+            BatchReply::Ok
+        } else {
+            BatchReply::Resync
+        })
+    }
+
+    /// The buffer's whole TEXT replaces the document's, as the user's change; VERSION as for [`Self::batch`].
+    pub fn resync(&self, buffer_id: &str, text: &str, version: u64, now: f64) -> Result<()> {
+        let mut g = self.lock();
+        let (doc, branch) = {
+            let b = g
+                .buffers
+                .get_mut(buffer_id)
+                .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
+            b.version = version;
+            (b.doc, b.branch)
+        };
+        let (key, author, _) = author_of("user")?;
+        let peer = g.peer(branch, &key, &author)?;
+        let _ = g.kept_ranges(doc, branch);
+        let inner = &mut *g;
+        let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
+        let old = ad.text();
+        let mut spans = Vec::new();
+        let redacted = redact(text);
+        for ch in diff(&old, &redacted) {
+            let before = ad.frontier();
+            spans.extend(ad.apply(peer, &ch)?);
+            super::kept_op(
+                &mut inner.kept,
+                (doc, branch),
+                &key,
+                &ch,
+                &before,
+                ad.frontier(),
+            );
+        }
+        g.settler.change(doc, peer, &spans, now);
+        if let Some(b) = g.buffers.get_mut(buffer_id) {
+            b.raw = (redacted != text).then(|| text.to_owned());
+        }
+        Ok(())
+    }
+
+    /// The buffer is no longer tracked.
+    pub fn unregister(&self, buffer_id: &str) {
+        self.lock().buffers.remove(buffer_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Hub, Tree};
+    use super::*;
+    use std::path::Path;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    struct Fx {
+        home: tempfile::TempDir,
+        _hist: tempfile::TempDir,
+        hub: Hub,
+        tree: Tree,
+        deny: DenyList,
+    }
+
+    /// A project at HOME/proj with FILES committed, and the user's deny-list naming its `notes.org`.
+    fn fx(files: &[(&str, &str)]) -> Fx {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+        for (p, t) in files {
+            std::fs::write(root.join(p), t).unwrap();
+        }
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-q", "-m", "base"]);
+        let head = {
+            let o = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            String::from_utf8(o.stdout).unwrap().trim().to_owned()
+        };
+        let cfg = home.path().join("config");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let deny_file = cfg.join(norn::deny::DENY_FILE);
+        std::fs::write(
+            &deny_file,
+            serde_json::json!({"version": 1, "entries": [{"kind": "file", "path": root.join("notes.org")}]}).to_string(),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            &deny_file,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        )
+        .unwrap();
+        let deny = DenyList::load(home.path(), &cfg);
+        let hist = tempfile::tempdir().unwrap();
+        let hub = Hub::open(hist.path()).unwrap();
+        let tree = Tree::new(&root, &root.join(".git"), Some(&head));
+        Fx {
+            home,
+            _hist: hist,
+            hub,
+            tree,
+            deny,
+        }
+    }
+
+    fn change(start: usize, old_len: usize, inserted: &str, origin: &str) -> BatchChange {
+        BatchChange {
+            start,
+            old_len,
+            inserted: inserted.into(),
+            origin: origin.into(),
+        }
+    }
+
+    // pattern: D
+    #[test]
+    fn register_untracked_path_says_untracked() {
+        let f = fx(&[("a.txt", "x\n")]);
+        std::fs::write(f.tree.root.join("ignored.txt"), "i\n").unwrap();
+        std::fs::write(f.tree.root.join(".env"), "KEY=1\n").unwrap();
+        std::fs::write(f.tree.root.join("notes.org"), "mine\n").unwrap();
+        for (path, why) in [
+            ("ignored.txt", "ignored"),
+            (".env", "secret"),
+            ("notes.org", "personal"),
+        ] {
+            let r = f.hub.register(&f.tree, path, "b1", &f.deny).unwrap();
+            assert!(!r.tracked, "{path}");
+            assert_eq!(r.reason.as_deref(), Some(why), "{path}");
+        }
+        let r = f.hub.register(&f.tree, "a.txt", "b2", &f.deny).unwrap();
+        assert!(r.tracked, "{r:?}");
+        let _ = &f.home;
+    }
+
+    // pattern: D
+    #[test]
+    fn batch_applies_with_user_peer() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let text = "one two\n";
+        let reply = f
+            .hub
+            .batch("b1", &[change(3, 0, " two", "user")], &hash(text), 1, 5.0)
+            .unwrap();
+        assert_eq!(reply, BatchReply::Ok);
+        assert_eq!(f.hub.text(&f.tree, "a.txt").unwrap().as_deref(), Some(text));
+        let who = f.hub.with(|h| {
+            let n = h.count("peer").unwrap();
+            h.author_of(verdandi::PeerId(n as u64)).unwrap().unwrap()
+        });
+        assert_eq!(who["kind"], "user");
+    }
+
+    // pattern: D
+    #[test]
+    fn the_buffers_version_is_its_last_batch_or_resync() {
+        let f = fx(&[("a.txt", "one\n"), ("b.txt", "x\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(0));
+        f.hub
+            .batch("b1", &[change(3, 0, "!", "user")], &hash("one!\n"), 4, 5.0)
+            .unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(4));
+        f.hub.resync("b1", "one!!\n", 6, 6.0).unwrap();
+        assert_eq!(f.hub.mirror_version(&f.tree, "a.txt").unwrap(), Some(6));
+        // a file no buffer tracks has no version
+        assert_eq!(f.hub.mirror_version(&f.tree, "b.txt").unwrap(), None);
+    }
+
+    // pattern: D
+    #[test]
+    fn hash_mismatch_asks_resync() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let reply = f
+            .hub
+            .batch(
+                "b1",
+                &[change(3, 0, "!", "user")],
+                &hash("not what the buffer has"),
+                1,
+                5.0,
+            )
+            .unwrap();
+        assert_eq!(reply, BatchReply::Resync);
+        // the editor then sends the whole text
+        f.hub.resync("b1", "one!\n", 1, 6.0).unwrap();
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some("one!\n")
+        );
+    }
+
+    // pattern: D
+    #[test]
+    fn origin_merge_is_attributed_to_its_peer() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(3, 0, "X", "agent:s9#1")],
+                &hash("oneX\n"),
+                1,
+                5.0,
+            )
+            .unwrap();
+        f.hub
+            .batch("b1", &[change(4, 0, "Y", "user")], &hash("oneXY\n"), 1, 6.0)
+            .unwrap();
+        let authors = f.hub.with(|h| {
+            let n = h.count("peer").unwrap();
+            (1..=n)
+                .map(|i| h.author_of(verdandi::PeerId(i as u64)).unwrap().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            authors
+                .iter()
+                .any(|a| a["kind"] == "agent" && a["session"] == "s9"),
+            "{authors:?}"
+        );
+        assert!(authors.iter().any(|a| a["kind"] == "user"), "{authors:?}");
+    }
+
+    // pattern: D
+    #[test]
+    fn an_agent_origin_carries_its_step_into_the_record() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(3, 0, "X", "agent:s9#4")],
+                &hash("oneX\n"),
+                1,
+                5.0,
+            )
+            .unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(4, 0, "Y", "agent:s9#5")],
+                &hash("oneXY\n"),
+                1,
+                6.0,
+            )
+            .unwrap();
+        f.hub.settle_due(40.0).unwrap();
+        let spans = f.hub.blame(&f.tree, "a.txt", 0..6).unwrap();
+        let agent = Some(json!({"kind": "agent", "session": "s9"}));
+        let x = spans
+            .iter()
+            .find(|s| s.start == 3)
+            .expect("the step's text");
+        assert_eq!(x.author, agent, "{spans:?}");
+        assert_eq!(
+            (x.session.as_deref(), x.step.as_deref()),
+            (Some("s9"), Some("4"))
+        );
+        // the next step's text: the same peer, a record of its own
+        let y = spans
+            .iter()
+            .find(|s| s.start == 4)
+            .expect("the next step's text");
+        assert_eq!(y.author, agent, "{spans:?}");
+        assert_eq!(y.step.as_deref(), Some("5"));
+        assert_ne!(x.record, y.record);
+        // an agent origin without its step is refused, whole
+        let r = f.hub.batch(
+            "b1",
+            &[change(5, 0, "Z", "agent:s9")],
+            &hash("oneXYZ\n"),
+            1,
+            7.0,
+        );
+        assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
+    }
+
+    // pattern: D
+    #[test]
+    fn a_key_in_a_batch_is_stored_as_stars_and_the_buffer_stays_in_step() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let key = format!("sk-{}", "q".repeat(30));
+        let typed = format!("one {key}\n");
+        let reply = f
+            .hub
+            .batch(
+                "b1",
+                &[change(3, 0, &format!(" {key}"), "user")],
+                &hash(&typed),
+                1,
+                5.0,
+            )
+            .unwrap();
+        // the buffer holds the key, the history does not, and they are not out of step
+        assert_eq!(reply, BatchReply::Ok);
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some(format!("one {}\n", "*".repeat(33)).as_str())
+        );
+        // a later batch is checked against the buffer's own text
+        let more = format!("one {key}!\n");
+        let reply = f
+            .hub
+            .batch("b1", &[change(37, 0, "!", "user")], &hash(&more), 1, 6.0)
+            .unwrap();
+        assert_eq!(reply, BatchReply::Ok);
+        // the editor's whole text through a resync is redacted too
+        f.hub.resync("b1", &format!("{key}\n"), 1, 7.0).unwrap();
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some(format!("{}\n", "*".repeat(33)).as_str())
+        );
+    }
+
+    // pattern: D
+    #[test]
+    fn oversized_batch_refused() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        let big = "x".repeat(BATCH_MAX + 1);
+        let e = f
+            .hub
+            .batch(
+                "b1",
+                &[change(0, 0, &big, "user")],
+                &hash("anything"),
+                1,
+                5.0,
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains("split-required"), "{e}");
+        // nothing was applied
+        assert_eq!(
+            f.hub.text(&f.tree, "a.txt").unwrap().as_deref(),
+            Some("one\n")
+        );
+    }
+}

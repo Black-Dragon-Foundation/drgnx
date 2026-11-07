@@ -171,6 +171,14 @@ by `machines/report`), four cards (one a clash). `test/fixtures/work-space/proto
 prototype's own data. `vegvisir::fixture::thirty()` and `prototype()` (feature `fixture`, tests only) turn a
 description into the events a hub would feed.
 
+Into a real hub: `test/fixtures/work-space-thirty-fixture.el` builds the description into three git repositories and 30
+mock agents, all sessions (the four subagent entries are sessions of their own, each with its parent's repository),
+every one streaming; `drgnx-work-thirty-premise` signals when that does not hold. The perf workloads
+(`docs/develop/perf.md`, "The Work space's workloads") and the GUI scenes (`drgnx-work-gui/thirty-agent-scenes`: dark,
+light and high contrast, one shot each at the session's scale) both use it. What the hub derives from the mock agents'
+files, edits and prompts (plans, specs, shared files, machines) is what the map shows; the description's cards and
+machines are not injected.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and
@@ -311,6 +319,15 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
 
 - `Registry` is pure: `report(r, now)`, `expire(now) -> names`, `set_local(slots)`, `list()`; `local` is always first
   and never expires. `Machines` holds one behind a lock in `Core`.
+- The map hears the list with each runner's fact (`MachineFact.runner`: trust, state, jobs, icon, cost; `slots` and
+  `used` are the runner's cores and jobs), from `Registry::map_facts` (`feed_map`, on every change of the runners, every
+  report and every sweep; the model drops a list that did not change). A runner's state and jobs are read from the
+  queue at that moment. The machine item's fields carry `runner`, and the strip's chips carry `cost` when there is one.
+- A session's running or waiting job (`SessionFact.job`: id, name, machine, state, start, time box in minutes, names of
+  the keys sent, from the job tracker, the job row and the key audit) is fed by the same sweep (`Map::jobs`); the
+  session's `machine` is the job's machine, so the "runs on" edge points at the runner. The agent item carries `job`;
+  the Lisp card turns it into `job · MACHINE · M:SS/Nm`, and the side panel of a machine lists the jobs on it
+  (`drgnx-work-detail--machine-queue`), `l` (`work-job-log`) calling `exec/log` for the row's job.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
 - The local pool is read from the job runner (`exec::Runner::slot_counts`, the queue's `local_slots`): one `local-N`
@@ -386,7 +403,9 @@ Layer 2 (the files a command's processes opened; labelled "seen open") is Gleipn
   D: the rules through a fake probe, the budget, the skip list, the labels), and the rows
   `trace/claude-bash-reads-are-seen-open` (the mock's `provider:bash` through the wrapper),
   `trace/a-file-seen-open-shows-on-the-map` (a read only the tracer sees, counted on the agent's card) and
-  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container.
+  `trace/macos-says-not-traced` (`DRGNX_TEST_TRACE_PLATFORM=macos`, test hubs only), in the sandbox container. The
+  first two need the tracer, which is Linux's alone (macOS has none to offer: no seccomp notification), so they
+  require `linux` and a macOS run lists them as skipped; the third is what macOS shows instead.
 
 ## The editor's side
 
@@ -434,7 +453,7 @@ STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-ma
   its text holds. A band is a blank line in a small face (`drgnx-work-band`) of its height; the edge tiles draw into it.
 - **Cards.** A card's line is placed by pixel `:align-to` from the layout's x, in the decoration faces
   (`drgnx-card-top`, `-mid`, `-bottom`, `-single`: PD's open boxes under Glitnir), its text cut to the card's width by
-  `string-pixel-width` (memoised in `drgnx-work-map--fit-memo`, bounded). Every card character carries the text
+  `string-pixel-width` (`drgnx-view-fit`, memoised in `drgnx-view--fit-memo`, bounded). Every card character carries the text
   property `drgnx-work-id`. The layer label stands in the 84 px margin on a layer's first row.
 - **Index.** `drgnx-work-map--index` (weak on the layout) maps a row key to its items left to right and to its layout
   row, built once per frame.
@@ -468,7 +487,10 @@ fixture's bands carry real curves, so the screenshot set shows them.
   replaces are flushed (`image-flush`), the unchanged tiles are not touched.
 - **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
   the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
-  descent), so the row keeps its height.
+  descent), so the row keeps its height. Edges that share a lane (a trunk) are one image at that x: the widest stroke
+  (the chain's, when one of them is on it), its alt naming every edge there. Images are text, so lanes drawn one per
+  edge would sit side by side, fill the gap and push the next card right. A row's line is its cards and lanes sorted
+  by column into a new list each time: the lanes are shared by every line of the row.
 - **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
   drawn into the tile that holds its column.
 
@@ -509,7 +531,58 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   The mode-local `n`/`N` are the commands `work-needs-you-here-next` and `-previous`, because a command has one keymap
   and `work-needs-you-next` is the global one.
 - Filters are buffer-local (`drgnx-work-map--filters`, `--collapsed`) and sent with `work/map/set` (`f`, `o`, `.`, `1`
-  to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields.
+  to `6`, `0`); the hub answers with a full frame. The selection and the arrow keys never send those fields. Sending
+  them is a layout the user asked for, which moves (next section).
+
+### Motion: the capture protocol
+
+A layout the user asks for moves in the compositor, through Glitnir's layout leg (Nidhogg; Work space design §12.4).
+The map's side is in `drgnx-work-map.el` ("Motion"); nothing runs in redisplay. Where the map cannot move, the frame
+of a layout the user asked for (`drgnx-work-map--asked`, set by `drgnx-work-map--send-filters`) is drawn at the next
+timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throttle was most of the relayout time
+(command to frame about 11 ms at p95, frame to drawn 100 ms). Live frames keep the throttle.
+
+1. **Capture.** `drgnx-work-map--send-filters` calls `drgnx-work-map--motion-begin` before it sends. Each window
+   showing the map gets a new value of the window parameter `glitnir-layout-capture` (a fresh list, so not `eq` to the
+   last) and the map keeps, in `drgnx-work-map--motion`, the frame it shows and its cards' rectangles in that window.
+   The redisplay after the key hands the capture to the presenter, which copies the window's text area while it still
+   shows the old layout.
+2. **Acknowledgement.** When the hub's frame comes with a new layout (`:layout` in the marks) and a capture waits,
+   `drgnx-work-map--changed` calls `drgnx-work-map--motion-frame` instead of touching the view. If
+   `glitnir-layout-captured-p` holds for every window, the new layout is drawn at once; otherwise a `drgnx-timer-poll`
+   keyed `(work-motion . VIEW)`, owned by the buffer, gives it one period (1/60 s) and then draws anyway.
+3. **Draw and move.** `drgnx-work-map--motion-draw` draws the whole view now (`drgnx-view-draw-now`) and, before the
+   redisplay that shows it, sets `glitnir-layout-motion` on each window whose picture is held: `:moves` `(ID OLD NEW)`,
+   `:enters` `(ID NEW)` (items new in the frame), `:exits` `(ID OLD)` (items the frame dropped), `:background 'default`,
+   `:duration` 0.16, `:curve 'ease-out`. A window whose picture is not held drops its capture, and the layout jumps
+   there; `drgnx-work-map-motion-stats` counts it under `:skipped` (`:legs` counts the layouts that moved).
+4. **End.** A `drgnx-timer-start` keyed `(work-motion-end . VIEW)` takes both parameters off 0.1 s after the leg's
+   duration, so the window is an ordinary one again (Glitnir demotes a window while it holds a capture). A capture whose
+   frame never comes (no hub, nothing changed) goes after a second (`(work-motion-expire . VIEW)`). A new layout during
+   a leg cancels the end and asks for a new capture: Glitnir retargets from the sampled rectangles.
+
+The rectangles are `(X Y W H)` in pixels of the window's text area (`drgnx-work-map--item-rects`): x and w from the
+layout (the margin plus the item's units, as the cards' `:align-to`), y and h from the rows as the display engine lays
+them out. `drgnx-work-map--drawn-rows` measures each row from the one the window starts at with
+`window-text-pixel-size`, which needs no redisplay, so the new layout's rows are measured right after they are drawn
+into the buffer and before the redisplay that shows them. (The drawn rows are not the layout's heights: a card line is
+as tall as its text, and an emoji or a larger fallback font makes a row taller.) At capture time
+`drgnx-work-map--checked-rows` checks the old layout's measured tops against `window-line-height`; from a row that
+differs, cards are left out of the old rectangles and cross-fade with the rest. A window that starts inside a row,
+scrolls sideways or was not drawn yet asks for no capture.
+
+**No motion** where `drgnx-work-map--motion-p` is nil: a terminal, a frame Glitnir does not draw, a Nidhogg without the
+layout leg (macOS for now), reduced motion (`glitnir--reduced-motion-p`, the desktop's setting through Glitnir, or
+`drgnx-look-motion` `reduced`). There the frame is drawn as before and nothing is said or counted. Live deltas never
+move the map: only a frame with a new layout while a capture waits does. The teardown and a map buffer's
+`kill-buffer-hook` call `drgnx-work-map-motion-clear`, which stops the timers and takes the parameters off every
+window the map set them on (`drgnx-work-map--motion-windows`).
+
+Tests: `test/ui/work-space-gui-test.el`, the rows `drgnx-work-gui/relayout-moves-with-motion` (dark and light, with
+screenshots), `-no-ack-is-a-jump` (the text area moves after the capture, so the presenter drops it),
+`-reduced-motion-sends-no-capture`, `-a-live-arrival-never-moves-the-map`, and the timing row
+`-keys-stay-fast-during-a-leg` (40 keys during a 3 s leg, p95 under 16 ms). They need a Nidhogg with the layout leg;
+on one without it the first two and the timing row skip.
 - Search is a local class: `drgnx-work-map--class` dims what the text does not match, with the same text properties
   the selection uses.
 - A conclusion that differs from the frame before (`:old` in the marks) puts its id in `drgnx-work-map--new`; one
@@ -539,7 +612,8 @@ works on a card when its `task` field names the card's id.
 `drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
 title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
 
-- **The trail** is a `work-trail` view (`:follow-tail`): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
+- **The trail** is a `work-trail` view (`:follow-tail`, DELAY 0: the first page and each new step are drawn at the next
+  timer pass; the default 0.1 s throttle was the whole of its first-rows and append times): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
   the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
   command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
   `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of
@@ -586,8 +660,9 @@ them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hu
 under the `cwd` of a mirrored hub session that is not `exited` and whose `cwd` is a linked worktree (its `.git` is a
 file, not a directory: the user's own checkout has a directory). It sets `view-mode`, keeps the buffer's old read-only
 state, and shows " live · NAME" (`drgnx-work-live-file--lighter`). `drgnx-work-take-wheel` (`W`, and the remaps of
-`read-only-mode` and `View-exit`) calls `agents/pause`, makes the buffer editable and adds a local `after-save-hook`
-that sends `agents/send` naming the file. The module's `:teardown` turns the mode off in every buffer, restoring the
+`read-only-mode` and `View-exit`) is an alias of `drgnx-agents-take-wheel` (module tools/agents-in-editor, the hub's
+wheel protocol, docs/develop/agents-editor.md); without that module it says so. The interim `agents/pause` and its
+`after-save-hook` are gone. The module's `:teardown` turns the mode off in every buffer, restoring the
 read-only state each had.
 
 ### Into the code (`drgnx-work-code.el`)

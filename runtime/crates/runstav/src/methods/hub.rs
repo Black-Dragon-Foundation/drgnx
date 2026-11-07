@@ -133,6 +133,10 @@ pub struct StoreStatus {
     /// Whether that copy passed its check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_ok: Option<bool>,
+    /// Whether the last night's copies of the edit histories (`history.db`, one per project) were all good (none: no
+    /// copy was made since the hub started).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_backup: Option<bool>,
     /// The copies that still hold what the migration's deny-list kept out of work.db (the pre-migration copy,
     /// `work.db.schema5`): the doctor offers removing them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -202,6 +206,50 @@ pub struct HubStatus {
     /// What the hub read of `settings.el` and the shipped defaults (none from a Lisp hub).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<SettingsStatus>,
+    /// The run this hub records or replays (`DRGNX_RECORD`, `DRGNX_REPLAY`); absent for a hub that does neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<RecordingStatus>,
+    /// Hrafn's file watches: what is watched and which projects run unwatched (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<WatchStatus>,
+}
+
+/// `status.watch`: the inotify budget and each open project's watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WatchStatus {
+    /// `fs.inotify.max_user_watches` (none off Linux or when unreadable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_user_watches: Option<u64>,
+    pub projects: Vec<ProjectWatch>,
+}
+
+/// One project's file watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectWatch {
+    pub root: String,
+    /// Directories under watch.
+    pub watched: u64,
+    /// Why the project runs unwatched (the watch budget is spent, or the watcher could not start); none: it is watched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Whether a hub records its run or replays one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RecordingMode {
+    Record,
+    Replay,
+}
+
+/// `status.recording`: the mode and the run's directory.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RecordingStatus {
+    pub mode: RecordingMode,
+    pub dir: String,
 }
 
 /// Whether `settings.el` read (`ok`, also when there is none) or not (`failed`: the agents' settings use the shipped

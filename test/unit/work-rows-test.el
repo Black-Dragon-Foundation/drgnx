@@ -110,6 +110,99 @@
       (should (string-match-p "⚠" (nth 1 lines)))               ; line 2 of the compact card carries the mark
       (should (string-match-p "fx-sess" (nth 0 lines))))))
 
+(defun drgnx-work-rows-test--runner (&rest runner)
+  "A machine item of the map whose runner fact is RUNNER (a plist), with its load."
+  (list :id "machine:desktop" :kind "machine" :label "desktop" :live t
+        :fields (list :slots '(3 16) :runner (append runner nil))))
+
+(ert-deftest drgnx-work-rows/a-runner-is-a-machine-chip-with-load ()
+  ;; pattern D: the icon says what kind of machine it is, the load and a cloud's cost follow in chips
+  (dolist (case '(("monitor" . monitor) ("laptop" . laptop) ("server" . server) ("cloud" . cloud)))
+    (let ((line (substring-no-properties
+                 (drgnx-work-map--chip-line
+                  (drgnx-work-rows-test--runner :trust "mine" :state "ready" :jobs 3 :icon (car case))))))
+      (should (string-search (drgnx-face-glyph (cdr case)) line))
+      (should (string-search "desktop" line))
+      (should (string-search "3/16" line))
+      (should-not (string-search "$" line))))
+  (let ((line (substring-no-properties
+               (drgnx-work-map--chip-line
+                (drgnx-work-rows-test--runner :trust "my-cloud" :state "ready" :jobs 3 :icon "cloud" :cost "$1.20")))))
+    (should (string-search "desktop · 3/16 · $1.20" line)))
+  ;; a machine only a scheduler reported keeps its plain chip
+  (should (string-search "▣ desktop · 3/16"
+                         (substring-no-properties
+                          (drgnx-work-map--chip-line (list :id "machine:desktop" :kind "machine" :label "desktop"
+                                                           :fields '(:slots (3 16))))))))
+
+(ert-deftest drgnx-work-rows/state-dot-per-runner-state ()
+  ;; pattern D: the dot's face follows the runner's state (the look's states, through the `drgnx-runners-*' faces)
+  (dolist (case '(((:state "ready" :jobs 0) . drgnx-runners-ready)
+                  ((:state "ready" :jobs 2) . drgnx-runners-running)
+                  ((:state "benched: image pull failed twice (14:02, 14:20)" :jobs 0) . drgnx-runners-out)
+                  ((:state "needs a login: ssh desktop true" :jobs 0) . drgnx-runners-attention)
+                  ((:state "needs keys" :jobs 0) . drgnx-runners-attention)
+                  ((:state "waits for your confirm" :jobs 0) . drgnx-runners-attention)
+                  ((:state "unreachable" :jobs 0) . drgnx-runners-error)
+                  ((:state "draining" :jobs 0) . drgnx-runners-subtle)
+                  ((:state "preempting" :jobs 1) . drgnx-runners-subtle)))
+    (let* ((item (apply #'drgnx-work-rows-test--runner :trust "mine" :icon "server" (car case)))
+           (dot (drgnx-work-map--dot item)))
+      (should (equal (cdr case) (get-text-property 0 'face dot)))
+      (should (string-prefix-p (drgnx-face-glyph 'dot) dot)))))
+
+(ert-deftest drgnx-work-rows/an-agent-card-and-the-strip-carry-the-runner ()
+  ;; pattern D: "job · NAME · M:SS/Nm" on the agent's card, "NAME n/m" and a cloud's "cloud $x/$cap" on the strip
+  (let ((job (list :name "desktop" :started 100.0 :limit_min 6 :state "running" :runner "desktop")))
+    (should (equal "job · desktop · 3:10/6m" (drgnx-work-map--job-chip job 290.0)))
+    (should (equal "job · desktop · 0:00/6m" (drgnx-work-map--job-chip job 90.0)))
+    (should (equal "job · desktop · waiting" (drgnx-work-map--job-chip (list :name "desktop" :state "waiting") 290.0))))
+  (let* ((state (drgnx-work-rows-test--state)) (frame (copy-sequence (drgnx-work-fixture-frame))))
+    (setq frame (plist-put frame :chips (list (list :kind "machine" :item "machine:desktop" :label "desktop" :used 3 :total 16)
+                                              (list :kind "machine" :item "machine:cloud-1" :label "cloud-1" :used 1 :total 4
+                                                    :cost "$3.10/$50"))))
+    (ignore state)
+    (let ((s (substring-no-properties (drgnx-work-map--strip-string (drgnx-work-client-init frame)))))
+      (should (string-search "desktop 3/16" s))
+      (should (string-search "cloud-1 1/4" s))
+      (should (string-search "cloud $3.10/$50" s)))))
+
+(defun drgnx-work-rows-test--golden-layout-state (name)
+  "A state of vegvisir's golden layout NAME (runtime/crates/vegvisir/tests/golden/NAME.json), an agent item per placed id."
+  (let* ((layout (with-temp-buffer
+                   (insert-file-contents (expand-file-name (format "runtime/crates/vegvisir/tests/golden/%s.json" name)
+                                                           drgnx-dir))
+                   (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
+         (i 0) items)
+    (cl-loop for (k _) on (plist-get layout :at) by #'cddr
+             do (let ((id (substring (symbol-name k) 1)))
+                  (push (list :id id :kind (car (split-string id ":")) :label (format "%s's long label" id) :live t
+                              :order (cl-incf i) :fields (list :state "running" :minutes 3 :model "Opus" :task "a task"))
+                        items)))
+    (drgnx-work-client-init (list :version 1 :items (nreverse items) :edges nil :layout layout :needs_you nil :chips nil))))
+
+(ert-deftest drgnx-work-rows/each-card-once-on-its-own-lines-among-lanes ()
+  ;; the 30-agent golden's row of a rich card and three compact ones, crossed by lanes: each line holds each card at
+  ;; most once, and a compact card only on its two lines (the lanes of one line once carried the cards of the line
+  ;; before, so every line after the first drew them again and pushed the next card right)
+  (let* ((drgnx-work-map-scale 1) (state (drgnx-work-rows-test--golden-layout-state "thirty-1000"))
+         (key '(:row 4 1 1))
+         (lines (split-string (drgnx-work-map-row-text state key) "\n" t))
+         (seen nil))
+    (should (seq-some (lambda (l) (eql (plist-get l :row) 12)) (plist-get (drgnx-work-client-layout state) :lanes)))
+    (should (= 5 (length lines)))
+    (dotimes (n (length lines))
+      (let ((l (nth n lines)) (pos 0) (ids nil))
+        (while (< pos (length l))
+          (let ((id (get-text-property pos 'drgnx-work-id l)))
+            (when id (push id ids))
+            (setq pos (or (next-single-property-change pos 'drgnx-work-id l) (length l)))))
+        (push (cons n (nreverse ids)) seen)))
+    (should (equal (nreverse seen)
+                   '((0 "agent:s14" "agent:s15" "agent:s16" "agent:s17")
+                     (1 "agent:s14" "agent:s15" "agent:s16" "agent:s17")
+                     (2 "agent:s14") (3 "agent:s14") (4 "agent:s14"))))))
+
 (ert-deftest drgnx-work-rows/subagent-under-its-parent ()
   (let* ((drgnx-work-map-scale 1) (state (drgnx-work-rows-test--state)) (keys (drgnx-work-map--layout-keys state)))
     (should (< (cl-position '(:row 4 0 0) keys :test #'equal) (cl-position '(:row 4 0 1) keys :test #'equal)))

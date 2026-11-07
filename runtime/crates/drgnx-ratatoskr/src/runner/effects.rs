@@ -4,8 +4,8 @@
 //! recorded since the branch's previous commit; the fallback `drgnx-report` block.
 //!
 //! A plan in the graph is a `plan` entity whose tasks are `task` entities under it (`parent_of`), each with
-//! `data.{number, model, interfaces, steps, role}`; a task waits on the tasks that `block` it.  Git runs in blocking
-//! tasks (never on the tick).
+//! `data.{number, model, interfaces, steps, role, profile, body}`; a task waits on the tasks that `block` it.  Git runs
+//! in blocking tasks (never on the tick).
 
 use crate::coord::{Writer, fail};
 use crate::dispatch::Caller;
@@ -163,7 +163,10 @@ pub(crate) async fn scope_of(f: &Front, c: &Caller) -> Result<Scope, Error> {
 /// A plan as the graph has it, with what the job needs beyond the view.
 struct Loaded {
     view: PlanView,
+    /// By task number: the role, the profile and the body a task names.
     roles: BTreeMap<String, String>,
+    profiles: BTreeMap<String, String>,
+    bodies: BTreeMap<String, String>,
     repo: Option<String>,
 }
 
@@ -222,7 +225,7 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
         ents.extend(live(conn, n)?.filter(|e| e.kind == "task"));
     }
     let number = |e: &Ent| str_of(e, "number").unwrap_or_else(|| e.id.clone());
-    let mut roles = BTreeMap::new();
+    let (mut roles, mut profiles, mut bodies) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
     let mut tasks = Vec::new();
     for e in &ents {
         let mut deps = Vec::new();
@@ -247,8 +250,14 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
         let report_interfaces = reports
             .iter()
             .find_map(|r| str_of(r, "interfaces").filter(|s| !s.trim().is_empty()));
-        if let Some(r) = str_of(e, "role") {
-            roles.insert(number(e), r);
+        for (key, map) in [
+            ("role", &mut roles),
+            ("profile", &mut profiles),
+            ("body", &mut bodies),
+        ] {
+            if let Some(v) = str_of(e, key) {
+                map.insert(number(e), v);
+            }
         }
         tasks.push(PlanTask {
             id: e.id.clone(),
@@ -273,6 +282,8 @@ fn load(conn: &Tx, id: &str) -> Result<Loaded, CoordError> {
             tasks,
         },
         roles,
+        profiles,
+        bodies,
         repo: plan
             .data
             .get("repo")
@@ -317,7 +328,12 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
     };
     let mut tasks = Vec::new();
     for t in &loaded.view.tasks {
-        let mut body = String::new();
+        // the task's own prose first, then its steps and interfaces
+        let mut body = loaded
+            .bodies
+            .get(&t.number)
+            .map(|b| format!("{}\n\n", b.trim()))
+            .unwrap_or_default();
         for s in &t.steps {
             body.push_str(&format!(
                 "- [{}] {}\n",
@@ -338,6 +354,8 @@ pub async fn plan_for_job(front: &Front, id: &str) -> Result<(PathBuf, Plan), Er
                 .unwrap_or_else(|| "implement".into()),
             deps: t.deps.iter().map(|d| num(d)).collect::<Result<_, _>>()?,
             body: body.trim().to_owned(),
+            profile: loaded.profiles.get(&t.number).cloned(),
+            model: t.model.clone(),
         });
     }
     let hash = format!("{}:{}", loaded.view.id, loaded.view.version);
@@ -488,8 +506,15 @@ fn write_plan(tx: &mut WTx<'_>, p: &WriteParams, scope: &Scope) -> Result<PlanWr
         let number = w.number.as_str();
         let mut data = serde_json::Map::new();
         data.insert("number".into(), json!(number));
-        if let Some(m) = &w.model {
-            data.insert("model".into(), json!(m.as_str()));
+        for (key, v) in [
+            ("model", w.model.as_ref().map(|m| m.as_str())),
+            ("role", w.role.as_ref().map(|r| r.as_str())),
+            ("profile", w.profile.as_ref().map(|p| p.as_str())),
+            ("body", w.body.as_ref().map(|b| b.as_str())),
+        ] {
+            if let Some(v) = v {
+                data.insert(key.into(), json!(v));
+            }
         }
         if let Some(i) = &w.interfaces {
             data.insert("interfaces".into(), json!(i.as_str()));
@@ -905,7 +930,7 @@ pub async fn record_conclusion_fallback(
 
 // ---- commits and decisions --------------------------------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -974,7 +999,15 @@ pub fn link_commits_in(
                 body: None,
                 priority: None,
                 assignee: None,
-                data: json!({"sha": sha, "repo": repo.to_string_lossy(), "session": session}),
+                data: {
+                    let mut d =
+                        json!({"sha": sha, "repo": repo.to_string_lossy(), "session": session});
+                    // the run's store keeps the commit once the task's tree is removed
+                    if let Some(store) = store_beside(repo) {
+                        d["store"] = json!(store.to_string_lossy());
+                    }
+                    d
+                },
                 origin: Origin::Recorded,
                 source: None,
             },
@@ -996,13 +1029,65 @@ pub fn link_commits_in(
     Ok(made)
 }
 
-/// After a tool step of SESSION in CWD (a task's tree): link the commits the task's branch has gained since the job
-/// branch.  Best effort; git runs in a blocking task.
-pub async fn link_new_commits(writer: &Writer, session: &str, task: &str, cwd: &Path) {
-    let Some(job) = task.strip_prefix("task:").unwrap_or(task).split_once('#') else {
-        return;
+/// The run store beside a task's tree (`<root>/<run>/<task>` has `<root>/<run>.git`), when there is one.
+fn store_beside(tree: &Path) -> Option<PathBuf> {
+    let run = tree.parent()?;
+    let name = run.file_name()?.to_string_lossy().into_owned();
+    Some(run.with_file_name(format!("{name}.git"))).filter(|s| s.is_dir())
+}
+
+/// The folder to read a commit's history in, from its entity's DATA: the run's trusted store when it has one, else
+/// the recorded repository while it is there and TOUCHED does not name it (plain git never runs where a sandboxed
+/// agent worked).
+pub(crate) fn store_in(data: &Value, touched: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
+    let dir = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
     };
-    let (dir, base) = (cwd.to_path_buf(), format!("job/{}", job.0));
+    dir("store").or_else(|| dir("repo").filter(|r| !touched(r)))
+}
+
+/// [`store_in`] with the hub's touched-folder ledger.
+pub(crate) async fn store_of(f: &Front, data: &Value) -> Option<PathBuf> {
+    let repo = data
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)?;
+    let touched = f.core.runs.git().is_touched(&repo).await.unwrap_or(true);
+    store_in(data, &|_| touched)
+}
+
+/// The commit SESSION's earliest step with a recorded head saw: where its own commits start (a hint; git may not know
+/// it, and then nothing links).
+fn session_base(conn: &Tx, session: &str) -> Result<Option<String>, CoordError> {
+    match conn.query_row(
+        "select head from step where session = ?1 and head is not null order by seq limit 1",
+        [format!("session:{session}")],
+        |r| r.get(0),
+    ) {
+        Ok(h) => Ok(Some(h)),
+        Err(urdr::SqliteError::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// After a tool step of SESSION in CWD: link the commits gained since the job branch (a task's tree), or since the
+/// session's first recorded head (a session with no job task: a chat).  Best effort; git runs in a blocking task.
+pub async fn link_new_commits(writer: &Writer, session: &str, task: Option<&str>, cwd: &Path) {
+    let job = task.and_then(|t| t.strip_prefix("task:").unwrap_or(t).split_once('#'));
+    let base = match job {
+        Some((job, _)) => format!("job/{job}"),
+        None => {
+            let sid = session.to_owned();
+            match writer.db.read(move |c| session_base(c, &sid)).await {
+                Ok(Some(b)) => b,
+                _ => return,
+            }
+        }
+    };
+    let dir = cwd.to_path_buf();
     let commits = crate::clock::blocking(move || commits_since(&dir, &base))
         .await
         .unwrap_or_default();
@@ -1125,7 +1210,7 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
         format!("decision:{}", raw.trim_start_matches('#'))
     };
     let key = id.clone();
-    let commits: Vec<(String, Option<String>)> = f
+    let commits: Vec<(String, Value)> = f
         .writer
         .db
         .read(move |c| {
@@ -1138,7 +1223,7 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
                     out.push((
                         str_of(&e, "sha")
                             .unwrap_or_else(|| e.id.trim_start_matches("commit:").into()),
-                        str_of(&e, "repo"),
+                        e.data.clone(),
                     ));
                 }
             }
@@ -1147,10 +1232,13 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
         .await
         .map_err(fail)?;
     let shas: Vec<String> = commits.iter().map(|(s, _)| s.clone()).collect();
-    let repo = commits
-        .iter()
-        .find_map(|(_, r)| r.as_ref().map(PathBuf::from))
-        .filter(|r| r.is_dir());
+    let mut repo = None;
+    for (_, data) in &commits {
+        if let Some(r) = store_of(f, data).await {
+            repo = Some(r);
+            break;
+        }
+    }
     let later_hunks = match repo {
         Some(repo) => {
             let shas = shas.clone();
@@ -1166,6 +1254,102 @@ pub async fn decision_effects(f: &Front, _: &Caller, p: EffectsParams) -> Result
         later_hunks,
         label: "computed".into(),
     })
+}
+
+/// What depends on a decision, computed from git: the decisions (by number) and the later commits that touched lines
+/// its commits changed, again and again until nothing more does.  Labelled `computed`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dependents {
+    pub decisions: Vec<i64>,
+    pub commits: Vec<String>,
+    pub label: &'static str,
+}
+
+/// The fixed point behind [`dependents`], reading history in STORE.
+pub(crate) fn dependents_in(conn: &Tx, store: &Path, n: i64) -> Result<Dependents, CoordError> {
+    let mut seen: Vec<String> = Vec::new();
+    if let Some(d) = entity::by_id(conn, &format!("decision:{n}"))? {
+        for c in srcs(conn, d.n, "implements")? {
+            if let Some(e) = live(conn, c)?.filter(|e| e.kind == "commit") {
+                seen.push(
+                    str_of(&e, "sha").unwrap_or_else(|| e.id.trim_start_matches("commit:").into()),
+                );
+            }
+        }
+    }
+    let mut frontier = seen.clone();
+    let (mut decisions, mut commits) = (std::collections::BTreeSet::new(), Vec::new());
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for h in later_hunks(store, &frontier) {
+            if !seen.contains(&h.commit) {
+                seen.push(h.commit.clone());
+                commits.push(h.commit.clone());
+                next.push(h.commit);
+            }
+        }
+        for sha in &next {
+            let Some(c) = entity::by_id(conn, &format!("commit:{sha}"))? else {
+                continue;
+            };
+            for d in dsts(conn, c.n, "implements")? {
+                if let Some(e) = live(conn, d)?
+                    .filter(|e| e.kind == "decision" && e.status.as_deref() != Some("withdrawn"))
+                    && let Some(m) = e.id.strip_prefix("decision:").and_then(|m| m.parse().ok())
+                    && m != n
+                {
+                    decisions.insert(m);
+                }
+            }
+        }
+        frontier = next;
+    }
+    Ok(Dependents {
+        decisions: decisions.into_iter().collect(),
+        commits,
+        label: "computed",
+    })
+}
+
+/// Decision N's dependents (see [`Dependents`]), read in the run's trusted store, else the untouched repository.  No
+/// store to read: none.  Git runs inside the store reader's thread, never on the tick.
+pub async fn dependents(f: &Front, n: i64) -> Result<Dependents, Error> {
+    let key = format!("decision:{n}");
+    let datas: Vec<Value> = f
+        .writer
+        .db
+        .read(move |c| {
+            let mut out = Vec::new();
+            if let Some(d) = entity::by_id(c, &key)? {
+                for s in srcs(c, d.n, "implements")? {
+                    if let Some(e) = live(c, s)?.filter(|e| e.kind == "commit") {
+                        out.push(e.data.clone());
+                    }
+                }
+            }
+            Ok(out)
+        })
+        .await
+        .map_err(fail)?;
+    let mut store = None;
+    for data in &datas {
+        if let Some(s) = store_of(f, data).await {
+            store = Some(s);
+            break;
+        }
+    }
+    let Some(store) = store else {
+        return Ok(Dependents {
+            decisions: Vec::new(),
+            commits: Vec::new(),
+            label: "computed",
+        });
+    };
+    f.writer
+        .db
+        .read(move |c| dependents_in(c, &store, n))
+        .await
+        .map_err(fail)
 }
 
 #[cfg(test)]
@@ -1356,6 +1540,77 @@ mod tests {
         assert_eq!(ri.as_deref(), Some("fn x()"));
         assert_eq!(status, "in-review");
         assert!(stale);
+    }
+
+    fn front_in(dir: &Path) -> Front {
+        Front::new(
+            runstav::proof::Cap::generate().unwrap(),
+            dir.join("hub-x.sock"),
+            crate::store::WorkDb::spawn(dir.join("work.db")).unwrap(),
+            CoordDb::spawn(dir.join("work.db")),
+        )
+    }
+
+    /// A plan of TASKS (`TaskWrite`s as JSON), written as the user; its id.
+    async fn written(f: &Front, tasks: Value) -> String {
+        let p: WriteParams = serde_json::from_value(json!({"title": "P", "tasks": tasks})).unwrap();
+        f.writer
+            .write(&crate::runner::user(), "plans/write", move |tx| {
+                write_plan(tx, &p, &Scope::Anyone)
+            })
+            .await
+            .unwrap()
+            .plan
+    }
+
+    /// Pure (D): a temp store.  A graph task's role, profile and body reach the job's plan.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_graph_task_keeps_its_role_profile_and_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "title": "look", "role": "review", "profile": "opus",
+                    "model": "claude-opus-5-5", "body": "Read the settings code."}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "review");
+        assert_eq!(t.profile.as_deref(), Some("opus"));
+        assert_eq!(t.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(t.body, "Read the settings code.");
+    }
+
+    /// Pure (D): a temp store.  With a body and steps, the body comes first.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_body_comes_first_then_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "body": "Do it.", "steps": [{"done": false, "text": "write"}]}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        assert_eq!(read.tasks[0].body, "Do it.\n\n- [ ] write");
+    }
+
+    /// Pure (D): a temp store.  A task that names none of them reads as it always did.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_task_without_them_reads_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = front_in(dir.path());
+        let plan = written(
+            &f,
+            json!([{"number": "1", "steps": [{"done": true, "text": "write"}], "interfaces": "fn a()"}]),
+        )
+        .await;
+        let (_, read) = plan_for_job(&f, &plan).await.unwrap();
+        let t = &read.tasks[0];
+        assert_eq!(t.role, "implement");
+        assert_eq!((t.profile.as_deref(), t.model.as_deref()), (None, None));
+        assert_eq!(t.body, "- [x] write\n\nInterfaces: fn a()");
     }
 
     fn project_entity(tx: &mut WTx<'_>, id: &str) -> Result<(), CoordError> {
@@ -1647,5 +1902,232 @@ mod tests {
             json!({"kind": "finding", "text": "t", "sources": many})
         );
         assert!(conclusion_block(&over).is_none());
+    }
+
+    // ---- dependents and the store (pattern D: a temp git repo and an in-memory store, no hub) ----
+
+    /// A repo with a decision (d1..d4 as `decision:N`) implemented by each commit, in order: c1 changes line 3, c2
+    /// lines 3 and 4, c3 line 4, c4 line 9.
+    async fn chain() -> (tempfile::TempDir, tempfile::TempDir, CoordDb, Vec<String>) {
+        let d = repo();
+        commit(d.path(), "a.txt", &lines(10), "base");
+        let text = |edits: &[(&str, &str)]| {
+            edits
+                .iter()
+                .fold(lines(10), |t, (from, to)| t.replace(from, to))
+        };
+        let c1 = commit(d.path(), "a.txt", &text(&[("line 3", "A3")]), "c1");
+        let c2 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "B4")]),
+            "c2",
+        );
+        let c3 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "C4")]),
+            "c3",
+        );
+        let c4 = commit(
+            d.path(),
+            "a.txt",
+            &text(&[("line 3", "B3"), ("line 4", "C4"), ("line 9", "N9")]),
+            "c4",
+        );
+        let shas = vec![c1, c2, c3, c4];
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let (repo_dir, s2) = (d.path().to_path_buf(), shas.clone());
+        db.write(meta(), move |tx| {
+            for (i, sha) in s2.iter().enumerate() {
+                let r = decide(
+                    tx,
+                    Decide {
+                        kind: "build".into(),
+                        subject: format!("d{}", i + 1),
+                        author: "user".into(),
+                        ..Decide::default()
+                    },
+                    1.0,
+                )?;
+                let norn::write::decisions::DecideResult::Ok { n, .. } = r else {
+                    panic!("{r:?}")
+                };
+                let dec = entity::by_id(tx.sql(), &format!("decision:{n}"))?.unwrap();
+                let project = tx.meta().project;
+                let c = entity::create(
+                    tx,
+                    EntityNew {
+                        id: format!("commit:{sha}"),
+                        kind: "commit".into(),
+                        project,
+                        title: Some(format!("c{}", i + 1)),
+                        status: None,
+                        body: None,
+                        priority: None,
+                        assignee: None,
+                        data: json!({"sha": sha, "repo": repo_dir.to_string_lossy()}),
+                        origin: Origin::Recorded,
+                        source: None,
+                    },
+                )?;
+                link::add(tx, c.n, "implements", dec.n, None, Origin::Recorded, None)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+        (d, dir, db, shas)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dependents_follows_a_chain_of_three() {
+        let (d, _dir, db, shas) = chain().await;
+        let repo_dir = d.path().to_path_buf();
+        let got = db
+            .read(move |c| dependents_in(c, &repo_dir, 1))
+            .await
+            .unwrap();
+        // d1's c1 was touched again by c2 (d2), and c2's lines by c3 (d3): a chain, not one step
+        assert_eq!(got.decisions, [2, 3]);
+        assert_eq!(got.commits, [shas[1].clone(), shas[2].clone()]);
+        assert_eq!(got.label, "computed");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dependents_ignores_a_commit_on_other_lines() {
+        let (d, _dir, db, _shas) = chain().await;
+        let repo_dir = d.path().to_path_buf();
+        let got = db
+            .read(move |c| dependents_in(c, &repo_dir, 1))
+            .await
+            .unwrap();
+        // d4's commit changed line 9 only
+        assert!(!got.decisions.contains(&4), "{got:?}");
+        let none = db
+            .read({
+                let repo_dir = d.path().to_path_buf();
+                move |c| dependents_in(c, &repo_dir, 4)
+            })
+            .await
+            .unwrap();
+        assert!(
+            none.decisions.is_empty() && none.commits.is_empty(),
+            "{none:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plain_session_commits_are_linked() {
+        let d = repo();
+        let base = commit(d.path(), "a.txt", "x\n", "base");
+        let first = commit(d.path(), "a.txt", "y\n", "first");
+        let dir = tempfile::tempdir().unwrap();
+        let db = CoordDb::spawn(dir.path().join("work.db"));
+        let repo_dir = d.path().to_path_buf();
+        let b2 = base.clone();
+        let (found_base, linked) = db
+            .write(meta(), move |tx| {
+                // two steps of a chat session (no job task): the earlier one saw the tree at BASE
+                for head in [Some(b2.as_str()), Some("not-a-commit"), None] {
+                    let id = norn::write::steps::open(
+                        tx,
+                        norn::write::steps::StepNew {
+                            session: "session:s1".into(),
+                            task: None,
+                            plan: None,
+                            project: None,
+                            agent: None,
+                            provider: None,
+                            class: norn::write::steps::StepClass::Tool,
+                            start: 1.0,
+                            tool: None,
+                            tool_kind: None,
+                            message_id: None,
+                            turn_id: None,
+                            snapshot: None,
+                            log_version: None,
+                            acp: None,
+                        },
+                    )?;
+                    if let Some(h) = head {
+                        norn::write::steps::set_head(tx, id, h)?;
+                    }
+                }
+                let r = decide(
+                    tx,
+                    Decide {
+                        kind: "build".into(),
+                        subject: "chat decision".into(),
+                        author: "user".into(),
+                        ..Decide::default()
+                    },
+                    1.0,
+                )?;
+                let norn::write::decisions::DecideResult::Ok { n, .. } = r else {
+                    panic!("{r:?}")
+                };
+                let e = entity::by_id(tx.sql(), &format!("decision:{n}"))?.unwrap();
+                entity::update(
+                    tx,
+                    e.n,
+                    None,
+                    Changes {
+                        data_patch: Some(json!({"session": "s1"})),
+                        ..Changes::default()
+                    },
+                )?;
+                let base = session_base(tx.sql(), "s1")?;
+                let commits = commits_since(&repo_dir, base.as_deref().unwrap_or("HEAD"));
+                link_commits_in(tx, "s1", &repo_dir, &commits)?;
+                let mut st = tx.sql().prepare(
+                    "select d.title from link l join entity d on d.n = l.dst join entity c on c.n = l.src \
+                     where l.kind = 'implements' and c.kind = 'commit' and l.tx_to = ?1",
+                )?;
+                let linked: Vec<String> = st
+                    .query_map([SENTINEL], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?;
+                Ok((base, linked))
+            })
+            .await
+            .unwrap();
+        assert_eq!(found_base.as_deref(), Some(base.as_str()));
+        assert_eq!(linked, vec!["chat decision".to_owned()]);
+        let _ = first;
+    }
+
+    #[test]
+    fn effects_survive_a_removed_tree() {
+        let store = repo();
+        commit(store.path(), "a.txt", &lines(10), "base");
+        let c1 = commit(
+            store.path(),
+            "a.txt",
+            &lines(10).replace("line 3", "x"),
+            "d",
+        );
+        let c2 = commit(
+            store.path(),
+            "a.txt",
+            &lines(10).replace("line 3", "y"),
+            "later",
+        );
+        // the task's tree is gone; the run's store has the commits
+        let gone = store.path().join("no-such-tree");
+        let data = json!({"sha": c1, "repo": gone.to_string_lossy(), "store": store.path().to_string_lossy()});
+        let found = store_in(&data, &|_| false).expect("the store is used");
+        assert_eq!(found, store.path());
+        let hunks = later_hunks(&found, std::slice::from_ref(&c1));
+        assert_eq!(hunks.len(), 1, "{hunks:?}");
+        assert_eq!(hunks[0].commit, c2);
+        // the tree itself is used only while it is there and untouched
+        let live = json!({"repo": store.path().to_string_lossy()});
+        assert_eq!(store_in(&live, &|_| false).as_deref(), Some(store.path()));
+        assert_eq!(store_in(&live, &|_| true), None);
+        assert_eq!(
+            store_in(&json!({"repo": gone.to_string_lossy()}), &|_| false),
+            None
+        );
     }
 }

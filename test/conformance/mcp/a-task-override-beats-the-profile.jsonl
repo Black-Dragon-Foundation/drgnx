@@ -20,9 +20,9 @@
 {"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
 {"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
-{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
+{"do": "expect", "conn": "m1", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
 {"do": "connect", "conn": "m2", "hub": "h", "socket": "path:$sock2", "as": "raw"}
 {"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
 {"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 1, "result": "$any"}}
 {"do": "send", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}}
-{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}
+{"do": "expect", "conn": "m2", "json": {"jsonrpc": "2.0", "id": 2, "result": {"tools": ["$any", "$any", "$any","$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any", "$any"]}}}

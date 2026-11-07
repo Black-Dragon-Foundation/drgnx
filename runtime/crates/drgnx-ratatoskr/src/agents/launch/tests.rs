@@ -60,6 +60,8 @@ impl Fx {
             enforced: Enforced::Yes,
             gateway: false,
             trace: None,
+            ro_files: Vec::new(),
+            gateway_url_env: Vec::new(),
         }
     }
 
@@ -1092,6 +1094,15 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
         eprintln!("no bubblewrap here: the argv half is the sandbox lane's");
         return;
     };
+    // macOS's one backend is Seatbelt, whatever the tier, and the browser is bubblewrap's alone: the launch is
+    // refused, and its refusal (a line a log shows) holds no secret either
+    if sb.kind() != gleipnir::BackendKind::Bwrap {
+        match launch_on(&env, &sb, &fx.plan(".claude"), &shape) {
+            Ok(_) => panic!("a browser on a backend other than bubblewrap was launched"),
+            Err(refused) => assert!(!refused.to_string().contains(&hex), "{refused}"),
+        }
+        return;
+    }
     let launch = launch_on(&env, &sb, &fx.plan(".claude"), &shape)
         .unwrap_or_else(|r| panic!("refused: {r}"));
     let argv = std::iter::once(launch.spec.program.as_os_str())
@@ -1110,4 +1121,30 @@ fn the_cdp_secret_is_never_in_argv_or_logs() {
         "{:?}",
         launch.spec.pass_fds
     );
+}
+
+// Pattern D (pure): a replayed run's sandboxed agent reads the recording and the mock's dir and writes its scratch dir.
+#[test]
+fn a_replayed_launch_sees_the_recording_and_its_scratch_dir() {
+    let shape = SessionShape {
+        sid: "a0123456789ab".into(),
+        cwd: "/w/t".into(),
+        write: vec!["/w/t".into()],
+        read: vec!["/w/r".into()],
+        net: NetCell::ProviderOnly,
+        browser: None,
+    };
+    let dirs = crate::recording::ReplayDirs {
+        read: vec!["/rec/run".into(), "/bin/dir".into()],
+        write: vec!["/scratch/replay".into()],
+    };
+    let s = with_replay_dirs(&shape, Some(&dirs));
+    assert_eq!(
+        s.read,
+        [PathBuf::from("/w/r"), "/rec/run".into(), "/bin/dir".into()]
+    );
+    assert_eq!(s.write, [PathBuf::from("/w/t"), "/scratch/replay".into()]);
+    // not replaying: the shape is the caller's
+    let same = with_replay_dirs(&shape, None);
+    assert_eq!((same.read, same.write), (shape.read, shape.write));
 }

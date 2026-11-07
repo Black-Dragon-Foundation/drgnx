@@ -126,18 +126,27 @@ impl Writer {
     }
 }
 
+/// The method name of the hub's hook records (`hook_points`): not a wire method.
+pub const HOOKS_METHOD: &str = "hub/hooks";
+/// The `tx` actor of those records, and only of those.
+pub const HOOKS_ACTOR: &str = "hub:hooks";
+
 /// The `tx` row of a front method's write (Urdr Task 12): who it is comes from the connection, never from a param.
 /// The hub is the one writer; the actor is
 /// - for a seam method (`coord/*`, the hub's own housekeeping): `hub`, class `system`;
 /// - for the editor's own methods (`cards/settle`, `messages/*`, `events/add`, `review/mark`) from the user's
 ///   connection: `user`, class `user`;
 /// - for an agent socket's session: `agent:SID`, class `agent`;
-/// - for anyone else (a service connection, the front's own timers): `hub`, class `system`.
+/// - for anyone else (a service connection, the front's own timers): `hub`, class `system`;
+/// - for the hub's hook records ([`HOOKS_METHOD`], whoever the caller): `hub:hooks`, class `system`. No wire method
+///   has that name, so no connection writes as `hub:hooks`, and a step's provenance reads only its rows.
 ///
 /// `tool` is `proto:<method>`.
 pub fn tx_meta(caller: &Caller, method: &str) -> TxMeta {
     let tool = format!("proto:{method}");
-    let mut meta = if method.starts_with("coord/") {
+    let mut meta = if method == HOOKS_METHOD {
+        TxMeta::new(HOOKS_ACTOR, TxClass::System, tool)
+    } else if method.starts_with("coord/") {
         TxMeta::new("hub", TxClass::System, tool)
     } else {
         match (caller.class, &caller.sid) {
@@ -614,9 +623,42 @@ impl ToolHub {
     pub fn bind(&self, front: &Arc<Front>) {
         let _ = self.front.set(Arc::downgrade(front));
     }
+
+    /// The front, once bound and while it lives.
+    pub fn front(&self) -> Option<Arc<Front>> {
+        self.front.get().and_then(std::sync::Weak::upgrade)
+    }
+
+    /// The hub's session SID (a tool's caller), or why not.
+    fn session(&self, sid: &str) -> Result<Arc<crate::agents::session::Session>, String> {
+        let front = self.front().ok_or("the hub is starting")?;
+        front
+            .core
+            .agents
+            .find(sid)
+            .map_err(|_| "only a chat drgnx runs edits your checkout".to_string())
+    }
 }
 
 impl Hub for ToolHub {
+    /// The `before-tool` hooks of a call of the hub's own tool ([`crate::hook_points::at_hub_server`]). Before the
+    /// front is bound no session socket serves, so nothing reaches this.
+    fn before_tool<'a>(
+        &'a self,
+        sid: &'a str,
+        server: &'static str,
+        tool: &'a str,
+        args: Value,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        let front = self.front();
+        Box::pin(async move {
+            match front {
+                Some(f) => crate::hook_points::at_hub_server(&f, sid, server, tool, args).await,
+                None => Err("drgnx refused the tool call: the hub is starting".into()),
+            }
+        })
+    }
+
     /// The front's own session table, read at once; `None` only before the front is bound.
     fn sessions(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade);
@@ -689,7 +731,7 @@ impl Hub for ToolHub {
     }
 
     /// A session's tool call ended: its graph writes link to its current ask before it answers.
-    fn after_tool(&self, _sid: &str, _tool: &'static str) -> BoxFuture<'_, ()> {
+    fn after_tool(&self, _sid: &str, _tool: &str) -> BoxFuture<'_, ()> {
         let front = self.front.get().and_then(std::sync::Weak::upgrade);
         Box::pin(async move {
             if let Some(f) = front {
@@ -704,6 +746,45 @@ impl Hub for ToolHub {
         {
             s.refuse_wait();
         }
+    }
+
+    /// A chat's `read_file`: its session's read through the pair door.
+    fn pair_read(&self, sid: &str, path: String) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_read(path).await })
+    }
+
+    /// A chat's `edit_file` or `write_file`: its session's write through the pair door.
+    fn huddle_reply(
+        &self,
+        sid: &str,
+        huddle: String,
+        text: String,
+        proposal: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            f.core
+                .huddles
+                .reply(&f, &sid, &huddle, text, proposal)
+                .await
+        })
+    }
+
+    fn escalated(&self, sid: &str) {
+        if let Some(f) = self.front() {
+            f.core.huddles.escalated(&f, sid);
+        }
+    }
+
+    fn pair_write(
+        &self,
+        sid: &str,
+        w: norn::tools::pair::PairWrite,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let found = self.session(sid);
+        Box::pin(async move { found?.pair_write(w).await })
     }
 
     fn propose(
@@ -724,6 +805,20 @@ impl Hub for ToolHub {
             self.editors
                 .explain(scope, names, root, norn::tools::settings::EXPLAIN_WAIT),
         )
+    }
+
+    fn extension_fact(
+        &self,
+        id: &str,
+    ) -> BoxFuture<'_, Option<norn::tools::extensions::ExtensionFact>> {
+        let front = self.front.get().and_then(std::sync::Weak::upgrade);
+        let id = id.to_string();
+        Box::pin(async move { front?.extensions.fact(&id).await })
+    }
+
+    /// A tool's card goes to the editors as every card does (`card`).
+    fn card_event(&self, event: Value) {
+        self.editors.broadcast("card", event);
     }
 
     /// The runtime settings in effect globally (the project overrides are the editor's, keyed by its names).

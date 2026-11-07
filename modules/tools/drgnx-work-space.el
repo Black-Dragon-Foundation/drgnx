@@ -19,6 +19,7 @@
 (require 'drgnx-state)
 (require 'drgnx-view)
 (require 'drgnx-work-client)
+(require 'drgnx-history)
 (unless (featurep 'drgnx-work-map)
   (load (expand-file-name "drgnx-work-map" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-work-detail)
@@ -65,6 +66,7 @@
 (declare-function drgnx-work-detail-buffer "drgnx-work-detail")
 (declare-function drgnx-work-detail-update "drgnx-work-detail")
 (declare-function drgnx-work-detail-buffers "drgnx-work-detail")
+(declare-function drgnx-work-job-log "drgnx-work-detail")
 (declare-function drgnx-pane-define-kind "drgnx-panes")
 (declare-function drgnx-pane-show "drgnx-panes")
 
@@ -80,6 +82,7 @@
 (declare-function drgnx-work-map--changed "drgnx-work-map")
 (declare-function drgnx-work-map--edges-update "drgnx-work-map")
 (declare-function drgnx-work-map-theme-changed "drgnx-work-map")
+(declare-function drgnx-work-map-motion-clear "drgnx-work-map")
 (defvar drgnx-work-space--view)
 (defvar drgnx-work-space--message)
 (defvar drgnx-hub--events)
@@ -102,25 +105,25 @@ it (a notes repository with the code repositories inside it)."
   "How roomy the map is: `compact', `comfortable' or `roomy' (card sizes, gaps and bands)."
   :type '(choice (const compact) (const comfortable) (const roomy)) :group 'drgnx-work-space)
 
-;;;; Faces: stock faces until the look's semantic ones exist; its one table retargets them
+;;;; Faces: they inherit the look's semantic faces (core/drgnx-faces.el)
 
-(defface drgnx-work-dim '((t :inherit shadow)) "Items off the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-dim '((t :inherit drgnx-text-muted)) "Items off the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-card '((t :inherit default)) "A card's text." :group 'drgnx-work-space)
-(defface drgnx-work-selected '((t :inherit highlight)) "The selected item." :group 'drgnx-work-space)
-(defface drgnx-work-chain '((t :inherit link :underline nil)) "Items on the selection's chain." :group 'drgnx-work-space)
+(defface drgnx-work-selected '((t :inherit drgnx-selected)) "The selected item." :group 'drgnx-work-space)
+(defface drgnx-work-chain '((t :inherit drgnx-accent)) "Items on the selection's chain." :group 'drgnx-work-space)
 (defface drgnx-work-overlap '((t :inherit warning)) "An overlap's flag and its edge." :group 'drgnx-work-space)
-(defface drgnx-work-needs-you '((t :inherit error)) "A thing that needs you." :group 'drgnx-work-space)
-(defface drgnx-work-edge '((t :inherit shadow)) "An edge." :group 'drgnx-work-space)
-(defface drgnx-work-edge-strong '((t :inherit shadow :weight bold)) "An edge that edits." :group 'drgnx-work-space)
-(defface drgnx-work-label '((t :inherit shadow)) "A layer's label." :group 'drgnx-work-space)
-(defface drgnx-work-chip '((t :inherit secondary-selection)) "A chip." :group 'drgnx-work-space)
+(defface drgnx-work-needs-you '((t :inherit drgnx-status-attention)) "A thing that needs you." :group 'drgnx-work-space)
+(defface drgnx-work-edge '((t :inherit drgnx-text-subtle)) "An edge." :group 'drgnx-work-space)
+(defface drgnx-work-edge-strong '((t :inherit drgnx-text-muted :weight bold)) "An edge that edits." :group 'drgnx-work-space)
+(defface drgnx-work-label '((t :inherit drgnx-text-muted)) "A layer's label." :group 'drgnx-work-space)
+(defface drgnx-work-chip '((t :inherit drgnx-selected-quiet)) "A chip." :group 'drgnx-work-space)
 (defface drgnx-work-new '((t :inherit success)) "The mark of a new conclusion." :group 'drgnx-work-space)
-(defface drgnx-work-agent-1 '((t :inherit ansi-color-blue)) "The first agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-2 '((t :inherit ansi-color-green)) "The second agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-3 '((t :inherit ansi-color-magenta)) "The third agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-4 '((t :inherit ansi-color-cyan)) "The fourth agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-5 '((t :inherit ansi-color-yellow)) "The fifth agent colour." :group 'drgnx-work-space)
-(defface drgnx-work-agent-6 '((t :inherit ansi-color-red)) "The sixth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-1 '((t :inherit drgnx-agent-1)) "The first agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-2 '((t :inherit drgnx-agent-2)) "The second agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-3 '((t :inherit drgnx-agent-3)) "The third agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-4 '((t :inherit drgnx-agent-4)) "The fourth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-5 '((t :inherit drgnx-agent-5)) "The fifth agent colour." :group 'drgnx-work-space)
+(defface drgnx-work-agent-6 '((t :inherit drgnx-agent-6)) "The sixth agent colour." :group 'drgnx-work-space)
 
 (defconst drgnx-work-space-command-ids
   '(work-view work-outline work-left work-right work-why work-touches work-next-agent work-previous-agent work-open
@@ -202,7 +205,8 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
       (max 0 (floor (- px 96) 4)))))
 
 (defun drgnx-work-space--killed ()
-  "`kill-buffer-hook' of a map buffer: its view closes."
+  "`kill-buffer-hook' of a map buffer: its windows lose the layout motion's parameters and its view closes."
+  (drgnx-work-map-motion-clear)
   (when drgnx-work-space--view (drgnx-work-client-close drgnx-work-space--view)))
 
 (defun drgnx-work-space--empty-buffer ()
@@ -344,7 +348,6 @@ no file name handler runs on it (`drgnx-work-code-local-dir')."
                    (format " live · %s" (if drgnx-work-live-file--agent (drgnx-agent-session-name drgnx-work-live-file--agent) "")))
              (view-mode 1))
     (view-mode -1)
-    (remove-hook 'after-save-hook #'drgnx-work-live-file--saved t)
     (setq buffer-read-only drgnx-work-live-file--was-read-only)))
 
 (defun drgnx-work-live-file--maybe ()
@@ -353,26 +356,16 @@ no file name handler runs on it (`drgnx-work-code-local-dir')."
     (setq drgnx-work-live-file--agent s)
     (drgnx-work-live-file-mode 1)))
 
-(defun drgnx-work-live-file--saved ()
-  "`after-save-hook' of a file whose wheel was taken: the agent is told which file changed (queued; part 3's protocol
-replaces this later)."
-  (when-let* ((s drgnx-work-live-file--agent) (id (drgnx-agent-session-remote s)) (file buffer-file-name))
-    (drgnx-hub-call "agents/send"
-                    ;; the file's name is the agent's: it stays on the message's one line
-                    (list :id id :text (format "I edited %s while you were paused. Read it again before you change it."
-                                               (drgnx-work-code-one-line (file-name-nondirectory file))))
-                    #'ignore)))
+(declare-function drgnx-agents-take-wheel "drgnx-agents-follow")
 
 (defun drgnx-work-take-wheel ()
-  "Take the wheel of the agent holding this file: it is paused after its current tool call, the buffer becomes editable,
-and saving tells the agent which file you changed."
+  "Kept for one release cycle under its id: the same as `drgnx-agents-take-wheel' (the module tools/agents-in-editor),
+which the hub's wheel protocol drives.  It has no key of its own."
   (interactive)
-  (let ((s (or drgnx-work-live-file--agent (user-error "No live agent holds this file"))))
-    (when-let* ((id (drgnx-agent-session-remote s))) (drgnx-hub-call "agents/pause" (list :id id) #'ignore))
-    (view-mode -1)
-    (setq buffer-read-only nil)
-    (add-hook 'after-save-hook #'drgnx-work-live-file--saved nil t)
-    (message "Work: %s is paused and this file is yours; save to tell it" (drgnx-agent-session-name s))))
+  (unless drgnx-work-live-file--agent (user-error "No live agent holds this file"))
+  (if (fboundp 'drgnx-agents-take-wheel)
+      (call-interactively #'drgnx-agents-take-wheel)
+    (user-error "Taking the wheel needs the module tools/agents-in-editor")))
 
 ;;;; The module
 
@@ -395,6 +388,7 @@ follows the windows; the commands."
                         :command #'drgnx-work-take-wheel :map 'drgnx-work-live-file-mode-map
                         :doc "Pause the agent that is editing here and make this file editable; saving tells the agent")
   (drgnx-state-subscribe 'windows-changed #'drgnx-work-space--windows-changed)
+  (drgnx-history-mode 1)                ; the editor's side of the edit history (stays off without Nidhogg's change hook)
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-map-mode 'editor))
   (when (fboundp 'drgnx-wb-place) (drgnx-wb-place 'drgnx-work-files-mode 'popup))
   (drgnx-command-define 'work-files :category "Work" :title "List the Agent's Files"
@@ -412,6 +406,9 @@ follows the windows; the commands."
   (drgnx-command-define 'work-diff-reject-hunk :category "Work" :title "Reject the Hunk"
                         :command #'drgnx-work-diff-reject-hunk :map 'drgnx-work-diff-mode-map
                         :doc "Reject the hunk at point; the review view decides hunks")
+  (drgnx-command-define 'work-job-log :category "Work" :title "Show the Job's Live Log"
+                        :command #'drgnx-work-job-log :map 'drgnx-work-detail-mode-map
+                        :doc "Show the end of the log of the job on this row of a machine's queue in the side panel")
   (drgnx-command-define 'work-who-is-here :category "Work" :title "Who Is in This File"
                         :command #'drgnx-work-who-is-here
                         :doc "Name the agents in the file you are visiting, with their lines, and select it on the map")
@@ -494,9 +491,12 @@ follows the windows; the commands."
                         :doc "One block per agent, with why it exists and what it touches; again for the map"))
 
 (defun drgnx-work-space--teardown ()
-  "tools/work-space's `:teardown': the views close (the hub forgets them) and the map buffers go."
+  "tools/work-space's `:teardown': the edit history's tracking stops, the views close (the hub forgets them), the
+windows lose the layout motion's parameters and the map buffers go."
+  (drgnx-history-mode -1)
   (drgnx-work-client-close-all)
   (dolist (b (drgnx-work-map-buffers))
+    (drgnx-work-map-motion-clear b)
     (with-current-buffer b (remove-hook 'kill-buffer-hook #'drgnx-work-space--killed t))
     (kill-buffer b))
   (dolist (b (buffer-list))

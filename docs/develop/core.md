@@ -470,6 +470,44 @@ ROOT)` reads it.
   `packages-wanted.eld` (a bare list of names, a state file) is changed with `drgnx-file-update … :on-unreadable
   'backup :timeout 0` from `drgnx-pkg--record-want`, which runs at startup: it never prompts or waits, skips a file
   another process holds (the next startup records the want), and turns an error into one message.
+- **Wants and the queue** (`core/drgnx-pkg-wants.el`, loaded by `drgnx-pkg`; the batch sync needs them without the
+  editor). A lock entry may carry `:wanted user`; `drgnx-pkg-manifest` reads those names as its fourth source, and
+  every lock write passes each entry through `drgnx-pkg--marked` (ADD sets the mark, REMOVE clears it, anything else
+  keeps the old entry's), so a rebuilt entry (`drgnx-pkg--desc-entry` after an upgrade) never drops it;
+  `drgnx-pkg-ship-lock` strips it. The queue `<state>/extensions/pending.eld`, `(:next N :entries (ENTRY…))`, is
+  changed only with `drgnx-file-update`: `drgnx-pkg-pending-add ENTRY` (→ the ticket) and `drgnx-pkg-pending-cancel
+  TICKET` with `:timeout 0` (the editor never waits: `drgnx-file-busy` passes up), `drgnx-pkg-pending-take` (→ the
+  entries; `:next` kept) by `drgnx sync --pending` while it holds `sync.lock`. `drgnx-pkg-removal-plan NAMES` →
+  `(:remove NAMES… :refused ((NAME . WHY)…))` reads the modules, `packages.eld`, `packages-wanted.eld` and the lock.
+- `drgnx-pkg-sync`'s `:add ((NAME . VERSION)…)`, `:remove NAMES` and `:strict` (set by either): the requested part
+  of `MISSING` (`drgnx-pkg--asked`: the names and what they bring) is checked before the swap, so a failed request
+  changes nothing; a strict run writes the lock and the generation even when an unrelated package is missing.
+  A version asked for is a pin of its own (never soft). The order of a run is swap → quickstart → lock → snapshot →
+  native compilation. `drgnx-pkg--take-sync-lock` waits under `drgnx-pkg--sync-wait` (`--wait`): another holder is a
+  `drgnx-pkg-sync-busy` (a `drgnx-pkg-error`), retried every 0.5 s. Tests hook a batch child through
+  `drgnx-pkg--after-lock-function` (`wait`, `held`) and `drgnx-pkg--step-function` (`native`), set by
+  `test/fixtures/pkg-child-fixture.el`.
+- **Progress** (`core/drgnx-pkg-progress.el`): `(drgnx-pkg-progress STEP &rest PLIST)` replaces
+  `drgnx-pkg--progress-file` (the CLI's `--progress FILE`, bound in `drgnx-pkg-cli-run`) with one JSON object of at
+  most 1 KiB (long lists dropped first), never failing the run, then calls `drgnx-pkg--step-function` (the child
+  fixture logs each step there). `drgnx-pkg-progress-plan GENERATION REPLACES REMOVES ADDS` writes `FILE.plan.json`,
+  then the plan step, before every swap: a sync computes it from its plan and the removals against the staging
+  directory as loaded (`drgnx-pkg--plan-swap`, before the downloads), a rollback (and an upgrade's restore) from the
+  generation against `elpa/` (`drgnx-pkg--dirs-change`). `drgnx-pkg-sync`'s `:only NAMES` (`drgnx-pkg--plan`'s
+  NEWEST; a pin too old for them, its TOO-OLD, is dropped and the plan made again), `:stage` (fetch into the cache,
+  write `drgnx-pkg-staged-file`, return before the swap) and `:staged ENTRIES` (exact pins with their hashes; their
+  `:verified` carried into the lock) back `drgnx upgrade --only/--stage/--staged`. `drgnx-pkg-generations-in-use`
+  reads `<state>/elpa-in-use/PID.eld` (live stamps only; with SWEEP the others are deleted): snapshot rotation and
+  an upgrade's restore keep those generations. `drgnx-pkg--after-change` (settings index, then
+  `drgnx-pkg-after-change-functions`) follows a sync, upgrade or rollback of the CLI that worked.
+- **Signatures**: `drgnx-pkg-with-archive-settings` is the one place that binds `package-check-signature` to `t`,
+  `package-unsigned-archives` (`drgnx-pkg-unsigned-archives`: MELPA by name or host, directory archives —
+  `drgnx-pkg--directory-archive-p`, which the signed tests override — and `packages.eld`'s `:unsigned-archives`), the
+  keyring and the priorities; the sync runs inside it. `drgnx-pkg--refresh` checks for gpg first and turns a failed
+  check of an archive's contents (package.el only logs it) into a `drgnx-pkg-error`. `drgnx-pkg--install` writes
+  `:verified t` for a file fetched from a signing archive, or a cache hit whose hash is a verified entry's (a staged
+  entry is the pin of a `--staged` run). The guard (`drgnx-pkg--guard`) takes `sync.lock` around a stock install a
+  user runs, never waiting (`user-error` while a sync holds it).
 
 **The reference and the doctor.** `docs/reference/config.md` is generated from the definitions: for each, sorted by
 name, its file, folder, format, reload rule, what happens on a mistake, its `:doc` and a table of its keys from
@@ -493,15 +531,17 @@ core features that define files are listed in `drgnx-doctor-config-features`: a 
 Tests: `test/unit/config-doc-test.el` and `test/unit/doctor-test.el`.
 
 **The settings reference.** `docs/reference/settings.md` is generated the same way from the settings declared with
-`drgnx-defsetting` (`harness/drgnx-settings-doc.el`; a port that declares settings appends a `(require FEATURE)` line
-to `drgnx-settings-doc-sources`). After declaring or changing one, regenerate it and commit it with the change:
+`drgnx-defsetting` (`harness/drgnx-settings-doc.el`, which loads every file under `core/`, `wb/`, `modules/` and
+`harness/` with a line that starts `(drgnx-defsetting `; nothing to register). After declaring or changing one,
+regenerate it and commit it with the change:
 
 ```sh
 emacs --batch -Q -L core -L wb -L harness -L modules/tools -L modules/editor -L modules/ui -l drgnx-settings-doc \
   --eval '(drgnx-settings-doc-regenerate "docs/reference/settings.md")'
 ```
 
-Test: `test/unit/settings-doc-test.el` runs this very command and compares.
+Test: `test/unit/settings-doc-test.el` runs this very command and compares, and reads the files itself to fail on a
+declared setting the reference lacks.
 
 `onboarding.eld` (state folder, an alist of step → `(:status :message :time)`, `core/drgnx-onboard.el`) is the one
 state file that is not refused when it cannot be read: `drgnx-onboard--record` is a `drgnx-file-update` with
@@ -546,6 +586,18 @@ signal `drgnx-prompt-in-automatic-path` instead — naming the prompt and where 
 
 `(drgnx-guard-automatic-p)` says whether the code running now is such a path, for code that would rather not ask
 than signal (choosing a Vim stack records it as pending instead of offering to install evil).
+
+**Code that must not ask even from a command** — a pair write's save, a buffer event's handler — runs inside
+`(drgnx-with-no-prompts BODY…)` (`core/drgnx-no-prompt.el`), which returns nil when BODY ran to its end and else a
+string saying what it would have asked about. It binds `inhibit-interaction` to t (every minibuffer read, `read-char`,
+`read-event` and the C callers signal `inhibited-interaction`; `read-key`, which reads through
+`read-key-sequence-vector` and is not stopped by it, signals `drgnx-would-prompt`), `delete-old-versions` to `keep` where it is
+nil and `require-final-newline` to t where it is `ask` (so a save keeps old backups and adds the newline instead of
+asking), and replaces `ask-user-about-lock`, `ask-user-about-supersession-threat` and
+`userlock--ask-user-about-supersession-threat` (which `lock_file` calls from C) with functions that signal
+`drgnx-would-prompt` with their reason ("notes.txt changed on disk since it was read", "… is locked by …"). The
+replacements are `cl-letf` bindings inside BODY only: no global advice. The guard's own refusal in an automatic path
+is caught the same way.
 
 **Process callbacks and hooks run inside the guard.** Emacs calls a process filter or sentinel from C, so nothing
 can tell it from a command; the guard is put on where the callback is handed over:
@@ -676,7 +728,12 @@ to nil. Never: `drgnx-notice--can-echo-p` (the seam tests stub) is nil in batch 
 (held until `server-after-make-frame-hook`), and `drgnx-notice--started` is nil until `emacs-startup-hook` (depth 90)
 or a daemon's first client frame, so nothing is echoed during startup; `drgnx-notice--startup-done` then queues one
 line over the `fail` conditions present. A single line names the item's `:command` by its registry title and that
-command's key; a merged line and the startup line name the Notices list and its key. Lines go out as
+command's key; a merged line and the startup line name the Notices list and its key. Where notices float
+(`drgnx-notice-toast-active-p`: `drgnx-notice-style` and Glitnir on a graphical frame) `drgnx-notice--echo-enqueue` hands a
+`problem` or `waiting` entry to `drgnx-notice-toast-offer` (`drgnx-notice-toast.el`) and queues no line: the model is
+`drgnx-notice-toast--visible` (at most three, oldest at the bottom) and `--waiting`, drawn by `drgnx-notice-toast--sync`
+into pooled child frames that take no focus; the layer timer `notice-toast` removes the oldest. The echo mode going off
+deletes them (`drgnx-notice-toast-delete-all`). Lines go out as
 `(let ((message-truncate-lines t)) (message "%s" LINE))`.
 
 **The session file** (`core/drgnx-notice-save.el`, `drgnx-notice-save-mode`, on in `drgnx-init`).
@@ -796,7 +853,9 @@ With `extra/completion` on and Glitnir active it floats: the category `drgnx-com
 frame; vertico shows the minibuffer buffer itself there, so the prompt, the text and the candidates float while the
 minibuffer window and focus stay in the editor frame. `vertico-buffer` restores nothing in that window on exit, so
 `minibuffer-exit-hook` runs `drgnx-palette-frame-hide` (hide the frame, clear the dedication and window parameters, show
-a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height. See
+a plain buffer); the module's teardown deletes the frame. `vertico-count` follows the window's height, so the action
+gives the minibuffer buffer (not the stand-in buffer `vertico-buffer` passes it and kills) the palette's 32 px rows and
+makes the window `vertico-count` + 2 of the lines `vertico-buffer` counts there (`default-line-height`). See
 `docs/guide/palette.md`.
 
 **One key label.** `(drgnx-surfaces-key-label CMD-OR-ID &key context any short)` is the only function that turns a
@@ -915,7 +974,14 @@ stack — the code that knows what it changed knows how to change it back):
   writes it and, when the report shows the module's stage has run, calls `drgnx-modules--run-one` (which checks
   packages and requirements) and runs `drgnx-modules-after-teardown-functions` (not the after-stage hook, whose
   subscriber skips `startup`) so keys and menus follow whatever the stage. Neither prompts; the question "Also turn off X, Y?" belongs to the
-  command `drgnx-modules-list-toggle`. `drgnx-modules-toggle` (onboarding) only writes.
+  command `drgnx-modules-list-toggle`, which then saves the choice as the Settings page saves a value
+  (`drgnx-settings-editors-commit` of each module setting that changes) and applies it through the settings'
+  `:apply` (`drgnx-modules--settings-apply`), the path the Extensions view's Built-in rows take, so the two never
+  disagree: turning a module back on also brings back the dependents that went with it. `drgnx-modules-toggle`
+  (onboarding) only writes.
+- `(drgnx-modules-retry-waiting)` runs the setup of every module waiting for packages (status `missing-packages`)
+  whose packages now load, and returns them; live activation calls it after an Extensions job installed packages
+  (`modules/tools/drgnx-extensions-live.el`, [Extensions](extensions.md#live-activation)).
 - Teardown and rollback run in automatic paths: they never prompt. Undos and `:teardown` run with
   `inhibit-interaction` bound, so one that would ask fails at once and is reported. Every undo checks before it
   changes anything, so off, on, off is the same as off once, and two undos of the same thing (a `:teardown` that
@@ -1479,7 +1545,9 @@ What redisplay reads, built once per change (PERF-L L6):
 | --- | --- | --- | --- |
 | `sticky-segment` (`drgnx-sticky.el`) | window | the window's start moves, it shows another buffer, or the epoch `sticky` of its buffer moves | `sticky` (per buffer), bumped by an edit at or above the start of a window showing the buffer |
 | `live-header` (`drgnx-live.el`) | buffer | the epoch `live-tabs` of the view moves | `live-tabs` (per buffer), bumped where the tabs, the watched tab or driving change (`drgnx-live--tabs-changed`) |
-| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: point, the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay (21 keys) |
+| `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: the position the bar shows (not point: the text of `statusbar-position`, nil for a bar with no position), the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay, the count of toasts waiting (24 keys). Built again, it measures only texts it has not met: the cache `statusbar-widths` (256, least recently used out) keeps each width per text, face properties, face and layout key, so a cursor move measures the new position alone, and a long branch is cut by halving. A segment that says the same again gives the same string (`drgnx-statusbar--texts`, per segment id), whose width is kept by the string object (`drgnx-statusbar--width-of`, weak), so the fit's repeated widths allocate nothing; a bar too wide drops its segments into one list of cells and makes its lists once; the row's font height comes from `drgnx-pixels-font-metrics` (one `font-info` per font name) |
+| `statusbar-position` (`drgnx-statusbar.el`) | window | the point it shows (the window's, or the buffer's when the window shows another), the change tick, the narrowing, the selection, whether you are in it or the large-file flag (7 keys) |
+| tab buttons (`drgnx-chrome--buttons`, `drgnx-chrome.el`; a plain table, weak on the frame) | frame | the tab's box, `drgnx-pixels-generation`, the frame's character cell, rounded corners or `drgnx-look-icons` change: a tab line made at every tab switch reuses the overflow and split buttons and their measured width | — |
 | `topline` (`drgnx-topline.el`) | frame | the editor buffer, its directory, file or breadcrumb project cache, the frame's width, the drawn title, the glyphs, the count of folders whose repository the git cache knows, or one of the three hint commands or its keys changes, or an epoch moves (16 keys; the git cache itself is read only to build) | the status bar's `buffer-look` (its `vc-mode` text) and `git`; while the status bar is off, the line's own `drgnx-git-changed-functions` hook moves `git` for the root that was read. Named through constants (`drgnx-topline--look-epoch`, `--git-epoch`), because the build compiles the file alone | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust, the large-file flag `drgnx-large-file`), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the Explorer's roots, the segment lists) |
 
 **Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are
@@ -1702,7 +1770,9 @@ a `:full-draws`.
 
 **The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
 (list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
-DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. A slice that leaves work re-arms a second key,
+DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
+next timer pass whatever the DELAY, replacing one armed for later: for a change the user asked for and waits to see
+(the Work map's answer to a layout command; live changes keep the throttle). A slice that leaves work re-arms a second key,
 `(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0.0, or 16 ms while input is
 pending or the links have run back to back for 100 ms: "A chain yields to input" under Timers), so the throttle never delays the next slice. A mark made
 during a chain arms nothing (`--arm` returns while the continuation is pending): the next slice takes it, so one
@@ -1724,7 +1794,8 @@ past the deadline between two checks marks nothing (that would cost a clock read
 a fresh slice. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
 entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
 `:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
-with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
+with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded) in a timer pass of its own, after the draw's, so a key
+typed during the draw is read before the collection.
 
 **Visibility: from the workbench state store.** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible
 frame shows the buffer. It has one source at a time. While `drgnx-state-mode` is on (core/workbench turns it on),
@@ -1886,6 +1957,72 @@ only fall: the task that rewrites a site deletes its entry, and `drgnx-lint/no-s
 on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-only-in-the-gc-owner` fails on
 `garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
 owner decides when to collect.
+
+### Hub-fed views: the env (`wb/drgnx-view-env.el`)
+
+A view whose rows the hub builds (docs/develop/hub.md, "Rows") registers its buffer with
+`(drgnx-view-env-register VIEW BUFFER RESUBSCRIBE)`. The module then tells the hub, by `view/env` on the subscribed
+connection, what it needs to fit and colour the rows: per display class the buffer shows in (display kind, scale and
+the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping), the fonts per role
+(`ui`, `code`, `card`: file, size, ascent, descent, average and space widths), the cell, `width_px` (the narrowest
+live window of the class: one buffer holds one fit), the palette roles the SVG writer colours from (read from faces,
+through `core/drgnx-color.el`), the terminal's width table, the time zone and reduced motion.
+
+- **The epoch is the editor's:** one counter per (view, class), one more for every env whose look changed. A width
+  change alone keeps it, so the hub answers a resize with `replace`s, never a reset. `drgnx-view-env-epoch` reads it.
+- **One message per kind of change.** A theme change sends each (view, class) one env (`enable-theme-functions`,
+  `disable-theme-functions`); a resize is debounced through `drgnx-timer-debounce` (0.1 s idle: never inside a follow); `text-scale` in the view's
+  buffer makes a new class, and the class it left is forgotten.
+- **Reconnect:** on `drgnx-hub-connected-functions` every live (view, class)'s env is sent again, then the view's
+  RESUBSCRIBE runs: a restarted hub holds no env and builds nothing until then.
+- **Glyph asks:** the hub's `view-glyphs` (chars its font file lacks, or a role with no file) is answered with
+  `view/glyphs`, each (font, char) measured once in the view's buffer and cached (at most 4096, then emptied).
+- **Owners:** the global hooks come with the first registered view and go with the last; a view is forgotten with
+  its buffer (`kill-buffer-hook`) or by `drgnx-view-env-unregister`, and the owning module's teardown calls
+  `drgnx-view-env-teardown`.
+
+### Hub-fed views: inserting the hub's patches
+
+`(drgnx-view-patch-attach VIEW CLASS :buffer B :start S :epoch E)` makes a buffer show the hub-built rows of one
+(view, display class): a view of the type `drgnx-view-rows`, whose rows are stored by key as the `view-patch` events
+carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub-fed buffer lives) only stores rows
+and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
+Hub-fed views do not call `drgnx-view-sync-rows`.
+
+- **The rules**, in order (`drgnx-view-patch--decide`, pure; `drgnx-view-patch--accept` keeps the books, tested in
+  every order of arrival, disconnect, reconnect, env and selection): a patch whose `hub` is not the last reset's, or
+  before the pair's first reset, is dropped, and so is a reset of that hub that is not newer; an epoch behind the one
+  this editor sent (`drgnx-view-patch-env-sent`, called by `drgnx-view-env`) is held (at most 64) and the view dims
+  without a layout change; a reset at the current epoch drops every held patch; a `base` older than the version is
+  dropped silently; a newer `base`, or a row naming an image the view lacks, sends `view/resync`, at most one
+  outstanding. On `drgnx-hub-disconnect-functions` every hub-fed view dims (`drgnx-view-stale`; keys still work) and
+  forgets its version and hub.
+- **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
+  properties only `drgnx-` ones and `drgnx-view-patch-props` (`intern-soft`, never `intern`). A stop's placeholder
+  character shows one shared `(space :align-to (PX))` per PX; an image's shows the image (an id-keyed cache, at most
+  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline.
+- **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
+  segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
+  reported by `view/measured`, after which the hub fits that string by the editor's width.
+- **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
+  at 4000). The Work map, the Board and the timeline's lane labels use it too.
+- **Selection, dimming and the stale shade** are the view's own state, put back by PATCHED after every draw over the
+  rows by key; `drgnx-view-patch-select` draws the selection at once, so it wins over a queued patch. A removed
+  selected row moves the selection to the next row, else the previous, else none.
+- `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
+  pass that compares the two.
+- **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
+  hub, but holds the rows of the class it is paired with; both frames show that fit.
+- **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
+  its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
+  class's first reset.
+- **The rule rows** run on the fixture view `rows-demo` (`test/fixtures/rows-demo-fixture.el`: a real hub, a
+  test-hooks build, whose `__test_view_rows` gives the rows; `drgnx-rows-demo-with`, `-open`, `-feed`, `-settle`), for
+  later areas to call for their views: a look change mid-stream, two classes, a face override after a patch, a dropped
+  patch and a lost image, a hub restart (the hub's process killed and a new one started: the view dims, the new
+  instance starts it with a reset, an old instance's late patch is dropped; `drgnx-rows-demo-restart-hub`)
+  (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height`,
+  `text-scale` and two GUI frames at font sizes 1x and 2x (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
 
 ## Modal core (`drgnx-modal.el`)
 
@@ -2310,7 +2447,9 @@ The two checks of the agent settings pages. Both run the user's configured comma
 `emacs --batch -Q -l mock-mcp.el -f drgnx-mock-mcp-main MODE MARKER`, plus `error` and `oom`; an HTTP one,
 `drgnx-mock-mcp-http-start MODE` with `ok`, `needs-login`, `hang`, `error-body`, `echo-path` and `legacy-sse`, served by
 the test Emacs); never the user's servers, hooks or agent homes. The tests run with `DRGNX_JOBS_LAUNCHER=detached`, so
-they never create a scope in the user's systemd manager.
+they never create a scope in the user's systemd manager. A check that ends starts `systemctl` to clear its scope and does
+not wait for it; the tests' fake `systemctl` logs into the fixture's temp folder, so the fixture's teardown
+(`drgnx-agent-check-test-env`) waits until every such call has ended before it deletes the folder.
 
 | Function | Does |
 | --- | --- |
@@ -2605,7 +2744,8 @@ its arguments, prints the recorded reply a regexp picks (`DRGNX_FAKE_WM_MAP`) an
 
 Every pane (Explorer, agents, terminal, help, …) is one data definition, a kind, made with
 `(drgnx-pane-define-kind KIND :title :buffer :placeholder :home :size :view :slot :height :fill :on-show :on-focus :stack)`.
-`:home` is `left`, `bottom`, `right` or `editor`. Callers show and find panes by kind and never use the dock, area
+`:home` is `left`, `bottom`, `right` or `editor`; `:title` may be left out (a `left` kind's section header then shows
+only its ✕). Callers show and find panes by kind and never use the dock, area
 or section API directly: `drgnx-pane-show` (`:buffer`, `:select`), `drgnx-pane-hide`, `drgnx-pane-toggle`,
 `drgnx-pane-focus`, `drgnx-pane-window`, `drgnx-pane-kind`, `drgnx-pane-kinds`. `drgnx-pane-show` never changes
 the selected window unless `:select` is given. `drgnx-pane-backend` (`areas`) says where kinds live; `areas` forwards
@@ -2689,6 +2829,45 @@ surfaces (for buttons that run registry commands), so the status bar, the lists 
   `drgnx-wb-header-with-close` are one-line wrappers over it, and the face `drgnx-wb-close` is an alias of
   `drgnx-ui-close`. No close or unqueue mark is a literal `×`: the Buffers panel's rows, the find bar and the agents
   queue (glyph `unqueue`) draw kit glyphs, so a terminal that is not UTF-8 shows `x`, `x` and `-`.
+
+## Colour library (`core/drgnx-color.el`)
+
+Every colour computation goes through this file: quick help's card, the panel colours derived when a theme loads,
+and the contrast lint. It holds no colour literals. Inputs are colour strings Emacs knows (`#rrggbb` is read as
+written, never snapped to a terminal's palette); results are `#rrggbb`. A colour a frame does not give (`nil`,
+`unspecified-bg`, an unknown name) is `nil`, and each function answers `nil` for it: a theme that leaves a face
+unspecified never makes colour code signal.
+
+| Function | Returns |
+|---|---|
+| `(drgnx-color-rgb COLOR &optional FRAME)` | `(R G B)` floats in 0..1, or `nil` |
+| `(drgnx-color-hex RGB)` | `"#rrggbb"` |
+| `(drgnx-color-mix A B AMOUNT &optional SPACE)` | AMOUNT (0..1) of the way from A to B; SPACE is `oklab` (default) or `srgb` (per channel in 0..255, rounded half to even) |
+| `(drgnx-color-over FG BG ALPHA)` | FG at ALPHA over BG in sRGB, for tints |
+| `(drgnx-color-contrast A B)` | the WCAG 2.x ratio, 1..21 |
+| `(drgnx-color-solve COLOR TOWARD BG RATIO &optional SPACE)` | the smallest move of COLOR toward TOWARD that reaches RATIO on BG (TOWARD itself when none does) |
+| `(drgnx-color-lch L C H)` | OKLCH as `#rrggbb`, clamped to the gamut; `(drgnx-color-oklch COLOR)` is the inverse, `(L C H)` |
+| `(drgnx-color-hue-distance A B)` | the OKLCH hue distance in degrees, 0..180 |
+| `(drgnx-color-delta-e A B)` | the OKLab distance times 100 |
+
+`drgnx-color-black` and `drgnx-color-white` are black and white as `(R G B)`, named once here for the code that moves
+a colour toward one of them (`(drgnx-color-hex drgnx-color-white)`), so no other file spells them.
+
+### Where colours may be written
+
+Colour literals live only in `themes/drgnx-tokens.eld`, the token table of drgnx's three themes. Faces inherit
+semantic or standard faces. A colour worked out from a theme at theme change goes only through this library's callers:
+`drgnx-look-derive` (`modules/ui/drgnx-look-derive.el`, the one function that derives panel, text and agent colours
+for a theme that does not set them), quick help and the adapters' roles.
+
+`drgnx-lint/no-hard-coded-colours` (`test/unit/lint-test.el`) reads every `.el` file under `core/`, `wb/`, `modules/`,
+`harness/` and `themes/` with the Lisp reader and fails on a hex string anywhere and on a string after `:foreground`,
+`:background`, `:distant-foreground` or `:color` (a face spec's `:box` colour is one). The token table is `.eld`, so
+it is not scanned. `test/unit/lint-contrast-test.el` holds the other colour lints: every pair of the look's contrast
+bars under drgnx Dark, Light and High Contrast (`drgnx-lint/contrast-own-themes`; the documented exceptions are
+disabled text, and status marks on the selection at 3:1), the derived colours under modus-operandi, modus-vivendi,
+leuven and a Doom One stand-in (`drgnx-lint/contrast-third-party-themes`), and that no drgnx face's `:inherit` chain
+loops under any of the seven (`drgnx-lint/no-face-inheritance-cycles`). A failure names the face pair and the ratio.
 
 ## Read and write through drgnx-file
 

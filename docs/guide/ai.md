@@ -312,18 +312,22 @@ Agent profiles can take their provider from the registry; the key is resolved wh
 - **claude (OpenRouter)** — Claude Code on OpenRouter: `ANTHROPIC_BASE_URL=https://openrouter.ai/api`,
   `ANTHROPIC_AUTH_TOKEN` = your OpenRouter key, `ANTHROPIC_API_KEY` empty.
 - **claude (Ollama)** — Claude Code on a local Ollama model.
-- **claude (Kimi)** and **claude (DeepSeek)** — Claude Code on Kimi or DeepSeek through the vendor's own
-  Anthropic-compatible API (`:ai claude-moonshot`, `claude-deepseek`): `ANTHROPIC_BASE_URL` = the vendor's address,
-  `ANTHROPIC_AUTH_TOKEN` = your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or auth-source for `api.moonshot.ai` or
-  `api.deepseek.com`), `ANTHROPIC_API_KEY` empty. The vendor bills you per token for an API key; Kimi's coding
-  membership is a subscription on a different endpoint, which these profiles do not use.
-- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models through OpenRouter
-  (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key.
+- **kimi** and **deepseek** — the vendors' own agents, Kimi Code and DeepSeek Harness, on the vendor's own
+  Anthropic-compatible API (`:ai kimi-moonshot`, `dsh-deepseek`), through the gateway: the agent gets the gateway's
+  address and its session token (Kimi Code's `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_API_KEY`, DeepSeek Harness's
+  `DEEPSEEK_BASE_URL` and `DEEPSEEK_API_KEY`), and the gateway holds your `MOONSHOT_API_KEY` or `DEEPSEEK_API_KEY` (or
+  auth-source for `api.moonshot.ai` or `api.deepseek.com`). The vendor bills you per token for an API key; Kimi's
+  coding membership is a subscription on a different endpoint, which these profiles do not use. The former `claude
+  (Kimi)` and `claude (DeepSeek)` (Claude Code on those APIs, `:ai claude-moonshot`, `claude-deepseek`) are retired:
+  a profile of yours that names one still starts, and says which built-in replaces it.
+- **claude (Kimi via OpenRouter)** and **claude (DeepSeek via OpenRouter)** — the same models in Claude Code through
+  OpenRouter (`:ai claude-openrouter` with a `:model`), billed by OpenRouter with your OpenRouter key; they set
+  `ENABLE_TOOL_SEARCH=false`, as does `claude (Ollama)`.
 
 A profile's `:model` (any profile with an `:ai`) also sets `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`,
 `ANTHROPIC_DEFAULT_OPUS_MODEL` and `CLAUDE_CODE_SUBAGENT_MODEL` to that name, and `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `claude-moonshot` or
-`claude-deepseek` profile without a `:model` does not start. The built-in names are data in
+(Claude Code's small, background model) to the profile's `:small-model`, else to the `:model`. A `kimi-moonshot`,
+`dsh-deepseek`, `claude-moonshot` or `claude-deepseek` profile without a `:model` does not start. The built-in names are data in
 `drgnx-agents-builtin-profiles`: copy a profile into `drgnx-agents-profiles` to use another model (the data is `settings/runtime-defaults.el`). Nothing about the route is
 written to `~/.claude/settings.json`: two profiles share Claude Code's configuration directory and differ only in
 these variables, so a model in that file's `env` would override them (the Claude page in Agent Settings notes it).
@@ -342,7 +346,7 @@ Bedrock and Vertex switches (the `AWS_*` and `GOOGLE_APPLICATION_CREDENTIALS` th
 DeepSeek, OpenRouter, Ollama) gets none of these, only its route's. To pass any other variable on, remove it from
 `drgnx-agents-scrubbed-env` (Customize), or set it in the profile's `:env`.
 
-In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `claude-moonshot` or `claude-deepseek` gives any profile
+In a profile of `drgnx-agents-profiles`, `:ai claude-openrouter`, `claude-ollama`, `kimi-moonshot` or `dsh-deepseek` gives any profile
 that environment. Durable jobs get the keys they need in their environment too — never in a command line or a file (under systemd, the value travels in
 `systemd-run`'s own environment).
 
@@ -387,6 +391,42 @@ bound by your OpenRouter account settings alone ([openrouter.ai/settings/privacy
 that no allowed provider serves fails with OpenRouter's own error, which the agent shows.
 Set it from Agent Settings (`r`, **OpenRouter Restrictions…**, [agent-settings.md](agent-settings.md#routes)); comments
 and the other entries of `settings.el` stay.
+
+## Recording a run and replaying it
+
+A run against real providers can be recorded once and replayed later without spending anything (for drgnx's own
+tests and demos). The hub records when it is started with `DRGNX_RECORD=DIR` and replays with `DRGNX_REPLAY=DIR`;
+it is never a setting, so your everyday hub records nothing. On replay the hub, the gateway and the editor run as
+usual, and every provider is answered from the recording; a request that differs from what was recorded is refused
+with a `replay_miss` error that says where it differs ("re-record"), never answered by a guess.
+
+Outside agents (Claude Code, Codex, Gemini) are recorded too: what the hub and the agent said to each other, the
+agent's calls of drgnx's own tools (its decisions), the files and commits its own tools made in the session's
+worktree, and the model calls it made through the gateway. On replay a stand-in plays the agent from the recording:
+it answers as the agent did, makes the same tool calls, writes the same files and commits (with the same hashes) just
+before it reports them, and sends its model calls through your gateway again, so budgets and spend rows are real.
+If you prompt it differently, or answer a permission differently, the agent's session ends with a "replay miss"
+error instead.
+
+What is written never holds a key or a token: the gateway's keys and the tokens it issues are replaced by `$SECRET`
+before anything reaches the disk, no authorization header is stored, and a lint checks every file of a run. Live
+recordings stay on your machine; drgnx's own repository holds only recordings made from its scripted mock providers.
+
+From a terminal, the commands do the setup:
+
+```
+drgnx record start smoke --cap-usd 5 --max-minutes 20 -- test --ui   # run a command with the outside ends recorded
+drgnx record stop smoke                                              # end the record: its report, the secret lint
+drgnx replay smoke --speed 0 --strict -- test --ui                   # the same command, answered from the recording
+drgnx record lint DIR…                                               # the secret lint alone, over any run
+```
+
+Runs are kept in `$DRGNX_RECORDINGS` (default: `recordings/` in drgnx's state directory), one directory per run,
+`DATE-NAME`. `--cap-usd`, `--cap-weekly` and `--max-minutes` are written into the run's record, and the minutes end
+the command when they pass. The command after `--` is any `drgnx` command; the recording is for the hub that command
+starts. `--speed` scales the recorded waits (0: none, 1: as they were), and `--strict` also fails a replay that left
+recorded lines unused. The details, and the steps of the smoke run you start yourself, are in
+[the recordings page](../develop/recordings.md).
 
 ## Tests
 

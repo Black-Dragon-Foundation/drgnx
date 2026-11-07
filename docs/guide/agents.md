@@ -125,6 +125,37 @@ program and everything it started. The answer says `ok` and the name and version
 answer in time, it could not start, or it ended first, with its exit status and the last 2 KiB of its error output (secrets
 blanked out). Nothing is recorded and no gateway token is made for it. The check is yours alone: an agent cannot ask it.
 
+## Why was this step refused?
+
+A step an agent asked for can be refused before you see it:
+
+- **by the permissions matrix**, when its cell is `never` ([security.md](security.md#the-permissions-matrix));
+- **by the freshness check**, when the agent of a job has not read the job's decision log;
+- **by a rule or a plugin's hook** before the tool call ([plugins.md](plugins.md#before-a-tool-call)). The agent is
+  told in drgnx's words, with the rule's or hook's quoted ("drgnx refused Bash; the hook deny-rm-hook said: «no rm
+  -rf»"), and the step's provenance in the timeline (`timeline/get`, each step's `hooks`) lists every rule and hook
+  that looked at it, what each said and how long it took. A hook that failed or timed out refuses too, and says so
+  ("hook NAME failed: timed out").
+
+A note a rule or hook added shows under the step. The session's `hooked` mark says which kinds of step its hooks see
+and which the agent runs without asking.
+
+**In the transcript** a hook's word is a line under the step, in theme colours: `⛔ refused by deny-rm 0.1 · "rm
+outside the worktree"`, `↻ changed by rewrite-commit-msg`, `✎ note by annotate-edit · text`, `⏳ NAME 0.1 was busy: its hook
+did not run` (a hook the plugin host had no room for, told apart from other failures), and, for a hub tool, `hooked at
+the hub's server`. Press RET on a line for its provenance: the source, version and hash, the verdict, how many
+milliseconds it took and what the hook was asked (the point, where it ran, the tool and the step). The lines come from
+what the hub already told the editor: nothing is asked while the transcript is drawn, and a step the editor was not
+watching when it ran has no line (its note still shows).
+
+**The header** above the transcript says `context N%` and, when the agent sends a breakdown (an agent from the org's
+adapter forks does: Claude, Gemini, Kimi Code, DeepSeek Harness; Codex and others do not and show none), the figure opens the breakdown: a bar of the parts of the window
+(system, tools, files, tool output, conversation, free), each part's items, `[drop]` and `[pin]` for an item where the
+agent offers them, and `[What /compact keeps]` where it can tell (nothing is compacted by looking). The header also says
+`not hooked: KINDS` for the kinds of step no hook reaches (with why), `hooked by the adapter: KINDS` for those the agent's
+adapter enforces itself, and `plugins changed: restart the session to use the new set` when you approved or disabled a
+plugin after the session began (a session keeps the plugin set it started with).
+
 ## Reviewing an agent's edits
 
 When an agent writes a file (ACP `fs/write_text_file`), the file is not changed: the transcript offers **Review**,
@@ -255,16 +286,27 @@ shuts it down and starts Ratatoskr in its place.
 
 ## Kimi and DeepSeek
 
-Claude Code also runs on Kimi and DeepSeek, with the same agent and the same tools; only the model behind it changes.
-Four built-in profiles (listed in New Agent Session… and on the Claude page of Agent Settings, with how each is
-billed):
+Kimi and DeepSeek each ship an agent of their own, and on their own APIs drgnx runs that agent: Kimi Code (`kimi
+acp`) and DeepSeek Harness (`dsh --profile acp`), never Claude Code on the vendor's endpoint. On OpenRouter it is
+Claude Code, with the same tools as ever and the model behind it changed (tool search is off there:
+`ENABLE_TOOL_SEARCH=false`, which models that are not Claude do not speak). Four built-in profiles (listed in New Agent
+Session…, the two Claude Code ones also on the Claude page of Agent Settings, with how each is billed):
 
-| Profile | Goes to | Key | Billed by |
-|---|---|---|---|
-| `claude (Kimi)` | Moonshot's own API | `MOONSHOT_API_KEY` | Moonshot, per token |
-| `claude (DeepSeek)` | DeepSeek's own API | `DEEPSEEK_API_KEY` | DeepSeek, per token |
-| `claude (Kimi via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
-| `claude (DeepSeek via OpenRouter)` | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| Profile | Agent | Goes to | Key | Billed by |
+|---|---|---|---|---|
+| `kimi` | Kimi Code | Moonshot's own API (`:ai kimi-moonshot`) | `MOONSHOT_API_KEY` | Moonshot, per token |
+| `deepseek` | DeepSeek Harness | DeepSeek's own API (`:ai dsh-deepseek`) | `DEEPSEEK_API_KEY` | DeepSeek, per token |
+| `claude (Kimi via OpenRouter)` | Claude Code | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+| `claude (DeepSeek via OpenRouter)` | Claude Code | OpenRouter | `OPENROUTER_API_KEY` | OpenRouter |
+
+Onboarding installs Kimi Code (`@moonshot-ai/kimi-code`) and DeepSeek Harness (`@deepseek-ai/dsh`, on a pinned
+pre-release: it has no stable release yet) beside the Claude Code adapter. Each runs under its own lock ("What each
+provider obeys" in [the security guide](security.md)); DeepSeek Harness counts as "not enforced" until drgnx's ask
+plugin ships with its fork, so it runs as a chat, not a worker, under the Cautious and Balanced presets.
+
+The former `claude (Kimi)` and `claude (DeepSeek)` profiles are retired. A profile of yours that still names their
+kinds (`:ai claude-moonshot`, `claude-deepseek`) still starts, and the first start in an Emacs session says which
+built-in profile replaces it.
 
 Like the other provider profiles they go through the gateway when a hub is available: the agent holds a token, never
 the key. Without a key the session does not start and the message names the variable and the keyring host to put it
@@ -331,6 +373,19 @@ the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profil
 Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
 edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
 you say yes.
+
+### The plugin tier of the network list
+
+`agents-net-hosts` names the hosts each network tier reaches (`provider-only`, `packages`). A plugin's HTTP requests
+are not the agent's: they have a tier of their own, `plugin`. A plugin reaches a host only when its approved manifest
+names it and, unless the session's network is open, you also list it as `"host:port"` under `plugin`:
+
+```elisp
+(drgnx-agents-net-hosts ((plugin "api.example.com:443")))
+```
+
+The agent's own tiers are never consulted for a plugin, and addresses on your machine or your network stay out of
+reach whatever the lists say ([plugins.md](plugins.md#installing-and-approving)).
 
 ### What a session gets with the browser
 
@@ -520,6 +575,9 @@ An action is one of the matrix's rows (`commit`, `push.main`, `spend`, `network`
 verdict is `allow`, `ask` or `never`; a limit's unit is `count`, `usd`, `usd-est`, `tokens` or `limit-share`. The most
 restrictive matching column wins.
 
+Autonomous is also the only preset under which a plan you described in one prompt can start without your OK, and
+only within its cells ([Say it](#say-it)).
+
 The editor tells the hub when you are **away**: after `drgnx-agents-away-after` seconds (600) without input it sends
 `presence/set`, and again on your next input. The time presets follow from the next action. An agent never sends it.
 
@@ -577,6 +635,16 @@ To let agents change settings without asking each time, give them an `options` g
 own project), and optionally `names`, globs such as `python-*` (none: every name the deny-list leaves). A grant opens
 settings in the agent's own project only. Agents outside drgnx never change a setting, grant or not.
 
+## Suggesting an extension
+
+**`extensions_suggest {id, why}`** lets an agent suggest a package (`pkg:NAME`) or an installed plugin
+(`plugin:NAME`) from the Extensions catalog. It makes a card and you decide (docs/guide/extensions.md, "Suggested by an
+agent"); the agent never installs, approves or trusts one, and no tool lets it. An id the catalog does not hold is
+refused. The card's title is the hub's ("s1 suggests magit (MELPA)"); `why` is kept only as a quote, on one line, at
+most 280 characters. One open card per package, the sessions' quotes on it; at most three suggestions a session;
+a session's quotes leave the cards when it ends, and a card with none left is withdrawn. Only sessions drgnx runs may
+use it; an agent outside drgnx is refused.
+
 ## Agents outside drgnx
 
 Agents you run outside drgnx can report to it too: Claude Code in a terminal or in Zed, Codex, gry workers and their
@@ -627,6 +695,88 @@ What an outside agent cannot do:
 **Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
 hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
 **not reporting**.
+
+## Say it
+
+Say what you want done in one prompt, and the hub turns it into a proposed job (`say/start`). In the editor, **Say It**
+(from the palette) asks for your words and plans in the current project's repository; nothing blocks while it plans.
+When the proposal is ready you get a notice ("A proposal is waiting for your OK"), and **Show** opens it; when the
+Autonomous preset started it at once (below), the notice says "Started by the Autonomous preset" instead, and **Show**
+opens the running job. A planning chat drafts the plan with no access to your repository or your records: it
+sees only your words and a list of your profiles, routes and roles. Each task gets a role, a profile when it names
+one, and a body that becomes the start of its brief. The hub checks the draft (known roles and profiles, at most 32
+tasks, no task over 16 KiB, no dependency loops, a budget in dollars) and asks the chat again when it does not hold;
+a question from the chat comes back to you instead.
+
+The job then waits for your OK, like any proposal: the proposal card's title is the hub's, never the chat's, and
+nothing either of you writes ("approved", "start now") counts as one. `say/revise` changes it: the proposal standing
+is withdrawn and a new one replaces it. `say/end` closes the planning chat; its proposal stays.
+
+One prompt makes at most one running job. Once its job has started (you approved it, or the Autonomous preset
+started it), the planning is done and the chat closes: `say/revise` is refused with "JOB has started: stop it, then
+say it again", and a revision already on its way when the job started comes back as `say-failed` with the same
+reason. A revision never stops work that is running; stop the job yourself, then say what you want again.
+
+**The proposal buffer** (also **Say It: Show Proposal** in the palette) shows the hub's facts first: status ("not
+known" when the hub did not answer), tasks and profiles, the budget with its unit (on a plan with a subscription it
+says it binds the estimate too), the forecast
+(cost, tokens and time as ranges: a middle and a high end, one run in ten goes past it), the cold wakes inside it
+("of which wakes"), the manager's own spend beside the total, what the plan does to each subscription's week ("at this
+pace: Thursday; with this plan: Wednesday (estimate)", or "no pace yet"), warnings and the date of the price table.
+Under **Basis** each task says what its forecast came from ("12 implement tasks on sonnet"). A profile with no price
+reads "not priced" with its tokens and time, never a zero. The planning agent's job title and task titles come last, under
+"Written by the planning agent". `C-c C-c` approves (the job starts and the planning chat ends), `C-c C-e` asks for a
+change (it reads your words in the command) and `C-c C-k` rejects (the job stops and the chat ends); each is also in
+the palette as **Say It: Approve**, **Say It: Revise** and **Say It: Reject**. A question from the planning chat comes
+as a notice whose **Answer** reads your reply (**Say It: Answer** in the palette answers the latest one), and a planning that failed says why. **Forecast Accuracy** (palette)
+lists, per role and profile, how many finished tasks were forecast, how many stayed within their high end, and the
+median of actual over middle.
+
+**Under the Autonomous preset** a Say proposal starts without the OK when the preset's own cells cover all of it:
+the manager may start that many agents (8), the plan's p90 cost in `usd` and `usd-est` together, counted as dollars,
+is within its spend cell ($150), every task has a price, and no subscription's limit would run out at the plan's p90
+before it resets, whether that is the week, the week's last day or a shorter window. A subscription with no meter reading yet means the week cannot be checked, so the proposal waits.
+When it starts alone, the job's decisions say "started by the Autonomous preset within its cells"; when it waits,
+the job says why.
+
+## Reading a forecast
+
+Every proposal, whether from Say it, `job/propose` or Start as Job, shows a forecast before anything is dispatched:
+tokens, active and wall time, and cost, each as a range ("about 12–41 USD (estimate), 40M–130M tokens, 2 h 10–4 h").
+`forecast/get` gives the same numbers per task.
+
+- **A range, not a promise.** The first number is the middle (p50): half the similar runs took less. The second is the
+  high end (p90): about one run in ten goes past it. Agent runs of one task can differ many times over, so a narrow
+  range is never promised.
+- **Where it comes from.** Each task says its basis: "12 implement tasks on sonnet, this project", "5 implement tasks on
+  claude", "9 review tasks on another model, repriced" or "no history: prior". Until a class has five finished tasks
+  the forecast is a labelled prior with a wide range. Every finished task adds to the history, so the next proposal of
+  the same kind is forecast from it. Once enough of them were forecast and finished, the high end is scaled by how
+  often it was missed (the task says it is calibrated). The plan's total is scaled the same way by how often whole
+  plans went past their high end, once nine finished plans were forecast; that total is what the Autonomous preset
+  checks against its spend cell and the week. `forecast/accuracy` shows, per role and profile, how many tasks
+  finished, the share that stayed within their p90, and the median of actual over p50.
+- **Wakes and the manager.** The wake line ("of which wakes: 1–3 cold, about 3 USD") is part of the total, not added to
+  it. A manager's own spend, where history has one, shows beside the total.
+- **`usd` and `usd-est`.** On a gateway profile the cost is exact dollars (`usd`). On a subscription it is what the
+  tokens would cost at API prices (`usd-est`, labelled estimate): your subscription is not charged that. A profile with
+  no price shows tokens only and is listed as unpriced, never as 0.00.
+- **The price table.** Tokens are priced by `drgnx-agents-model-prices`, shipped with the date its rows were read off
+  the provider's page; the forecast shows that date (`prices_as_of`). The setting's value is the whole table, so to
+  change a row copy the shipped rows (Describe Variable shows them) into `settings.el`, change or add the one you need,
+  and the next forecast uses it.
+- **The week.** On a subscription the forecast says what share of the week's limit the plan would use at this pace and,
+  when its high end would use the limit up before it resets, says so. The meter is the account's, so use outside drgnx
+  counts too: the share is an estimate.
+- **Budgets.** A dollar budget on a plan with a subscription profile also limits the plan's `usd-est`, so the job
+  pauses when the estimate reaches it; the budget view says the limit is an estimate. A proposal whose high end is over
+  its budget warns; you decide.
+- **Autonomous.** Under the Autonomous preset a Say proposal starts without your OK only when the preset's cells cover
+  it (above): the agents it needs, its high-end cost with an estimate counted as dollars (a $100 `usd` p90 plus a $60
+  `usd-est` p90 is $160 against the $150 cell, so it waits), every task priced, and no subscription's week used up
+  before it resets. A plan on a subscription with no meter reading yet waits, since its week cannot be checked.
+- **Fork from here.** The Fork command's prompt shows the same forecast for one more run of that session's role and
+  profile (`forecast/session`).
 
 ## Plans and the board
 
@@ -689,6 +839,51 @@ hub applies the operations if the records did not change meanwhile, then rewrite
 edited file is kept in the hub's records backup, then the file is rewritten). A proposal that went stale stays open:
 review it again. Also available as **Records: Accept Proposal** and **Records: Reject Proposal**.
 
+## Going back to a step, and forking from one
+
+Four commands work on a step of an agent's work (from a step in the work trail, or from the palette, where they take the
+trail's session, else the one running, and its last step):
+
+- **History: Revert to Here** opens a card and changes nothing yet. The card lists first what the revert cannot undo
+  (pushed commits, merges, running jobs, settings the agent changed, tasks it filed, messages already read, what was
+  spent), then the files and the later edits of yours it meets, then how much of the conversation comes back. At the
+  Summary level (an agent whose conversation cannot be rewound) the card says so and asks for a message the new
+  conversation is told first (`e`). `k` keeps your later edits, `r` rolls them back too (your versions are kept), `t` at an
+  overlap takes the reverted file there, `a` applies. A revert that other sessions' merged work depends on is
+  blocked: the card offers **Fork** instead of Apply. A finished worker's card says "conversation not restored: the
+  agent has finished" and offers Apply (code, decisions and commit) beside Fork.
+- **History: Fork from Here** asks for the new agent's first message (the prompt shows what one more run like this costs
+  when the forecast is available), starts a second agent from the step in its own tree, and opens the comparison of
+  its work with the first's.
+- **History: Redo a Revert** puts back what the revert that abandoned the step took away.
+- **History: Compare Branches** lists what one branch of the edit history has that another does not, each hunk with who
+  wrote it and in which step. **History: Who Wrote This** says the same for the text at point.
+
+How much of the conversation comes back depends on the provider. Claude Code with fork support goes back to the step's
+own message (**Message** level); Codex goes back to the last turn that finished at or before the step (**Turn**; a step in
+the middle of a turn rounds down, and the rest of that turn up to the step goes in as a summary with your message); anything else, and any fork that fails (Claude Code deletes old transcripts after about
+30 days), starts a new conversation and tells it a labelled summary of what happened up to the step (**Summary**), which
+is why a summary revert asks for your message: no turn starts unasked. A step inside a subagent rounds down to the message
+before the parent's `Task` call. A revert goes forward: the restored text is one new commit (never a reset, never a
+rewritten branch), and a redo is a revert of the revert. It does not undo pushed commits, merges, messages already read,
+spent money or settings the agent changed; the card lists those first. In a linked worktree a sandboxed session cannot
+reach the shared git folder, so there the files are restored but the commit is not made, and the card says so. The
+agent's lock still applies: a revert never writes the protected paths (`.git`, the agent's own configuration,
+`.envrc`, `mise.toml`) and never writes through a link.
+
+**Fork from here** is your own act: no job, no approval card and no budget chain; it starts a plain session (a worker
+stays a worker) on the branch `job/fork-<session>-<id>`. A finished worker has no conversation to rewind: its revert
+restores code, decisions and commit and says so, and Fork sits beside it.
+
+The edit history (`history.db`, one per project) is part of the nightly backup, beside `work.db`: one checked copy per
+project, `backup/history-<project>.db`, replaced each night and never rotated; its 2 GiB cap per project bounds it.
+`drgnx doctor` shows the newest copy in its `history` row and warns when a copy failed. A failed history copy never
+stops the `work.db` copy.
+
+After a revert, a file you have open reverts quietly. A buffer with unsaved changes in a file the revert wrote is never
+touched: a notice leads to **History: Resolve Unsaved Changes**, a card showing the difference with *keep mine*,
+*take theirs* or *edit* (Ediff).
+
 ## A manager agent
 
 A chat session becomes a **manager** when you say so: `agents/role` with `role: manager` (no editor command yet). Only
@@ -729,7 +924,11 @@ A budget is a limit with a unit, set on a project, a plan, a manager or a worker
 (counted per conversation, so a manager's rotation or a fresh start after a restart adds to what the session spent),
 `tokens` and `count` are what they say, and `limit-share` is a share (0 to 1) of a subscription's usage window.
 `usd-est` and `limit-share` are estimates and are labelled so, in the budget card and in `pace/get`. A limit in one
-unit is only ever used up by spending in that unit.
+unit is only ever used up by spending in that unit, with one exception: a job's dollar budget sets a `usd` limit and,
+when a subscription profile can run its tasks, a `usd-est` limit of the same amount, and those two bind together. Each
+counts what the gateway measured plus what the subscription's agents estimated, so "$20" caps the plan's dollars once,
+not $20 of each; the gateway may spend only what that sum leaves, and the card for the limit says it is an estimate
+([jobs.md](jobs.md#routes-and-the-estimate)).
 
 Budgets nest. What a worker spends counts against the worker, its manager, its plan and its project, and what it may
 still spend is the least remaining over that chain. The gateway admits `usd` against the same minimum: a session on a
@@ -742,19 +941,24 @@ with `budget/set` reports again if it is still reached.
 
 Subscription windows (Claude's `_claude/rateLimit`, Codex's rate-limit window) are read from the agent, never from
 your login. `pace/get` gives, per meter, the share used, the rate per hour (linear over the last 24 hours of readings)
-and when the window would run out at that rate, unless it resets first. Its numbers are estimates.
+and when the window would run out at that rate, unless it resets first. Its numbers are estimates. The meter's
+readings are kept for eight days (one every quarter hour) and survive a restart of the hub; the rate itself still
+reads the last 24 hours. A job's forecast uses them to say what share of the week a plan on a subscription would use,
+and warns when its high end would use the limit up before it resets. The meter is the account's, so use outside drgnx
+counts: the share is an estimate.
 
 ## The supervisor
 
 The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after
-the tool call it is running, the queue is held, and a `supervisor` card offers fixes (restart, raise the time box,
+the tool call it is running (its turn ends there and the session reads idle), the queue is held, and a `supervisor`
+card offers fixes (restart, raise the time box,
 kill the stray process, move to another model) and a `supervisor` event is sent. Each rule fires once until its
 condition clears. A silent session also gets a `stalled` step on the timeline.
 
 | Rule | Holds when | Setting |
 |---|---|---|
 | `silent` | no update for the time of its kind of work (chats are brainstorming) | `drgnx-agents-silent-after` (600 s task, 1800 s brainstorm) |
-| `repeat` | the same tool call this many times in one turn | `drgnx-agents-repeat-limit` (3) |
+| `repeat` | the same tool call (same title and the same input) this many times in one turn; a read of the same file at another offset is another call | `drgnx-agents-repeat-limit` (3; 0 turns the rule off) |
 | `no-progress` | task work only: tokens per changed line over the limit | `drgnx-agents-no-progress-tokens` (20000) |
 | `dead-wait` | the session waits for a job whose row or process is gone | |
 | `lease` | the task's lease is not renewed for two lease intervals | |

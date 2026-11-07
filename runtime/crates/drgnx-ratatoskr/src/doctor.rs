@@ -2,7 +2,8 @@
 //!
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
-//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite,
+//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
+//! socket_dir: {path, mode, ok}, sqlite,
 //! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
 //! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
 //! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
@@ -53,6 +54,8 @@ pub struct Running {
     pub commit: Option<String>,
     pub gateway: Option<Value>,
     pub store: Option<Value>,
+    /// Its `watch`: Hrafn's file watches.
+    pub watch: Option<Value>,
 }
 
 /// The socket directory's state.
@@ -146,6 +149,9 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
             if let Some(why) = g.get("keys_refused").filter(|w| w.is_string()) {
                 v["gateway"]["keys_refused"] = why.clone();
             }
+        }
+        if let Some(w) = r.watch {
+            v["watch"] = w;
         }
         if let Some(s) = r.store {
             v["store"] = json!({
@@ -434,6 +440,37 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
                 .into(),
         );
     }
+    // the edit histories' copies (`history-<project>.db`, one each, replaced each night)
+    let history_copies: Vec<u64> = std::fs::read_dir(&backup)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("history-") && n.ends_with(".db")
+        })
+        .filter_map(|e| {
+            e.metadata()
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        })
+        .collect();
+    v["store"]["history"] = json!({
+        "copies": history_copies.len(),
+        "newest_age_s": history_copies.iter().max().map(|t| now.saturating_sub(*t)),
+    });
+    if v["store"]["history_backup"] == false {
+        warnings.push(
+            "the last copy of an edit history (history.db) failed: see the hub log; the older copy was kept".into(),
+        );
+    }
+    let mut history_warnings = Vec::new();
+    v["store"]["history_size"] = json!(history_rows(env, &mut history_warnings));
+    v["store"]["history_warnings"] = json!(history_warnings);
     // the personal-notes opt-in file, as it loads now
     if let Some(home) = env.vars.get("HOME").filter(|h| Path::new(h).is_absolute()) {
         let deny = norn::deny::DenyList::load(Path::new(home), &paths::config_dir(env));
@@ -460,6 +497,48 @@ fn store_files(env: &Env, v: &mut Value, now: u64) {
     v["store"]["warnings"] = json!(warnings);
 }
 
+/// A history this full of its cap is warned about.
+const HISTORY_FULL: f64 = 0.8;
+
+/// One row per project history: its size, its cap and what pins the size, read from the report the hub's sweep leaves
+/// beside each `history.db` (`history::timers::REPORT`). A history near its cap adds a warning naming its biggest pin.
+fn history_rows(env: &Env, warnings: &mut Vec<String>) -> Vec<Value> {
+    let dir = paths::state_dir(env).join("hub/history");
+    let mut projects: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    projects.sort();
+    let mut rows = Vec::new();
+    for project in projects {
+        let Some(mut row) = std::fs::read(dir.join(&project).join(crate::history::timers::REPORT))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        else {
+            continue;
+        };
+        row["project"] = json!(project);
+        let (size, cap) = (
+            row["size"].as_f64().unwrap_or(0.0),
+            row["cap"].as_f64().unwrap_or(0.0),
+        );
+        if cap > 0.0 && size >= cap * HISTORY_FULL {
+            let pin = row["pins"][0]["name"]
+                .as_str()
+                .unwrap_or("nothing set aside");
+            warnings.push(format!(
+                "the edit history of {project} is {} MiB of its {} MiB cap; the biggest thing keeping it is {pin}",
+                (size / (1 << 20) as f64) as u64,
+                (cap / (1 << 20) as f64) as u64,
+            ));
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 /// What the doctor and `status` say of work.db beyond "ready": a migration that failed (and how to go back), and the
 /// copies that still hold what the migration's deny-list kept out.
 fn store_lines(store: &Value) -> String {
@@ -478,6 +557,28 @@ fn store_lines(store: &Value) -> String {
         .filter_map(Value::as_str)
     {
         out.push_str(&format!("\nwork.db: {w}"));
+    }
+    for row in store
+        .get("history_size")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        out.push_str(&format!(
+            "\nhistory {}: {} MiB of {} MiB",
+            row["project"].as_str().unwrap_or("?"),
+            row["size"].as_u64().unwrap_or(0) >> 20,
+            row["cap"].as_u64().unwrap_or(0) >> 20,
+        ));
+    }
+    for w in store
+        .get("history_warnings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        out.push_str(&format!("\nhistory: {w}"));
     }
     if let Some(copies) = store.get("denied_in").and_then(Value::as_array)
         && !copies.is_empty()
@@ -579,6 +680,7 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                 commit: s["runtime"]["commit"].as_str().map(str::to_string),
                 gateway: s.get("gateway").cloned(),
                 store: s.get("store").cloned(),
+                watch: s.get("watch").cloned(),
             })
             .or_else(|| {
                 client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
@@ -586,6 +688,7 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                     commit: None,
                     gateway: None,
                     store: None,
+                    watch: None,
                 })
             });
         let check = check
@@ -643,11 +746,35 @@ fn text(v: &Value, sandbox: &Check) -> String {
     if !v["key_socket"].is_null() {
         out.push_str(&format!("\nkey sockets: {}", t(&v["key_socket"])));
     }
+    out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
     out
 }
 
 /// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
+/// `watch`: the inotify budget and the open projects' watches; a project that runs unwatched is named with why.
+fn watch_lines(watch: &Value) -> String {
+    let Some(projects) = watch["projects"].as_array().filter(|p| !p.is_empty()) else {
+        return String::new();
+    };
+    let dirs: u64 = projects.iter().filter_map(|p| p["watched"].as_u64()).sum();
+    let mut out = format!("\nwatch: {dirs} directories in {} projects", projects.len());
+    if let Some(max) = watch["max_user_watches"].as_u64() {
+        out.push_str(&format!(
+            " (inotify budget {max}, fs.inotify.max_user_watches)"
+        ));
+    }
+    for p in projects {
+        if let Some(why) = p["error"].as_str() {
+            out.push_str(&format!(
+                "\nwatch: {} runs unwatched: {why}",
+                p["root"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    out
+}
+
 fn legacy_lines(legacy: &Value) -> String {
     let list = |k: &str, f: &dyn Fn(&Value) -> String| {
         legacy[k]
@@ -768,9 +895,11 @@ mod tests {
                 ),
                 store: Some(json!({"schema": 6, "writer": "not-ready", "writes": 0,
                     "failed": "the move of work.db to schema 7 failed: x", "denied_in": ["/d/backup/work-pre7-1.db"]})),
+                watch: Some(watch_json()),
             }),
             &working(),
         );
+        assert_eq!(up["watch"], watch_json());
         for (k, want) in [
             ("schema", json!(6)),
             ("writer", json!("not-ready")),
@@ -803,6 +932,57 @@ mod tests {
             assert_eq!(parse_rfc3339(&crate::log::rfc3339(secs)), Some(secs));
         }
         assert_eq!(parse_rfc3339("yesterday"), None);
+    }
+
+    /// The `history` row: each project's size against its cap and what pins it, from the report the hub's sweep leaves
+    /// beside `history.db` (the live file is never opened here).
+    #[test]
+    fn the_history_row_names_size_cap_and_what_pins_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("s");
+        let env = Env::new(
+            &[
+                ("XDG_STATE_HOME", &state.to_string_lossy()),
+                ("HOME", &dir.path().to_string_lossy()),
+            ],
+            1000,
+        );
+        for (p, size) in [("p1", 1_900_000_000u64), ("p2", 5_000)] {
+            let d = paths::state_dir(&env).join("hub/history").join(p);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(
+                d.join("size-report.json"),
+                json!({"size": size, "cap": 2u64 << 30, "pins": [
+                    {"kind": "frozen", "name": "wt-x", "bytes": 1_500_000_000u64},
+                    {"kind": "anchors", "name": "user (3 anchors)", "bytes": 0}]})
+                .to_string(),
+            )
+            .unwrap();
+        }
+        // the test writes only inside the drgnx state folder its environment names
+        let top: Vec<_> = std::fs::read_dir(&state)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            top,
+            [paths::state_dir(&env)],
+            "written outside {}",
+            paths::state_dir(&env).display()
+        );
+        let mut warnings = Vec::new();
+        let rows = history_rows(&env, &mut warnings);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0]["project"], "p1");
+        assert_eq!(rows[0]["size"], 1_900_000_000u64);
+        assert_eq!(rows[0]["pins"][0]["name"], "wt-x");
+        // only the project near its cap warns, and says what pins it
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("p1") && warnings[0].contains("wt-x"),
+            "{warnings:?}"
+        );
     }
 
     /// The store section from files alone: a big WAL, a stale backup, a bad opt-in file and the copies kept.
@@ -1104,6 +1284,7 @@ mod tests {
                     json!({"port": 4100, "registrations": 0, "providers": 0, "keys_refused": why}),
                 ),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
@@ -1124,11 +1305,31 @@ mod tests {
                 commit: None,
                 gateway: Some(json!({"port": 4100, "registrations": 0, "providers": 0})),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
         assert!(fine["gateway"].get("keys_refused").is_none());
         assert!(!text(&fine, &working()).contains("keys: refused"));
+    }
+
+    fn watch_json() -> Value {
+        json!({"max_user_watches": 132648, "projects": [
+            {"root": "/p/a", "watched": 410},
+            {"root": "/p/b", "watched": 0,
+             "error": "the inotify watch limit is spent (ENOSPC; raise fs.inotify.max_user_watches): x"}]})
+    }
+
+    #[test]
+    fn the_watch_row_names_an_unwatched_project() {
+        let l = watch_lines(&watch_json());
+        assert!(l.contains("410 directories in 2 projects"), "{l}");
+        assert!(l.contains("132648"), "{l}");
+        assert!(l.contains("/p/b runs unwatched"), "{l}");
+        assert!(l.contains("ENOSPC"), "{l}");
+        assert!(!l.contains("/p/a runs unwatched"), "{l}");
+        // no hub, no row
+        assert_eq!(watch_lines(&Value::Null), "");
     }
 
     #[test]

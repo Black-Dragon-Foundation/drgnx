@@ -1,0 +1,104 @@
+{"scenario": "system/hooks-every-profile", "requires": ["v1", "test-hooks"], "doc": "[C] The same three before-tool rules (a deny on reads, a deny on `rm`, a note on edits) over every profile the hooks serve, each as a session: Claude, Claude through the gateway (the OpenRouter-like profile), Codex (the stock adapter, its read-only mode lock and the managed hook), and Gemini, Kimi and DeepSeek, each stock and as the org fork that advertises `before-tool` (the mock mirrors the fork's `_drgnx/panel`: its own `_drgnx/before_tool` goes first, and a deny vetoes the step). Per profile the snapshot says what is hooked and what is not (nothing unhooked: the lock refuses a session that would run a subscribed kind unhooked, and a fork's feature adds nothing to the snapshot), a read is refused, and an allowed edit shows its hook under the step once: a fork's step both sites hooked has the seam's row only, a step only the adapter hooked keeps its own."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/claude.log\")) (\"mock-gw\" :ai claude-openrouter :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--log\" \"$ROOT/gw.log\")) (\"mock-codex\" :provider codex :command (\"$MOCK\" \"acp\" \"--as\" \"codex\" \"--log\" \"$ROOT/codex.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--log\" \"$ROOT/gemini.log\")) (\"mock-gemini-fork\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--panel\" \"before-tool,context,drop,compact-preview\" \"--panel-policy\" \"engine\" \"--log\" \"$ROOT/gemini-fork.log\")) (\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--log\" \"$ROOT/kimi.log\")) (\"mock-kimi-fork\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--panel\" \"before-tool,context,compact-preview\" \"--log\" \"$ROOT/kimi-fork.log\")) (\"mock-dsh\" :provider deepseek :command (\"$MOCK\" \"acp\" \"--as\" \"dsh\" \"--log\" \"$ROOT/dsh.log\")) (\"mock-dsh-fork\" :provider deepseek :command (\"$MOCK\" \"acp\" \"--as\" \"dsh\" \"--panel\" \"before-tool,context,drop\" \"--log\" \"$ROOT/dsh-fork.log\")))) (drgnx-agents-matrix (:cells ((:action code.edit :column (:role chat) :verdict allow) (:action code.read :column (:role chat) :verdict allow)))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-reads", "point": "before-tool", "tool-kinds": ["read"], "verdict": "deny", "reason": "no reads"}, {"id": "no-rm", "point": "before-tool", "tool-kinds": ["execute"], "command": "^rm ", "verdict": "deny", "reason": "no rm"}, {"id": "note-edits", "point": "before-tool", "tool-kinds": ["edit"], "verdict": "annotate", "reason": "edits are noted"}]}, {"name": "drgnx-ai-providers", "source": "row", "value": {"openrouter": {"kind": "openai", "url": "https://openrouter.ai/api/v1", "caps": ["chat"], "messages": true, "key_env": "KEY"}}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"applied": 2}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "gateway/keys", "params": {"keys": {"openrouter": "k"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:claude", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 11, "method": "agents/get", "params": {"id": "$claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 11, "result": {"session": {"id": "$claude", "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 12, "method": "agents/send", "params": {"id": "$claude", "text": "ask:announced {\"kind\": \"edit\", \"title\": \"Edit a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}\nask:announced {\"kind\": \"read\", \"title\": \"Read a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 12, "result": true}}
+{"do": "file", "path": "$ROOT/claude.log", "contains": "{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/claude.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 13, "method": "timeline/get", "params": {"scope": "session", "id": "$claude"}}}
+{"do": "expect", "conn": "c", "json": {"id": 13, "result": {"steps": {"$contains": [{"tool_kind": "edit", "hooks": [{"at": "seam", "outcome": "allow"}]}, {"tool_kind": "read", "hooks": [{"at": "seam", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/start", "params": {"profile": "mock-gw", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"id": "$capture:gw", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 21, "method": "agents/get", "params": {"id": "$gw"}}}
+{"do": "expect", "conn": "c", "json": {"id": 21, "result": {"session": {"id": "$gw", "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 22, "method": "agents/send", "params": {"id": "$gw", "text": "ask:announced {\"kind\": \"edit\", \"title\": \"Edit a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}\nask:announced {\"kind\": \"read\", \"title\": \"Read a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 22, "result": true}}
+{"do": "file", "path": "$ROOT/gw.log", "contains": "{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gw.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 23, "method": "timeline/get", "params": {"scope": "session", "id": "$gw"}}}
+{"do": "expect", "conn": "c", "json": {"id": 23, "result": {"steps": {"$contains": [{"tool_kind": "edit", "hooks": [{"at": "seam", "outcome": "allow"}]}, {"tool_kind": "read", "hooks": [{"at": "seam", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 30, "method": "agents/start", "params": {"profile": "mock-codex", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 30, "result": {"id": "$capture:codex", "name": "$string"}}, "within_ms": 30000}
+{"do": "file", "path": "$ROOT/codex.log", "contains": "\"mode\":\"read-only\"", "within_ms": 15000}
+{"do": "file", "path": "$ROOT/codex.log", "contains": "\"argv_overrides\":[]"}
+{"do": "send", "conn": "c", "json": {"id": 31, "method": "agents/get", "params": {"id": "$codex"}}}
+{"do": "expect", "conn": "c", "json": {"id": 31, "result": {"session": {"id": "$codex", "hooked": {"before_tool": ["edit"], "by_adapter": ["execute", "read"], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 901, "method": "agents/entries/subscribe", "params": {"session": "$codex"}}}
+{"do": "expect", "conn": "e", "json": {"id": 901, "result": {"seq": "$number"}}}
+{"do": "send", "conn": "c", "json": {"id": 32, "method": "agents/send", "params": {"id": "$codex", "text": "call:before_tool {\"tool_name\": \"exec_command\", \"tool_input\": {\"cmd\": \"rm -rf x\"}, \"tool_use_id\": \"call-1\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 32, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-entries", "data": {"id": "$codex", "entries": {"$contains": [["$any", {"type": "agent", "text": "call: {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"drgnx refused exec_command; the rule no-rm said: «no rm»\"}}"}]]}}}, "within_ms": 30000}
+{"do": "sql_expect", "path": "$DATA/work.db", "sql": "select json_extract(e.data, '$.outcome'), json_extract(e.data, '$.at'), json_extract(e.data, '$.tool') from event e join tx t on t.id = e.tx where t.actor = 'hub:hooks' and json_extract(e.data, '$.at') = 'adapter' and json_extract(e.data, '$.tool') = 'exec_command'", "rows": [["deny", "adapter", "exec_command"]]}
+{"do": "send", "conn": "c", "json": {"id": 40, "method": "agents/start", "params": {"profile": "mock-gemini", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 40, "result": {"id": "$capture:gemini", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 41, "method": "agents/get", "params": {"id": "$gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 41, "result": {"session": {"id": "$gemini", "panel": "$absent", "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 42, "method": "agents/send", "params": {"id": "$gemini", "text": "ask:announced {\"kind\": \"edit\", \"title\": \"Edit a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}\nask:announced {\"kind\": \"read\", \"title\": \"Read a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 42, "result": true}}
+{"do": "file", "path": "$ROOT/gemini.log", "contains": "{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gemini.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 43, "method": "timeline/get", "params": {"scope": "session", "id": "$gemini"}}}
+{"do": "expect", "conn": "c", "json": {"id": 43, "result": {"steps": {"$contains": [{"tool_kind": "edit", "hooks": [{"at": "seam", "outcome": "allow"}]}, {"tool_kind": "read", "hooks": [{"at": "seam", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 50, "method": "agents/start", "params": {"profile": "mock-gemini-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 50, "result": {"id": "$capture:gfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 51, "method": "agents/get", "params": {"id": "$gfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 51, "result": {"session": {"id": "$gfork", "panel": {"features": ["context", "drop", "compact-preview", "before-tool"]}, "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 52, "method": "agents/send", "params": {"id": "$gfork", "text": "ask:announced {\"kind\": \"edit\", \"title\": \"Edit a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}\nask:announced {\"kind\": \"read\", \"title\": \"Read a.txt\", \"rawInput\": {\"path\": \"a.txt\"}}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 52, "result": true}}
+{"do": "file", "path": "$ROOT/gemini-fork.log", "contains": "{\"vetoed\":\"read\"}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/gemini-fork.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 53, "method": "timeline/get", "params": {"scope": "session", "id": "$gfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 53, "result": {"steps": {"$contains": [{"tool_kind": "edit", "hooks": [{"at": "seam", "outcome": "allow"}]}, {"tool_kind": "read", "hooks": [{"at": "adapter", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 60, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 60, "result": {"id": "$capture:kimi", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 61, "method": "agents/get", "params": {"id": "$kimi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 61, "result": {"session": {"id": "$kimi", "panel": "$absent", "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 62, "method": "agents/send", "params": {"id": "$kimi", "text": "provider:write a.txt\nprovider:read a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 62, "result": true}}
+{"do": "file", "path": "$ROOT/kimi.log", "contains": "{\"permission\":{\"kind\":\"read\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/kimi.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 63, "method": "timeline/get", "params": {"scope": "session", "id": "$kimi"}}}
+{"do": "expect", "conn": "c", "json": {"id": 63, "result": {"steps": {"$contains": [{"hooks": [{"at": "seam", "outcome": "allow"}]}, {"hooks": [{"at": "seam", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 70, "method": "agents/start", "params": {"profile": "mock-kimi-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 70, "result": {"id": "$capture:kfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 71, "method": "agents/get", "params": {"id": "$kfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 71, "result": {"session": {"id": "$kfork", "panel": {"features": ["context", "compact-preview", "before-tool"]}, "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 72, "method": "agents/send", "params": {"id": "$kfork", "text": "provider:write a.txt\nprovider:read a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 72, "result": true}}
+{"do": "file", "path": "$ROOT/kimi-fork.log", "contains": "{\"vetoed\":\"read\"}", "within_ms": 30000}
+{"do": "file", "path": "$ROOT/kimi-fork.log", "contains": "{\"permission\":{\"kind\":\"edit\",\"answer\":\"allow_once\"}}"}
+{"do": "send", "conn": "c", "json": {"id": 73, "method": "timeline/get", "params": {"scope": "session", "id": "$kfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 73, "result": {"steps": {"$contains": [{"hooks": [{"at": "seam", "outcome": "allow"}]}, {"hooks": [{"at": "adapter", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 80, "method": "agents/start", "params": {"profile": "mock-dsh", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 80, "result": {"id": "$capture:dsh", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 81, "method": "agents/get", "params": {"id": "$dsh"}}}
+{"do": "expect", "conn": "c", "json": {"id": 81, "result": {"session": {"id": "$dsh", "panel": "$absent", "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 82, "method": "agents/send", "params": {"id": "$dsh", "text": "provider:write a.txt\nprovider:read a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 82, "result": true}}
+{"do": "file", "path": "$ROOT/dsh.log", "contains": "{\"permission\":{\"kind\":\"other\",\"answer\":\"reject_once\"}}", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 83, "method": "timeline/get", "params": {"scope": "session", "id": "$dsh"}}}
+{"do": "expect", "conn": "c", "json": {"id": 83, "result": {"steps": {"$contains": [{"hooks": [{"at": "seam", "outcome": "allow"}]}, {"hooks": [{"at": "seam", "outcome": "deny"}]}]}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 90, "method": "agents/start", "params": {"profile": "mock-dsh-fork", "cwd": "$ROOT/work", "role": "chat"}}}
+{"do": "expect", "conn": "c", "json": {"id": 90, "result": {"id": "$capture:dfork", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 91, "method": "agents/get", "params": {"id": "$dfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 91, "result": {"session": {"id": "$dfork", "panel": {"features": ["context", "drop", "before-tool"]}, "hooked": {"before_tool": ["edit", "execute", "read"], "by_adapter": [], "unhooked": []}}}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 92, "method": "agents/send", "params": {"id": "$dfork", "text": "provider:write a.txt\nprovider:read a.txt"}}}
+{"do": "expect", "conn": "c", "json": {"id": 92, "result": true}}
+{"do": "file", "path": "$ROOT/dsh-fork.log", "contains": "{\"vetoed\":\"other\"}", "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 93, "method": "timeline/get", "params": {"scope": "session", "id": "$dfork"}}}
+{"do": "expect", "conn": "c", "json": {"id": 93, "result": {"steps": {"$contains": [{"hooks": [{"at": "seam", "outcome": "allow"}]}, {"hooks": [{"at": "adapter", "outcome": "deny"}]}]}}}, "within_ms": 10000}

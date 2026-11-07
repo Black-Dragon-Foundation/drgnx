@@ -184,6 +184,29 @@ impl LocalRunner {
         })?
     }
 
+    /// This machine now, with RUNNING (the queue's jobs here, the last started at LAST_START), and its budget, as backfill
+    /// reads them; none when it admits by count (there is no budget to reserve) or the probe can't read it.
+    pub fn state(
+        &self,
+        running: &[RunningJob],
+        last_start: Option<u64>,
+        now: u64,
+    ) -> Option<(MachineState, forseti::Budget)> {
+        #[cfg(target_os = "linux")]
+        if let (Admission::Live, Some(p)) = (self.admission, &self.probe) {
+            let cores = p.cpus_usable().map(|c| c.len() as u32).unwrap_or(1);
+            let limits =
+                Limits::for_profile(Profile::Workstation, p.memory().ok()?.total_mib, cores);
+            let mut m = p.machine(now, &limits).ok()?;
+            m.running = running.to_vec();
+            m.last_start = last_start;
+            let b = forseti::budget(&m, &limits);
+            return Some((m, b));
+        }
+        let _ = (running, last_start, now);
+        None
+    }
+
     /// Job ID ended here: its reservation goes.
     pub fn release(&self, id: &str) {
         #[cfg(target_os = "linux")]

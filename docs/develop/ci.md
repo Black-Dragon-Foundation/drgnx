@@ -48,18 +48,19 @@ outcome, `steps.<id>.outcome == 'success'`). The fuzz step runs every target and
 failed. `drgnx-ci/each-push-workflow-ends-in-one-gate-over-its-push-jobs` and `drgnx-ci/nothing-stops-early` check it.
 
 Not gates: `Terminal tier` and `Bootstrap` run no push (nightly, weekly), and the terminal tier is red until its owner
-makes it green (a tier gates only once it is green); `Test images` makes a cache, not a verdict (a job without its
-image builds it), and its paths filter means most pushes never run it, so a required check there would wait forever.
+makes it green (a tier gates only once it is green). `Test images` has no gate of its own: it runs as the `images`
+job of `CI` and `GUI tier`, inside their gates (skipped only on a fork's pull request), and a job that finds no image
+builds it.
 
 | Workflow | When | What |
 |---|---|---|
-| `CI` (`.github/workflows/ci.yml`) | every push to `main` or `ci/*`, every pull request, on demand | the `runtime` job (calls `runtime.yml`, below: a `needs:` cannot reach another workflow file, so the call puts its jobs in `CI gate`); the `tiers` job, which calls `drgnx-tiers.yml` ([The tiers workflow](#the-tiers-workflow)) with `unit no-lisp-writes hub-chaos`: the unit suite on **Nidhogg 31.1** (drgnx's own Emacs build, from its release tarball; Fedora 45, `bin/drgnx test --container`) against a test-hooks `ratatoskr` built once on the runner (`bins-linux`), with `ratatoskr-mock` beside it (the gateway tests' provider) (`DRGNX_RATATOSKR_BIN`; the runner's glibc is older than Fedora 45's, so it runs in the container; the tests that need it fail rather than skip, `test/no-skip.eld`), and huginn's `dump` example (`DRGNX_HUGINN_DUMP`: the editor's differential test, `drgnx-huginn/differential-fresh-seed`, reads a fresh seed with it and with Emacs's reader; on `test/no-skip.eld`), its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `no-lisp-writes`, the same suite once with `DRGNX_WORK_DB_GATE=1` (it fetches the same `ratatoskr`, `ratatoskr-mock` and huginn `dump`, so `test/no-skip.eld` holds there too) (opening `work.db` read-write signals; only the tests tagged `:work-db-writer` are left out; docs/develop/store.md, "The one-writer gate"); `hub-chaos`, the `hub-client` and `ai-gateway` files once per seed (1 to 3) under seeded hub answer delays, with no rerun ([Hub chaos](#hub-chaos)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx`, the pre-commit hook, `test/container/nidhogg.sh` and `.github/ci/`'s scripts; the path filter's self-test; the leak scan; `CI gate` |
+| `CI` (`.github/workflows/ci.yml`) | every push to `main` or `ci/*`, every pull request, on demand | the `runtime` job (calls `runtime.yml`, below: a `needs:` cannot reach another workflow file, so the call puts its jobs in `CI gate`); the `tiers` job, which calls `drgnx-tiers.yml` ([The tiers workflow](#the-tiers-workflow)) with `unit no-lisp-writes hub-chaos`: the unit suite on **Nidhogg 31.1** (drgnx's own Emacs build, from its release tarball; Fedora 45, `bin/drgnx test --container`) against a test-hooks `ratatoskr` built once on the runner (`bins-linux`), with `ratatoskr-mock` beside it (the gateway tests' provider) (`DRGNX_RATATOSKR_BIN`; the runner's glibc is older than Fedora 45's, so it runs in the container; the tests that need it fail rather than skip, `test/no-skip.eld`), and huginn's `dump` example (`DRGNX_HUGINN_DUMP`: the editor's differential test, `drgnx-huginn/differential-fresh-seed`, reads a fresh seed with it and with Emacs's reader; on `test/no-skip.eld`), its files in parallel, a failed file rerun once, the `:timing` tests left out by name ([Parallel files](#parallel-files)); `no-lisp-writes`, the same suite once with `DRGNX_WORK_DB_GATE=1` (it fetches the same `ratatoskr`, `ratatoskr-mock` and huginn `dump`, and the same pinned packages through the `test-elpa` action, so `test/no-skip.eld` holds there too) (opening `work.db` read-write signals; only the tests tagged `:work-db-writer` are left out; docs/develop/store.md, "The one-writer gate"); `hub-chaos`, the `hub-client` and `ai-gateway` files once per seed (1 to 3) under seeded hub answer delays, with no rerun ([Hub chaos](#hub-chaos)); `shellcheck --severity=warning` on `install.sh`, `bin/drgnx`, the pre-commit hook, `test/container/nidhogg.sh` and `.github/ci/`'s scripts; the path filter's self-test; the leak scan; `CI gate` |
 | `GUI tier` (`.github/workflows/gui.yml`) | every push to `main` or `ci/*` (not `ci/joint/*`), every pull request, nightly, on demand (a dispatched run's `GUI tier gate` does not count for `main`'s protection, so a pull request runs it itself) | `drgnx-tiers.yml` with `ui scenario perf`: real Nidhogg sessions under headless mutter, three jobs: `ui` (`bin/drgnx test --container --ui`, `DRGNX_TEST_NO_TIMING=1`: the GUI and live tiers, the `:timing` tests left out; it fetches the run's test-hooks `ratatoskr` for the live tests that start a hub, `DRGNX_RATATOSKR_BIN`), `scenario` (`--container --scenario`, `DRGNX_TEST_NO_TIMING=1`: the frame budget is reported, not judged) and `perf` (`--container --perf`, `DRGNX_PERF_CPU_FACTOR=2`, `DRGNX_PERF_RESULTS=perf-results.json` uploaded as the `perf-results` artifact, also when the run fails); `GUI tier gate`. A newer push to a `ci/*` branch cancels an older run of the same branch |
 | `Terminal tier` (`.github/workflows/tty.yml`) | nightly, on demand | a `tiers` job calling `drgnx-tiers.yml` with `tty`: `bin/drgnx test --container --tty --fedora 45`, the terminal tests (Emacs in tmux) on Emacs 31.1, after fetching the pinned kkp. No gate: it is not a push workflow |
 | `Bootstrap` (`.github/workflows/bootstrap.yml`) | weekly (Monday), on demand with a Fedora release (45 by default, or 44; the pinned Nidhogg release is unpacked first, so no build) | `bin/drgnx test --bootstrap --fedora N`: the exit test of a second machine — `install.sh --yes --config … --identity …` in a fresh Fedora container reaches a green doctor with the configuration, the locked packages and the provider keys back, and a second run changes nothing ([harness.md](harness.md)) |
 | `Runtime` (`.github/workflows/runtime.yml`) | called by `ci.yml` (so on every push to `main` or `ci/*` and every pull request, inside `CI gate`); daily; on demand | the Rust workspace in `runtime/` ([runtime.md](runtime.md)). The `linux` job also fails if `cargo tree -i h2` or `-i aws-lc-sys` (all targets, all dependency kinds) prints anything: the gateway is HTTP/1.1 over rustls with ring. `linux` and `macos` run the workspace tests with the pinned model files (`DRGNX_TEST_MODELS`, from `.github/ci/models.sh`; What is cached); `linux` runs the GPU tests on llvmpipe (`DRGNX_TEST_ADAPTER=llvmpipe`, Mesa's software Vulkan driver from `rust-packages.sh`), and macOS, with no GPU on the runner, ignores them. `linux` (Fedora 45, as root, util-linux installed for `setpriv`: the image has only util-linux-core, and draugr's pdeathsig test and the `sudo` rows run it): `cargo fmt --check`, `clippy -D warnings`, `cargo test --locked --no-fail-fast --workspace` with `drgnx-ratatoskr/test-hooks` and `drgnx-px/test-hooks` (clippy too); installs Nidhogg and runs the conformance suite with `--require-all` (every row against Ratatoskr; as root the `sudo` rows run, so `security/another-uid-is-refused` is not skipped); a release build whose `version --json` must say `"test_hooks":false`; the perf baseline (`--perf`, artifact `ratatoskr-perf-linux`). `macos` (macOS 27, the image's `rustup` with clippy, not Homebrew's rust: no formula to fetch per run; before the tests `sudo xcode-select -s` points at the Command Line Tools the image installs, because draugr runs only the git of the selected developer dir and refuses Xcode under the admin-writable `/Applications`, whose git is the runner user's there): the same tests and conformance as the runner user, the `sudo` rows through passwordless `sudo -n -u nobody` (`--require-all` fails if that row is skipped), the perf baseline (`ratatoskr-perf-macos`), and last, whatever the steps before it said, `clippy --all-targets -D warnings` on the seven pure-Rust crates (runstav, draugr, eitri, gleipnir, mimir, bifrost and huginn, as on Android; only clippy's test build shows code that is dead on macOS). The Gleipnir escape suite ([gleipnir.md](gleipnir.md), "Proving it") runs in three places. `linux` (the container, as root, `--init`): builds `gleipnir-probe` and `gleipnir-escape`, fails if `cargo tree -e features -i gleipnir -p drgnx-ratatoskr` shows `test-hooks` in a default build (under `bash` with `pipefail`, and the tree must name gleipnir, so a failed `cargo tree` never passes), and runs `--rows rows --rows rows/container` without `--require-all` (the full-tier rows skip there with "inside a container", and the reduced rows with "Landlock ABI N below 9" if the runner's kernel is older; what runs is that every row parses, the probes reach with no sandbox, `check-in-a-container`, and the floor and fail-closed rows); report `escape-report-container`. `macos`: the Seatbelt rows and `rows/any` (no row there needs Linux: a unit test holds it) for real with `/usr/bin/sandbox-exec`, `--require-all` (a skip fails the job), whatever its conformance and perf steps said (and they whatever it says); report `escape-report-macos`. `escape-host` (`ubuntu-24.04` and `ubuntu-24.04-arm`, no container): Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, so the job runs `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (the runner user has passwordless sudo) and builds bubblewrap 0.12.0 (gleipnir's floor; apt has 0.9.0) from its checksummed release tarball; then `cargo test` for `gleipnir`, `draugr`, `eitri` and `gleipnir-escape` (the arm64 run is the first real one on arm64 Linux, for the seccomp call numbers) and `--rows rows/linux --rows rows/any` without `--require-all`, because the runner kernel's Landlock ABI is probably below 9 (the reduced rows skip with "Landlock ABI N below 9"; only listed reasons may skip). The job gates (green on both runners since 74be75cf; it was `continue-on-error` until then); reports `escape-report-host-X64` and `-ARM64`. The 60-row full run with `--require-all` stays on the escape VM (`gleipnir-vm.sh run`). `escape-host` also runs the agent core's `#[ignore]`d sandbox tests (`cargo test -p drgnx-ratatoskr --features test-hooks -- --ignored`) with the bubblewrap it built, skipping the crate's timing rows (`test/timing-rust.txt`: they are the timing lane's, judged on a release build); `agent-containers` (podman, preinstalled on the runner) builds the static relay sidecar `drgnx-px` beside the hub as `drgnx-px-x86_64-linux-musl` (its own target dir, as `drgnx runtime build` does) and, in that target dir, `sleipnir` static in jobq's shape (its `linux` and `sync` features for `x86_64-unknown-linux-musl`, [sleipnir.md](sleipnir.md)), gives the runner's user a systemd user session (`loginctl enable-linger`, then `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` for the steps after: without one rootless podman falls back to cgroupfs and the hub refuses container jobs, whose caps it could not enforce) and runs the `container*/*` rows with `--require-all`; both restore the cargo cache before the build and save it right after (`actions/cache/restore` and `/save`). `android` type-checks `runstav`, `draugr`, `eitri`, `gleipnir`, `huginn`, `drgnx-ratatoskr` and `forseti` for `aarch64-linux-android` (a fake C compiler stands in for urdr's bundled SQLite; nothing links), and `sleipnir` with only its `proto` and `sync` features (the shape jobq and the Android door take), then runs `clippy --all-targets -D warnings` there on the eight pure-Rust crates (runstav, draugr, eitri, gleipnir, mimir, bifrost, huginn and forseti; not norn, whose urdr needs a C cross toolchain; only clippy's test build shows code that is dead on Android) and on `sleipnir` in that `proto,sync` shape. `msrv` (Rust 1.95.0, `cargo build --locked`). `deny` (cargo-deny 0.20.2, its checksum verified: advisories, licenses, bans, sources; the whole workspace, so every crate under `runtime/crates/`, for the targets `deny.toml` lists: Linux glibc and musl, macOS, Android). `fuzz` (nightly-2026-10-15, cargo-fuzz 0.13.2, the runner's g++; four parallel shards of `cargo fuzz list`'s targets): 60 s a target on a push (`main` or `ci/*`; every target runs, whatever an earlier one found), 10 minutes a target daily, `fuzz_minutes` a target on demand, none on a pull request; a crash uploads its input as `fuzz-crashes-N`. The daily run is `deny` and `fuzz`: advisories land with no change on our side. Each job with a build has a cargo cache ([What is cached](#what-is-cached)); `only` (from `ci.yml`'s path filter, or by hand) names the jobs to run |
-| `macOS` (`.github/workflows/macos.yml`) | `tiers` (`drgnx-tiers.yml`'s `macos` job, below `unit`) and `macOS gate`: every push to `main` or `ci/*` (not `ci/joint/*`), every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now; `.github/actionlint.yaml` declares the label for `actionlint`, whose runner list predates it): `unit` installs ripgrep with Homebrew and Rust with the image's `rustup`, builds Ratatoskr with its test hooks and `ratatoskr-mock` beside it (`.github/actions/build-test-bins`; `DRGNX_RATATOSKR_BIN` for the client's tests; some need `--idle-tick-ms`) and installs Nidhogg from its release tarball (`test/container/nidhogg.sh macos`, which sets `DRGNX_EMACS`), checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` (timeout 180 minutes: it builds Nidhogg) runs `install.sh --yes` for real on the checkout, then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer push to a `ci/*` branch cancels an older run of the same event and branch only, so a push never cancels the weekly install, and nothing cancels a run on `main` |
-| `Test images` (`.github/workflows/images.yml`) | a push to `main` changing `test/container/` or `.github/ci/bwrap/`, weekly, on demand (never a pull request or a `ci/*` push) | builds the prebuilt CI images and pushes them to `ghcr.io/black-dragon-foundation/`: the three Fedora test images `drgnx-test`, `drgnx-test-gui` and `drgnx-test-tty` (and `f45` on `main`), the Rust job's `drgnx-test-rust`, and `drgnx-bwrap` per architecture, each tagged with `test/container/image-tag.sh` ([Prebuilt images](#prebuilt-images-the-cache)); a push or a manual run builds only the tags GHCR lacks, the weekly run rebuilds them all |
+| `macOS` (`.github/workflows/macos.yml`) | `tiers` (`drgnx-tiers.yml`'s `macos` job, below `unit`) and `macOS gate`: every push to `main` or `ci/*` (not `ci/joint/*`), every pull request, on demand; `install`: weekly (Wednesday), on demand | on macOS 27 (`xcode-27`, Apple silicon: GitHub names macOS images after their Xcode now; `.github/actionlint.yaml` declares the label for `actionlint`, whose runner list predates it): `unit` installs ripgrep with Homebrew and Rust with the image's `rustup`, builds Ratatoskr with its test hooks and `ratatoskr-mock` beside it (`.github/actions/build-test-bins`; `DRGNX_RATATOSKR_BIN` for the client's tests; some need `--idle-tick-ms`) and installs Nidhogg from its release tarball (`test/container/nidhogg.sh macos`, which sets `DRGNX_EMACS`), checks that `install.sh` parses under macOS's bash 3.2 (`/bin/bash -n`), prints its plan (`--dry-run`), points `xcode-select` at the Command Line Tools as the `Runtime` macOS job does (the hub runs only that git and refuses the image's Xcode under `/Applications`: without it no folder is a project, so the tests that make tasks through the hub find none) and runs `bin/drgnx test` the same way ([Parallel files](#parallel-files)), with no time factor (CI runs no `:timing` test); `install` (timeout 180 minutes: it builds Nidhogg) runs `install.sh --yes` for real on the checkout, then `drgnx doctor`, `drgnx sync` (a first sync from the shipped lock), `drgnx macos-app` and `drgnx open --check`. A newer push to a `ci/*` branch cancels an older run of the same event and branch only, so a push never cancels the weekly install, and nothing cancels a run on `main` |
+| `Test images` (`.github/workflows/images.yml`) | called first by `CI` and `GUI tier` (their `images` job) on every push and every pull request of this repository (never a fork's), weekly, on demand | builds the prebuilt CI images and pushes them to `ghcr.io/black-dragon-foundation/`: the three Fedora test images `drgnx-test`, `drgnx-test-gui` and `drgnx-test-tty` (and `f45` on `main`), the Rust job's `drgnx-test-rust`, and `drgnx-bwrap` per architecture, each tagged with `test/container/image-tag.sh` ([Prebuilt images](#prebuilt-images-the-cache)); a push or a manual run builds only the tags GHCR lacks, the weekly run rebuilds them all |
 
 The unit suite includes formatting (`bin/drgnx fmt`), the byte-compile with no warnings and the lints, so they
 need no jobs of their own. Tests that need what an Emacs build lacks skip themselves (for example the Work
@@ -161,17 +162,60 @@ manual dispatch of `runtime.yml` that names it, never on a push or in a gate:
 gh workflow run runtime.yml --ref ci/my-lane -f only=rt-fleet
 ```
 
+## Runners in CI
+
+Where each part of the runners work (`docs/guide/runners.md`, `docs/develop/hub.md`, `docs/develop/sleipnir.md`) is
+proven on CI:
+
+| Lane | What it runs | Gates |
+|---|---|---|
+| `linux` (Runtime) | the workspace tests with `drgnx-ratatoskr/test-hooks`: forseti, sleipnir's pure rows, the hub's lib and `runners_orders`, the repo-wide rules (`real_time_in_tests`, `hub_reads_its_clock`), and `tests/macos.rs`' four rows that need no sshd | yes |
+| `android` | `forseti` and the hub (with the cloud code) type-check for `aarch64-linux-android` with the other pure-Rust crates; `forseti` and `sleipnir --no-default-features --features proto,sync` (the shape jobq and the Android door take) also pass clippy `-D warnings` on their test builds | yes |
+| `macos` (Runtime) | the same workspace tests as `linux` on macOS 27, so `tests/macos.rs` runs there, then its sshd row (below) | yes |
+| `fleet` | the fake runners (`test/runners/`): the spike's checks and linger over ssh | no: on demand only (`only=rt-fleet`) |
+
+`fleet` stays on demand because its checks have never run on CI: the fake runner (systemd as PID 1 and rootless podman
+inside a container) is proven on the desktop only, and the runner image's flags (`--cap-add SYS_ADMIN`, `--security-opt
+unmask=ALL`) may not be allowed on GitHub's hosted runners. The first dispatch decides: it is a diagnostic run of one
+lane on a `ci/*` branch. When it passes, the drills (`tests/fleet_drills.rs`, `test/runners/drills.sh`) and the other
+`fleet` feature rows (`fleet_keys`, `fleet_runners`, `fleet_registry`, `fleet_sync`, `fleet_link`) are added to the job
+and it joins the gate. Until then the fleet rows run on the desktop (`test/runners/README.md`).
+
+### macOS
+
+A Mac is a hub, never a runner (`docs/guide/runners.md`): OpenSSH ships with macOS and the private agent's socket is
+under `$TMPDIR`. `runtime/crates/drgnx-ratatoskr/tests/macos.rs` holds the five rows that say the hub works there:
+
+- `placement_and_trust_filter`: the trust table and the pick, with the Mac as the local candidate;
+- `an_agents_job_with_no_runner_runs_here_with_its_reason`: a job no runner may take is placed on the Mac with the
+  design's "runs here: …" words, and a queue with no runner starts it there;
+- `sync_into_a_local_mirror`: a commit reaches a mirror (real git), the hub measures the gap, and the plan is a push;
+- `runner_add_of_a_macos_host_is_refused_with_the_contract`: the host's `uname` says Darwin, so the add is refused
+  with what a runner is and nothing is recorded (the row stands in a `uname` that says Darwin, so it runs on Linux
+  too);
+- `the_generated_config_against_a_localhost_sshd`: the generated ssh config's forced options win over the user's
+  file, and the transport opens a session over it. It is `#[ignore = "macos-sshd"]` and needs a real `sshd`.
+
+The first four run with the workspace tests on every platform. The last one runs as its own step of the `macos` job:
+`.github/ci/macos-sshd.sh up` turns Remote Login on (`launchctl enable system/com.openssh.sshd`), makes a throwaway
+key that may log in as the runner user, adds a `Host drgnx-sshd-test` entry to `~/.ssh/config` and the host key to
+`known_hosts`, and prints the host name; the step passes it as `DRGNX_TEST_SSHD_HOST` and runs `cargo test --test macos
+-- --ignored`. `down` removes the key, the entry and the service again, whatever the step said. Run it by hand on a
+Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) runs in the `macos` tier of
+`drgnx-tiers.yml`, which runs the whole unit suite.
+
 ## The tiers workflow
 
 `.github/workflows/drgnx-tiers.yml` is the one definition of drgnx's Emacs-side jobs (`workflow_call`). drgnx's
-`ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` call it on the pinned release; **Nidhogg's CI calls it too**, at a pinned drgnx
+`ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` call it on Nidhogg's integration line while drgnx's next release is
+unreleased ([Nidhogg's integration line](#nidhoggs-integration-line); the pinned release otherwise); **Nidhogg's CI calls it too**, at a pinned drgnx
 commit, on the tarballs its own run just built, so a Nidhogg change is tested with drgnx's real tiers (the GUI tier
 included) and the steps live in one place. Inputs:
 
 | Input | Values | Meaning |
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
-| `nidhogg` | `release`, `artifact` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos` |
+| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)); on `artifact` and `line` the test jobs also run with `DRGNX_NIDHOGG_STRICT=1`, so a test whose Nidhogg primitive is missing fails instead of skipping |
 | `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
@@ -183,15 +227,17 @@ serves from this repository, fails the job. The actions save a cache only for dr
 commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
-  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`
-  or a pull request from a branch of this repository, never by a `ci/*` branch or a fork's (Nidhogg's run restores
-  it and never writes). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
+  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved on Linux by a push or manual run of
+  `main` only, never by a pull request, a `ci/*` branch or a fork (Nidhogg's run restores it and never writes; macOS rebuilds
+  through sccache). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
 - `test-image`: pulls the prebuilt image for its Containerfile ([Prebuilt images](#prebuilt-images-the-cache)); with
   `nidhogg-artifact` it then installs the run's tarball on top — a thin image `FROM` it that runs
-  `test/container/nidhogg.sh fedora-45 TARBALL`, the same install the images make of the release — and names that image
+  `test/container/nidhogg.sh fedora-45 TARBALL` after removing the base's `/opt/nidhogg/*` (an unreleased build still
+  calls itself the last release's version and would unpack over it, mixing old and new files), the same install the
+  images make of the release — and names that image
   in `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE`. It fails when the artifact holds no tarball; it never falls back to
   the release. On macOS the `macos` job passes the tarball to `nidhogg.sh macos TARBALL` the same way.
 - `gate`: see [Gates](#gates).
@@ -199,6 +245,59 @@ commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 Called workflows run in the caller's context: the caller's runners, token and caches (in Nidhogg's run the cargo cache
 is Nidhogg's), and `actions/checkout` without `repository` checks out the caller
 ([GitHub: reusing workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
+
+## Nidhogg's integration line
+
+Between releases each repository is tested against the other's **current integration branch**, never an old release:
+
+- **drgnx's CI** (`nidhogg: line`): the `nidhogg-line` job reads the branch name in `.github/ci/nidhogg-line`
+  (`rel7-next`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
+  `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) whose tarball jobs
+  (`Linux (fedora-45)`, `macOS (NS app)`) succeeded, even when its test jobs are red, and that still holds
+  the tarballs the asked tiers need (`tarball-fedora-45` for the Linux tiers, `tarball-macos` for `macos`). It
+  downloads them and uploads them into this run under the same names, so every tier job installs them exactly as
+  `nidhogg: artifact` does. Every tier job waits for it (`needs: nidhogg-line`) and is skipped when it failed. No such
+  run (none yet, still running, a tarball job red, or its artifacts expired: GitHub keeps them 90 days by default, 1–90 on a public
+  repository) fails the job with one error line; it never falls back to the release.
+- **Nidhogg's CI** tests drgnx's integration branch's head (named in Nidhogg's `nidhogg/ci/drgnx-line`) on every
+  build but a release tag's (Nidhogg's README, "CI and releases").
+
+**The token.** Downloading another repository's artifacts needs authentication even when the repository is public
+(the REST download endpoint answers 401 without it, checked 2026-11-07), and the run's own `GITHUB_TOKEN` is scoped
+to drgnx ([GitHub: GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token): "The token's
+permissions are limited to the repository that contains your workflow"; [actions/download-artifact](https://github.com/actions/download-artifact):
+`github-token` "is required when downloading artifacts from a different repository or from a different workflow
+run", read 2026-11-07). So the job mints a token with `actions/create-github-app-token` from a narrow GitHub App,
+`drgnx-ci-artifacts`: **Actions: Read** only (Metadata: Read is implied), installed on `nidhogg` alone, the token asked
+for `repositories: nidhogg` and `permission-actions: read`. Its secrets `NIDHOGG_LINE_APP_ID` and
+`NIDHOGG_LINE_APP_KEY` live in drgnx; `ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` pass them to the tiers workflow.
+Without them the job fails with that message. A pull request from a fork gets no secrets, so its line run fails.
+
+Why not the existing `drgnx-fork-sync` App: it writes the ACP forks' contents and workflows, and giving drgnx's CI
+its key (plus Actions: Read and an install on `nidhogg`) would hand every drgnx CI run write access to the forks. The
+narrow App can only read Actions data of `nidhogg`.
+
+Setup (an org owner, once). GitHub has no CLI for creating an App; in the browser, open
+<https://github.com/organizations/Black-Dragon-Foundation/settings/apps/new> and set:
+
+- **Name** `drgnx-ci-artifacts`, **Homepage URL** drgnx's repository URL, **Webhook**: off (clear "Active").
+- **Repository permissions**: Actions: Read-only; Metadata: Read-only (always required); nothing else.
+- **Where can this GitHub App be installed?** Only on this account.
+
+Then create the App and note its **App ID**; **Generate a private key** (it downloads a `.pem` file); **Install
+App** on Black-Dragon-Foundation, **Only select repositories**: `nidhogg`. Store the two secrets in drgnx and delete
+the downloaded key:
+
+```sh
+R=Black-Dragon-Foundation/drgnx
+gh secret set NIDHOGG_LINE_APP_ID -R $R --body <APP_ID>
+gh secret set NIDHOGG_LINE_APP_KEY -R $R < <downloaded>.pem
+```
+
+`actions/create-github-app-token` is one of GitHub's own actions, pinned by commit like the others.
+
+When a release round starts, the two files move to the next line; after the release, the callers go back to
+`nidhogg: release` on the new pin ([Joint rounds](#joint-rounds) is the by-hand variant for one pair).
 
 ## Joint rounds
 
@@ -347,10 +446,16 @@ An image's tag is `test/container/image-tag.sh FILE`: the first 16 hex digits of
 every file its `COPY`/`ADD` lines take from the build context (a copied directory counts each file), so a change to
 `nidhogg.sh`, the child-frame pins or a build script is a new tag, and nothing else is. A job looks the tag of its
 own checkout up on GHCR (`.github/ci/ghcr.sh ref NAME TAG`, the registry API through curl) and pulls the digest it got
-(`NAME@sha256:…`), so one job never mixes two builds of a tag (the weekly run rebuilds them); when there is none yet
-(a pull request or `ci/*` push that changes the inputs, or the `main` push before `Test images` finishes), it builds
-the image itself and pushes nothing, so a job never runs on an image of other inputs. Only `main` and this
-repository's manual runs publish. The prebuilt images:
+(`NAME@sha256:…`), so one job never mixes two builds of a tag (the weekly run rebuilds them). `ci.yml` and `gui.yml`
+call `Test images` first, as their `images` job, on every push and pull request of this repository, and the jobs that
+pull an image (`runtime`, `tiers`) wait for it: a round whose inputs changed builds each missing tag once and every
+job of it pulls the same one (round 3 of `.6` built them in every job, about 3 minutes each, seven times a run). The
+call builds only the tags GHCR lacks; `Test images`' own weekly run rebuilds every one (a caller's nightly does not),
+and on `main` it moves `f45` to the tag an earlier round built. The waiting jobs run whatever the images job did
+(`!cancelled()`), and a job that still finds no image (a fork's pull request: its token cannot push, so the call is
+skipped there, which its gate allows) builds the image itself and pushes nothing, so a job never runs on an image of
+other inputs. Only this repository's runs publish. The calls of `ci.yml` and `gui.yml` are separate concurrency groups
+(`images-WORKFLOW-REF`): one shared group would cancel the call that waits. The prebuilt images:
 
 - `drgnx-test`, `drgnx-test-gui`, `drgnx-test-tty`: the tiers (the `test-image` action; `bin/drgnx test --container`
   builds one itself when the action set none). Each is built on a base: `drgnx-base-test`, `drgnx-base-gui`,
@@ -360,8 +465,10 @@ repository's manual runs publish. The prebuilt images:
   base change re-tags every image on it and a Nidhogg bump re-tags none of the bases. `image.sh` resolves a base as it
   does an image (local, GHCR, build), so a local run after a Nidhogg bump builds only the thin top.
 - `drgnx-test-rust` (`Containerfile.rust`: Fedora 45 with `test/container/rust-packages.sh` and Nidhogg): the container
-  of `runtime.yml`'s `linux` job, by digest, from the `images` job before it; without one the job runs plain
-  `fedora:45`, and its steps run `rust-packages.sh` and `nidhogg.sh` themselves. The timing lane's Rust step
+  of `runtime.yml`'s `linux` job, by digest, from that workflow's own `images` lookup job before it; without one the job runs plain
+  `fedora:45`, and its steps run `rust-packages.sh` and `nidhogg.sh` themselves. The job's `container` is one
+  expression with both cases: GitHub refuses a job whose `credentials` come out empty before any step runs, so only
+  the prebuilt image gets them (`drgnx-ci/a-job-container-names-credentials-only-with-its-image`). The timing lane's Rust step
   (`test/timing-rust.sh`, `DRGNX_TEST_RUST_IMAGE`) runs in it too.
 - `drgnx-bwrap` (`.github/ci/bwrap/`, `-x64` and `-arm64` tags, built on Ubuntu 24.04 of that architecture): one file,
   bubblewrap 0.12.0 built from its checksummed source, in a `FROM scratch` image, so the escape suite's runner jobs
@@ -387,15 +494,77 @@ The weekly rebuild picks up Fedora's updates under the same tags. The Ubuntu job
 as a git `safe.directory` system-wide (the tests run git with a temporary `HOME`); without that, every git command
 on the checkout fails with "dubious ownership" (`drgnx test --bootstrap`'s snapshot did).
 
+## The browser rows in a VM
+
+The agent browser's layer needs Landlock ABI 9 (Linux 7.1) on both sandbox tiers, and GitHub's Ubuntu runners, 24.04
+and 26.04 alike, boot Linux 7.0 (ABI 8). So the x64 legs of `runtime.yml`'s `escape-host` run the browser rows
+(`tests/browser_sandboxed.rs`) in a Fedora 45 VM, whose kernel has ABI 9 or later as the Fedora hosts drgnx supports
+do, right after their own sandbox lane, which leaves out exactly those rows (the names the test binary lists with
+`--list --ignored`). Under KVM the guest answers ssh about 20 s after QEMU starts.
+
+The arm64 legs skip the rows with a notice that says why. Those runners have no `/dev/kvm`, and an emulated (TCG)
+guest never answered ssh within 20 minutes (on 24.04 it reached emergency mode; on 26.04 the console showed nothing
+past the firmware's banner). The rows' only arm64-specific part is the browser host's seccomp filter, and the arm legs install that for real
+in gleipnir's own tests (`installed_filter_denies`, its `browser-` cases). The rest is the same code on both
+architectures, so the x64 VM covers it.
+
+`.github/ci/browser-vm.sh`:
+
+- `up DIR` installs QEMU and cloud-image-utils from apt, fetches the pinned x86_64 Fedora Cloud image and checks
+  its sha256, and boots an overlay of it: KVM where the runner gives it (`/dev/kvm` is opened to the runner's user),
+  emulation otherwise. cloud-init makes a user `runner` with passwordless sudo and a key made for the run; the script
+  waits for ssh on a forwarded loopback port, at most 20 minutes.
+- `put DIR PATH...` copies the job's `/usr/bin/bwrap` (bubblewrap 0.12.0; root's, as Gleipnir requires), `ratatoskr`,
+  `gleipnir-probe`, `ratatoskr-mock`, the crate's `tests/data` and the test binary to the same paths in the VM:
+  the binary names its data and its hub by absolute path. glibc builds of the runner run on Fedora's newer glibc.
+- `run DIR CMD` runs the rows (`--ignored --test-threads 1`) as `runner`; their exit is the step's.
+
+To bump the image, change its name and sha256 (the `CHECKSUM` file beside the image, signed by Fedora's key);
+`drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm` holds the pin, the step order and the arm64 skip.
+
 ## What is cached
 
 Measured on the runs of 2026-10-19/20 (`gh run view ID --json jobs`): the unit suite is 3.5–4 min on Linux and about
 16 min on macOS, a GUI job 1.5–5.5 min, the image pull 18–28 s, `brew install emacs ripgrep` 8 s. Nothing in the unit
-suite downloads: no grammar, no `drgnx sync`. The unit, GUI and terminal jobs use the `test-elpa` action
+suite downloads: no grammar, no `drgnx sync`. The unit, `no-lisp-writes`, GUI and terminal jobs use the `test-elpa` action
 (`.github/actions/test-elpa`): `test/container/modal-elpa.sh` fetches the lock's pinned evil, goto-chg, evil-collection,
 kkp, vertico, compat and orderless (vertico needs compat; Quick Open's tests drive real vertico), checks each sha256 against `etc/drgnx.lock.eld`, unpacks them into one directory (cached by the lock's hash,
 saved only by a push to or the daily run of `main`, on its own commit), and the action sets `DRGNX_MODAL_ELPA` and `DRGNX_USER_ELPA` to it. So the evil and real-kkp teardown tests, the modal
-isolation test and kitty's kkp tests run instead of skipping. So the caches are few:
+isolation test and kitty's kkp tests run instead of skipping. The gate job needs them as much as `unit` does:
+`test/no-skip.eld` holds in gate mode (the gate is evidence about every Lisp path, so a path that skipped is one not
+checked), and Quick Open's two vertico rows are on it; without the action they skip and the summary fails them. So the caches are few:
+
+**Test packages.** MELPA serves only the newest build of each package, so a pinned `evil-collection-DATE.tar` 404s the
+day MELPA rebuilds it, which broke round 4's unit and GUI jobs. `modal-elpa.sh` therefore falls back to a mirror (a
+release of this repository, tag `test-packages`, `DRGNX_ELPA_MIRROR` overrides the URL) that holds each pinned tarball
+under its own name; the sha256 check is the same for both sources. Whoever bumps a MELPA pin uploads the tarball
+(already fetched and checked) with `gh release upload test-packages NAME.tar --repo Black-Dragon-Foundation/drgnx`
+(`gh release create test-packages` the first time) in the same change; old tarballs stay. A cache hit needs neither.
+
+**sccache.** The `runtime/target` entries are all-or-nothing: a job restores its own newest entry, and a job with none
+(a new toolchain, a new branch whose base has no entry, an entry evicted from the repository's 10 GB) compiles every
+dependency from scratch. On the PR run of 2026-11-06 only `linux` and `macos` restored one (both PR-scoped entries, since
+`main` held none of them: the 4.8 GB macOS entry and the other PR entries fill most of the 10 GB, so older ones go);
+`msrv`, `android`, both `escape-host` runners and `agent-containers` missed and rebuilt everything (88-159 s of
+cargo each in that run). Those jobs now also run rustc through
+[sccache](https://github.com/mozilla/sccache) (`.github/actions/sccache`, the `mozilla-actions/sccache-action` pinned by
+SHA, GitHub's cache service as its store; `build-test-bins` does the same inline). sccache keys every rustc call by the
+compiler, its flags and the source hashes, so a dependency compiled by any job with the same toolchain, target and
+flags is a hit, whatever the branch's target entry. The two layers stack: a restored target makes cargo skip rustc
+(sccache never sees it); sccache serves what cargo does rebuild. Scope is the same as `actions/cache`: Only a push to `main` writes it (`SCCACHE_GHA_RW_MODE`);
+pull requests and `ci/*` pushes read what `main` wrote. A fork's pull request (no cache token) runs without it, and a cache service error never fails a
+build (`SCCACHE_IGNORE_SERVER_IO_ERROR`). Needs `CARGO_INCREMENTAL=0` (set in every workflow). Not covered: the Rust
+built inside container images (`agent-containers`' podman builds) and the fuzz jobs' cargo-fuzz run. `sccache --show-stats` in a job's
+last step shows the hits; check them after the first run on `main`.
+
+**The 10 GB budget** (everything is written by `main`; estimates, compressed; check `gh cache list` after the first full
+`main` run and trim here if it is over): `linux` target 2.5 GB, Linux test binaries 0.5 GB, pinned models 1.0 GB, Nidhogg
+tarball 0.1 GB, registry and ELPA under 0.1 GB, fuzz build and corpora under 0.5 GB (unmeasured), sccache 1-3 GB (the
+third-party crates of the Linux, MSRV, Android, ARM and macOS builds, each compressed per crate; unmeasured, local runs
+cached 7 GB uncompressed for the whole workspace). About 6-8 GB in all, so a second `main` generation (the lock moved)
+still fits before the least recently used entries go. Replaced since: the `msrv`, `escape-host`, `agent-containers`,
+`android` and `macos` target entries (the macOS target and test binaries were 6.2 GB of the 9.2 GB) and every pull request's entries.
+If the budget is exceeded, the first thing to trim is sccache for `fuzz-build` and `macos`.
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
@@ -426,14 +595,15 @@ until the lock or the toolchain moves, and more crates rebuild as `main` moves o
 cargo copies them out of `deps/` again), incremental data (CI builds with `CARGO_INCREMENTAL=0`) and the registry's
 unpacked sources. It never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
 end when its build passed, whatever its tests said (a red test keeps the build), and only when its key was not
-already there. Who saves (`CACHE_SAVE` and `CACHE_SAVE_PR` in `runtime.yml`, and the actions' own conditions): `main`
-first, with every family (its pushes, manual runs and the daily run); a pull request from a branch of this repository
-only the families that pay off: `runtime.yml`'s `linux` and `macos` (the slowest Rust jobs), `build-test-bins` (the
-tiers wait for it) and the test ELPA. Its other jobs restore `main`'s and rebuild only what changed. `ci/*` branches
-and a fork's pull requests only restore, so an untrusted change never writes what a trusted run reads, and neither does
-a `drgnx_ref` another repository's run names. GitHub scopes a pull request's entries to its merge ref (it reads its own
-and `main`'s, and `main` never reads them), and the fuzz corpora are grown by the daily run and `main` only. A pull
-request whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
+already there. Who saves (`CACHE_SAVE` in `runtime.yml`, and the actions' own conditions): `main` only (its pushes, manual runs and the
+daily run), and of the target caches only `runtime.yml`'s `linux` and the Linux `build-test-bins` (and the fuzz build the
+fuzz shards take). A pull request, a `ci/*` branch and a fork only restore, so an untrusted change never writes what a
+trusted run reads, nor does a `drgnx_ref` another repository's run names. The earlier rule let a pull request save its own
+(`linux`, `macos`, `build-test-bins`, the models): GitHub scopes those to the merge ref, so no other run reads them, and
+on 2026-11-06 they (9.2 GB, the macOS target alone 4.8 GB) filled the repository's 10 GB and pushed all of `main`'s out;
+the macOS target also took 204 s to restore. The other jobs, macOS included, rely on sccache. The fuzz corpora are grown by
+the daily run and `main` only. A pull request whose lock matches `main`'s restores `main`'s entry under the exact key and
+saves nothing. CI builds
 with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`: backtraces keep file and line), which halves the
 kept build: the `linux` job's test build is 2.6 GB on disk and 0.6 GB compressed, against 5.3 GB and 1.1 GB with full
 debug info. The registry is one entry per OS and lock, not a copy in each job's entry, and a pull request whose lock
@@ -472,6 +642,7 @@ check the image tags, `drgnx-ci/images-are-published-only-by-main-and-manual-run
 - Actions are pinned by commit hash with the version in a comment; Dependabot (`.github/dependabot.yml`) proposes
   updates weekly.
 - `permissions: contents: read` and `persist-credentials: false`: no workflow can write to the repository. Only
-  `Test images` may write packages; the test jobs may read them. None uses a secret beyond the built-in token.
+  `Test images` may write packages (and the `images` job that calls it, never on a fork's pull request); the test jobs
+  may read them. None uses a secret beyond the built-in token.
 - The GUI, scenario and perf jobs run on every push to `main` or `ci/*` (not on pull requests); the terminal tier is nightly, the macOS real install and the second-machine exit test weekly; `drgnx test --install` (source
   builds in fresh containers) runs locally. The Emacs install step of each workflow is one step (the image pull, Homebrew's `brew install`), so one change swaps it.

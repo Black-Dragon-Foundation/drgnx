@@ -1,0 +1,32 @@
+{
+  "title": "drgnx runners",
+  "description": "What drgnx may do in its own project: start, read and delete its machines and their disks, read their serial console, read the Fedora CoreOS base, keep its images and its SSH firewall rules. No service account, no stop.",
+  "stage": "GA",
+  "includedPermissions": [
+    "compute.disks.create",
+    "compute.disks.setLabels",
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.get",
+    "compute.globalOperations.get",
+    "compute.images.create",
+    "compute.images.delete",
+    "compute.images.get",
+    "compute.images.getFromFamily",
+    "compute.images.useReadOnly",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.get",
+    "compute.instances.getSerialPortOutput",
+    "compute.instances.list",
+    "compute.instances.setLabels",
+    "compute.instances.setMetadata",
+    "compute.instances.setTags",
+    "compute.networks.updatePolicy",
+    "compute.networks.use",
+    "compute.networks.useExternalIp",
+    "compute.subnetworks.use",
+    "compute.subnetworks.useExternalIp",
+    "compute.zoneOperations.get"
+  ]
+}

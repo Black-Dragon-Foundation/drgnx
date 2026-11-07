@@ -1,0 +1,27 @@
+{"scenario": "runners/keys-never-in-the-log-or-any-reply", "requires": ["v1", "test-hooks"], "doc": "[B] runners/keys-held answers names only, before and after runners/keys; runners/audit has no row while no key went anywhere; a job naming a key off the project's drgnx-runners-job-keys list is refused (invalid-params); one naming a listed key waits for a runner (its keys reach no job on this machine); no canary value in a reply, an event, the hub's log or any file under the root."}
+{"do": "root"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "w", "hub": "h"}
+{"do": "send", "conn": "w", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "w", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "runners/keys-held", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"names": []}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "runners/keys", "params": {"keys": {"CANARY_TOKEN": "canary-job-key-7Hq2"}}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "runners/keys-held", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"names": ["CANARY_TOKEN"]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "runners/audit", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"rows": []}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-runners-job-keys", "source": "row", "value": ["CANARY_TOKEN"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT", "keys": ["OTHER_TOKEN"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "invalid-params"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo $CANARY_TOKEN"], "cwd": "$ROOT", "keys": ["CANARY_TOKEN"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$capture:keyed", "text": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "exec/get", "params": {"id": "$keyed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"id": "$keyed", "status": "queued", "waiting": "$string"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 9, "method": "exec/stop", "params": {"id": "$keyed"}}}
+{"do": "expect", "conn": "c", "json": {"id": 9, "result": {"id": "$keyed"}}, "within_ms": 10000}
+{"do": "count_events", "conn": "w", "for_ms": 300, "lacks": "canary-job-key"}
+{"do": "file_grep", "paths": ["$ROOT/**"], "absent": "canary-job-key"}

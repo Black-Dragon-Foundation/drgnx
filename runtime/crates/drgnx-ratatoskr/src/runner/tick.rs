@@ -4,9 +4,9 @@
 //! [`super::Hooks`].
 
 use super::{
-    GitError, GitFuture, MAX_AGENTS, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, changed,
-    clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in, raise_card,
-    service, settle_cards, update_data, user,
+    GitError, GitFuture, RunGit, START_TRIES, TaskTree, TreeMode, TrialResult, agent_slots,
+    changed, clash, data_for, data_of, fallback, internal, load, ordered, profile_of, put_in,
+    raise_card, service, settle_cards, update_data, user,
 };
 use crate::agents::Origin;
 use crate::coord::fail;
@@ -69,9 +69,10 @@ pub async fn once(front: &Arc<Front>) {
             h.tick(front, &id).await;
         }
     }
+    crate::forecast::sweep(front).await;
 }
 
-/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`MAX_AGENTS`]) in the
+/// Move job ID on: tasks whose agent is gone are free again, ready tasks get agents (up to [`agent_slots`]) in the
 /// run order, the job is done when every task is.
 pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Error> {
     let Some(l) = load(front, id, false).await? else {
@@ -177,7 +178,7 @@ pub async fn step(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::Err
     for t in ordered(&l.tasks, &data) {
         if t.row.status.as_deref() == Some("ready")
             && runs.busy_of(&t.row.id).is_none()
-            && count < MAX_AGENTS
+            && count < agent_slots(front)
             && data_for(&data, "blocked", &t.row.id).is_none()
         {
             runs.set_busy(&t.row.id, Some("starting"));
@@ -285,6 +286,7 @@ pub(crate) fn run_state(
                 id: s.id.clone(),
                 task: s.task.clone(),
                 exited: s.status == Some(SessionStatus::Exited),
+                held_by_user: s.held_by.is_some(),
                 held: held
                     .get(&s.id)
                     .copied()
@@ -309,6 +311,7 @@ pub(crate) fn run_state(
             .filter(|c| c.kind.as_deref() == Some("clash"))
             .filter_map(|c| c.task.clone())
             .collect(),
+        predictions: Vec::new(),
     }
 }
 
@@ -373,12 +376,19 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
             diffs.insert(t.row.id.clone(), files);
         }
     }
-    let run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    let mut run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    // what the conflict predictor found between the run's sessions
+    run.predictions = front
+        .core
+        .predict
+        .among(&sessions.iter().map(|s| s.id.as_str()).collect());
     let decisions = decisions_of(&l);
     let found = clash::scan(&run, &decisions, &diffs);
     for c in &found {
         card_clash(front, id, c).await?;
     }
+    // a predicted conflict or a contradiction between two of the run's sessions opens a huddle
+    front.core.huddles.clashed(front, Some(id), &found);
     if !found.is_empty()
         && let Some(h) = front.core.runs.hooks()
     {
@@ -540,12 +550,7 @@ pub async fn start(
         }
     };
     // the session's steps are filed under its plan and project
-    let plan = l
-        .job
-        .plan
-        .as_deref()
-        .map(|p| format!("plan:{p}"))
-        .unwrap_or_else(|| format!("plan:{job}"));
+    let plan = super::plan_scope(&l.job);
     let project = {
         let dir = repo.clone();
         crate::clock::blocking(move || norn::project::resolve(&dir).map(|p| p.id))

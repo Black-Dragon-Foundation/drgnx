@@ -108,7 +108,7 @@ fn is_protected(p: &str) -> bool {
         .any(|q| p == *q || p.strip_prefix(q).is_some_and(|r| r.starts_with('/')))
 }
 
-fn is_ci_or_build(p: &str) -> bool {
+pub(crate) fn is_ci_or_build(p: &str) -> bool {
     let base = p.rsplit('/').next().unwrap_or(p);
     p.starts_with(".github/")
         || base.starts_with("Makefile")
@@ -859,6 +859,10 @@ impl RunGit for HubGit {
 
     fn touched<'a>(&'a self, folder: &'a Path) -> GitFuture<'a, ()> {
         Box::pin(self.touch(folder))
+    }
+
+    fn is_touched<'a>(&'a self, folder: &'a Path) -> GitFuture<'a, bool> {
+        Box::pin(async move { Ok(HubGit::is_touched(self, folder).await) })
     }
 
     fn prepare<'a>(&'a self, tree: &'a TaskTree) -> GitFuture<'a, ()> {

@@ -1,0 +1,20 @@
+[package]
+name = "drgnx-rows"
+description = "Hub-built view rows: the row and patch format, the run builder, the fitter and the SVG writer; no I/O"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars = { workspace = true, optional = true }
+skrifa.workspace = true
+read-fonts.workspace = true
+unicode-width.workspace = true
+
+[features]
+# the JSON Schemas of the wire types, for the hub protocol's registry (runstav)
+schema = ["dep:schemars"]

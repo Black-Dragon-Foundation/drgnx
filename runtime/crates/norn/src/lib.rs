@@ -8,12 +8,17 @@
 //! - Schema 7 (the Urdr plan): [`kinds`], [`deny`], [`scope`], [`grants`], [`trust`], [`project`] (the policy),
 //!   [`migrate7`] (6 → 7), [`parsed`] (the scan's door), [`privacy`] (the opt-in), [`tracker`] (tasks agents share),
 //!   [`options`] (settings history: kind `option`, its ids, the settings deny-list, the `options` grant's rule).
+//! - [`hooks`]: the hook engine, which combines rules' and plugins' verdicts under the matrix (narrowing only).
 
 pub mod deny;
+pub mod forecast;
 pub mod grants;
+pub mod hooks;
 pub mod kinds;
 pub mod matrix;
 pub mod migrate10;
+pub mod migrate11;
+pub mod migrate12;
 pub mod migrate7;
 pub mod migrate8;
 pub mod migrate9;

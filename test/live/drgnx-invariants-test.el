@@ -11,7 +11,7 @@
      (let ((p (drgnx-wb-area-window 'panel)) (r (drgnx-wb-area-window 'right)) (e (drgnx-wb-section-window 'explorer)))
        (list :geometry (format \"%S\" (sort (mapcar #'window-pixel-edges (window-list nil 'nomini))   ; any order
                                             (lambda (a b) (or (< (car a) (car b)) (and (= (car a) (car b)) (< (cadr a) (cadr b)))))))
-             :frames (length (frame-list))
+             :frames (length (visible-frame-list))
              :editors (length (seq-filter #'drgnx-signal-editor-window-p (window-list nil 'nomini)))
              :panel (if p (window-pixel-height p) 0) :right (if r (window-pixel-width r) 0)
              :left (if e (window-pixel-width e) 0)
@@ -24,7 +24,8 @@
                                   (derived-mode-p 'dired-mode 'Buffer-menu-mode 'ibuffer-mode 'Custom-mode 'proced-mode
                                                   'edit-abbrevs-mode 'bookmark-bmenu-mode 'command-history-mode 'lisp-interaction-mode))
                               t (format \"%s (%s)\" (buffer-name) major-mode))))))"
-  "The layout facts the invariants are about.")
+  "The layout facts the invariants are about.  :frames counts the visible ones: under Glitnir the popup lane's child
+frame is made once and kept, hidden, between popups.")
 
 (defmacro drgnx-inv--with (sess &rest body)
   "BODY with SESS a fresh GUI session (config=drgnx) whose editor shows a fixture project's file."
@@ -122,7 +123,8 @@ settled within 250 ms."
       (when panel (drgnx-ui-measure sess (list (list :keys "C-`"))))
       (let ((before (drgnx-inv--probe sess)))
         (drgnx-ui-measure sess (list (list :keys "C-x")) 400)
-        (should (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window \" *which-key*\") t :false)))") :shown)))
+        ;; on any visible frame: under Glitnir the lane is a child frame of the window
+        (should (eq t (plist-get (drgnx-ui-call sess "(drgnx-uitest--json (list :shown (if (get-buffer-window \" *which-key*\" 'visible) t :false)))") :shown)))
         (drgnx-ui-measure sess (list (list :keys "C-g")))
         (should (equal (plist-get (drgnx-inv--probe sess) :geometry) (plist-get before :geometry)))))))
 

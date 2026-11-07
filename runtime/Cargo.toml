@@ -1,8 +1,8 @@
 # The drgnx runtime workspace (docs/develop/runtime.md).  Later tasks add crates under crates/ (a glob) and write
-# `x.workspace = true`; the fuzz crate is its own workspace.
+# `x.workspace = true`; the fuzz crate and the plugin fixtures and template are their own workspaces.
 [workspace]
 members = ["conformance", "crates/*"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "plugins/fixtures", "plugins/template"]
 resolver = "3"
 
 [workspace.package]
@@ -21,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 schemars = "1.2"
 serde_path_to_error = "0.1"
+# the hook rules' `command` (norn::hooks): linear time, compiled under a size limit; already in the lock as a
+# transitive dependency, so nothing new is downloaded. Never fancy-regex for a user's pattern
+regex = "1.13"
 serde_ignored = "0.1"
 hmac = "0.13"
 sha2 = "0.11"
@@ -35,6 +38,12 @@ tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-bash = "0.25"
 notify = "8"
+# Hrafn's read-only door of agent-touched trees: pinned exactly, read-only features only; no filter,
+# hook or fsmonitor is ever run, and submodules are never opened. MIT OR Apache-2.0, MSRV 1.88
+gix = { version = "=0.90.0", default-features = false, features = ["sha1", "index", "dirwalk"] }
+inotify = { version = "0.11", default-features = false }
+# verdandi's documents (the edit history; agent system part 4's spike chose it): public API only, pinned, moved on purpose
+loro = { version = "=1.17.1", default-features = false }
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
 libc = "0.2"
 hyper = { version = "1.12", features = ["server", "client", "http1"] }
@@ -66,6 +75,12 @@ insta = { version = "1.49", features = ["json"] }
 proptest = "1.12"
 tempfile = "3"
 rmcp = { version = "3.6", default-features = false }   # dev only (mimir's interop test); a member names its features
+# drgnx-rows' fitter (render offload, Call 1): the advances of the font file Emacs names, unshaped and unhinted; TTC
+# and variable fonts. 0.x breaks often: pinned, moved on purpose. skrifa's own read-fonts requirement is this one
+skrifa = { version = "=0.49.0", default-features = false, features = ["std"] }
+read-fonts = { version = "=0.46.0", default-features = false, features = ["std"] }
+# the terminal fitter's widths (drgnx-rows), adjusted by the editor's char-width-table; already in the lock
+unicode-width = "0.2"
 # hrafn-embed, pure Rust: a tokeniser with no C regex engine (default-features alone does not compile), and the model file
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 safetensors = "0.8"
@@ -78,6 +93,15 @@ pollster = "0.4"
 # aarch64 (Linux arm64, Android) doesn't have; the CPU path runs on baseline NEON there
 gemm = { version = "=0.19.0", default-features = false, features = ["std", "rayon"] }
 rayon = "1"
+# brokkr's plugin engine: the 48 LTS (rustc 1.95, supported to 2028-08-20), only these features; no `wat`, `cache`,
+# `gc`, `threads`, pooling allocator, Winch or WASI p1/p3/http. wasmtime-wasi-io links wasi:io on its own, so brokkr
+# links each WASI interface it provides one by one (docs/develop/plugins.md, "What a plugin can reach")
+wasmtime = { version = "=48.0.8", default-features = false, features = ["runtime", "cranelift", "component-model", "async", "std"] }
+wasmtime-wasi = { version = "=48.0.8", default-features = false, features = ["p2"] }
+wasmtime-wasi-io = { version = "=48.0.8", default-features = false, features = ["std"] }
+bytes = "1"
+# brokkr's tests only: component text for what no toolchain emits on purpose (a disabled proposal, many handles)
+wat = "=1.263.0"
 
 [profile.release]
 strip = true
@@ -100,4 +124,15 @@ opt-level = 3
 [profile.dev.package.rayon]
 opt-level = 3
 [profile.dev.package.rayon-core]
+opt-level = 3
+# the edit history's documents: its property test makes some hundred thousand records
+[profile.dev.package.loro]
+opt-level = 3
+[profile.dev.package.loro-internal]
+opt-level = 3
+[profile.dev.package.loro-common]
+opt-level = 3
+[profile.dev.package.loro-rle]
+opt-level = 3
+[profile.dev.package.generic-btree]
 opt-level = 3

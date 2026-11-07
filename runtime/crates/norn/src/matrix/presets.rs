@@ -67,6 +67,8 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (Machines, _) => [ALLOW, ALLOW, NEVER],
         (JobContainer, Cautious) => [ASK, ASK, NEVER],
         (JobContainer, _) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, Autonomous) => [ALLOW, ALLOW, NEVER],
+        (JobKeys, _) => [ASK, ASK, NEVER],
         (Network, Cautious) => [ASK, ASK, ALLOW],
         (Network, _) => [ALLOW, ALLOW, ALLOW],
         (Browser, Cautious) => [ASK, ASK, ASK],
@@ -79,6 +81,16 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (UserEmacs, Cautious) => [NEVER, NEVER, NEVER],
         (UserEmacs, _) => [ASK, NEVER, NEVER],
         (ChatProjectRead, _) => [NEVER, NEVER, ASK],
+        (PluginAbilities, Cautious) => [ASK, ASK, ASK],
+        (PluginAbilities, _) => [ALLOW, ALLOW, ASK],
+        // a chat edits your checkout through the pair door: ask = the Pair toggle is allowed, allow = paired from
+        // the start; the chat's code.edit stays never
+        (ChatProjectEdit, Cautious) => [NEVER, NEVER, NEVER],
+        (ChatProjectEdit, Balanced) => [NEVER, NEVER, ASK],
+        (ChatProjectEdit, Autonomous) => [NEVER, NEVER, ALLOW],
+        // two agents state their positions in a huddle for the user to decide: a card first under Cautious
+        (Huddles, Cautious) => [ASK, ASK, ASK],
+        (Huddles, _) => [ALLOW, ALLOW, ALLOW],
     }
 }
 

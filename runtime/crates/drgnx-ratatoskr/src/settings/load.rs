@@ -373,6 +373,9 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-agents-manager-context" => {
             values.agents_manager_context = default.agents_manager_context;
         }
+        "drgnx-agents-model-prices" => {
+            values.agents_model_prices = default.agents_model_prices.clone();
+        }
         "drgnx-runners-send" => values.runners_send = default.runners_send.clone(),
         "drgnx-runners-heavy" => values.runners_heavy = default.runners_heavy.clone(),
         "drgnx-runners-image" => values.runners_image = default.runners_image.clone(),
@@ -382,6 +385,10 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         }
         "drgnx-runners-shared-overlay" => {
             values.runners_shared_overlay = default.runners_shared_overlay;
+        }
+        "drgnx-runners-job-keys" => values.runners_job_keys = default.runners_job_keys.clone(),
+        "drgnx-runners-origin-key" => {
+            values.runners_origin_key = default.runners_origin_key.clone();
         }
         "drgnx-sandbox-proxy-pinned-addresses" => {
             values.sandbox_proxy_pins = default.sandbox_proxy_pins.clone();
@@ -393,6 +400,12 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-search-include" => values.search_include = default.search_include.clone(),
         "drgnx-search-exclude" => values.search_exclude = default.search_exclude.clone(),
         "drgnx-search-off" => values.search_off = default.search_off,
+        "drgnx-search-base" => values.search_base = default.search_base.clone(),
+        "drgnx-agents-plugins" => values.agents_plugins = default.agents_plugins.clone(),
+        "drgnx-agents-hook-rules" => values.agents_hook_rules = default.agents_hook_rules.clone(),
+        "drgnx-agents-hook-rules-off" => {
+            values.agents_hook_rules_off = default.agents_hook_rules_off.clone();
+        }
         "drgnx-agents-browser-program" => {
             values.agents_browser_program = default.agents_browser_program.clone();
         }

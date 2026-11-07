@@ -41,10 +41,20 @@
                   ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
       (skip-unless yml)
-      (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: release"
+      ;; Nidhogg's integration line while drgnx's next release is unreleased, its App passed on
+      (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: line"
+                          "NIDHOGG_LINE_APP_ID: ${{ secrets.NIDHOGG_LINE_APP_ID }}"
+                          "NIDHOGG_LINE_APP_KEY: ${{ secrets.NIDHOGG_LINE_APP_KEY }}"
                           (concat "tiers: " (cadr spec) "\n"))
       ;; no test step of its own: the tiers workflow is the one place those steps live
       (should-not (string-search "bin/drgnx test" yml)))))
+
+(ert-deftest drgnx-ci/the-tiers-fail-a-missing-nidhogg-primitive-on-the-line ()
+  ;; on `nidhogg: line' / `artifact' every test job runs strict (a missing primitive fails, as in the local runs);
+  ;; on `release' the value is empty, which drgnx-test-require-nidhogg reads as off (it compares to "1")
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
+    (skip-unless tiers)
+    (drgnx-ci-test--has tiers "\nenv:\n  DRGNX_NIDHOGG_STRICT: ${{ (inputs.nidhogg == 'line' || inputs.nidhogg == 'artifact') && '1' || '' }}\n")))
 
 (ert-deftest drgnx-ci/the-tiers-workflow-runs-each-tier-only-when-asked ()
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
@@ -55,12 +65,12 @@
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 10 (funcall count "runs-on:")))
-      (should (= 10 (funcall count "          path: drgnx\n")))
-      (should (= 10 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
+      (should (= 11 (funcall count "runs-on:")))   ; the ten tiers and nidhogg-line
+      (should (= 11 (funcall count "          path: drgnx\n")))
+      (should (= 11 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
-      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: [bins-linux, nidhogg-line]" "uses: ./drgnx/.github/actions/fetch-test-bins"))
     ;; and bins-linux runs for each of them
     (dolist (tier '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" tier)
@@ -74,8 +84,80 @@
     (should-not (string-search "brew install ripgrep rust" tiers))
     (should-not (string-search "brew install rust" (drgnx-ci-test--yml "runtime.yml")))
     ;; `nidhogg: artifact' puts the run's own build under the tests: the overlay on Linux, the tarball on macOS
-    (drgnx-ci-test--has tiers "nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}"
+    (drgnx-ci-test--has tiers "nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}"
                         "name: tarball-macos")))
+
+(ert-deftest drgnx-ci/nidhogg-line-installs-the-line-s-green-build-or-fails ()
+  ;; `nidhogg: line': the nidhogg-line job copies the tarballs of Nidhogg's green build of the line's head into the run
+  ;; under the artifact names, every tier job waits for it and installs them as `artifact' does; it never falls back
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml"))
+        (sh (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+        (line (drgnx-ci-test--file ".github/ci/nidhogg-line")))
+    (skip-unless (and tiers sh line))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "nidhogg-line")
+                        "if: ${{ inputs.nidhogg == 'line' }}" "uses: actions/create-github-app-token@"
+                        "permission-actions: read" "repositories: nidhogg" "bash drgnx/.github/ci/nidhogg-line.sh $NAMES"
+                        "run-id: ${{ steps.line.outputs.run }}" "github-token: ${{ steps.token.outputs.token }}"
+                        "uses: actions/upload-artifact@" "name: tarball-fedora-45" "name: tarball-macos")
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "nidhogg-line" "needs.nidhogg-line.result != 'failure'"))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if [ \"$MODE\" = artifact ] || [ \"$MODE\" = line ]; then")
+    (drgnx-ci-test--has sh "status=completed" "never falls back to the release" "exit 1")
+    (should (string-match-p "^[a-z0-9][a-z0-9./_-]*$" line))))   ; a line of its own names the branch
+
+(defun drgnx-ci-test--line (artifacts runs)
+  "Run nidhogg-line.sh for ARTIFACTS with a stub git and gh; RUNS is ((ID JOBS ARTIFACTS)...) newest first.
+Returns (EXIT . OUTPUT)."
+  (let* ((dir (make-temp-file "drgnx-line" t)) (bin (expand-file-name "bin" dir)) (data (expand-file-name "data" dir))
+         (ci (expand-file-name "ci" dir)))
+    (unwind-protect
+        (progn
+          (dolist (d (list bin data ci)) (make-directory d))
+          (dolist (f '("nidhogg-line" "nidhogg-line.sh"))
+            (copy-file (expand-file-name (concat ".github/ci/" f) drgnx-ci-test--root) (expand-file-name f ci)))
+          (with-temp-file (expand-file-name "runs" data)
+            (dolist (r runs) (insert (format "%s\n" (car r)))))
+          (dolist (r runs)
+            (with-temp-file (expand-file-name (format "jobs-%s" (car r)) data) (dolist (j (nth 1 r)) (insert j "\n")))
+            (with-temp-file (expand-file-name (format "artifacts-%s" (car r)) data) (dolist (a (nth 2 r)) (insert a "\n"))))
+          (with-temp-file (expand-file-name "git" bin) (insert "#!/bin/sh\nprintf 'abc123def456\\trefs/heads/x\\n'\n"))
+          (with-temp-file (expand-file-name "gh" bin)
+            (insert "#!/bin/sh\ncase \"$2\" in\n *workflows/build.yml/runs*) cat \"$DATA/runs\" ;;\n"
+                    " */runs/*/jobs*) r=${2#*/runs/}; cat \"$DATA/jobs-${r%%/*}\" ;;\n"
+                    " */runs/*/artifacts*) r=${2#*/runs/}; cat \"$DATA/artifacts-${r%%/*}\" ;;\nesac\n"))
+          (set-file-modes (expand-file-name "git" bin) #o755)
+          (set-file-modes (expand-file-name "gh" bin) #o755)
+          (let ((process-environment (append (list (format "PATH=%s:%s" bin (getenv "PATH")) (concat "DATA=" data))
+                                             process-environment)))
+            (with-temp-buffer
+              (let ((rc (apply #'call-process "bash" nil t nil (expand-file-name "nidhogg-line.sh" ci) artifacts)))
+                (cons rc (buffer-string))))))
+      (delete-directory dir t))))
+
+(ert-deftest drgnx-ci/the-line-takes-the-head-s-run-whose-tarball-jobs-passed ()
+  ;; the run may be red (its test jobs); what counts is the job that builds each asked tarball, and the artifact
+  (skip-unless (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+  (let* ((both '("Linux (fedora-45)" "macOS (NS app)")) (arts '("tarball-fedora-45" "tarball-macos"))
+         (red (list "7" both arts)))
+    ;; a red run whose tarball jobs succeeded is picked
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") (list red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^commit=abc123def456$" (cdr r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; the newest run whose tarball job failed is skipped for an older one that has it
+    (let ((r (drgnx-ci-test--line '("tarball-macos") (list (list "9" '("Linux (fedora-45)") arts) red))))
+      (should (= 0 (car r)))
+      (should (string-match-p "^run=7$" (cdr r))))
+    ;; only the asked tarballs' jobs matter
+    (let ((r (drgnx-ci-test--line '("tarball-fedora-45") (list (list "5" '("Linux (fedora-45)") '("tarball-fedora-45"))))))
+      (should (= 0 (car r))))
+    ;; a tarball job that failed, or an expired artifact: one error, exit 1, no run= line
+    (dolist (runs (list (list (list "8" '("Linux (fedora-45)") arts))
+                        (list (list "8" both '("tarball-fedora-45")))))
+      (let ((r (drgnx-ci-test--line '("tarball-fedora-45" "tarball-macos") runs)))
+        (should (= 1 (car r)))
+        (should (string-match-p "::error::" (cdr r)))
+        (should-not (string-match-p "^run=" (cdr r)))))))
 
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
@@ -111,12 +193,13 @@
     (should-not (string-search "emacs-30" tiers))))
 
 (ert-deftest drgnx-ci/the-modal-and-kitty-tiers-get-the-pinned-evil-and-kkp ()
-  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip
+  ;; without DRGNX_MODAL_ELPA / DRGNX_USER_ELPA the evil teardown, the modal isolation test and kitty's kkp tests skip,
+  ;; and so do Quick Open's vertico rows, which test/no-skip.eld then fails: in the gate's job too
   (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml")) (action (drgnx-ci-test--action "test-elpa")))
     (skip-unless (and tiers action))
     (drgnx-ci-test--has action "test/container/modal-elpa.sh" "echo \"DRGNX_MODAL_ELPA=" "echo \"DRGNX_USER_ELPA="
                         "etc/drgnx.lock.eld")
-    (dolist (job '("unit" "ui" "tty"))
+    (dolist (job '("unit" "no-lisp-writes" "ui" "tty"))
       (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "uses: ./drgnx/.github/actions/test-elpa"))))
 
 (ert-deftest drgnx-ci/the-timing-lane-judges-and-calibrates-in-the-image ()
@@ -149,6 +232,33 @@
       (should (string-search "if: ${{ !startsWith(matrix.os, 'ubuntu-26.04') }}" job step)))
     ;; one report and one cache per image
     (drgnx-ci-test--has job "escape-report-host-${{ matrix.os }}" "-escape-${{ matrix.os }}-")))
+
+(ert-deftest drgnx-ci/the-escape-legs-run-the-browser-rows-in-a-vm ()
+  ;; the agent browser's rows need Landlock ABI 9 (Linux 7.1), and the runners boot Linux 7.0 (ABI 8): the x64 escape
+  ;; legs run them in a Fedora 45 VM under KVM, after the host sandbox lane, which leaves out exactly them (the names
+  ;; their binary lists), so they neither fail there nor go unrun. The arm legs have no KVM, and emulated the guest
+  ;; never answered; the rows' one arm64-specific part, the browser's seccomp filter, is installed for real by gleipnir's
+  ;; own tests on the arm runner, so the arm legs skip the VM and say why
+  (let* ((rt (drgnx-ci-test--yml "runtime.yml")) (job (and rt (drgnx-ci-test--job rt "escape-host")))
+         (vm (drgnx-ci-test--file ".github/ci/browser-vm.sh")))
+    (skip-unless job)
+    (should vm)
+    (drgnx-ci-test--has job "--test browser_sandboxed -- --list --format terse --ignored"
+                        "bash .github/ci/browser-vm.sh up \"$RUNNER_TEMP/vm\""
+                        "bash .github/ci/browser-vm.sh put \"$RUNNER_TEMP/vm\" /usr/bin/bwrap"
+                        "'$bin' --ignored --test-threads 1")
+    (let* ((lane (string-search "name: agent core, sandbox lane" job))
+           (in-vm (string-search "name: the agent browser's rows in a Fedora 45 VM" job))
+           (step (and in-vm (substring job in-vm (string-search "\n      - " job in-vm))))
+           (arm (string-search "name: the agent browser's rows skip on arm64" job)))
+      (should (and lane in-vm (< lane in-vm)))
+      (should (string-search "runner.arch == 'X64'" step))
+      (should (and arm (string-search "runner.arch == 'ARM64'" job arm))))
+    ;; the x86_64 image is pinned by its sha256, which is checked; no arm64 image; the script is shellchecked
+    (drgnx-ci-test--has vm "Fedora-Cloud-Base-Generic-45-" "sha256sum -c -" "x86_64)")
+    (should-not (string-search "aarch64)" vm))
+    (should (= 1 (length (drgnx-ci-test--matches "sha=\\([0-9a-f]\\{64\\}\\)" vm))))
+    (drgnx-ci-test--has (drgnx-ci-test--yml "ci.yml") " .github/ci/browser-vm.sh ")))
 
 (ert-deftest drgnx-ci/the-msrv-is-one-number ()
   ;; 1.95 since 2026-11-06 (wasmtime's 48 LTS needs it): the workspace's rust-version, the job that builds with it, and
@@ -287,6 +397,19 @@
       (skip-unless yml)
       (should-not (string-search "DRGNX_TEST_TIME_FACTOR" yml)))))
 
+(ert-deftest drgnx-ci/macos-jobs-select-the-git-the-hub-trusts-before-their-tests ()
+  ;; pattern D: the hub runs only the git of the developer dir xcode-select names and refuses the image's Xcode under
+  ;; /Applications, so without the Command Line Tools no folder is a project and a task cannot be made
+  (dolist (spec '(("drgnx-tiers.yml" "macos" "bin/drgnx test") ("runtime.yml" "macos" "cargo test")))
+    (let ((yml (drgnx-ci-test--yml (nth 0 spec))))
+      (skip-unless yml)
+      (let* ((job (drgnx-ci-test--job yml (nth 1 spec)))
+             (select (string-search "sudo xcode-select -s /Library/Developer/CommandLineTools" job))
+             (tests (string-search (nth 2 spec) job)))
+        (should select)
+        (should tests)
+        (should (< select tests))))))
+
 (defun drgnx-ci-test--workflows-and-actions (workflows)
   "The text of each of WORKFLOWS and of every local action."
   (append (mapcar #'drgnx-ci-test--yml workflows) (mapcar #'drgnx-ci-test--action drgnx-ci-test--actions)))
@@ -347,9 +470,11 @@
         (should (equal (sort (copy-sequence needs) #'string<)
                        (sort (cl-set-difference (drgnx-ci-test--job-ids yml) (cons "gate" (nth 2 spec)) :test #'equal)
                              #'string<)))
-        ;; besides the gate's, the only `needs:' is the path filter's (no job waits on another it does not take data
-        ;; from); a job's own key, not the gate action's `needs' input
-        (should (= 1 (length (drgnx-ci-test--matches "^    needs: \\(\\[\\)" yml))))
+        ;; besides the gate's, a job waits only for the path filter and the images it pulls (no job waits on another it
+        ;; does not take data from); a job's own key, not the gate action's `needs' input
+        (dolist (n (drgnx-ci-test--matches "^    needs: \\[\\([^]]*\\)\\]$"
+                                           (substring yml 0 (string-search "\n  gate:\n" yml))))
+          (should (equal (split-string n ", *" t) '("changes" "images"))))
         (dolist (n (drgnx-ci-test--matches "^    needs: \\([^[\n]*\\)$" yml))
           (should (equal n "changes")))
         ;; the gate lets a job be skipped only when the path filter skipped it (or on a joint round, below)
@@ -536,7 +661,7 @@
   ;; main moves to a pull request's head by fast-forward: every checkout of the workflows a pull request runs takes the
   ;; head (on other events the expression is empty: the event's own commit), the path filter diffs the head, and the
   ;; head must descend from main's tip
-  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml"))
+  (dolist (name '("ci.yml" "macos.yml" "gui.yml" "runtime.yml" "drgnx-tiers.yml" "images.yml"))
     (let ((yml (drgnx-ci-test--yml name)))
       (skip-unless yml)
       (should (= (length (drgnx-ci-test--matches "\\(uses: actions/checkout@\\)" yml))
@@ -642,8 +767,28 @@
                         "ghcr.sh ref drgnx-bwrap \"$(bash test/container/image-tag.sh .github/ci/bwrap/Containerfile)-$ARCH\"")
     (should-not (string-search "needs: images" (drgnx-ci-test--job rt "escape-host")))
     (drgnx-ci-test--has (drgnx-ci-test--job rt "linux")
-                        "image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}"
+                        "|| fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}') }}"
                         "run: sh test/container/rust-packages.sh" "if: ${{ env.PREBUILT == '' }}")))
+
+(ert-deftest drgnx-ci/a-job-container-names-credentials-only-with-its-image ()
+  ;; GitHub refuses a job whose container `credentials' come out empty ("Unexpected value ''") before any step runs:
+  ;; the Rust job's fallback to plain Fedora (no prebuilt image for its inputs yet) never started. So no workflow
+  ;; has a `credentials:' block, and the Rust job's container is one expression: the prebuilt image with a token to
+  ;; pull it, else plain Fedora with none
+  (dolist (f '("ci.yml" "macos.yml" "gui.yml" "drgnx-tiers.yml" "tty.yml" "images.yml" "bootstrap.yml" "runtime.yml"))
+    (let ((yml (drgnx-ci-test--yml f)))
+      (skip-unless yml)
+      (should-not (string-match-p "^ +credentials:" yml))))
+  (let* ((linux (drgnx-ci-test--job (drgnx-ci-test--yml "runtime.yml") "linux"))
+         (start (string-search "\n    container: >-\n      ${{ needs.images.outputs.rust\n" linux))
+         (end (and start (string-search " }}\n" linux start)))
+         (expr (and end (substring linux start end)))
+         (or-at (and expr (string-search "\n      || " expr))))
+    (should or-at)
+    (drgnx-ci-test--has (substring expr 0 or-at) "\"credentials\":{{\"username\":\"{1}\",\"password\":\"{2}\"}}"
+                        "needs.images.outputs.rust, github.actor, github.token" "\"options\":\"--init\"")
+    (should (equal (substring expr or-at)
+                   "\n      || fromJSON('{\"image\":\"registry.fedoraproject.org/fedora:45\",\"options\":\"--init\"}')"))))
 
 (ert-deftest drgnx-ci/test-images-are-built-on-published-bases ()
   ;; each test image adds Nidhogg and a few small files to a base of only the Fedora packages (test/container/base/);
@@ -669,15 +814,34 @@
     (drgnx-ci-test--has images "needs: bases" "BASE_FILE: ${{ matrix.base-file }}"
                         "--build-arg \"BASE=$base\"")))
 
-(ert-deftest drgnx-ci/images-are-published-only-by-main-and-manual-runs ()
-  ;; a pull request or a ci/* push never publishes: a run whose inputs have no image yet builds its own
-  (let ((images (drgnx-ci-test--yml "images.yml")))
+(ert-deftest drgnx-ci/a-round-builds-each-missing-image-once-before-its-jobs ()
+  ;; The tiers' and the runtime's images were built by every job of a round whose inputs changed (seven builds a run):
+  ;; images.yml published only on main. Now ci.yml and gui.yml call it first, for this repository's own pushes and
+  ;; pull requests (never a fork's: its token cannot push, and its jobs build their own), and the jobs that pull
+  ;; images wait for it whatever it did; the gate lets it be skipped only on a fork's pull request
+  (let ((images (drgnx-ci-test--yml "images.yml"))
+        (own "if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}")
+        (fork "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'images' || '' }}"))
     (skip-unless images)
-    (drgnx-ci-test--has images "push:\n    branches: [main]\n" "workflow_dispatch:" "schedule:")
-    (should-not (string-search "pull_request" images))
-    (should-not (string-search "ci/**" images))
-    ;; a push or a manual run builds only the tags GHCR lacks; the weekly run rebuilds them all
-    (drgnx-ci-test--has images "if [ \"$EVENT\" != schedule ] && [ -n \"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" ]")))
+    (drgnx-ci-test--has images "on:\n  workflow_call:\n" "workflow_dispatch:" "schedule:"
+                        "group: images-${{ github.workflow }}-${{ github.ref }}")
+    (should-not (string-match-p "^  \\(push\\|pull_request\\):" images))
+    ;; a call or a manual run builds only the tags GHCR lacks; this workflow's own weekly run rebuilds them all (a
+    ;; caller's nightly does not); main moves the `f45' name to a tag an earlier round built
+    (drgnx-ci-test--has images
+                        "REBUILD: ${{ github.workflow == 'Test images' && github.event_name == 'schedule' }}"
+                        "if [ \"$REBUILD\" != true ] && have=\"$(bash .github/ci/ghcr.sh ref \"$NAME\" \"$tag\")\" && [ -n \"$have\" ]; then"
+                        "podman tag \"$have\" \"$image:f45\"" "if [ \"$moving\" = refs/heads/main ]; then podman tag")
+    (should-not (string-search "$EVENT" images))
+    (dolist (spec '(("ci.yml" "runtime" "tiers") ("gui.yml" "tiers")))
+      (let ((yml (drgnx-ci-test--yml (car spec))))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "images") own "packages: write"
+                            "uses: ./.github/workflows/images.yml")
+        (dolist (j (cdr spec))
+          (drgnx-ci-test--has (drgnx-ci-test--job yml j) "needs: [changes, images]" "if: ${{ !cancelled() && "))
+        (drgnx-ci-test--has (drgnx-ci-test--job yml "gate") fork)
+        ;; no other job may push: only the images job asks for packages: write
+        (should (= 1 (length (drgnx-ci-test--matches "\\(packages: write\\)" yml))))))))
 
 (ert-deftest drgnx-ci/an-image-tag-hashes-every-file-it-copies ()
   :tags '(:cond)
@@ -715,7 +879,7 @@
   (let ((action (drgnx-ci-test--action "test-image")))
     (skip-unless action)
     (drgnx-ci-test--has action "uses: actions/download-artifact@" "name: ${{ inputs.nidhogg-artifact }}"
-                        "\"FROM $base\"" "RUN bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz"
+                        "\"FROM $base\"" "RUN rm -rf /opt/nidhogg/* && bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz"
                         "expected one Nidhogg tarball" "echo \"$VAR=localhost/$NAME-nidhogg:run\"")))
 
 (ert-deftest drgnx-ci/nidhogg-sh-installs-a-local-tarball-without-a-download ()

@@ -53,6 +53,13 @@ pub fn task_updates(task: &str, child: &str, arg: &str) -> Vec<Value> {
     ]
 }
 
+/// The `tool_call` fields of an `Edit` of PATH: the path in `locations`, the input holding only `file_path` until
+/// the stream fills the rest.
+pub fn edit_shape(path: &str) -> Value {
+    json!({"title": format!("Edit {path}"), "kind": "edit", "locations": [{"path": path}],
+        "rawInput": {"file_path": path}, "_meta": {"claudeCode": {"toolName": "Edit"}}})
+}
+
 /// The `tool_call` fields claude-agent-acp sends for WHAT (`read FILE [OFFSET LIMIT]`, `grep PATTERN`,
 /// `web-search QUERY`, `web-fetch URL`, `write FILE`), with the tool name in `_meta.claudeCode.toolName`: a `Read` has
 /// `locations [{path, line}]` and the end line only from `limit`, a `Grep` has no `locations`, and `WebSearch` is

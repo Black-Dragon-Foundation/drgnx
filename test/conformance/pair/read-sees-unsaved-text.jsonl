@@ -1,0 +1,26 @@
+{"scenario": "pair/read-sees-unsaved-text", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A chat in your project calls read_file of a file the editor has open with unsaved edits: the hub asks the editor (pair-read) and the agent gets the buffer's text, not the disk's. The read is recorded with the buffer's version: the whole-file write after it travels as hunks against that text, at that version."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && printf 'one\\ntwo\\n' > $ROOT/project/notes.txt"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 90, "method": "pair/open", "params": {"file": "$ROOT/project/notes.txt", "kind": "normal"}}}
+{"do": "expect", "conn": "e", "json": {"id": 90, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/send", "params": {"id": "$sid", "text": "call:read_file {\"path\": \"$ROOT/project/notes.txt\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-read", "data": {"req": "$capture:r", "file": "$ROOT/project/notes.txt"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "pair/read-answer", "params": {"req": "$r", "text": "one\nunsaved\ntwo\n", "version": 5}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 3, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: one\nunsaved\ntwo\n"}]}}}, "within_ms": 20000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/send", "params": {"id": "$sid", "text": "call:write_file {\"path\": \"$ROOT/project/notes.txt\", \"content\": \"one\\nunsaved\\nTWO\\n\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "pair-apply", "data": {"write": "$capture:w", "session": "$sid", "file": "$ROOT/project/notes.txt", "version": 5, "floor": 5, "edits": [{"kind": "lines", "line": 3, "delete": 1, "text": "TWO\n"}], "ttl_ms": 2000}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "pair/answer", "params": {"write": "$w", "result": "applied", "version": 6, "saved": false}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 5, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 5, "result": {"session": {"status": "idle"}, "entries": {"$contains": [{"type": "agent", "text": "call: applied in the editor; the file on disk has neither the user's unsaved edits nor yours until the user saves"}]}}}, "within_ms": 20000}

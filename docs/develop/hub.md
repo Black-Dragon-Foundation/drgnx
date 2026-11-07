@@ -162,6 +162,13 @@ running: {commit, pid}?, gateway: {port, registrations, providers, keys_held, wa
 {path, mode, ok}, sqlite, job_agents}` (`gateway` is the running hub's: the providers named in `keys_held`, never a key;
 `keys_refused` only from a hub that could not be hardened, above). `ratatoskr restart` calls `restart`.
 
+**A recorded or replayed run.** `DRGNX_RECORD=DIR` or `DRGNX_REPLAY=DIR` in `serve`'s environment makes this run a
+recording or a replay ([recordings.md](recordings.md)); both at once, or a replay of what is not a recording this hub
+reads, exits 1 at start. `status` then has `recording: {mode: "record" | "replay", dir}`, and the log says it once.
+Recording, the gateway's tap writes each attempt and every gateway token is scrubbed from what is written; replaying,
+`ratatoskr-mock llm --replay DIR` is started beside the hub (`--parent` it) and every provider's base is `/p/ID` on it,
+keyless.
+
 **`restart`** (user class) answers `true`, then the hub stops as for `shutdown` and exits **75**. Under `--supervisor self`, where nothing would start it again, it releases
 its socket and cap and executes the binary again with the same arguments instead (the pid stays; the lock descriptor is
 close-on-exec, so the new image takes the lock at the exec).
@@ -348,6 +355,13 @@ its time box is a `clock::real` wait, so an advance past the time box answers af
 not mark, on something outside the hub that has not answered yet (a raw thread, a raw-spawned task's work), is still
 not seen: a barrier there answers as if the task were parked.
 
+**In-process tests** (a crate test that runs the hub's tasks itself, as `tests/search_index.rs` does with a project's
+tier 2) call `clock::install_virtual()`, `clock::advance(d)` and `clock::barrier()`, the barrier's steps 2 and 3, which
+answers the origins still waiting or busy (none when it held). Both wait for the runtime's workers to park, which only
+a runtime built with `clock::worker_parks` and `clock::worker_unparks` as its park hooks reports: on a plain
+`#[tokio::test]` runtime every advance runs out its 5 s of real time instead. The clock is the process's, so these
+tests share one such runtime and run one at a time.
+
 A hub without the sequencer refuses `__test_barrier` (`not-allowed`). A release build has none of these: `__test_advance`
 and `__test_barrier` are unknown methods (`no-method`), `__seq` is dropped and listed in the answer's `ignored`, and
 `serve --test-clock` or `--test-sequencer` is a usage error (exit 2).
@@ -408,7 +422,17 @@ between knows whole turns went by (a turn can be shorter than the update throttl
 for that session (the answer is the change number to continue from; the connection's subscriptions end with it, and
 `agents/entries/unsubscribe` ends one), and its tool entries have no `rawInput` either (a string `url` of the input
 stays as `url`). An editor that needs a tool call's input asks `agents/tool-input` (at most 256 KiB of its JSON text;
-a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. `agents/pause` cancels a
+a larger one comes back cut, as a string, with `truncated`). The hub keeps the whole input. A tool entry's `content`
+text over 64 KiB goes in an event as its first and last 32 KiB with `outputBytes`, the whole size; the hub itself keeps
+the first and last 8 MiB of an output past 16 MiB. `agents/tool-output {id, tool_call, from, to}` answers
+`{text, total_bytes, truncated}`: bytes `from..to` (cut at character boundaries, so the next `from` is `from` plus
+`text`'s length), at most 256 KiB; `truncated` says the answer holds less than was asked. A range that starts in
+output the hub did not keep gets the kept head and tail with a line saying how many bytes are gone. An agent message
+entry in an event carries `blocks`, `[{block, kind, spans: [{text, style}]}]`, the first time and for a connection
+that has just subscribed, then `patch`, the blocks that are new or changed (same shape; only the last block of the
+text is parsed again as it streams); `kind` is `paragraph`, `heading`, `code`, `quote`, `list`, `rule`, `table` or
+`html`, `style` is `text` or space-joined `emph`, `strong`, `strike`, `link`, `code`, `h1`..`h6`. `text` stays as it
+was. `agents/pause` cancels a
 busy session's turn once the tool call running now completes, and holds its queue. A mirror (below) subscribes while a
 transcript of its session is shown (`drgnx-agents-mirror-show` and `-hide`, run from `window-buffer-change-functions`
 for transcript buffers only) and fetches the transcript then; a session nobody shows has its turns told by the
@@ -536,14 +560,14 @@ the same directory.
 
 **The store at start.** Before it serves anything the hub opens `<data>/work.db` with the graph writer and
 `norn::migrate7`'s opening rule ([store.md](store.md#migration-from-schema-6-task-11)), and waits for its answer: a
-missing file is made at schema 10, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
-migrated in one transaction, so the first request sees schema 10. A newer file (above 10) makes the hub read-only; a
+missing file is made at schema 12, a schema-6 one is copied to `<data>/backup/work-pre7-<unix>.db`, checked, and
+migrated in one transaction, so the first request sees schema 12. A newer file (above 12) makes the hub read-only; a
 file below 6, or a migration that failed, leaves the writer not ready (writes answer its text) and the hub serves
 the rest. A failed migration is not tried again until the hub restarts. The coordination writer
 (`norn::store::CoordDb`) and the coordination tools' graph store run on the same file.
 
 **`work.db` read-only.** The front reads work.db through `urdr::open_readonly` on a thread of its own (`store.rs`).
-It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 10,
+It reads `meta.schema` (schema 7's `meta` view over `kv`) at the start and every 2 s. While it is above this hub's 12,
 the hub is read-only: a method that writes is `schema`, and `status.read_only` is the schema.
 
 **Rolling back.** The way back from schema 7 is `drgnx hub stop`, then `ratatoskr store restore-pre7 --yes`: the
@@ -621,10 +645,13 @@ opening rule's text (the writer looks at the file once more first); a newer one 
 `best_effort` event and `coord/agent`'s `seen` answer `{}`); a writer's refusal (a `seen` from the future, a review
 state) `invalid-params` with its text. `coord/prune` never fails (`{pruned: false}`). `coord/notify`, from any
 class, wakes the `events` broadcast. `status` says `store: {schema, writer: ready | not-ready |
-read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, denied_in?}`: the writer's state
-from its opening rule's last answer, the transactions the front's methods committed since start, when the move from
-schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list kept
-out of the migration (`last_backup` and `backup_ok` come with the daily backups).
+read-only, writes, migrated_at?, failed?, wal_bytes?, last_backup?, backup_ok?, history_backup?, denied_in?}`: the
+writer's state from its opening rule's last answer, the transactions the front's methods committed since start, when the
+move from schema 6 committed, why a migration failed, the WAL's size, and the copies that still hold what the deny-list
+kept out of the migration (`last_backup` and `backup_ok` come with the daily backups; `history_backup` says whether the
+last night's copies of the edit histories were all good). `graph/backup` and the nightly timer also copy each
+project's `history.db` to `<data>/backup/history-<project>.db` (one copy each, replaced, never rotated) and answer
+`history: [{project, path, ok, bytes}]`; a failed one never fails the `work.db` copy.
 
 `messages/send`'s `sender` is refused from every connection (`invalid-params` at `sender`): a message's sender is
 its connection's, and the hub is work.db's one writer (coordination.md, "Who writes what").
@@ -868,17 +895,45 @@ the status bar.
 ## Session start: lock, sandbox and matrix
 
 A session starts in this order (`agents/session.rs`): the matrix's cells for the session's columns, `lock::plan` (Claude's
-managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `-c` overrides plus
-`projects."<cwd>".trust_level="untrusted"`, Gemini's `--approval-mode default`), a refusal of a worker or manager whose
+managed settings plus the deny/ask rules of the user's and the worktree's settings, Codex's `CODEX_CONFIG` and
+`INITIAL_AGENT_MODE=read-only`, Gemini's `--approval-mode default`, Kimi Code's and DeepSeek Harness's hub-owned homes), then
+the lock's parts that depend on the session's subscribed `before-tool` kinds and folder (`with_hook_asks`: Claude's
+managed ask rules; `with_locks`: Codex's untrusted worktree and managed hook, Gemini's `--admin-policy`, Kimi Code's
+ask rules, DeepSeek Harness's `--patch` overlay; `with_gateway_env`), a refusal of a session that would run a
+subscribed kind unhooked (`lock::hooked`, `lock::unhooked_refusal`: an agent with no lock, a Gemini whose system policy
+shadows the admin policy or whose admin policy Gemini's loader would drop, `gemini_policy_problem`), a refusal of a worker or manager whose
 lock is not enforced unless the preset is autonomous, a refusal of a chat in a project whose `chat.project-read`
 cell is never (the message names the row; it is not started without the project instead), `launch::spawn` (`spawn_plain` for a chat in its own scratch
 directory, `spawn_chat` for a chat in a project: the project read-only, its scratch directory the only writable path;
 test builds spawn the mock unsandboxed), the sandbox status pipe read (`gleipnir::read_status`), the ACP
-handshake, `lock::verify` (a lock that does not hold kills the session). Every permission request then goes through
+handshake, `lock::verify` (a lock that does not hold kills the session; Codex's, proven or not, holds only when the
+mode `session/new`'s answer reports, `hermod::Conn::reported_mode`, is `read-only`; an enforced Gemini's, when its
+`initialize` reports `_meta["_drgnx/panel"].adminPolicy`, only when the admin policy loaded with at least the rules
+the lock wrote, `lock::gemini_policy_confirmed`; Kimi Code's, only when the reported mode is not `plan`,
+`lock::kimi_mode_refused`). A running session's `current_mode_update` to a mode its lock refuses (Kimi Code's `plan`,
+`lock::refused_mode_switch`) ends it the same way. Every permission request then goes through
 `MatrixGate::check` with the session's id (so a manager's delegation applies): allowed answers at once, never
 refuses at once, an ask waits for the user; a session's `exec/start` is checked as `code.edit` the same way. For the
 browser rows an ask that the user's matrix grant for the session or its plan already covers is allowed with no card
 ([coordination.md](coordination.md), "Grant records").
+
+**The lock's files** (`LaunchPlan::ro_files`, `sandbox::lock_files`): one in the session dir (`lock/drgnx-<hash>.toml`,
+Gemini's admin policy, named by the first 16 hex digits of its content's SHA-256 so the rules drgnx's Gemini fork counts
+by file name, `Admin: <name>`, are drgnx's and no system policy's; `lock/dsh-overlay.yml`) is written there, and the agent reads that dir and never writes it on every target; one at a
+fixed path (`/etc/codex/requirements.toml`, `/etc/codex/config.toml`, Kimi Code's `config.toml` in its home) is
+written to the session's scratch and bound read-only at that path, which only the full tier can do: elsewhere the
+launch is refused (`Rule::Setup`). The user's own `/etc` is never touched. A gateway plan's `gateway_url_env` names the
+variables that get the relay's URL beside `ANTHROPIC_BASE_URL` (Kimi Code's, DeepSeek Harness's).
+
+**The `before_tool` tool** (`agents/before_tool_tool.rs`): a Codex session whose hooks subscribe to a kind other than
+`drgnx` is marked before its MCP session opens (`Sessions::mark_before_tool`), and its socket serves `before_tool
+{tool_name, tool_input, tool_use_id}` beside the coordination tools, outside the hook wrapper they share. Codex's
+managed PreToolUse hook (an `mcp_tool` handler in the lock's `/etc/codex/config.toml`) calls it before each tool: it
+runs `hook_points::before_tool` at `At::Adapter` (no `change`) with the kind of Codex's tool name (its shell `execute`,
+`apply_patch` `edit`, …) and answers `{}`, or a deny in the hook's shape (`hookSpecificOutput.permissionDecision`),
+never an `allow` (Codex's approvals still decide). A hub tool's name is answered `{}` without running anything (it is
+hooked at its server), and the seam records nothing for `mcp__drgnx__before_tool`, so it never hooks itself. Codex
+fails the hook open on a timeout, so the snapshot lists those kinds under `hooked.by_adapter` with that note.
 
 ## Sessions across a restart
 
@@ -918,9 +973,227 @@ resume, the tick goes on from the store with the same workers, and the wakes sti
   ([coordination.md](coordination.md#delivery-the-hub)); a prompt queued in a session is read back from its
   `<sid>.queue.json`.
 
+## Rewind and fork
+
+A step of an agent is a point its conversation can go back to (`agents/rewind.rs`). How much of the conversation comes
+back is its **restore level** (`runstav::methods::history::RestoreLevel`, `message` / `turn` / `summary`):
+`rewind::expected_level` gives Claude with `sessionCapabilities.fork` `message`, Codex with it `turn`, and anything
+else (Gemini, an agent without the capability) `summary`.
+
+- **The cut** (`rewind::point_for`, pure). Message: the last `step.message_id` at or before the step; the steps of one
+  assistant message share it. A subagent's step (part 2's `step_detail.parent_tool`) rounds down to the message before
+  the one that holds its `Task` call, so the fork never lands inside a call with no result. Turn: the end of the last
+  turn that completed at or before the step, cut at that turn's last message, because a Codex fork point is inclusive
+  and cannot be a turn in progress. A turn's end is its last step: once a turn ends every step of it carries its
+  `turn_id` (the step writer's anchors), so a step inside an ended turn rounds down too. The steps a cut drops are
+  `retained`: a labelled summary carries them, so the revert needs the user's message (`needs_message`). No id found (or the first turn still running): `summary`, carrying every step up to
+  the one asked for. Only the step's own conversation counts: a step an earlier revert abandoned (`step.undone_by`)
+  is no cut point, ends no turn and is in no summary, since the new conversation never held it and may reuse its turn
+  ids (Codex's restart after a fork). The steps after a step that is not abandoned stay its conversation's, abandoned
+  or not, because a revert marks them before it rewinds; an abandoned step's conversation is the steps its revert
+  abandoned with it and the ones before them that no revert abandoned.
+- **The attach** (`session::Attach`: `New`, `Resume(acp)`, `Fork { source, at, level }`). A fork always runs in a
+  fresh process: `launch` spawns the agent in its sandbox as for a new session, then sends `session/fork` with the
+  session's `mcpServers` (its drgnx tools) and the lock's `_meta`, and verifies the lock afterwards exactly as after
+  `session/new` (a lock that does not hold kills it). An agent without the fork capability, or a fork the agent
+  refuses (its transcript is gone, the message is unknown), gets a new conversation on the same process instead:
+  `Launched.level` is then `summary`, with the reason logged and returned, and the session is alive.
+- **The rewind** (`rewind::rewind_conversation(hub, front, target, first)`, `Target { sid, seq }`) keeps the hub
+  session: its id, `asession` row, budget, task, queue and workers. It starts from the row, not a live session, so it
+  runs at start-up too; a session with no row (a finished one) is `session-gone`. It forks the conversation the
+  step ran in (`step.acp`), so a second rewind to a point before the first forks the older conversation. A live
+  session gets the turn core's `Detach` (below), then is closed as a rotation closes it (`close_for_swap`: transcript
+  and queue kept on disk); `relaunch` launches it again with `Attach::Fork` and writes the row's `acp` only once that
+  launch has landed, so a failed launch leaves the row resumable. The new conversation then gets `Reattach` with what
+  it is told first. Steps go on with the session's `seq` and name their conversation; the budget counts the new
+  conversation's spend from its first reading (`spend_total_in` names `self.acp`).
+- **What it is told first** (`rewind::first_text`): at Message or Turn level, the user's message alone, or nothing
+  (no turn starts). When a summary must be delivered (Summary level, or steps a cut dropped), it is the labelled
+  summary of the session's facts cut at the step (`handoff::summary(.., up_to)`: its steps up to that `seq` in the
+  step's own conversation, by the cut's own filter (`rewind::same_line`, so no step an earlier revert abandoned), the
+  head recorded there, and the decisions stamped in those steps; an unstamped decision unless its version is after
+  the step's `log_version`) joined with the user's message, which is then required: without one the rewind is refused
+  (`needs-message`) before anything changes. A fork that lands at Summary though it was planned higher is told the
+  summary and the message; with no message the summary waits, held, at the front of the queue.
+- **The fork** (`rewind::fork_conversation`): a new session in another directory, from the step, while the source
+  keeps running. The same provider forks the step's conversation at the cut; another provider gets a new
+  conversation told the labelled summary. A finished source is read from its `session:<sid>` entity (profile, cwd).
+  The new session is linked `forked_from` its source with `{seq, level}`, and the user's message is its first prompt.
+- **The turn core across the swap** (`TurnEvent::Detach`, `TurnEvent::Reattach { told }`): `Detach` cancels a
+  running turn (`CancelTurn`) and cuts it off, so its later `PromptDone`/`PromptFailed` (which name their turn)
+  changes nothing; a prompt whose `Sending` had not answered `Prompt` goes back to the queue's front; no turn starts
+  while detached, a `Send` queues and a Stop holds the queue. `Reattach` puts `told` ahead of the queue, as
+  `TurnCore::resume` does, then starts the next prompt unless the queue is held. The core decides; the rewind only
+  sends the two events.
+
+## Revert to here
+
+A revert takes an agent's work back to one of its steps: the files, the decisions and the conversation as one record.
+
+- **The methods** (`history::revert`, user only). `history/revert/preview {session, seq} | {decision}` answers the
+  card: the files, the overlaps, the files merged with the user's later edits (`non_overlapping_files`), what the
+  revert cannot undo, the level, `needs_message` (the rewind tells the conversation a summary: at Summary level, or
+  for steps the cut leaves out, as at a subagent's step; apply then refuses without a message before anything
+  changes), `blocked`, the paths left out, the conversation (`restored`, or
+  `not-restored` with a label: a finished worker's is "conversation not restored: the agent has finished") and
+  `fork` (offered beside Apply for a finished worker or a blocked revert). The preview is kept in the project's
+  `history.db` (`History::keep_preview`, under a random 52-bit id unique across the projects), so it survives a hub
+  restart, and is taken once on apply (`take_preview`, from whichever project holds it).
+  `history/revert/apply {preview_id, mode, choices, message}` answers `Applied {op, session, level,
+  commit, skipped, conversation, kept_patches, undone}` and broadcasts `history/applied {op, paths, worktree}`.
+  Refusals start with their reason: `stale` (the files or the session moved since the preview, or no such
+  preview), `blocked`, `needs-message`, `not-revertible` (no checkpoint: older than the history; an agent's call),
+  `busy` (a revert of the tree runs).
+- **The user's work is never lost.** Each path the checkpoint and the files now differ in is the agent's alone when
+  it equals the agent's newest checkpoint (restored from the step's checkpoint), else the user's: a text file whose
+  edits do not meet the agent's is merged (`verdandi::merge3`: base the agent's last version, ours the user's,
+  theirs the step's) and the user's edit stays; where they meet it is an overlap, and its choice decides: keep the
+  user's (the default, also for a missing choice; listed `edited-later`), take the reverted file, or an edited text.
+  A text file the project's `history.db` holds as it is now is decided by the history instead: the typing waiting to
+  settle is flushed, and `History::preview_revert` over the records the session caused after the end of the step whose
+  checkpoint is used gives the text with the agent's operations undone and everyone else's kept, so an edit the user
+  made between two agent steps (which the agent's later checkpoint holds) stays; a hunk where the two meet is an
+  overlap as above (`docs/develop/history.md`, "Testing", says what this cannot tell apart).
+  `roll-back-mine` writes every path back. Either way the files as they were are kept as a tree under
+  `refs/drgnx/undone/<op>` of the shadow repository (`Applied.undone`).
+- **The record** is one `revert` record in the project's `history.db`, its parents the records the session caused
+  after the step (`History::caused_by`), or one `agent_step` record standing for those steps when the history has
+  none. A revert is the user's act: the record is by the user's peer, and what the revert is about to write at each
+  path (the checkpoint's file, link or nothing, or the merged or edited text) is applied onto the path's document
+  first as the user's operations, which the record holds (and each version is published as `history/file-version`).
+  So the history holds the files as the revert leaves them, and a later revert of them is decided by the history
+  again. The pending record (`History::mark_pending`) holds the plan and the answers until the last step clears it.
+  At start-up `agents::Hub::resume_all` first calls `history::revert::finish_pending`, which finishes every pending
+  revert from the files on.
+
+- **What it cannot undo** (`timeline::effects::of(front, target)` → `RevertEffects`, labelled `computed`), each from a
+  hub record after the step began, listed first on the card: the session's commits a remote already has (remote
+  tracking refs that contain them, read in the trusted store), messages it sent that their recipient has `read` or
+  `acted` on, its decisions after the step that another decision depends on (`decisions/effects`' computed
+  dependents), the tasks it filed and the settings it changed (txs of the session; a setting through
+  `mcp:settings_change`), its commits already merged into its job's `job/<job>` branch, what the steps after it spent
+  (cost by unit and tokens), and its jobs that run or wait: the hub's own (`exec::Live`), then the runners queue's
+  queued rows and remote attempts (`runtime.db`'s `rq_job` and `rq_attempt`), each named with where it runs.
+- **When it must become a fork** (`timeline::effects::blocked(front, dependents, sid)` → `[Blocked {decision, commit,
+  session, branch}]`): a dependent commit of another session that the integration branch already holds (`git
+  merge-base --is-ancestor` in the commit's trusted store; the branch is the session's `job/<job>`, or for a session
+  with no job the branch its repository's `HEAD` names). The session's own dependents never block: the revert takes
+  them too.
+- **Writing into an agent's tree** (`history::tree`, `timeline::snapshot`). `tree::restorable(rel, extra)` refuses
+  the lock's `NEVER_RESTORED` (`PROTECTED_RO`: `.claude`, `.codex`, `.gemini`, `.envrc`, `.git/hooks`,
+  `mise.toml`; the same list a runner's returned patch is refused by) at any depth, any `.git` component, and the
+  secret files a snapshot leaves out (`snapshot::excludes`, with the settings' extra paths), component by component
+  (case-folded on macOS). `snapshot::restore_into(root, source, target, tree, only, extra)` makes a tree equal to a
+  checkpoint: what it holds now is written as a tree into the source's shadow repository, `snapshot::changed`
+  (`diff-tree -r -z --raw`, both sides' git modes) lists what differs, and each path is written by mode through
+  `eitri`: `100644`/`100755` with `write_regular` and the mode, `120000` with `symlink_beneath` (the target as
+  bytes), a path the checkpoint lacks with `remove_beneath`; a gitlink (`160000`) and a refused path are skipped and
+  listed. Nothing is chmodded through a path. `snapshot::tree_at(root, worktree, sid, seq)` is the nearest snapshot
+  at or below a step.
+- **The forward commit** (`tree::commit_in_sandbox(front, sid, cwd, paths, subject)`), as `git commit --only` but
+  quiet about a path neither side has (a deletion committed before a crash, a file never added): HEAD is read into
+  the commit's own index (`GIT_INDEX_FILE=.git/drgnx-commit-index`), the paths updated there (`update-index --add
+  --remove`), the index compared with HEAD (`diff-index --cached --quiet`: equal is nothing to commit), committed
+  (`commit --no-verify`, `core.hooksPath=/dev/null`, no signing), and the same paths updated in the worktree's own
+  index; what the agent staged besides them stays staged. In a folder a sandboxed agent worked in
+  (`RunGit::is_touched`) each run is a Gleipnir one-shot of the session's worktree shape
+  (`launch::worktree_launch`: the folder writable, the protected paths and the git folder's hooks and config
+  read-only, the provider's relay only), and the placeholders that launch made to pin absent protected files
+  (`.envrc`, `mise.toml`) are removed when it ends (`sandbox::remove_stubs_since`: only the ones after the mark it
+  took, so the session's own stubs stay bound); elsewhere with plain git. The commit is read from the ref files after
+  (`snapshot::head_of`), since the sandboxed run keeps no stdout; nothing to commit is `Ok(None)`, so a retry after a
+  crash is quiet. A failure is reported and the files stand; in a linked worktree the sandboxed commit cannot reach
+  the common folder and fails.
+- **The order** (`history::revert_core`, pure): after the shell's check, `Quiet` (the session detached from its
+  turn core, its jobs stopped), `Rescan` (a record new since the preview is `stale`), `Record` (the history record and
+  the pending record: durable from here), `Files` (each path announced to the origin core as the hub's write before
+  it is written: the checkpoint's blob, or the blob of the merged or edited text hashed as the watcher hashes what it
+  reads, so the watcher's event about it is no outside edit), `Graph`, `Conversation` (a finished worker has
+  none: said once, and skipped), `Commit`, `Clear`, then `history/applied` and the manager told: a worker's manager
+  (its row's `parent`) gets a message from the hub naming the worker, the step, the conversation and the commit. A
+  failure before
+  `Record` reattaches the session and refuses; a conversation that cannot be restored is said and the commit follows;
+  a failed commit is reported and the record cleared. A crash forgets the revert; the next start finishes it from the
+  pending record (`Files` on, each step idempotent). A message or a Stop sent meanwhile is the turn core's (queued or
+  held until the reattach); the cancelled turn's answer changes nothing; a runner's patch returned meanwhile is kept
+  on its job, never applied: the returned-patch path asks `history::revert::patch_returned(front, sid, job)` first,
+  which is true while the session's revert runs, and the job is listed in `Applied.kept_patches`. Every order of these
+  is tested with skuld, composed with the turn and origin cores; the steps on a live session of the mock agent, a
+  hub stopped after a step and a second one finishing, are tested with a park hook (test builds only).
+- **A fork's tree** (`tree::fork_tree(front, source, new_sid)`): `RunGit::task_worktree(repo, "fork-<sid8>", new_sid,
+  base)`, where `repo` is the worktree's recorded repository (`worktree_base`) or the source's own untouched folder,
+  and `base` the step's head when that commit verifies there (a snapshot task's branch, named by its `.git/HEAD`, is
+  brought into the repository through its bundle first, `RunGit::import`: verified, fsck'd, written
+  compare-and-swap), else the worktree's recorded `base_commit`; the
+  checkpoint (`step.snapshot`, else `tree_at`) is then written over it with `restore_into` and the folder marked
+  touched.
+
+## Fork from here
+
+A fork starts a second agent from one of a session's steps, in its own tree, while the source runs on
+(`history::branches`, user only, a direct act of the user's: no task, no job, no `job/propose`, no approval card, no
+budget chain; the forecast line the user saw is the editor's).
+
+- **`history/fork {session, seq, message, profile?}`** answers `Forked {id, branch, source_branch, path, level}`. In
+  order: the tree (`tree::fork_tree`, above), then the fork's history branch, then the conversation
+  (`rewind::fork_conversation` with the new session id the tree was named for, told the user's `message`, which is
+  required). The branch is named for the fork's tree (`wt/<id>`), so the tree's later changes land on it; it holds
+  the source tree's documents as they were at the step: `History::fork` at the record the step anchors
+  (`step.history_op`), else the newest record the session caused by the step's end. A step whose record holds none of
+  the source's documents (the history has none of its files yet) starts the branch from its base. Either way there
+  is one `fork` record. A conversation that cannot start removes the tree again and freezes the branch. A Codex fork
+  marks its new tree untrusted, as every Codex launch marks its folder (`projects."<cwd>".trust_level`).
+- **`history/fork/drop {id}`** (a session linked `forked_from` another): its agent stopped, its tree removed (only a
+  tree the hub made for this fork, `fork-<sid8>`: `git worktree remove --force` and `worktree prune` in the trusted
+  repository the fork was made from, never git in the tree, then what is left with `remove_dir_all`, which follows no
+  link), its history branch frozen. The branch is kept for compare and expires 90 days later as a frozen worktree does
+  (`History::expire`); its git branch stays.
+- **`history/compare {a, b}`** (two branch names, from `Forked`): the hunks B has that A does not, per file, each
+  with who wrote B's text (the peer's author), the record and the session and step that record names
+  (`History::compare`), from whichever project's history holds both.
+- **`history/take {from, worktree, hunks}`**: whole hunks of branch FROM (a hunk's `theirs_start`/`theirs_end` from
+  compare) into the worktree's branch as the user's new text, one `merge` record whose provenance is the source
+  element ids (`History::take`; part of a hunk is refused and nothing changes), then the files written through
+  `eitri`, each announced to the origin core first. A file whose disk differs from what its history holds is refused
+  (`stale`), so the user's unsaved or unrecorded work is never overwritten; a protected path is refused.
+- **`history/redo {session, op}`**: the revert OP put back. Each path the revert changed (the step's checkpoint
+  against `refs/drgnx/undone/<op>`) goes back to the files as the revert found them when the user has not touched it
+  since, is merged with the user's later edit where they do not meet (`merge3`: base the checkpoint's, ours the
+  user's, theirs the undone), and is left, listed `edited-later`, where they meet. One `redo` record naming the
+  revert, by the user's peer and holding what the redo writes as the user's operations on the documents (as a
+  revert's record does), one forward commit (`tree::commit_in_sandbox`), `history/applied`, and the agent told by a message from the
+  hub: its conversation is not restored.
+- The methods are tested on live sessions of the mock agent in a real repository: an agent's writes recorded as the
+  session handler records them (`Hub::on_agent_write`), stamped at the steps' own times.
+
+## One hunk of a record
+
+What Reject on one agent hunk calls, a worktree agent's or a paired chat's (whose writes land in the user's buffers,
+as the peer `agent:<session>` on the user's branch). Both user only; `history/hunk.rs` over `verdandi::revert_hunk`.
+
+- **`history/op/hunks {worktree, op? | session?}`**: the hunks of record OP, or of every `edits` record of SESSION's
+  agent on the worktree's branch, each `{op, path, index, start_line, end_line, text, deleted, state, undone_by}`:
+  lines 1-based in the text now, `text` the record's text still there, `deleted` what it removed, `state` `live`,
+  `partly-undone` or `undone`, and `undone_by` the records that took its text away or put back what it deleted, each
+  with its author (the user's `C-/` of an agent's write is `{"kind": "user"}`: "undone by you"). Settling typing is
+  written into its records first.
+- **`history/revert/hunk {worktree, op, path, hunk}`**: hunk HUNK of record OP reverted as the user's operations,
+  keeping what the user typed since. `state`:
+  - `applied`: no editor buffer tracks the file, so the hub applied it, wrote one `revert` record (parent OP, OP's
+    cause) and the file through `eitri`, announced to the origin core first, then `history/applied`. A file whose
+    disk differs from its history is refused (`stale`), as `history/take` is.
+  - `in-buffer`: an editor buffer tracks the file, so the hub changes nothing (it never writes behind an open buffer)
+    and answers `buffer_id`, `version` (the SHA-256 of the text the edits apply to, the hash `history/batch` carries)
+    and `edits` (`history/batch` changes, in order, with the origin `revert:<op>`). The editor applies them when its
+    buffer hashes to `version`; its batch then records them as the user's operations in one `revert` record naming OP.
+  - `conflict`: the text the hunk deleted has no place to go back to (a neighbour it sat between is gone, or other
+    text now sits beside it outside the agent's own text): `conflict {start_line, end_line, users, reverted}`,
+    nothing changed.
+  - `undone`: nothing to do; `undone_by` names who did.
+
 ## The store
 
-The front serves the store (`work.db`, schema 10) itself: `graph/*` (reads and walks, history, revert, excise, grants,
+The front serves the store (`work.db`, schema 12) itself: `graph/*` (reads and walks, history, revert, excise, grants,
 proposed txs, read-only SQL, export, import, backup, settings, the personal-notes opt-ins) and `tasks/*` (the tracker
 for the editor), all class `user`. `cards/settle` of an `access` card makes a grant (or refuses) and of a `close`
 card closes the task (or rejects), in the settle's tx. `mcp/session` takes the session's `profile` and its tool sets (`tools: {tracker}`), and
@@ -1030,16 +1303,27 @@ result may (a transcript entry's ACP fields, a job's tasks).
 <!-- hub-methods:begin -->
 | Method | Class | Params | Result | Writes |
 |---|---|---|---|---|
+| `agents/buffer/unwatch` | user | `{view: string}` | `boolean` | no |
+| `agents/buffer/watch` | user | `{doc_version?: natnum, file: string, view: string, worktree?: string}` | `BufferFrame` | no |
+| `agents/compact-preview` | user | `{id: Id}` | `{frees?: natnum, kept?: [ContextItem], note?: string, summarised?: [ContextItem]}` | no |
+| `agents/config` | user | `{id: Id, option: string, value: string}` | `boolean` | yes |
+| `agents/context-drop` | user | `{id: Id, item: string}` | `boolean` | no |
+| `agents/context-pin` | user | `{id: Id, item: string, pinned: boolean}` | `boolean` | no |
 | `agents/do` | user | `{id: Id, item?: RequestId, n?: natnum, op: "deliver-queue" \| "unqueue" \| "requeue" \| "review", reject?: boolean, text?: Prompt}` | `boolean` | yes |
 | `agents/entries/subscribe` | user | `{session: Id}` | `{seq: natnum}` | no |
 | `agents/entries/unsubscribe` | user | `{session: Id}` | `boolean` | no |
+| `agents/explain` | user | `{id: Id, item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | `{facts?: [Fact], item: "context" \| "cost" \| "mode" \| "model" \| "waiting" \| "mcp"}` | no |
+| `agents/follow` | user | `{session: Id, view: string}` | `boolean` | no |
 | `agents/get` | user | `{id: Id}` | `{entries?: [Entry], seq: natnum, session: Snapshot}` | no |
+| `agents/huddle/get` | user | `{id: Id}` | `Huddle` | no |
+| `agents/huddle/start` | user | `{clash?: string, sessions?: [Id]}` | `Huddle` | yes |
 | `agents/kill` | user | `{id: Id}` | `boolean` | yes |
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
+| `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
-| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string}` | no |
+| `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
 | `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
@@ -1048,6 +1332,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/start` | user | `{about?: string, cwd?: AbsPath, document?: AbsPath, env?: [{name: EnvName, value: string}], job?: Id, profile: string, role?: "manager" \| "worker" \| "chat", task?: TaskRef}` | `{id: string, name: string}` | yes |
 | `agents/stop` | user | `{id: Id}` | `boolean` | yes |
 | `agents/tool-input` | user | `{session: Id, tool_call: string}` | `{raw_input: any, truncated: boolean}` | no |
+| `agents/tool-output` | user | `{from: natnum, id: Id, to: natnum, tool_call: string}` | `{text: string, total_bytes: natnum, truncated: boolean}` | no |
+| `agents/unfollow` | user | `{view: string}` | `boolean` | no |
+| `agents/wheel/give` | user | `{id: Id}` | `boolean` | yes |
+| `agents/wheel/saved` | user | `{req: natnum, unsaved?: [AbsPath]}` | `boolean` | no |
+| `agents/wheel/take` | user | `{id: Id}` | `boolean` | yes |
 | `brief/build` | user | `{task: string}` | `{cut: boolean, edited: boolean, parts?: [BriefPartText], task: string, text: string}` | no |
 | `brief/set` | user | `{task: string, text: string}` | `{note: string}` | yes |
 | `browser/check` | user | `{}` | `BrowserCheckResult` | no |
@@ -1075,8 +1364,15 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/get` | user | `{id: Id}` | `ExecRow` | no |
 | `exec/list` | user | `{running?: boolean, session?: Id}` | `{jobs?: [ExecRow]}` | no |
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
-| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
+| `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
+| `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
+| `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
+| `forecast/accuracy` | user | `{profile?: Text, role?: Text}` | `{rows?: [AccuracyRow]}` | no |
+| `forecast/get` | user | `{job: Id}` | `Forecast` | no |
+| `forecast/session` | user | `{profile?: string, session: Id}` | `Forecast` | no |
 | `gateway/editor-token` | user | `{}` | `{token: string, url: string}` | no |
 | `gateway/keys` | user | `{keys: ProviderKeys}` | `boolean` | no |
 | `gateway/keys-held` | user | `{}` | `{providers?: [Id]}` | no |
@@ -1102,6 +1398,21 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
+| `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
+| `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
+| `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
+| `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
+| `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string, version: natnum}` | `{ok: boolean}` | yes |
+| `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
+| `history/revert/hunk` | user | `{hunk: integer, op: integer, path: string, worktree: string}` | `HunkReverted` | yes |
+| `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
+| `history/take` | user | `{from: string, hunks: [{path: string, theirs_end: integer, theirs_start: integer}], worktree: string}` | `{op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
+| `history/unregister` | user | `{buffer_id: string}` | `{ok: boolean}` | yes |
 | `job/approve` | user | `{budget?: Usd, id: Id}` | `JobSummary` | yes |
 | `job/block` | user | `{reason?: Text, task: TaskRef}` | `JobSummary` | yes |
 | `job/card` | user | `{action: CardAction, arg?: StringOrNumber, card: natnum}` | `JobSummary` | yes |
@@ -1117,7 +1428,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `job/unblock` | user | `{task: TaskRef}` | `JobSummary` | yes |
 | `machines/list` | user | `{}` | `{machines?: [Machine]}` | no |
 | `machines/report` | user | `{machine: string, slots?: [{holder?: string, id: string, kind: string}], ttl: number}` | `{local: boolean, machine: string, slots?: [Slot]}` | no |
-| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
+| `matrix/check` | user | `{action: "agents.start" \| "agents.model" \| "agents.control" \| "graph.change" \| "task.done" \| "spend" \| "spend.over" \| "code.read" \| "code.edit" \| "commit" \| "merge.integration" \| "push.ci" \| "push.main" \| "code.ci-config" \| "machines" \| "job.container" \| "job.keys" \| "network" \| "browser" \| "browser.web" \| "browser.private" \| "unsandboxed" \| "settings.change" \| "user.private" \| "user.emacs" \| "chat.project-read" \| "plugin.abilities" \| "chat.project-edit" \| "huddles", amount?: number, plan?: string, project?: string, who: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `{verdict: "allow" \| "ask" \| "never", why?: string}` | no |
 | `matrix/get` | user | `{plan?: string, project?: string, who?: {agent?: string, provider?: string, role?: "manager" \| "worker" \| "chat"}}` | `MatrixView` | no |
 | `mcp/attach` | service | `{kind: AgentKind}` | `{identity: string}` | no |
 | `mcp/session` | user | `{agent: AgentName, cwd?: AbsPath, job?: Id, owner: natnum, profile?: Id, sid?: SessionId, task?: TaskRef, tools?: {tracker: boolean}}` | `{sid: string, socket: string}` | no |
@@ -1126,9 +1437,17 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `messages/retract` | user | `{id: natnum}` | `{retracted: boolean, status: string}` | yes |
 | `messages/send` | user | `{answers?: natnum, job?: Id, question?: boolean, recipient: AgentName, seen?: natnum, sender?: AgentName, text: Text}` | `SendResult` | yes |
 | `pace/get` | user | `{provider?: string}` | `{meters?: [Pace]}` | no |
+| `pair/answer` | user | `{lines?: [natnum], not_saved?: Text, reason?: Text, result: "applied" \| "refused" \| "dropped", saved?: boolean, version?: natnum, write: natnum}` | `boolean` | no |
+| `pair/closed` | user | `{file: AbsPath}` | `boolean` | no |
+| `pair/open` | user | `{file: AbsPath, kind: "normal" \| "large" \| "remote"}` | `boolean` | no |
+| `pair/open-set` | user | `{files: [{file: AbsPath, kind: "normal" \| "large" \| "remote"}]}` | `boolean` | no |
+| `pair/read-answer` | user | `{error?: Text, req: natnum, text?: string, version?: natnum}` | `boolean` | no |
 | `ping` | user, agent, service | `{}` | `{pid: natnum}` | no |
 | `plans/get` | user | `{plan: string}` | `PlanView` | no |
-| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], interfaces?: Text, model?: string, number: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plans/write` | user | `{base_version?: natnum, plan?: string, project?: string, tasks?: [{blocks?: [string], body?: Text, interfaces?: Text, model?: string, number: string, profile?: string, role?: string, status?: Status, steps?: [{done: boolean, text: string}], title?: string}], title?: string}` | `{plan: string, tasks?: [TaskId], tx: natnum}` | yes |
+| `plugins/approve` | user | `{hash: Hex64, name: string}` | `PluginRow` | yes |
+| `plugins/disable` | user | `{name: string}` | `PluginRow` | yes |
+| `plugins/list` | user | `{}` | `{plugins?: [PluginRow]}` | no |
 | `presence/set` | user | `{away: boolean}` | `boolean` | no |
 | `records/decide` | user | `{accept: boolean, id: Id}` | `{backup?: string, id: string, note?: string, status: "open" \| "accepted" \| "rejected" \| "stale"}` | yes |
 | `records/import` | user | `{dry_run?: boolean, only?: "plans" \| "ledgers" \| "deferred" \| "build-board" \| "board", root: AbsPath}` | `{backup?: string, dry_run: boolean, files?: [ImportedFile]}` | yes |
@@ -1138,17 +1457,23 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `restart` | user | `{}` | `boolean` | no |
 | `review/mark` | user | `{agent: AgentName, event?: {data?: JsonObject, job?: Id, kind: "start" \| "stop" \| "claim" \| "release" \| "status" \| "decision" \| "edit" \| "test" \| "question" \| "answer" \| "review" \| "message" \| "card" \| "accept" \| "revert" \| "comment" \| "job", summary?: Text}, hash: string, path: string, state: "accepted" \| "pending"}` | `boolean` | yes |
 | `runners/add` | user | `{accept?: "all" \| "heavy", host: string, name?: Id, prefix?: string, profile?: "dedicated" \| "workstation", root?: AbsPath, trust: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
+| `runners/audit` | user | `{job?: Id, key?: KeyName}` | `{rows?: [AuditRow]}` | no |
 | `runners/bench` | user | `{name: Id}` | `Runner` | yes |
 | `runners/check` | user | `{name: Id}` | `Runner` | yes |
+| `runners/keys` | user | `{keys: RunnerKeys}` | `boolean` | no |
+| `runners/keys-held` | user | `{}` | `{names?: [KeyName]}` | no |
 | `runners/list` | user | `{}` | `{runners?: [Runner]}` | no |
 | `runners/probe-host` | user | `{host: string}` | `{effective: Effective, facts?: HostFacts, missing?: [Missing]}` | no |
 | `runners/remove` | user | `{confirm: boolean, name: Id}` | `{name: string}` | yes |
 | `runners/set` | user | `{accept?: "all" \| "heavy", name: Id, profile?: "dedicated" \| "workstation", trust?: "mine" \| "my-cloud" \| "shared"}` | `Runner` | yes |
 | `runners/unbench` | user | `{name: Id}` | `Runner` | yes |
+| `say/end` | user | `{id: Id}` | `boolean` | yes |
+| `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
+| `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
-| `search/query` | user | `{k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `{hits: [Hit], lag: Lag, lag_line: string, model?: string, notice?: string}` | no |
+| `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/server-plan` | user | `{kind: "tei" \| "ollama"}` | `ServerPlan` | no |
 | `search/server-start` | user | `{confirm: boolean, kind: "tei" \| "ollama"}` | `{provider: ProviderEntry, started: boolean, unit: string}` | no |
 | `search/server-stop` | user | `{kind: "tei" \| "ollama"}` | `{stopped: boolean}` | no |
@@ -1165,6 +1490,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/close` | user | `{view: string}` | `boolean` | no |
+| `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
@@ -1258,15 +1588,117 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
-| `agent-presence` | the presence model (to the connections that asked) | `{file, entries: [{session, file, mode, line?, source, step, at}]}`: who is in the file now, at most once per file per 100 ms ("The presence model") |
+| `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
+| `agent-buffer` | the buffer views (to the view's connection only) | `{view, version, base, doc_version?, approximate?, agents: [{session, ordinal?, handle?, mode, line?, line_end?, col?, source, live?, projected?, step_title?, plan_entry?}], gutter: [{session, kind, start, end, projected?, help}]}`: a watched buffer's frame, at most once per view per 50 ms ("The buffer view") |
 | `work-map` | the Work map (to the view's connection only) | `{view, version, base, full?, changed: [Item], removed: [Id], entered: [Id], places?, edges?, layout?, needs_you?, chips?, stale?}`: what changed in one map view since version `base` ("The Work map") |
+| `agent-follow` | the follow feed (to the view's connection only) | `{view, session, file?, worktree, line?, col?, mode: listed \| read \| pending \| write \| edit, step_title?, plan_entry?, why_source: plan_entry \| step_title, changed?}`: where the followed session is now, at most once per 200 ms ("The follow feed") |
 | `supervisor` | the supervisor | `{rule, session?, exec?, task?, card?, text}` |
 | `view-written` | records | `{path, kind, hash}`: a view file written (never committed) |
 | `view-proposal` | records | `{id, path, by?}`: a hand edit to a view became a proposal |
+| `agent-wheel` | sessions | `{id, state: held \| free}`: the user's hold on a session's wheel; `held` once the turn the take stopped has ended and its step snapshot is taken (coordination.md, "Take the wheel") |
+| `wheel-save` | sessions (a give) | `{req, id, worktree}`: the editor saves its buffers in the session's worktree and answers `agents/wheel/saved {req, unsaved}` |
+| `pair-apply` | the pair door (to the editor that has the file) | `{write, session, ordinal, file, version?, floor?, edits: [{kind: replace, old, new} \| {kind: lines, line, delete, text}], ttl_ms}`: applied whole or refused whole, answered by `pair/answer` ([Pair mode](#pair-mode)) |
+| `pair-read` | the pair door | `{req, file}`: the editor answers `pair/read-answer` with the buffer's text and version |
+| `pair-reconcile` | the pair door | `{write, file}`: no answer in `ttl_ms` plus a margin; the editor answers `pair/answer` from what it applied |
+| `pair-drop` | the pair door (to each editor holding the session's writes) | `{session, reason: pair-off \| held \| never}`: drop the session's queued writes, each answered `dropped` with the reason |
 
 The hub sends every event it lists; `card` and `lease-released` are in the registry for the clients that read them,
 and nothing sends them now (`runstav/src/events.rs`).
+
+## Pair mode
+
+A chat in a project edits your checkout only through the hub's door (`src/pair/`; user guide:
+[pair-mode.md](../guide/pair-mode.md); per agent: [pair-routing.md](pair-routing.md)). The sandbox still binds the
+checkout read-only for it.
+
+- **Its tools.** Every chat in a project gets `read_file {path}`, `edit_file {path, old, new}` and `write_file {path,
+  content}` on its `mcp.sock` (`norn::tools::pair`, through `Hub::pair_read` / `Hub::pair_write`); a Claude chat also
+  starts with `disallowedTools` = `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (`lock::LaunchPlan::with_project_chat`;
+  its `Read` stays). A chat's ACP `fs/read_text_file` and `fs/write_text_file` inside the project go to the same door,
+  on a task of their own so the session's reader loop never waits on an editor; every other session keeps the fence.
+- **The gates.** `pair::gate`: `chat.project-edit` decides (never: refused; ask: the Pair toggle is the user's;
+  allow: paired from the start), never the chat's `code.edit`; `chat.project-read` too; an absolute path inside the
+  checkout, links resolved, never `.git/`, the protected agent-config paths, a CI or build file or a credential file.
+  `pair::read_gate` (every hub-served read): `chat.project-read`, inside the checkout, never a credential file.
+- **A write** goes to the editor as `pair-apply` with a relative `ttl_ms` (2000) the editor counts from its arrival.
+  `edit_file` travels as it is (the editor needs one match at apply time); `write_file` of an existing file needs a
+  read the editor served to that session (`read_file`, `fs/read_text_file`), and is diffed into line hunks against it
+  at its version; a new file needs none. One file's writes go one at a time, in order (`pair::writes::FileQueue`).
+- **The verdict is the editor's** (`pair/answer {write, result: applied | refused | dropped, version?, reason?, lines?,
+  saved?, not_saved?}`), from the connection the write went to. At `ttl_ms` plus a second with no answer the hub sends
+  `pair-reconcile`, which the editor answers from what it applied; the hub's timer never refuses. An editor that goes
+  away leaves a write in flight unknown ("read it with read_file to see"), never refused.
+- **Refusals** that need a re-read name `read_file`. Two refusals of one file within 60 s add "wait for the user or ask
+  them", and the session's snapshot carries `waiting {file, lines?}` until a write of that file applies.
+- **The open set** (`pair::open_set`): the editor tells the hub which files it has open, `pair/open {file, kind:
+  normal | large | remote}` and `pair/closed {file}`, and sends its full set (`pair/open-set {files: [{file, kind}]}`)
+  at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
+  to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
+  editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
+  has is read from the disk and written there (`pair::disk`, next item).
+- **The disk path** (`pair::disk`): a write of a file open nowhere lands only when the file's content hash (of its
+  canonical text: no BOM, LF) equals the last read the hub served that session ("changed since you read it; read it
+  with read_file"; never read: "you have not read it yet"), or, for a whole-file write, when the file does not exist.
+  It is atomic: a temporary file in the same folder, made beneath the checkout without following a link, takes the old
+  file's mode, owner (when the hub may set it), ACLs, extended attributes and SELinux context, keeps its BOM and CRLF
+  line ends, is synced, and is renamed over the file (a hard link is broken on purpose). The gate resolved a link to its
+  target inside the checkout, which is written; a link that names nothing is refused. Missing parent folders are made
+  only after every check passed and removed again if the write fails. Before the rename the write is recorded in the
+  project's edit history as the agent's operations (`Hub::on_agent_write`, the same record an agent's own write gets),
+  so the watcher's event about it is the hub's version, not an outside edit. The written text is the session's read
+  from then on.
+- **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
+  door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
+  holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
+  is cancelled. The snapshot's `paired` (chats in a project only) is the toggle, else the cell's allow.
+  `Door::hold` closes the door the same way while the user holds the wheel ("the user holds the wheel"), and
+  `Door::recheck` when the matrix makes the session's `chat.project-edit` never (a preset or a cell changed, reason
+  `never`): the task `pair::door::follow_matrix` decides every paired session again at each change that may change an
+  answer (`coord::Signals::answers_changed`), so the writes queued in the editor are dropped then, not at the next
+  write.
+- **Presence**: the door shares the hub's presence model (`work::presence::Live`). A write it sends is the session's
+  live entry `pair:WRITE` in `pending` mode on the lines it will change (`edit_lines::of_diff` over the session's served
+  read, else the file on disk up to `EDIT_TEXT_MAX`; the file only when `old` is not there once), in place before
+  `pair-apply` goes out. Applied, the entry closes into the session's `edit` entry on the lines the new text covers,
+  ranked at the session's step in that file (`Presence::step_in`), so it replaces the read before it and a later step
+  replaces it; refused, dropped or lost, it goes. The editor's buffer views and `agent-presence` follow; the Work map
+  hears it with the session's next step.
+- **The editor's side** is `modules/tools/drgnx-agent-pair.el` (module `tools/agent-pair`). Every pair call goes on
+  the subscribed connection, the one the door sends to. The event handler only queues a `pair-apply` in the buffer
+  visiting the file (deadline: arrival plus `ttl_ms` on Emacs's clock); `drgnx-agent-pair--drain` takes the queues
+  from `post-command-hook` (when `drgnx-agent-pair--pending` is set) or a zero-delay wall timer, only when
+  `drgnx-agent-pair-slot-open-p` holds: no command runs (a count kept by `pre-`/`post-command-hook`,
+  `drgnx-agent-pair-command-step`, since minibuffer commands run inside another), recursion and minibuffer depth 0, no
+  keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
+  `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
+  `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
+  `pair-read` is answered with the buffer's text and its version: its drain counter in the edit history after a drain
+  (`drgnx-history-drain-now`; none when the history does not track the buffer, so a whole-file write is refused).
+- **The shift** (`drgnx-agent-pair--shift`): while an `agent` snapshot says a chat is paired in a folder, each buffer
+  there keeps the changes every drain sent (`drgnx-history-drained-functions`) in `drgnx-agent-pair--log`, bounded by
+  4096 drains or back to the hub's `floor` (sent with each `pair-apply`), whichever reaches further; a drain that
+  returned `resync` (and the history's own resync) is a gap. Each version handed out keeps its line starts (the last
+  16). An apply drains first, then moves each `lines` edit's range past the changes since its version: a change before
+  it shifts it, one after leaves it, one inside it (or typed at its start) is a conflict and the whole write is refused
+  `overlap` with the lines it would change now; a version older than the log or before a gap is refused `gap` ("read it
+  with read_file"). An `edit_file` edit must match once in the text. No edit may touch the guard zone (the line at point
+  ±1 in every window on the buffer, and the active region): refused `guard` with its lines. Nothing falls back to an
+  unshifted apply. The applied answer carries the version after the write.
+- **The apply** (`drgnx-agent-pair--apply`): a read-only buffer refuses (`read-only`), a file another Emacs locked
+  refuses (`locked`); a file changed on disk is read again first when the buffer has no unsaved edits
+  (`insert-file-contents … replace` inside `drgnx-with-no-prompts`, origin `external:disk`, never `revert-buffer`),
+  else refused (`changed-on-disk`). The ranges get markers first and are replaced last to first through
+  `replace-region-contents` (with `drgnx-agent-pair-max-secs`, so point and markers stay on their text), inside one
+  change group amalgamated into one undo step, with `undo-boundary` before and after, all inside
+  `drgnx-history-with-origin` bound to `agent:SESSION#STEP` (`pair-apply` carries `step`, the session's current step, 0
+  before its first; a disk write records the same cause); the ring is drained right after (the answer's version), so the
+  change reaches the hub as the agent's before a resync could strip its origin. Then the command loop learns an apply
+  ran: from `post-command-hook` `this-command` is set to `drgnx-pair-apply` (the loop copies it to `last-command` after
+  the hook); from the timer `last-command` itself. So typing after an apply starts its own undo group, an `undo` run
+  ends at an apply, and `C-/` takes the agent's write away as one step. Each apply's milliseconds go to
+  `drgnx-agent-pair-apply-ticks` (the `pair-apply-tick` probe, the last 64).
 
 ## Per-session sockets
 
@@ -1348,7 +1780,8 @@ event and performs what it answers; the entries, steps and transcript stay with 
   `PromptFailed` (closed or not), `Stop` (or the pause after a tool call), `Kill` (`agents/kill`, the hub ending, or
   a Stop's deadline for its turn), `PermissionAsked` (with the turn it came in), `PermissionAnswered`,
   `ToolCompleted`, `EmitTick`, `QueueEdited` (deliver, unqueue, requeue, the freshness gate's notice), `Changed`,
-  `Exited`, and `Sending` (the turn's task is about to hand its prompt to the agent).
+  `Exited`, `Sending` (the turn's task is about to hand its prompt to the agent), and `Detach` / `Reattach` (a rewind
+  swaps the conversation: [Rewind and fork](#rewind-and-fork)). `PromptDone` and `PromptFailed` name their turn.
 - Effects: start a turn with the next prompt, send its prompt now (`Prompt`) or put it back (`PutBack`, the hub's
   end), name what a user's kill drops (`Discard`), end it (waiting on a job, or held), tell the agent to cancel, arm a
   Stop's deadline, end the process group, hold a permission request for the user, answer it or answer it cancelled,
@@ -1439,9 +1872,12 @@ topic note and design document, so that a resumed brainstorm keeps its write fen
 The hub cuts each turn into steps from its own clock (`think` between tool calls, `tool` from the tool call to its
 `completed`/`failed` with the title and ACP kind, `user-wait` while a permission request waits, `paused` while the
 queue is held) and writes each closed step to schema 8's `step` table (`norn::write::steps`), in order, from one
-writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). Each write is
-announced as an `agent-step` event (`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready
-loses the row (logged), not the event.
+writer task per session; the last step of a turn carries its tokens and `turn_id` (`_meta.turnId`). The steps that
+closed while the writer was busy go in one transaction (at most 256): the graph writer holds a transaction open for
+its linger after the first request, so one transaction per step capped a session at about one step per linger, and a
+10,000-step turn's steps were readable (`timeline/get` waits for them) only minutes after it ended. A batch that fails
+is written again one step at a time, so a bad row loses only itself. Each write is announced as an `agent-step` event
+(`{session, step}`) and on `Hub::subscribe_steps()`. A store that is not ready loses the row (logged), not the event.
 
 **Step detail** (`work::detail::of`, schema 9's `step_detail`): a tool step also records what it read, searched or
 fetched, in the same transaction as the step, taken when the call completes because `rawInput` is refined while it
@@ -1454,6 +1890,8 @@ write `command` and `opened` details). The detail is the step's `detail` on `age
 (`runstav::methods::timeline::StepDetail`). The mock agent's `provider:read|grep|web-search|web-fetch|write` words
 send each personality's real shapes. A Claude Code subagent's steps (the `Task` tool's nested calls) keep the
 `Task` call's id as `detail.parent_tool` (`work::subagents`); the mock's `provider:task DESCRIPTION` sends one.
+Edits have their own words (table in `runtime/conformance/src/mock_acp/mod.rs`): `provider:edit-stream`,
+`provider:pending-edit`, `provider:diff-hunks`, `provider:whole-diff`, `provider:native-edit` and `moves N [SECONDS]`.
 
 ### The presence model
 
@@ -1461,26 +1899,111 @@ Who is in which file, at which line, now (`work::presence`; agent system part 2 
 and badges build on it). This is its contract.
 
 - **An entry** is one session's latest `{session, file, mode, line?, source, step, at}` in one file
-  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path (links followed when the file exists); `mode`
+  (`runstav::methods::work::PresenceEntry`). `file` is an absolute path, its links followed: a file that does not exist
+  (not made yet, or removed) under the true name of its nearest folder that does, as a workspace root is (on macOS a
+  root asked as `/tmp/…` and a missing file under it are both `/private/tmp/…`); `mode`
   is `read`, `edit`, `listed` (a listing, a recursive search) or `write` (a shell command's); `line` is the last line
   known, or absent ("file only"); `source` is `acp` (a read or search step's fields), `edit` (an edit step), `command`
   (a file a shell step's command names, from `work::shell_read`, only inside the session's folder) or `opened` (a file
   its processes opened; Gleipnir's tracer, not yet); `step` is the timeline step it came from, `at` the hub's time.
-  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `read` >
-  `listed`).
-- **Now:** an entry is now while its session is live and it is younger than 120 s (`presence-stale-after`) or it is
-  its session's latest entry. Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in
-  no file.
+  Of one session's entries in one file the later step wins, then the stronger mode (`edit` > `write` > `pending` >
+  `read` > `listed`). Part 3 adds `line_end` (the range's last line), `col` (the column after an edit's last inserted
+  character, where its cursor sits) and `pending` (an edit about to land).
+- **Edit lines and read ranges** (part 3, `work::edit_lines`): an edit's lines come from its ACP `diff` content, never
+  from `rawInput`. A fragment (Claude's `Edit`, Codex's one `diff` per hunk) is placed where its `oldText` is found
+  exactly once in the file's text now, or its `newText` once it has landed; a whole file (Gemini's diff, a `Write`, a
+  new file) is its old text diffed against its new, line by line. A call with several hunks sits on its last one.
+  Lines count on LF (a CRLF file is read as LF); found nowhere, or more than once, or in a file over 8 MiB, the entry
+  is the file only. The step's detail records the lines (`line_start`, `line_end`), so they survive a restart. A
+  read's range is its location's line (else its `offset`) through `limit` lines.
+- **Pending:** an edit call with `diff` content that is still `pending` or `in_progress`, and a permission request
+  for one that waits for the user, show as `pending` on the lines the diff will change. A refused request's entry
+  goes at once; an allowed one gives way to the call's own updates.
+- **The live feed** (part 3): the session's reader applies each `tool_call` and `tool_call_update` as it arrives, not
+  only when the step closes. Such an entry has `live: true`, `tool_call` (the call's id) and `step: 0`, and stands in
+  for the session's closed entry in that file while the call runs. The call's end replaces it: the closed step's entry
+  when it completed, nothing when it failed or was denied; a step cut while its call runs on (a permission wait, the
+  next call starting) leaves the live entry standing, and a call that ends with no step of its own open drops it at
+  once. An update for a call already closed is dropped, so the reader and the step writer may come in either order.
+  Live entries are never rebuilt after a restart.
+- **Now:** a session's running call in a file is now; otherwise an entry is now while its session is live and it is
+  younger than 120 s (`presence-stale-after`) or it is its session's latest entry (a running call's, if it has one).
+  Older entries stay as history. A session ended with `agents/stop` or `agents/kill` is in no file.
 - **Methods** (user connections): `agents/presence/subscribe {workspace: {id, roots}} | {file}` makes the connection
-  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file,
-  entries}]}`, who is in them now; `agents/presence/get {file} -> {file, entries}`. The names keep clear of
-  `presence/set`, the user's away state. A connection's subscriptions end with it.
+  get `agent-presence` for the files under the roots (or that file) from then on, and answers `{files: [{file, rel?,
+  repo?, entries}]}`, who is in them now; `agents/presence/get {file} -> {file, rel?, repo?, entries}`. `rel` is the
+  file's path from the top of its git checkout and `repo` the checkout's project id (16 hex digits of the main
+  checkout's real path, as the code index's), so a badge lands on the user's tree whatever worktree the agent is in;
+  both are read from the `.git` entries, with no git run. The names keep clear of `presence/set`, the user's away
+  state. A connection's subscriptions end with it.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
+
+### Identity
+
+Every live session holds an identity from its start until it ends (`agents::identity`, part 3), so every surface
+names and colours an agent the same way:
+
+- **Ordinal:** the lowest number from 1 that no other live session of its workspace holds, kept for its life. A
+  workspace is the session's git repository (the project id of its checkout's common directory, the same for every
+  worktree of it), else its folder. The hub never gives a live ordinal twice; a display that has fewer
+  colour-and-mark pairs than agents reuses one by its own rule, reading `last_active`.
+- **Handle:** the model's short name (Claude's families by name, `Opus`, `Sonnet`, `Haiku`; another model by the first
+  word of its name; else the provider: `Claude`, `Codex`, `Gemini`), numbered from the second live agent of that model
+  in the workspace on (`Opus`, `Opus 2`, `Opus 3`; a freed number is given again, lowest first). The **monogram** is
+  its initial and that number (`O`, `O2`).
+- **Where:** the `agent` snapshot (`agents/list`, the `agent` event) carries `ordinal`, `handle`, `monogram` and
+  `last_active` (the hub's time of its latest update); an ended session has none. A session frees its identity when it
+  is stopped or killed, or its process exits; a session resumed after a restart takes one again. The pool gives a
+  Claude subagent's id (`agent:SID/TOOLID`, as the Work map names it) an identity of its own and frees it with its
+  parent's; subagents have no snapshot, so none is shown yet.
+
+### The buffer view
+
+What an editor draws in a buffer comes from one frame per visible buffer (`editor`, part 3; Lisp only moves
+overlays from it):
+
+- **Views:** `agents/buffer/watch {view, file, worktree?, doc_version?}` (user connections) opens view VIEW of this
+  connection on FILE, or opens it again, and answers its full frame (`base` 0); `agents/buffer/unwatch {view}` ends it
+  (`false`: none was open). Views are keyed by (connection, view), like the Work map's, and a connection's views end
+  with it. A view matches its file's true name and `REPO:REL` (the same file in every worktree of its repository, the
+  presence model's `rel` and `repo`).
+- **Frames:** a presence change in a matched file makes the view due, and one flush 50 ms of the hub's clock later
+  (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
+  (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
+  frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
+  a newer `doc_version` (the buffer's version, its edit history drain counter) is the user typing: that view's frame
+  follows after 300 ms without another (task `editor:quiet`). A frame of a file the edit history tracks names the
+  tracked buffer's version (its last `history/batch` or `history/resync`) as `doc_version`; any other the watch's. Nothing is built while no view matches, and an
+  unwatched file costs nothing.
+- **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
+  session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
+  and kind: `pending` for an edit about to land, and `changed` for the lines a session wrote. Where the project's edit
+  history holds the file, those come from its operations (`editor::ranges`, below): an agent's lines in its own
+  worktree, and a paired agent's writes in the user's checkout, drawn in that agent's identity ("NAME · changed");
+  where it does not, from the lines the session's latest step snapshot changed in its own worktree against its base,
+  with a hover that names the handle, the step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Line authors** (`editor::ranges`, pure; kept by `history::Inner`). For each document on each branch, the runs of
+  characters each author wrote (`user`, `agent:<session>`, …; the base's text has none). The hook on every operation
+  the history applies (an agent's captured write, an editor's batch or resync) updates them in step; a document whose
+  version moved another way (a revert, a merge) or that was not kept (after a restart) is made again from its blame
+  when read, off the tick. A line is an author's when one of its characters is (its line break only on an empty
+  line); a line with the user's characters is never an agent's, and a deletion marks no line. A batch with an
+  `agent:` change (a paired chat's write) makes the file's views due at once; the user's typing waits for the quiet.
+- **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
+  repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
+  copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
+  meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
+  entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
+  ranges are `changed` or `conflict`, also `projected`. The user's text is the edit history's mirror of the buffer
+  when the editor tracks it (unsaved typing, and a paired agent's writes, are the user's side); an untracked buffer's is
+  read from disk, and such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
+- **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 
 ### The Work map
 
@@ -1520,6 +2043,28 @@ view only what changed, to the connection that shows it.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
 
+### The follow feed
+
+A follow window in the editor shows where one agent is (`editor::follow`). `agents/follow {view, session}` (user
+connections) makes the connection's VIEW follow SESSION from now on, its latest place first; `agents/unfollow {view}`
+ends it (true when it followed one), and a connection's views end with it. The event `agent-follow {view, session,
+file?, worktree, line?, col?, mode, step_title?, plan_entry?, why_source, changed?}` goes by `Front::send_to` to the
+view's connection only.
+
+- **Source:** each tool call update of the session (`tool_call`, `tool_call_update`), as the transcript merges it:
+  its first location is the place, its kind the mode (`read`; `search` → `listed`; `edit`, `delete`, `move` →
+  `pending` until completed, then `edit`, or `write` for a whole-file write). A failed call and other kinds (a
+  command, a fetch) do not move the window.
+- **The rules** (`editor::follow::Core`, pure, tested in every order on the hub's clock): at most one move per 200 ms
+  per view (the latest one held goes when the window ends); a read of another file switches only after the agent has
+  stayed in it 500 ms (a third file starts the dwell again, a move back cancels it); a search or a glob never switches
+  files: its query (the step's title) goes in the line and the window stays; an edit, a write or a pending edit
+  switches at once (the throttle still holds). `changed` is set when a completed edit changed the file shown, so the
+  window reverts it from disk.
+- **The line is the agent's own words:** the plan's `in_progress` entry when the agent sends plans
+  (`why_source: plan_entry`), else the tool call's title (`step_title`). Nothing is generated.
+- **Restart:** nothing is kept; the editor follows again.
+
 ### After a restart
 
 `Hub::shutdown` (server end) ends every session's process group and leaves the rows, transcripts and queues.
@@ -1528,6 +2073,96 @@ brings the session back: `session/resume` when the agent advertises it, else `se
 history, and the transcript is not used), else the row stays for the next start. The transcript and the queue are
 read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions: a running
 turn delays the restart, an idle session does not.
+
+## Rows
+
+A hub-fed view gets finished rows from the hub and only inserts them (`wb/drgnx-view.el`'s inserter). The format,
+its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O, no clock, no platform dependency:
+it builds for Android too).
+
+- **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
+  [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
+  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out.
+- **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
+  `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
+- **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
+  keywords. An image id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  epoch (a theme change) never reuses an old tile.
+- **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
+  class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
+  `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
+  images the rows name that the editor may not hold yet.
+
+### The wire: envs, patches, resyncs (`view`)
+
+The hub keeps, per (connection, view, display class), the env the editor sent, the version and rows it last sent,
+and the images that editor holds (`view::Store`, pure, tested in every order of envs, rows, resyncs and restarts).
+All of it is in memory only.
+
+- **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
+  `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
+  view; a connection's views end with it.
+- **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
+
+**The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
+
+- **The epoch is the editor's.** It numbers each (view, class)'s env, one more for every change of its look (fonts,
+  scale, palette, display, widths, zone, motion); a width change alone keeps it. The hub echoes it as `env_epoch` on
+  every patch and owns no epoch counter.
+- **The hub owns `version`.** A patch's `base` is the version it applies to; `version` is one more.
+- **The hub's instance id `hub`** is drawn at its start (a random number below 2^53) and is on every patch. The editor
+  drops a patch whose `hub` is not its last reset's, and anything for a (view, class) before that pair's first reset.
+- **The first patch per (view, class)** after a `view/env` with a new epoch (or the first env) is a `reset`; a
+  `view/env` with the same epoch is answered by what changed (a resize: `replace`s of the rows whose fit changed).
+- **No env, no rows:** a hub with no env for a (view, class) builds nothing for it. A restarted hub holds none until
+  the editor sends its envs again (`drgnx-hub-connected-functions`), so its first patch is a reset with a new `hub`.
+- **Held and stale patches** (the editor's side). A patch with an epoch behind the editor's is held and the view dims;
+  a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
+  `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
+  outstanding per (view, class).
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
+  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
+- **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
+  literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
+  callers), a role the palette lacks is drawn in `currentColor`, and a palette value that is not a `#hex` or a
+  colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
+  never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
+  carries.
+
+### Fitting: text to a pixel width
+
+A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
+hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
+with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
+
+- **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
+  written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
+  Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
+  advance rounded to whole pixels (largest error 4.0 px; the fractional sum's was 16.4 px, as Emacs places glyphs on
+  whole pixels). The error must stay within the slack.
+- **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
+  (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
+  names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
+- **What the font lacks, the editor answers.** A char with no glyph, or a role with no font file (as `font-info`
+  often has on macOS), is asked of the editor once per (role, char) in `view-glyphs`; its `view/glyphs` answers are
+  kept and the rows built again. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+- **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
+  (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
+- **The fit check row** (`test/ui/rows-fit-gui-test.el`, on the fixture view `rows-demo`, whose labels the hub
+  fits per class: `__test_view_rows`' `labels`): Latin, ligatures, a ZWJ
+  sequence, combining marks and Arabic in Inter and JetBrains Mono at 11 to 16 px, fitted to 80, 160 and 240 px. No
+  segment runs past its stop after the guard, and none is cut more than the slack and one glyph short, except joined
+  Arabic in a font without it: its letters come per char from the editor's fallback font, whose shaped (joined) forms
+  are narrower, so the sum runs wide and the label may be cut up to about 26 px short at 80 px. That is reported, not
+  failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
+- **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
+  (`tty_widths`).
 
 ## Sessions and their sockets
 
@@ -1941,7 +2576,7 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
   `RUNTIME_NAMES` and `value` JSON of the setting's runtime type (alists are objects, keys sorted; `drgnx-ai-roles` a
   list of `{role, chain: [{provider, model}]}`; at most 64 KiB). A call replaces the whole set of that project (none:
   global); an empty list clears it (the project still counts as having sent). A project's set holds only the settings
-  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`); every other runtime setting is
+  the Lisp declares `:scope project` (`overrides::PER_PROJECT`: `drgnx-ai-roles`, `drgnx-search-include`, `drgnx-search-exclude`, `drgnx-search-off`, and the user's own `drgnx-agents-plugins`, `drgnx-agents-hook-rules`, `drgnx-agents-hook-rules-off`: see "Plugins"); every other runtime setting is
   global and security-bearing (profiles and their commands, providers and their URLs,
   `drgnx-agents-allow-unsandboxed`), so a project never changes it. A name that is not a runtime setting, a global one
   in a project's set, or a value that does not fit is `invalid-params` at `overrides[N].name` or
@@ -2033,8 +2668,10 @@ that ssh would expand (`%`) or that would break its line, and an empty argv; `gr
 it reads for an option: `ForwardAgent no`, `ForwardX11 no`, `ClearAllForwardings yes`, `PermitLocalCommand no`,
 `BatchMode yes`, `StrictHostKeyChecking yes`, `UpdateHostKeys no`, `ServerAliveInterval 15`, `ServerAliveCountMax 4`,
 `Compression yes`, `ControlPersist 10m`, `RemoteCommand none` and `RequestTTY no` (`FORCED`). A cloud runner adds
-`IdentityAgent`, `CertificateFile`, `IdentitiesOnly yes` and `UserKnownHostsFile` (paths quoted) and reads no user
-config; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
+`IdentityAgent`, `IdentityFile` (the public half of the agent's key), `CertificateFile`, `IdentitiesOnly yes` and
+`UserKnownHostsFile` (paths quoted) and reads no user config. The `IdentityFile` is needed: under `IdentitiesOnly`
+ssh pairs a certificate only with a named identity's agent key ("no separate private key for certificate"), and
+without one it offers the user's default keys; an SSH runner ends with `Include ~/.ssh/config`, so its host name, user, port, keys and `ProxyJump` /
 `ProxyCommand` stay the user's. `write` puts it at `$XDG_RUNTIME_DIR/drgnx-runners/<name>/ssh_config`, mode 0600, its
 folders 0700 (made, or narrowed), replaced in one rename; a runner folder that is a link or someone else's is refused.
 ssh expands `~` from the password database, not `$HOME`, so a test's `Include` reaches its own home only in a
@@ -2065,7 +2702,8 @@ the runner's folder. `LinkError {Lost, NeedsLogin(Login), HostKeyChanged, Refuse
 `classify_stderr` reads ssh's error output: Tailscale's "requires an additional check" (its URL kept for the card,
 never opened), a passphrase, a host key not known yet (`Login`), a changed host key (`HostKeyChanged`, never
 accepted); `link_error` makes the machine down or out of reach `Lost` and the rest `Refused` in ssh's words.
-`Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
+`for_runner` makes a cloud machine's unknown host key `HostKeyChanged` and any login it asks for a refusal: its keys
+are pinned and there is nothing to log in to. `Redial::delay(n)` is 5, 15, 45, then 120 s. `effective(config, host)` runs `ssh -G -F <generated> host` and reads
 `forwardagent`, the forwards and the proxy (`Effective`), for the onboarding probe and the runner list.
 
 Tests: unit rows `runners::` [D]; the fleet rows `tests/fleet_link.rs` [C] (`#[ignore = "fleet"]`) run in a fleet's
@@ -2076,6 +2714,188 @@ escape lane's `--ignored` run never picks it up. They need sshd set two ways, th
 banner. Each row first shows the user's own ssh doing what the hub must not (forwarding the agent, running the user's
 `RemoteCommand` on a terminal and their `LocalCommand`, opening their `LocalForward`). The dead-link row stops the
 runner's sshd for the master's connection (`kill -STOP` over a second connection), which a network cut would do too.
+
+## Runners: cloud machines
+
+`runners/cloud/` starts and ends the user's cloud machines (`docs/guide/runners.md`, "Cloud: what you give drgnx").
+`trait Provider` (`BoxFuture` methods, so the hub holds a `dyn Provider`): `preflight() -> Vec<Check>`, `start(&StartReq)
+-> Instance`, `describe(id) -> InstanceInfo`, `list_ours()`, `end(id)` (one already gone is fine), `console(id)` (where
+a machine prints its host keys) and `prices(sizes) -> Prices`. Every call is bounded by `CALL_TIMEOUT` (30 s) and an
+answer by `MAX_BODY` (8 MiB). `CloudError {NeedsLogin(cmd), Denied, Capacity, Transient, Other}` carries the
+provider's code and message, never a credential.
+
+**AWS** (`aws.rs`): EC2's Query API (and STS `GetCallerIdentity`, the Pricing API's `GetProducts`), signed by
+`aws-sigv4` (`sign-http` only), sent through bifrost's `Upstream` (HTTP/1.1, rustls on ring) and read by a small
+`quick-xml` tree (`El`). `run_params` always sets `ClientToken` (the start's token: a retry returns the same
+machine), the `drgnx-hub` and `Name` tags on the instance, its volumes and its network interface,
+`InstanceInitiatedShutdownBehavior=terminate`, `MetadataOptions` tokens required with hop limit 1, the security group,
+the spot options, and the user-data (public things only). `classify(status, code)`: a 401/403 with an expired or
+unrecognised token (`ExpiredToken`, `AuthFailure`, …) is `NeedsLogin` and drops the cached credentials;
+`UnauthorizedOperation` is `Denied`; `Insufficient*Capacity` is `Capacity`; throttling, 5xx and a just-started
+machine not listed yet are `Transient`. `POLICY` is the IAM fixture (`aws-policy.json`), `policy_for(hub, regions,
+sizes)` what `drgnx runner cloud setup aws` prints.
+
+**GCP** (`gcp.rs`, design §6.7.1, §6.7.6, H6): Compute Engine's REST API (and Resource Manager's
+`testIamPermissions`, the Billing Catalog's `skus.list`) as JSON with a bearer token, through the same `Upstream`.
+`Gcp::new(GcpCfg {project, zone, hub_id, lifetime}, creds)`; a machine's id is `ZONE/NAME`. `insert_request(req, now)`
+always sets the `requestId` (`request_id(token)`: a UUID from the start's token, so a retry is the same request), the
+`drgnx-hub` label on the instance and its disk, `terminationTime` = now + the lifetime with
+`instanceTerminationAction=DELETE`, `SPOT` with `preemptionNoticeDuration` 120 s for a spot start (`STANDARD`
+otherwise), `automaticRestart` off, no service account, the network tag `drgnx-<hub id>-ssh` and the Ignition config
+as `user-data`; a name that isn't `drgnx-…` is refused (the conditional role allows only those). `start` waits for its
+operation (GCE reports capacity and quota there); `describe` of a deleted machine is `Gone` (GCE keeps no record);
+`list_ours` is `instances.aggregatedList` with the label filter, in the zone's region; `end` is `instances.delete` (a
+machine already gone is fine) and there is no stop: on GCP the guest never powers off, and the idle stop is the hub's
+delete (`Sweeper::with_idle`). `scheduling(id)` reads back the deadline and its action (the first start's check).
+`classify`: 401 is `NeedsLogin` (a cached token gets one retry with a fresh one first), the zone-pool reasons are
+`Capacity`, 429/5xx and rate limits `Transient`, other 403s `Denied`. Tokens: the credential source's output
+(`Resolver::raw`) is a token (`gcloud auth print-access-token`, used 5 minutes) or a service-account JSON key
+(`parse_service_account`), whose `jwt_assertion` (RS256 by `ring`, scope `cloud-platform`) is traded at its
+`token_uri`. `ROLE` is the custom-role fixture (`gcp-role.json`); `setup_check(gcp, member)` lists the VMs without a
+`drgnx-hub` label and gives the `gcloud` commands (`setup_commands`), the binding with `condition(project)` when there
+are any; `drgnx runner cloud setup gcp` prints both bindings. `ensure_firewall` finds or makes the two rules
+`drgnx-<hub id>-ssh` (`0.0.0.0/0`) and `…-ssh6` (`::/0`), TCP 22 to that tag, the hub id in their description; one of
+ours that allows anything else is refused. The pre-flight's lines: credentials, permissions (every one of the role's),
+the base image (`images.getFromFamily`), other machines, firewall rules.
+
+**Ignition** (`ignition.rs`, design §6.7.2): `render(&Machine {ca_public, principal, limits, bundle_url,
+bundle_sha256})` writes the Fedora CoreOS `stable` config (spec 3.4.0). Ignition runs once, on a disk's first boot, so
+each machine gets its whole setup there instead of in a baked image: the runner user (linger, subordinate ids),
+`/usr/local/bin/sleipnir` fetched from the hub with its `sha256-` verification, the CA's public key, the principal and
+sshd's certificate-only drop-in, the watchdog's `watchdog.env` with `DRGNX_WATCHDOG_PROVIDER=gcp` and the image's own
+watchdog unit (without its first-boot dependency), `drgnx-host-keys.service` printing the fingerprints and keys to
+`/dev/ttyS0` in cloud-init's shape (`ca::pin::from_console` reads them from `getSerialPortOutput`), and Zincati off (a
+`config.d` drop-in and the unit masked). Files are percent-encoded `data:` URLs; nothing in it is secret, and nothing
+in it powers the machine off.
+
+**Credentials** (`creds.rs`): `Source {Command(argv), Keyring(name)}`. `run_command(argv, timeout)` runs with stdin on
+`/dev/null` in a session of its own (`setsid`: no `/dev/tty`), kills its process group at the limit, and refuses a
+prompt on its error output (even when it then exits 0), a failure and empty output (`CredError`); what it printed is
+in a `Zeroizing` buffer, parsed into `SecretString`s (`AwsCredentials`, never `Debug` or `Clone`), and no error quotes
+it. `Resolver` keeps them until 5 minutes before they expire; a keyring source reads `Keys::value`. `Resolver::raw()`
+is the source's output unparsed (in a `Zeroizing` buffer), for GCP.
+
+**The market** (`market.rs`, design §6.7.3, pure): `Policy {mode}` with `Mode {Spot, OnDemand, SpotThenOnDemand}`
+(`drgnx-runners-cloud-market`, the default the last). `History::record(region, at, Event {Preempted, NoCapacity})`
+keeps only what can still matter (`WINDOW_S` + `FALLBACK_S`). `choose(region, now, history)` is on-demand in a region
+where two events of one kind came within `WINDOW_S` (1 h), for `FALLBACK_S` (6 h) after the second;
+`for_job(restartable, …)` never gives a job that can't be restarted spot (on-demand, or none with `spot` only). A
+runner's `preempting` frame (its watchdog's notice, `docs/develop/sleipnir.md`, "The watchdog") ends its attempts
+`infra: preempted` and requeues them at once (`attempts`, `Event::Preempting`).
+
+**Endpoints**: the providers' own, `https://` only. A `test-hooks` build reads `DRGNX_TEST_CLOUD_ENDPOINT_AWS` /
+`_GCP` and accepts `http://`, for `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock").
+
+Tests: `runners::cloud::` [D] (the SigV4 test suite's `get-vanilla`, the `RunInstances` parameters, the error
+classes, the policy's statements, a prompting credential command, the market's fallback and restartability), and [B]
+rows against the mock with its virtual clock (`start_describe_end_round_trip`,
+`a_retry_after_a_crash_returns_the_same_instance`). GCP: [D] `gcp::insert_always_has_deadline_delete_and_request_id`,
+`gcp::jwt_fallback_signs_with_ring` (a key `ssh-keygen` makes, verified by `ring`),
+`ignition::ignition_turns_zincati_off_and_holds_no_secret`, `ignition::the_guest_never_powers_off_on_gcp`; [B]
+`gcp::a_stopped_vm_is_deleted_by_the_sweeper` (and an idle one), `gcp::the_deadline_deletes_with_the_hub_down` (the
+mock's clock moved to the deadline with no client running; the firewall rules, the console, the prices),
+`gcp::a_shared_project_gets_the_conditional_role_warning` (the role, the setup's commands, the pre-flight).
+
+## Runners: cloud spend, the sweeper, the network rule
+
+**The meter** (`meter.rs`, design §6.7.5): `Meter::new(Rates, month_spent)` per month, from that month's records.
+Per machine (`Started {machine, runner, provider, region, size, market, price_h, disk_gb, at}`): running seconds ×
+the price at its start, its disk's GB-hours, its public IPv4 address-hours (`Rates`, AWS's list prices by default)
+and the bytes it sent back (`sent`) at the egress price; and the images' storage (`images(gb, now)`, the `images`
+record). `tick(now)` gives one `CloudSpend {machine, provider, region, type, market, from, to, amount}` per whole
+machine-hour, each once; `end(machine, now)` the last part-hour; `write(db, rec)` puts it in the graph as
+`cloud_spend:<machine>.<from>` (`("hub", Class::System)`, `norn::write::runners`). `spent(now)` is the records and
+what runs since.
+
+- `gate(now, cap, size, price_h, busy_s, idle_s, running, needs_login)`: while the credentials need a login, the
+  card's text (`needs_login_text`: "Run CMD, then Runners: Retry Cloud", CMD in backquotes); at the cap `"cloud cap: $50 of $50 used; no new cloud work"`; and a
+  start whose `forseti::cost::projection` passes the cap `"cloud cap: $41 of $50 used; a c7a.4xlarge for ~40 min would
+  pass it"` (dollars from $10, cents below; the minutes are busy + idle).
+- `check(now, cap, machine_hour, CHECK_S) -> CapAct {Go, NoNewWork, StopAll([(instance, runner)])}`, through
+  `forseti::cost::guard` one check (10 s) ahead: on `StopAll` the hub runs a sweep with `CapState::PastCapPlusHour`,
+  which ends every machine, and `Queue::cloud_gone(runner, now)` requeues their attempts at once
+  (`attempts::Event::CloudGone`; a job that can't be restarted ends lost).
+
+**The sweeper** (`sweep.rs`, design §6.7.6 layer 3): `Sweeper::new(hub_id, Bounds {lifetime_s, unreachable_s})`;
+`pass(provider, now, reached, cap) -> Pass {Done(Swept), Paused(cmd), Failed(e)}`, at hub start, every `EVERY_S`
+(600 s) and on the cap's stop. It lists the provider's tagged machines and skips (into `Swept::not_ours`) any without
+`drgnx-hub=<this hub>`, whatever the list returned. A running machine `reached` says the hub has no link to goes into
+`reattach`, and is ended after `UNREACHABLE_S` (300 s) unreached in a row; a machine past its lifetime (its
+`launchTime`, `InstanceInfo::launched`), a stopped one, and with `PastCapPlusHour` every one is ended
+(`Ended {Unreachable, Lifetime, Stopped, Cap, Idle}`). Where the idle stop is the hub's (GCP), `with_idle(idle_s)`
+ends a reached machine that `idle_since(id, Some(t))` (its watchdog's `Idle {since}`, through `serve`) says has been
+idle that long; `idle_since(id, None)` is busy again. A `NeedsLogin` pauses it (`paused()` names the command, nothing is
+ended); the next pass the credentials work for resumes and ends what is past its bound by then.
+
+**The network rule** (`net.rs`): `ensure_rule(&Aws)` finds or makes the region's one security group
+`drgnx-<hub id>-ssh` in the default VPC, tagged `drgnx-hub` at creation, and gives it the one rule TCP 22 from
+`0.0.0.0/0` and `::/0`. A group of ours with no rule (a crash between the calls) gets it; one with any other rule is
+refused, never used.
+
+Tests: `forseti::cost::` [D] (`docs/develop/forseti.md`); `runners::cloud::meter::` [D]
+(`the_reason_text_is_the_designs`, `cap_plus_one_hour_stops_now`, `the_meter_counts_disk_ipv4_egress_and_images`); and
+against the mock with its virtual clock [B]: `sweep::ends_an_unreachable_tagged_machine_after_5_minutes`,
+`sweep::stops_every_machine_past_the_cap`, `sweep::never_touches_an_untagged_instance` (with a list that returns the
+whole account), `sweep::creds::expired_pauses_the_sweeper_and_it_resumes`, `net::the_rule_is_port_22_only_and_tagged`.
+
+## Runners: cloud SSH
+
+`runners/cloud/ca.rs` (design §6.7.4). Keys are `ring` ed25519 (the plan's fallback: `ssh-key` 0.6 would add sha2
+0.10), and the OpenSSH formats are written here:
+
+- `Ca::new() -> (Ca, PublicKey)`: one CA per hub. `to_secret()` is its unencrypted `openssh-key-v1` PEM as a
+  `SecretString`, for the editor to write to the keyring; `from_secret` reads it back from `runners/keys`. Its seed is
+  a `Zeroizing` array; nothing writes it.
+- `UserKey::generate()`: a fresh key per redial, in memory only.
+- `Ca::sign(user, principal, valid) -> Certificate`: an `ssh-ed25519-cert-v01@openssh.com` user certificate, the
+  principal as its only principal and key id, valid from now less 60 s (clock skew) to now plus VALID (1 h), with no
+  critical options and no extensions (no pty, no forwarding). Public: written beside the key's public half.
+- `Agent::start(runtime_dir)`: the hub's own `ssh-agent -D -a $XDG_RUNTIME_DIR/drgnx-runners/agent.sock` (`$TMPDIR`
+  on macOS), ready when it prints `SSH_AUTH_SOCK=`. `add(key, lifetime)` is `ssh-add -t SECS -` with the PEM on
+  stdin. Both run with a cleared environment (`PATH` and our `SSH_AUTH_SOCK` only), so the user's agent is never
+  asked. Dropping it stops the agent.
+- `pin::from_console(text) -> Vec<HostKey>`: the machine's host keys as cloud-init's `write-ssh-key-fingerprints`
+  prints them: the fingerprint lines (after `logger`'s syslog prefix) and the public keys, the last pair of blocks
+  winning. A key counts only when its SHA-256 is among the fingerprints; a console without both blocks, a key the
+  fingerprints don't list, or no key refuses the machine. No trust on first use. `pin::known_hosts(host, keys)` is the
+  machine's `UserKnownHostsFile`. The GCP image (Fedora CoreOS has no cloud-init) prints the same blocks.
+- `ssh_config::write_in(runtime_dir, name, file, text)` writes those public files into the runner's folder, 0600.
+
+Tests: `runners::cloud::ca::` [D] (a certificate's fields and its signature, the CA's bytes in no file after signing,
+the user's agent untouched with `SSH_AUTH_SOCK` on a recording listener, the console's refusals), and the fleet rows
+`tests/fleet_cloud.rs` [C] (`fleet.sh up --cloud`: a mock cloud's machine reached by certificate only, a changed host
+key refused).
+
+## Runners: the AWS image
+
+`runners/cloud/image.rs` and `user_data.rs` (design §6.7.2). drgnx's own image is Fedora Cloud 45 with everything a
+runner needs baked in, so a started machine is ready in about a minute.
+
+- `image::build(api, list, cfg, inputs) -> Built {id, reused, base}`: resolves the base (`resolve_base`: Fedora's
+  published `releases.json` through `FedoraList`, parsed by `parse_fedora_list` for the release, region and arch;
+  else the caller's named fallback; else `unavailable: no supported base image`), hashes the inputs with the base
+  (`user_data::input_hash`), and returns the image already carrying that hash (`reused`, no machine). Otherwise it
+  starts the build machine (`ImageApi::start_builder`: on-demand, **stops** at power-off instead of terminating),
+  waits for it to stop (`wait_stopped`, bounded by `BuildCfg.wait`, 10 s polls on the hub clock), images it
+  (`create_image`: encrypted block device, the hub's tag and `drgnx-version`, `drgnx-bundle`, `drgnx-input-hash`,
+  `drgnx-built` on the image and its snapshot), ends the machine (also when imaging failed), and keeps the newest two
+  (`keep_newest`; the older ones are `deregister`ed with their snapshots).
+- `user_data::render_build(inputs)`: the build machine's cloud-config. It installs git, podman, the runner bundle
+  (checked against its SHA-256), the watchdog and first-boot units, the CA's public key, the `runner` user, the
+  project images by digest, the git mirrors fetched from the hub and a warm cargo registry, then runs `FINAL_STEPS`:
+  remove `/etc/ssh/ssh_host_*`, `cloud-init clean --logs`, `sync`, `systemctl poweroff`. `ssh_deletekeys` is set, so
+  each instance makes its own host keys. `BuildInputs` takes public data only and refuses anything else (a private key
+  line, a URL with credentials, an image not named by digest).
+- `user_data::render(ca, principal, limits, flavor)`: an instance's user-data, **public things only** (the principal,
+  the watchdog's limits, optionally a newer CA public key). Any process on the machine can read it from the instance
+  metadata. `image/drgnx-first-boot` reads it at boot (IMDSv2), writes the `TrustedUserCAKeys` and
+  `AuthorizedPrincipalsFile` drop-in and the watchdog's limits, and reloads sshd.
+
+Tests: `runners::cloud::image::` and `user_data::` ([D] pure: `user_data_holds_no_secret`,
+`host_keys_removed_before_the_snapshot`, `keeps_the_newest_two_images`; [B] `image::build_then_start_from_it` against
+`ratatoskr-mock cloud`, the guest's power-off played by the test at the one point the build waits), and
+`test/runners/image-units.sh` (the first-boot script against a stand-in metadata service, and the units, in a
+container).
 
 ## Runners: attempts
 
@@ -2100,8 +2920,10 @@ attempt, nonce, runner, grace_s, restartable}`, `Started`, `Finished {runner, r,
   then sends its `finished`); requeued (`infra: runner lost`) when the `hello` doesn't list it or lists it lost, when
   the grace ends (`graces_due(now)`, read at each tick), or when the cloud says the machine is gone; `lost` instead
   when the job isn't restartable.
-- **The grace** is the runner's, `RunnerCfg::grace()`, passed in at `Placed`: 600 s with linger, 0 without, where a lost
-  link ends the attempt at once (the runner's jobs die with the login).
+- **The grace** is the runner's, passed in at `Placed`: the registry's (`RunnerCfg::grace()`, 600 s with linger) while
+  the runner's last `hello` says it lingers, 0 when it says it doesn't, where a lost link ends the attempt at once (the
+  runner's jobs die with the login). Each `hello` is read again: one without linger sets the grace of the runner's open
+  attempts to 0 (`Core::set_grace`), so linger turned off between two `hello`s ends them with the next lost link.
 - **Only `finished` gives a verdict.** A preemption requeues at once (`infra: preempted`), never a verdict and never an
   eviction. A cancel sends `cancel` to a running attempt and waits for its `finished`; an attempt whose runner can't be
   told (offered, detached) ends `cancelled` at once, and its runner is told when it lists the attempt again.
@@ -2131,7 +2953,10 @@ job's log cut mid-stream and reattached equals the runner's file byte for byte.
 One queue holds every job but the user's servers (`runners/queue.rs`), for this machine and the runners alike. The
 job layer (`exec/`) records a job's folder and meta as before, then `Queue::submit`s it: its forseti `JobSpec`, its
 `Placement {machine (auto | local | runner), heavy, keys, local_only, background, writes, priority, send, machines_cell,
-image, weight, visibility, shared_overlay}`, its frozen inputs (below) and what to start it from (`Pending`). `exec/start` lost `check_machine` and the agents' semaphore:
+image, weight, visibility, shared_overlay, origin_key, suite, net_hosts}`, its frozen inputs (below) and what to start it
+from (`Pending`). `net_hosts` is what a container job's network grant reaches (its cell over the caps' hosts, as its
+proxy here allows them): a runner's `start` frame carries it, and the runner's proxy allows those hosts (it pins no
+name, so `pins` stay empty). `exec/start` lost `check_machine` and the agents' semaphore:
 `machine` names `auto` (the default), `local` or a runner the queue knows (else `invalid-params`); `priority` (1–5) is
 honoured on the user's connections only (a session's is `invalid-params`); `job_start` takes `JobStartParams`,
 `exec/start`'s fields without `priority`, so an agent's request that names one is refused as an unknown field.
@@ -2144,17 +2969,26 @@ splitter's (`Origin::Splitter`), 3 for an agent's `job_start`, 4 for a plan's or
 
 **A tick** (`Queue::tick(now)`, every 2 s on the hub's clock, at every start and on every link event): the detached
 attempts whose grace ended; then the queued jobs in `forseti`'s order (`effective_priorities`, `queue_order`, then
-`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick` over this machine and every
+`Drr::order` by project, weighted by `drgnx-runners-weight`); each placed by `forseti::pick_with` over this machine and every
 runner (trust, pin, features, state, the project's send mode, the `machines` cell). `Pick::Local` asks the local
 runner's admission: admitted, the job starts (`Ticked.starts`; the job layer holds a `Slot` until it ends, and dropping
 it frees the room); refused, the pick is made again without this machine, so the job may still go to a runner.
 `Pick::Runner` offers it there (a new attempt, a random nonce, `Placed` into the attempt state machine, an `offer`
-frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's `admit` is answered with
-`start`; a `refuse` puts the job back with the runner's reason; `finished`, a lost link, a `hello` and a preemption go
+frame); `Pick::Wait` writes the reason's words (`wait_text`) on the job's row. A runner's last `ready` is its budget
+(free memory and CPU, less what the hub offered it since) and the slots and images it holds: a runner whose budget has
+no room for a job's need is passed by (`no room`), so the hub offers only what fits (§6.8.1); one that sent no `ready`
+yet is offered as before. A runner's `admit` is answered with `start`; a `refuse` puts the job back with the runner's
+reason; `started` is written to `rq_attempt` at once (`running`, so a restart never reads `offered` for a job that
+ran); `finished`, a lost link, a `hello` and a preemption go
 through the attempt state machine, whose verdicts, losses and late results become `Outcome`s: the job layer writes the
 verdict as the job's `exit` (or `why`) and ends it as a job here ends. The session's `Route` writes a runner's log
 frames to `<id>/log` for the current attempt and `<id>/log.<n>` for a late one; a requeue moves the log aside as
 `log.<n>`.
+
+**Dialing** (`Queue::dial`, which the registry's `connect` calls): the transport opens the runner, its session starts
+and the queue takes it (adding a runner it doesn't know yet). A dial refused for a login the user must do, or for a
+changed host key, puts the runner in `needs login` with the command its card shows (`ssh HOST true`); a lost link
+leaves that state as it is, and nothing is placed there until the runner's next `hello`.
 
 **The local runner** (`runners/local.rs`, Calls 6 and 7): `Admission::Live` on Linux, `forseti::admit` over
 `sleipnir::linux::probe` under the `workstation` profile, with a reservation per admitted job in the reservation
@@ -2174,6 +3008,63 @@ runner's `hello` lists them, and jobs running here are adopted by the job layer,
 Tests: `runners::queue::`, `runners::local::`, `runtime_db::`, `exec::tests::a_queued_pending_json_is_read_once` [D];
 `test/conformance/runners/*.jsonl` [B]; `tests/fleet_runners.rs` `queue::` [C] (a heavy job goes to the runner under
 `send heavy` while the light one waits here).
+
+## Runners: partial rows and learned placement
+
+**Rows** (design §6.9, "Partial results"). A test job whose suite supports row selection carries
+`Placement.suite = Suite {parser, listed}`: the row parser that reads its log (`ert`, `cargo-test`, `plist`), and its
+rows in listing order. Its command holds `{rows}` (`queue::ROWS`) where the selector goes; each attempt's spec
+(`attempt_spec`) puts there `forseti::split::selector` of the listed rows that have no result yet
+(`forseti::split::remaining_rows`), all of them on a first attempt, and sets `select` to it. A job with no suite, a
+parser that reads no rows (`exit`), or no `{rows}` in its command (`selects_rows` false) reruns whole, as before. The
+`start` frame names the suite's parser, so the runner sends `row` frames; each counts for an attempt placed on that
+runner with that nonce, current or late, until the job's verdict (`attempts::Rows`, and `rq_rows`). A runner sends its
+rows at an attempt's end, so when an attempt is requeued the hub reads the rows its own copy of the log shows (up to the
+last whole line) as that attempt's. A requeued attempt whose rows the next one reruns is cancelled when its runner lists
+it again (an `attach`, then a `cancel`; its log and result are kept as late), so no row runs to its end twice. When
+every listed row already has its result at the requeue, nothing runs again: the job ends there from those rows, judged
+as a finish is (a `Pass` judged over the union), and the job layer gets its `Outcome::Done` for that attempt.
+
+At the verdict, `attempts::union_result` gives the runner's `result.json` the union's `counts`, `rows` (each with its
+attempt and machine) and `failing`: each row once, from its latest attempt. A `Pass` is judged again over the union
+(`sleipnir::linux::parse::judge` with the job's `expect`), so a row an earlier attempt failed keeps the job red; any other
+verdict stands. When the rows came from more than one attempt the result carries `split`, `exec::summary::split_line`'s
+words ("rows 1–212 on desktop (attempt 1), 213–240 on laptop (attempt 2)"), which the job layer puts first in the
+summary (the job folder's `split` file).
+
+`exec/start` takes the suite as `rows: {parser, listed}` (`StartParams.rows`, at most 20000 rows): the job's
+`Placement.suite`. A run on this machine runs once, whole: `{rows}` becomes the selector of every listed row.
+
+**Learned placement** (`forseti::learn`). A runner's `Pass` or `Red`, undisturbed and not a run of only some rows, is a
+history row (`rq_history`: key `forseti::history_key`, machine, wall, CPU, peak memory, verdict, time, and `warm` when
+its start was: no grant). A job here that ran to its end is one too, machine `local` (`Queue::ran_here`, from the job
+layer's finish). The queue keeps each key's last 5 runs per machine, and `forseti::Learned` learns the speed ratios
+between machines from each new row (`Learned::observe_run`). A bundle the runner took in times the link: its bytes
+over the time from its sending to the runner's next `sync-need` (`Learned::observe_transfer`), and a candidate's
+transfer counts its overlay's bytes unless an attempt there synced the same inputs (the queue remembers the last 64
+input keys per runner). A start is warm on a runner whose last `ready` lists the job's slot
+(`sleipnir::sync::slot::SlotKey::of(spec)`) and holds its image; `serve` lists the slot folders under its root and the
+images its attempts ran in. Every candidate's estimate reads the job's history on every machine, and the pick is
+`forseti::pick_with` with what was learned and each candidate's warmth. After a restart `queue::kept` reads `rq_rows`
+and `rq_history` (oldest first) and `Queue::restore_kept` puts the rows back and learns again in the same order, so
+placement is what it was; with no history it is the static rule's.
+
+**Backfill** (`forseti::backfill`, jobq §5.6). At each tick the head (the first queued job of the highest effective
+priority) reserves, when it fits none of the machines that may take it now, the one where it can start soonest
+(`forseti::reservation`): from this machine's probe and budget (live admission only: one admitting by count has no
+budget to reserve) and each runner's last `ready`, with the expected ends of what the queue runs there (a runner's job
+counts from its `started`, holding its grant, for the time its placement expected). While it holds, a job a machine
+would take waits as "room is kept for job H" there (`admit::head_protection`) unless it ends before the head's start,
+and may still go to another machine; the reservation goes once the head is placed, and is made again every tick.
+
+Tests: `runners::attempts::tests::union_with_latest_attempt_winning`,
+`exec::summary::tests::summary_shows_the_split`, `runners::queue::tests::a_requeue_runs_only_the_rows_without_a_result`,
+`learned_placement_comes_back_after_a_restart`, `the_head_reserves_a_runner_and_a_short_job_backfills_it`,
+`a_timed_bundle_teaches_the_link_and_placement_counts_the_transfer`, `a_runner_with_the_jobs_slot_and_image_wins_a_tie`,
+`a_run_here_is_this_machines_history`, `exec::tests::rows_reach_the_queue_and_a_run_here_runs_them_all` [D];
+`tests/runners_orders.rs`
+`every_order_each_row_counted_once_latest_wins` [A] (two attempts' rows and a late `finished`, all 280 orders);
+`tests/fleet_runners.rs` `drill::a_dropped_link_at_row_150_of_240_reruns_only_the_rest` [C].
 
 ## Runners: sync and job trust
 
@@ -2203,7 +3094,7 @@ The runner's `sync-need` gets, for the commit, `sync::plan(job, trust, missing, 
 | Case | What the hub does |
 |---|---|
 | public, the commit on the origin, any runner | `origin-fetch` with the origin's URL |
-| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | `origin-fetch` with the key (no key setting yet: never taken) |
+| a private origin, a deploy key named, the commit on it (`mine`, `my-cloud`) | the key in a `key` frame (recorded as `key_sent`), then `origin-fetch` naming it (`cred`); the key is `drgnx-runners-origin-key`, taken only while the hub holds it (else asked for, and the commit goes another way) |
 | over 8 MiB missing (`missing_bytes`: `rev-list --objects --disk-usage` past the runner's ref tips) | one bundle (`make_bundle`: a temporary bare repository borrowing the objects, `refs/hub/job`, the runner's tips left out), in 1 MiB chunks |
 | a small gap | a push; for now a bundle too |
 | a shared runner and anything not on the public origin | never: the attempt is cancelled with the reason |
@@ -2215,6 +3106,76 @@ verdict, requeue or loss drops the attempt's sync and its bundle file.
 Tests: `runners::sync::` [D] (trust from visibility and reachability; the four cases; no lock file in any overlay; a
 bundle sent in chunks from an offset); `tests/fleet_sync.rs` [C] (one unpushed commit keeps a public job off the
 shared runner; the shared runner fetches from origin; the shared overlay off by default, and scanned when on).
+
+## Runners: keys
+
+`runners/keys.rs` and `runners/redact.rs` (design §6.3, §6.6; the user's side is docs/guide/runners.md, "Keys").
+
+**Naming a key.** `exec/start`'s `keys` (names) must each be on the project's `drgnx-runners-job-keys`
+(`keys::on_the_project_list`, else invalid-params naming the key and the setting); a session's start also passes the
+matrix's `job.keys` (`gate_session_job`; Cautious and Balanced ask, Autonomous allows the manager and workers, chat
+never). The names go to `Placement::keys` and the spec; the job is `private+keys`. A keyed job has no local candidate
+in `Queue::place` (it waits for a runner, saying so): a keyed job on this machine is not wired yet.
+
+**The handover.** `runners/keys {keys: {NAME: value}}` (user only; refused while `Gate::protects_keys` fails, as
+`gateway/keys` is) puts the values in `Keys` (`SecretString`s in memory; `RunnerKeys` refuses a NUL, an over-64-KiB
+value and more than 32 keys, naming the key, never the value). `runners/keys-held` answers the names. When an attempt
+needs a key the hub doesn't hold, `runners/need-keys {names}` goes to the user's connections; nothing answers it but a
+command the user runs.
+
+**Sending.** On a keyed attempt's `started` (never before), `Queue::send_keys` sends each held key it hasn't sent yet in
+its own `key` frame, only where `keys::trust_ok` (never `shared`; `my-cloud` only its list, empty until cloud runners
+come); each is a `key_sent` row. Keys taken later go to the started attempts still missing them. A `key-use` frame
+from an attempt the hub placed there becomes a `key_use` row, `runner_reported: true`. Rows go to memory (the last
+10 000) and to the graph (norn kind `key_sent` / `key_use`, written as `("hub", System)`); `runners/audit {job?, key?}`
+reads the graph, or memory when the graph can't be read.
+
+**Redaction.** `QRoute::write_log` (the link's `Route` hook for `log` frames) runs a keyed attempt's chunks through its
+`Redactor` before they reach the hub's copy: every value sent masked in its raw, base64 (both alphabets, padded or not)
+and percent forms, at its own length, so the copy keeps the runner's offsets; the end of a chunk that could begin a
+form is held back until the next one (`Redacting::consumed` is the runner's offset taken in). A redactor exists from
+`start`; a key is added to it before its frame goes. After a hub restart a keyed attempt's log isn't taken in until all
+its keys are held again (`runners/keys`), then it is attached from the copy's end; its runner's `hello` that lists it
+asks for the missing ones (`runners/need-keys`). At `finished` the held tail is
+written and `redact::notices` (the `looks_like_secret` heuristic) sends one `notice` per log that may hold some other
+secret, never masking it.
+
+Tests: `runners::keys::` and `runners::redact::` [D]; `runners/keys-never-in-the-log-or-any-reply` [B] (conformance);
+`tests/fleet_keys.rs` [C] (one frame and one `key_sent` per key and one `key_use` per read, no key bytes on the runner;
+the returned log redacted; a shared runner never gets a key; a key that never arrives is infra; `podman inspect` names
+only and `memory.swap.max` 0).
+
+## Runners: returned data
+
+`runners/returned.rs` (design §6.3; the user's side is docs/guide/runners.md, "What comes back"): what a runner
+returns is checked before it reaches anyone. Runners return only the log and `result.json` today, so the checks below
+wait for their callers (reports, outputs, `changes.patch`, `exec/fetch`); the `shared` rules are wired.
+
+- `path_ok(rel)`: relative and normalised (`.` and empty segments dropped), refused for `..`, an absolute name, a NUL
+  or nothing left. `never_returned(path)`: a `target` component, a build tree (`CMakeFiles`, `CMakeCache.txt`,
+  `build.ninja`, `.ninja_log`, `.ninja_deps`, `config.status`) or an image (`oci-layout`; `.oci`, `.qcow2`, `.vmdk`,
+  `.vdi`, `.iso`, `.img`), by name, whatever a job declared.
+- `write(job_dir_fd, rel, bytes)`: both checks, then each folder on the way opened with `eitri::open_beneath` (a link
+  is refused) or made with `mkdirat` beneath the last one, then `eitri::write_regular` (0644; a link at the name is
+  replaced, never followed).
+- `archive_ok(tar)`: ustar (checksums checked; a ustar prefix, a GNU long name and a pax `path` taken; a global pax
+  `path` refused) holding only regular files and folders, every name through both checks; a link, device, FIFO,
+  any other type, a truncated entry or a missing end is refused.
+- `Patch::parse(from, bytes)` reads `git diff --full-index --binary` output: per file the paths before and after
+  (none: created or deleted), the modes and the blob before. A quoted path, a copy, a binary change without its data,
+  text before the first `diff --git` or an unknown header line can't be read: the patch is kept. `patch_ok(patch, spec,
+  attempt, submit, runner_trust)` lists every reason not to apply it: a path outside `spec.writes` (`*`/`?` within a
+  segment, `**` any segments, `dir/` the folder), a protected name (`lock::NEVER_RESTORED`, the list a revert never writes either) or `.git` at any depth, a bad path,
+  a symlink or submodule mode, a changed mode or a new executable file, a blob before that isn't the file's `submit`
+  hash (or a created file that had one), another job, attempt number or nonce than `attempt`, a `shared` runner, more
+  than `PATCH_MAX`. A refused patch is kept with `review_card(runner, n)`.
+- **`shared`:** `Queue::apply` gives `Outcome::Done` the runner's name when its trust is `shared`; the job layer writes
+  it to the job's `shared` file, `finish` starts the summary with `shared_label` ("output from runner NAME (shared)"),
+  so `exec-done` and the starter's wake carry it, and `Runner::counts_for_gates(id)` is false for it
+  (`counts_for_gates(trust)`): what a gate or `needs` reads once the hub has one.
+
+Tests: `runners::returned::` [D] (the returned-data rules: paths, archive links, a planted link, writes globs, protected files and
+`.git`, exec bits, an old attempt, `shared`, `target/`); `exec::tests::a_shared_runners_result_is_labelled_and_never_counts_for_a_gate` [D].
 
 ## Runners: health
 
@@ -2282,6 +3243,128 @@ Tests: `norn::write::runners::` [D]; `runners::registry::` and `runner_cli::` [D
 `runners/methods-are-user-only` [B]; `tests/fleet_registry.rs` [C]: add (probe, copy, pull, bench, link), the contract's
 refusal with its list, the hub's own machine, a removal that leaves nothing of ours.
 
+## Extensions
+
+`extensions/*` (`drgnx-ratatoskr/src/extensions/`) serve the Extensions view's list from memory. The hub never installs
+and never reaches the network here: the refresh job (`drgnx extensions refresh`) writes
+`<cache>/extensions/catalog.json` (docs/develop/extensions.md), `drgnx sync` writes the lock, and the hub reads them.
+
+- **Sources, merged into rows:** the catalog; the user's lock (`<config>/drgnx.lock.eld`, read up to 8 MiB); the wanted
+  file (`<state>/packages-wanted.eld`); `packages.eld`'s `:packages` and `:git` names; the modules the editor sent with
+  `extensions/modules` (held in memory, replaced by each call); and Emacs's built-ins from the catalog. All Lisp files
+  are read as data with `huginn`, never evaluated.
+- **Reload:** each call looks at the four files' `(mtime, size)` in a blocking task and reads only those that changed,
+  so a refresh run from the command line is seen too. A file that does not read (truncated JSON, a catalog of another
+  `version`, a lock with a mistake) keeps its last good copy; `extensions/details` carries a note saying so. A file that
+  is gone is empty.
+- **Ids:** `pkg:NAME`, `module:NAME`, `emacs:NAME`, `plugin:NAME`. A plugin's row comes from the plugins' last look
+  (`plugins/list`, memory only), with the hub's `unapproved`, `changed`, `disabled` or `broken`, and for an approved one
+  `on` or `off` by the global `drgnx-agents-plugins`; `signed` is `hash-approved`. A search never reads the folder.
+- **State:** `installed`, `update` (the catalog's update plan takes a newer version), `held` (a newer version exists the
+  plan does not take), `incompat` (the newest version needs a newer Emacs), `dependency` (installed only because
+  another installed package requires it), `missing` (a module, `packages.eld` or the wanted file names it and the lock
+  does not have it), `available`, `built-in`, and for modules `on`, `off`, `needs-package`, `failed`.
+- **Signed:** `signed` only for a lock entry with `:verified t`; a row of an archive that signs without one (GNU or
+  NonGNU, not installed yet) is `signing-archive` (no trust card: the sync checks its signature); a MELPA package is
+  `unsigned-archive`, a directory archive `local`, a Git package `git-commit`. A lock entry without `:sha256` (and not Git) is `by-hand`.
+- **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
+  its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
+  (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows` and
+  `extensions/modules` are the user's.
+
+Tests: `extensions::catalog::` [D, one every-order test A] and `extensions::rank::` [D]; conformance
+`extensions/search-ranks-the-fixture`, `details-of-an-installed-package`, `rows-keep-their-order`,
+`a-new-catalog-is-read-on-the-next-call` and `an-agent-may-search-but-not-send-modules` [B].
+
+## Plugins
+
+`plugins/list`, `plugins/approve` and `plugins/disable` are the user's alone (`runstav::methods::plugins`); no agent
+connection and no tool reaches them, and `plugins/approve` takes the hash the editor displayed and refuses it when the
+files on disk hash differently. The plugins live in `<data>/plugins/NAME/` (`ratatoskr plugins install PATH
+[--replace] | list | remove NAME` puts them there); the hub reads that folder with `brokkr::scan` at its start and at
+every `plugins/list`.
+
+**`runtime.db`** (migration 10): `plugin` (`name`, `hash` last seen on disk, `approved_hash`, `approved_at`, `enabled`,
+`approved_reach` the manifest's whole reach as JSON) and `plugin_kv` (`plugin`, `key`, `value`: the plugins' key-value
+stores). A plugin is `unapproved`, `approved`, `changed`, `disabled` or `broken`; a `changed` entry of `plugins/list`
+also carries `approved_reach`. A change of state sends the event `plugin {name, state}` (`state` also `removed`) and
+keeps one card of kind `plugin` for each plugin that is `unapproved` or `changed`.
+
+Which approved plugins run for a project, and the hook rules in force, come from three settings the Lisp declares
+`:scope project :workspace never :agents never` (`drgnx-agents-plugins`, `drgnx-agents-hook-rules`,
+`drgnx-agents-hook-rules-off`; `overrides::PER_PROJECT`): `Plugins::enabled_for` and `Plugins::rules_for` read the
+global value and the project's own set from `config/settings` (`Settings::project_value`). A rule list that
+`norn::hooks::parse_rules` refuses refuses the whole set at `overrides[N].value[I].KEY`. `plugins::io` holds the
+decisions a plugin's imports need (the store's quota, `judge_http`); `docs/develop/plugins.md` ("Plugins in the hub")
+has the whole account.
+
+## The _drgnx/panel extension
+
+An ACP extension between the hub and an agent's adapter, for what standard ACP does not give: the context breakdown,
+dropping and pinning what is in it, a compaction preview, and the `before-tool` hooks on steps the agent allows itself.
+The org's adapter forks (Claude, Gemini, Kimi Code, DeepSeek Harness) speak it; any other agent simply does not
+advertise it, and the panel then shows none of it (hidden, never faked). Codex runs the stock `codex-acp`, which does
+not: its steps reach the hooks through its lock's managed hook instead ("The `before_tool` tool", above). The hub's side is `agents/session/panel.rs`.
+
+- **Handshake.** `initialize` sends `clientCapabilities._meta["_drgnx/panel"] = {"version": 1}`. The agent answers
+  in `agentCapabilities._meta["_drgnx/panel"] = {version, features}`, features among `context`, `drop`, `pin`,
+  `compact-preview` and `before-tool`. Only version 1 counts, and only those names: they become the snapshot's
+  `panel.features` (in that order). An agent that advertises none has no `panel` in its snapshot.
+- **`_drgnx/context`** (agent → hub notification) `{sessionId, used, size, parts: [{kind, tokens, items?: [{id, label,
+  tokens}]}], compact_frees?}`, `kind` one of `system`, `tools`, `files`, `tool-output`, `conversation`: the
+  snapshot's `panel.context`, at most 4 times a second (the first at once, then the latest after the quarter second;
+  the last one is never lost). At most 8 parts, 200 items a part and 256 characters a label.
+- **User actions.** `agents/context-drop {id, item}`, `agents/context-pin {id, item, pinned}` and
+  `agents/compact-preview {id}` (user class) go to the agent as `_drgnx/context/drop {sessionId, item}`,
+  `_drgnx/context/pin {sessionId, item, pinned}` and `_drgnx/compact/preview {sessionId}`, each with a 10 s deadline.
+  The preview's answer is `{frees?, kept?, summarised?, note?}` (items as in the breakdown); nothing is compacted. A
+  session whose agent does not offer the feature gets `invalid-params` "this agent does not offer it" (the editor hides
+  the action instead). An agent's error is `not-allowed` with its message quoted; no answer in time, or an answer that
+  does not fit its schema, is `internal`.
+- **Mode and model: `agents/config {id, option, value}`** (user class, writes). `option` is `mode` or `model`; any
+  other is `not-allowed`. A mode is switched only to one on the provider's lock allow-list
+  (`agents::lock::allowed_modes`: Claude `default` and `plan`, Gemini `default`, Kimi Code `default` without plan, Codex
+  and DeepSeek none); any other is `not-allowed` with the mode, the allowed list and why (Claude's other modes run tools
+  without asking, which skips the matrix; Codex's lock pins `read-only`). A session with no lock cannot switch its mode.
+  A model is free within the profile (the agent refuses one it does not have). The agent is asked by
+  `session/set_config_option {sessionId, configId, value}`; one without the method (`-32601`) gets `session/set_mode`
+  or `session/set_model`. An agent's refusal is `not-allowed` with its message quoted.
+- **The facts behind a chip: `agents/explain {id, item}`** (user class), `item` among `context`, `cost`, `mode`,
+  `model`, `waiting`, `mcp`; the answer `{item, facts: [{name, value}]}`, facts only (a value the hub does not know is
+  not listed, or says so). `context` is the adapter's own `_drgnx/context` count when it sent one (`source` says so),
+  else the agent's `usage_update`, else says none is known. `mode` names the lock (provider, enforced or why not), the
+  matrix column (`row`: role, agent, provider), the allowed switches and why the others are refused. `cost` has the
+  turns, the tokens of finished turns and the cost the agent reported; `model` the profile's model and environment;
+  `waiting` the status, the job waited on and the permission requests waiting; `mcp` the hub's server and the agent's
+  `mcpCapabilities`.
+- **`_drgnx/before_tool`** (agent → hub request) `{sessionId, toolCall}`, `toolCall` as in
+  `session/request_permission`: the session's `before-tool` rules and hooks run at the adapter site
+  (`hook_points::before_tool` with `At::Adapter`, no matrix cell, so they can only refuse; `change` is not taken), with
+  one hook row as at the seam. The answer is `{outcome: "allow"}`, or `{outcome: "deny", reason}` with the hub's words
+  and the hook's quoted, and a deny is also steered into the turn. A hub tool's step answers `allow`: it is hooked at its
+  server. The adapter runs inside the agent's sandbox, so this check is the agent's own and a second line: a fork's
+  steps still reach the seam (its lock makes them ask), so the snapshot's `hooked` comes from the lock alone
+  (`hooked.by_adapter` is Codex's managed hook), and a session whose lock leaves a subscribed kind unhooked is refused
+  whatever the fork advertises. A step both sites hooked has one provenance row, the seam's (`timeline/get`); a step
+  only the adapter hooked keeps its own.
+- **What the agent sends is untrusted.** Every params object is checked against its schema with unknown fields
+  refused, so an `outcome` or a verdict of the agent's own in a `_drgnx/before_tool` is refused (`-32602`, the field
+  named) and runs nothing: the answer is the hooks' outcome, never the agent's say. A `sessionId` that is not the
+  agent's own session, and a message over 256 KiB, are refused. A request the hub does not take from an agent (one it
+  sends, such as `_drgnx/context/drop`, or one it does not know) gets `-32601` "drgnx refuses it: it takes no METHOD
+  from an agent"; a feature the agent did not advertise is refused too. A notification that does not fit is dropped
+  with a warning in the hub's log. Nothing in the extension changes a session's matrix, grants or lock.
+- **Tests.** `agents::session::panel::tests` (the checks and the context gate, pure), hermod's
+  `an_extension_request_comes_with_a_responder` and `ext_request_returns_the_answer_or_ends_at_its_deadline`, and the
+  rows `panel/*` against `ratatoskr-mock acp --panel FEATURES`. The rows that run the hooks over every profile are
+  `system/hooks-every-profile` and `system/abilities-every-profile` (Claude, Claude through the gateway, Codex's
+  stock adapter, and Gemini, Kimi and DeepSeek stock and as their forks: with `before-tool` the mock asks
+  `_drgnx/before_tool` first, with the step's tool call id, and a deny vetoes it, as the forks' listeners do); each
+  fork's rebase is checked by `adapters/{claude,gemini,kimi,dsh}-rebase` (Codex has no fork). The fuzz targets
+  `drgnx_context`, `plugin_manifest` and `hook_rules` and the `perf/hook-overhead*` and `perf/ability-20-sessions`
+  rows are in [runtime.md](runtime.md).
+
 ## The timeline
 
 Every step of an agent's work is a row of the `step` table (`norn::write::steps`), written when it closes by the
@@ -2295,10 +3378,23 @@ column still matches `:ai` only).
 
 Anchors of a step (part 4's rewind): `message_id` (the last message id seen, so tool calls carry their turn's
 message), `turn_id` (it arrives with the turn's last step; the turn's earlier rows get it then), `log_version` (the
-decision log's version when the step closed) and `snapshot`.
+decision log's version when the step closed) and `snapshot`; from schema 12 also `acp` (the agent conversation the
+step ran in), `head` (the worktree's commit when its snapshot was taken, read from the ref files without git), and
+`history_op` and `undone_by` (the edit history's record it anchors, and the revert that abandoned it). The wire step
+adds `revertible`: it has a history record and its session's snapshots were not removed at the cap in this hub's run
+([store.md](store.md#schema-12-the-timelines-step-facts-agent-system-part-4)).
 
 A **step snapshot** is a tree of the session's worktree, written at the first step of each turn and after each completed edit (`edit`, `delete`, `move`
-tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. Each
+tool kinds) into a shadow repository `<state>/hub/checkpoints/<hash>.git` and kept as `refs/drgnx/s/<sid>/<seq>`. A
+turn's tree is taken before its prompt goes to the agent (through an index of its own, held by `refs/drgnx/turn/<sid>`
+until the turn's first step is written and keeps it), so nothing the agent writes in the turn is in it. An edit's
+tree is taken by the step writer once the step's row is written, unless the session serves the agent's next
+`fs/write_text_file` first: then the session takes the tree before it serves that write (`Snap::before_write`, through an
+index of its own, held by `refs/drgnx/write/<sid>/<tree>` until the step keeps it), one tree for every edit step closed
+since the last write, and the writer keeps that one. The writer holds the step's cell while it takes its own tree, so no
+write is served meanwhile; with no edit step waiting, a write costs a lock and nothing more. A step whose row cannot be
+written closes its cell (`EditCell::close`), so no later write takes a tree nobody would keep; a tree taken for it
+already stays held until the session's refs are pruned, since the steps closed before one write share it. Each
 session has its own persistent index file in the shadow repository, so a snapshot only hashes what changed. The
 sandbox's secret file names (`.env`, `.npmrc`, `credentials*`, keys, …) are never in a tree. Over
 `drgnx-agents-checkpoint-cap` (summed over the shadow repositories), the refs of finished sessions go oldest first and
@@ -2307,6 +3403,30 @@ one `notice` (a running task's refs are never removed). Restore and fork are par
 
 `timeline/get {scope, id, since?, rollup?}` answers the steps of a session, task, plan or project (500 a page, `next`
 continues) and their rollup: seconds by class (closed steps), cost by unit (never summed across units) and tokens.
+
+A step's `cost` is what the budget booked from the agent's cost readings (ACP's `usage_update`) during the turn the
+step closes, on the turn's last step, with the unit `usd-est`: an estimate, since a subscription agent reports an
+API-equivalent price. Both the step and the budget book the same delta, keyed by the agent's conversation, so a new
+conversation (a rotation, a fresh start, a rewind or fork) counts from its first reading in both and `budget/get`
+never disagrees with the steps. An agent that reports no cost leaves `cost` empty (never `0`). The rollup of a task
+or plan adds a `usd` line with what the gateway charged (the `spend` table), next to the estimate. A plan scope is
+`plan:<id>` for a graph plan, `plan:<path>` for a plan file and `plan:<job>` for a job with none; steps and budget of
+a job use the same key. Rows written before this keep their old key.
+
+**Forecast samples.** Every task that finished (`done` or `dropped`) and ran a turn becomes one `forecast_sample` row
+(`forecast.rs`, `norn::forecast::sample`), and so does a finished job's manager (`JOB#manager`). The sweep runs once
+at hub start, which backfills the history of earlier runs, and at the end of each runner tick; it takes what is due in
+pages of 100. A task is due when every step of it has closed and no sample covers its newest step, so a restart, a
+second sweep and a task reopened after review are all the same query and leave one row per task. Because it runs
+every tick, the query reads no whole table of the graph: a finished job's manager sessions are found through the
+partial expression index `entity_manager_job` (work.db migration 11: live sessions whose `data.role` is `manager`, by
+`data.job`), compared as `+j.id` so the index is searched, and their steps through `step_session`. Every step with the
+task counts, whichever session wrote it (a fallback, a move, a reviewer) and whatever a rewind marked: spent is spent.
+A session with no task (a chat, a fork) makes no sample. The row's profile and provider are those of the last session
+that is no review: the runner marks a task's reviewer session (`review` in its record), whose steps count on the task
+but whose profile is not the task's class (else the next proposal would find the worker's class empty and fall to
+the role). Its model comes
+from the profile's setting, a wake is a job wait and a cold one is longer than the cache TTL (assumed 300 s).
 
 ## The CDP broker
 
@@ -2521,3 +3641,193 @@ dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as
 sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
 pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.
+
+## Forecasts
+
+A forecast comes from the history of similar finished tasks, never from a model's own guess. `norn::forecast` is pure:
+no store and no clock, so the same history and the same seed give the same numbers.
+
+**The reference class** (`model::reference_class`). A task is compared with finished tasks at each level in turn, and
+the first level with at least 5 observations (`MIN_CLASS`) wins:
+
+| Level | Same | |
+|---|---|---|
+| `Project` | role, profile, model and project | a task with no project skips this level |
+| `Profile` | role, profile and model | |
+| `Role` | role | `other_model` says when some ran on another model: their tokens are carried and priced at the task's rates |
+| `Any` | nothing | |
+| `Prior` | | `n` is 0, and the answer says it has no history |
+
+`other_model` compares models: another profile on the same model is the same model. A profile with no model set is
+the CLI's choice, so across profiles it counts as another model.
+
+Within a class an observation weighs `exp(-(ln b - ln b0)² / (2 · 0.7²))`, where `b` and `b0` are the two briefs'
+bytes, floored at 1 KiB: a brief twice the size weighs 0.61, four times 0.14. The prior is unweighted.
+
+**The prior** (`model::prior`) is one base task at ×⅓, ×½, ×1, ×2 and ×3: 19M cache reads, 600k cache writes, 60k input,
+90k output, 40 minutes active, 60 minutes of wall time. The cache reads and the output's share (under 0.5 %) are
+measured on this project's agents; the other figures are judgement. Its 2 wakes (1 cold) and 300k context are not
+scaled: the first is an assumed count, the second a level a task reaches.
+
+**Rates** (`model::usd`) are USD per million tokens, per token class. A cache write pays the 5 minute rate at a TTL of
+300 s or less, else the 1 hour rate. Every token class counts towards a forecast's tokens (`Usage::total`).
+
+**A wake** (`model::wake_usd`) costs the session's context × the cache read rate if the job ended within the TTL,
+and × the write rate after it, because the whole context is written again. At Opus 5.5's rates, 300k of context costs
+$0.06 within the TTL, $1.50 after a 5 minute TTL and $2.40 after an hour's. History already contains its wakes, so a
+forecast shows the wake as a part of the total, never added to it.
+
+**The simulation** (`sim::simulate`) runs the plan 2000 times (`DRAWS`). Each draw takes one whole observation per task,
+by weight, so one run's tokens, time and cost stay together. Time is a list schedule of each observation's wall time:
+whenever one of the slots is free it takes the ready task with the lowest `n`, as the runner does, and a task starts
+once its parents have finished. So wall time shows merge bias: three parallel tasks together end later than the p50 of
+any of them. Each range comes from the plan's own draws, because p90s do not add up.
+
+The stream is SplitMix64, and `seed_of` is FNV-1a over the inputs: both are written here so that the numbers do not move
+with a library or a compiler. Quantiles are nearest-rank (`quantile`).
+
+`price` answers a task's unit and amount for an observation, or nothing. Units are never summed. A pick with no price is
+not a zero: the task's cost comes from its priced picks, and a task with none is in no unit. Run again with the same
+seed and a `price` of a wake's cost, and the draws are the same, which gives the plan's wake cost.
+
+The class's picks count into the history, and a prior's count on past its end, so `simulate` takes the history followed
+by the prior. A prior serves only when the whole history is under 5 rows, because the `Any` level takes the rest.
+
+**The small-class floor** (`sim::widen`): below 20 observations a p90 is at least 1.5 × p50, whatever the draws say, so
+a class of five near-identical runs cannot print a tight range.
+
+**Calibration** (`sim::conformal`) is split conformal scaling. Past pairs of (p90, actual), per role, profile and model,
+give the actual/p90 ratios, and the factor is the ratio at rank ⌈(n+1)·0.9⌉, so it needs 9 pairs. `p90 × factor` then
+covers the next run at least 9 times in 10, provided past and future runs are exchangeable, which a change of model
+breaks; hence the model in the key and a recent window. Keep the p90 of each pair as it stood before calibration:
+ratios against a calibrated p90 say only how the last factor did, and the factor would swing. The factor can be below
+1, so the caller holds a scaled p90 at its p50 or above.
+
+**Prices and the hub's side** (`drgnx_ratatoskr::forecast`). Tokens are priced at today's rates, not at the sample's own
+cost. `rates_for` takes the rates of a profile from the setting `drgnx-agents-model-prices` (US dollars per million
+tokens, shipped dated `2026-11-01`; a cache price left out is the input price): the row with the longest key that is a
+prefix of the profile's model id; else, for a gateway profile, the provider's `:price (IN . OUT)` with every cache token
+at the input rate; else the row named for the profile's CLI (`claude`, for a Claude profile with no model set). No
+rate: the task is unpriced, and its cost is empty, never zero; a sample's own recorded cost serves only on the same
+profile. `prices_as_of` is the oldest date of a row. The cost unit is `usd` for a gateway profile and `usd-est` for a
+subscription's, which is an estimate.
+
+`ttl_of` is the prompt cache time to live of a profile in a role: 3600 s for a Claude subscription in any role and for a
+gateway Claude worker or manager (the lock asks for `LONG_CACHE_TTL`, `agents/lock.rs`), 300 s for everything else. The
+sweep passes it to `gather`, so a sample's cold wakes use the TTL its session had.
+
+`for_tasks` reads the newest 5000 samples, forms each task's class, simulates on `runner::agent_slots` slots (the number
+the tick starts at once) with a seed from the job key and every want's fields, widens each task by its class's size and
+the plan's totals by the smallest class's, and scales a task's p90 by its class's calibration factor when it has one.
+The plan's total has its own factor (a task's holds for that task alone and says nothing of a sum's p90): split
+conformal over whole plans, from `sample::plan_pairs`, the job's own `forecast_made` row (its total's tokens p90 before
+calibration) against what its tasks used, summed, managers apart, for `done` jobs whose every task that ran has its
+sample; the latest 200, at least 9. It scales the total's p90 of tokens, time and every cost unit, and the pace's
+added share, so the Autonomous rule's spend and week checks read the calibrated total; a session's forecast
+(`forecast/session`) has none. `forecast_made` keeps the p90 as it stood before calibration (`for_job` returns the rows
+to keep). The wake line is a
+second simulation with the same seed and a price of each drawn observation's cold wakes × its context at the cache
+write rate. A manager's own spend comes from the `manager` samples, per task, beside the total.
+
+**The week's pace** (`Forecast.pace`, one `PaceEffect` for each subscription meter a task of the plan runs on). A
+meter's readings are kept in a thinned history (`Budgets::history`): one for each quarter hour, none older than 8 days,
+at most 768 a provider, saved with the budgets in `runtime.db` (the `meters` field of the `budgets` row; a row saved
+before has none) and replayed when the hub starts, so a restart keeps the pace. `pace/get`'s rate still reads only the
+last 24 hours. A fall in the meter is a reset, a new segment: only rises count (`budget::rise_total`).
+`share_per_usd` is the rises over the `usd-est` that the provider's steps booked since the first kept reading; the
+account's meter includes use outside drgnx, so it is an estimate, high if anything. The plan's `added_share` is the
+plan's own `usd-est` draws on that provider (a second simulation with the same seed) times that ratio. `runs_out_p90`
+is true when the used share, the plan's p90 share and what the current rate adds before the reset reach 1; the
+forecast then warns, and the Autonomous preset's auto-start waits. `window` is `week` when the reset is more than a
+day off, else `short` ("this window"). No spend or no rise: no `added_share`, and the view says "no pace yet".
+
+| Method | Class | Answer |
+|---|---|---|
+| `forecast/get` | user | the forecast of a job, from its data as proposed |
+| `forecast/session` | user | one more run like a session: one task of its role and profile, nothing recorded |
+| `forecast/accuracy` | user | per role and profile, the share of finished tasks that took no more than their p90, and the median of actual over p50 |
+
+End to end, on mocks: `system/a-forecast-before-dispatch` proposes a plan on a subscription Claude mock and a gateway
+profile with a provider price, checks the card's range and the prior's basis before any worker exists, runs it to the
+end, and checks that each task's and the plan's rollup equal the step table summed in SQL, that the plan's `usd-est`
+equals what `budget/get` booked, that the gateway task's `usd` equals its spend rows, that `forecast/accuracy` has a
+row per role, and that the next proposal's implement task is forecast from its class of five. The rows wait on a
+condition with a deadline (`poll`), never a quiet period. `system/say-it-survives-a-restart` keeps a Say proposal,
+its card and its forecast across a second hub on the same root, where `say/revise` on the old planning session says
+the planning stopped. `system/mixed-providers-lease-clash-review-spend` checks cost per session, task and plan.
+
+## Say it
+
+One prompt becomes a proposed plan (`say.rs`). `say/start {text, repo, project?, profile?}` starts a planning session:
+a chat on `profile`, else the `say` route's first profile, which is the first `implement` route's when `say` has none
+(`runner::route`). It runs in a scratch folder of its own (no `cwd`: `spawn_plain`), with no repository, no task and
+no graph, so repository and graph text, the injection surface, never reach the session that shapes the plan. Its
+first prompt (origin `hub`) is the fixed instructions with the one block form, a digest of the profiles a task may
+name (those a job may run on), each role's route, the roles and the project's id (`say::digest`: settings only), and
+the user's words.
+
+The session's turn ends at the shell's `PromptDone` handling (`agents/session.rs`, where the last message is already
+read for `drgnx-report`): when its id is a planning session's (one set lookup), `(sid, message)` goes to `say::run`.
+A message with no `drgnx-proposal` block is a question: `say-message {id, text}` carries it to the editor. A block
+ends at the first line that is only "```" (a JSON string holds no raw line break, so a fenced command inside a task's
+body is never that line), and is parsed with every unknown key refused (`grants`, `approved`, `auto`, `repo` and the like: the format has `title`,
+`tasks` of `{n, title, role, profile?, deps, body}`, `budget` and `gate` only), and more than one block is refused.
+`say::check` then refuses, all at once: no title, no tasks or more than 32, a role other than `implement`, `test`,
+`docs`, `review` and `review-long`, a profile the settings do not have or a job may not run on
+(`runner::review::profile_refusal`), a body over 16 KiB, a dependency that is not there or goes round
+(`plan::check`), and a budget that is not a positive amount in `usd` or `usd-est`. A block that does not hold is
+answered with the reasons, twice at most; the third is `say-failed {id, why}` and the session is stopped. A block
+that holds is written as a graph plan as the user would (`plans/write`: each task's `role`, `profile` and `body`)
+and proposed with the repository `say/start` named, the smallest dollar budget of the block and its gate
+(`runner::propose_graph`): the job is `proposed` with its proposal card, whose title is the hub's (`card_title`),
+never the block's, and `say-proposal {id, job, started}` names it (`started`: the Autonomous preset started it at
+once, so nothing waits for an OK and the editor says so). The planning session's own use is the job's
+`data.planning` (`tokens`, `usd_est`, `usd`: numbers only), shown and not budgeted.
+
+A Say proposal waits for the user's OK (`job/approve`, a user-class method: an agent's connection is refused, and
+no word of the user's prompt or of the block is read for an OK) unless the Autonomous rule holds
+(`say::rule`, called from `runner::propose_job` before the job is written). All of these must hold, read with the
+manager's column (`MatrixGate::dry`, the project's and the plan's layers applied); the first that fails is why it
+waits, kept in the job's `data.waits`:
+
+1. the active preset is Autonomous (time presets and the away flag applied);
+2. `agents.start` with the number of tasks is Allow (Autonomous: up to 8);
+3. `spend` with the plan's p90 in `usd` plus its p90 in `usd-est`, the estimate counted as dollars, is Allow
+   (Autonomous: up to $150);
+4. nothing is unpriced;
+5. no meter would run out at the plan's p90 before it resets (`runs_out_p90`), whatever its `window`: Claude's one
+   meter blends the week with its 5 h window, the week's last day reads as `short`, and a meter with no reset known
+   is `short` too, so every window is checked and the reason names the one that would run out; and every
+   subscription a task runs on (a profile with no API key) has a pace with the plan's share known: a subscription
+   with no meter reading yet never starts alone.
+
+When it holds, the job is approved as the user's preset decided (`approve_job`, no proposal card) and a decision
+records it: kind `build`, author `user`, reason "started by the Autonomous preset within its cells".
+
+The order of one planning session is a pure core (`say::SayCore`, every order tested with skuld): at most one prompt
+is in flight; a revision (`say/revise {id, text}`) that comes while a prompt, a check or a proposal is under way
+waits for it and replaces what it would have done; a revision of a standing proposal withdraws it first and prompts
+again only when it was withdrawn (or the user had rejected it). The withdrawal and `job/approve` each decide in their
+own store write whether the job is still `proposed` (`norn::write::jobs::withdraw_proposal`, `approve_proposal`), and
+the store's writes are one at a time, so of the two exactly one holds: an approval that lands between a status read
+and the withdrawal runs on, never stopped (every order tested). `job/stop` (the editor's and the card's reject)
+decides in its write the same way (`stop_job`): a proposal is withdrawn and marked never approved, any other job is
+stopped unmarked, so an approval that landed first can still be resumed; the budget pause (`pause_running`) and
+`job/resume` (`resume_job`) read the status in their own write too (every order tested). A say has at
+most one live job: when its proposal starts (the Autonomous preset at once, or the user's `job/approve`, which the
+withdrawal finds), the planning is done: the session is stopped and forgotten, the latest 64 such sessions remember
+their job, `say/revise` on one answers `invalid` "JOB has started: stop it, then say it again", and a revision that
+was waiting is answered `say-failed` with that reason. A revision never stops a running job. The job's start is
+recorded before `say-proposal` goes out, so a revision the event prompts is refused at once. `agents/stop` or
+`agents/kill` of a planning session stops its planning: nothing
+more is prompted or proposed, and a proposal of it still proposed is stopped. `say/end {id}` stops the session and
+forgets it; its proposal is a job and stays. Say's state is memory only: after a restart `say/revise` answers "the
+planning stopped: say it again", and a proposal it made stays a job with its card.
+
+| Method | Class | Answer |
+|---|---|---|
+| `say/start` | user | the planning session's id |
+| `say/revise` | user | true (refused for a planning session the hub no longer holds, or whose job has started) |
+| `say/end` | user | true, or false for a session that is not a planning session |
+
+Events: `say-proposal {id, job, started}`, `say-message {id, text}` (agent-written), `say-failed {id, why}`.

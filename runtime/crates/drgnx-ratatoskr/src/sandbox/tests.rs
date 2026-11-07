@@ -343,7 +343,73 @@ fn browser_plan(env: Vec<(String, String)>) -> crate::agents::lock::LaunchPlan {
         enforced: crate::agents::lock::Enforced::Yes,
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     }
+}
+
+// [D] pure: the lock's files (`LaunchPlan::ro_files`). One in the session's own folder, which the agent reads and never
+// writes on every target, is written there; one elsewhere (Codex's `/etc/codex`) is bound read-only at its path from a
+// copy in the session's scratch on the full tier, and the launch is refused on any other.
+#[test]
+fn lock_files_are_written_bound_or_refused() {
+    let fx = Fx::new();
+    fs::create_dir_all(fx.p("wt")).unwrap();
+    let env = fx.env();
+    let ctx = context_for(&env, None);
+    let run = paths::session_dir(&env, &paths::socket_path(&env), "S2").unwrap();
+    let shape = SessionShape {
+        sid: "S2".into(),
+        cwd: fx.p("wt"),
+        write: vec![fx.p("wt")],
+        read: vec![],
+        net: crate::agents::launch::NetCell::ProviderOnly,
+        browser: None,
+    };
+    let mut plan = browser_plan(vec![]);
+    let etc = PathBuf::from("/etc/codex/requirements.toml");
+    plan.ro_files = vec![
+        (run.join("lock/policy.toml"), b"a = 1\n".to_vec()),
+        (etc.clone(), b"b = 2\n".to_vec()),
+    ];
+    let scratch = crate::agents::launch::scratch_dir(&env, "S2").unwrap();
+    let built = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Full,
+        Target::LinuxBwrap,
+    )
+    .unwrap_or_else(|r| panic!("refused: {r}"));
+    assert_eq!(
+        fs::read_to_string(run.join("lock/policy.toml")).unwrap(),
+        "a = 1\n"
+    );
+    let bind = built
+        .spec
+        .binds
+        .iter()
+        .find(|b| b.dest == etc)
+        .expect("bound at its path");
+    assert_eq!(bind.mode, Mode::Ro);
+    assert!(bind.source.starts_with(&scratch), "{bind:?}");
+    assert_eq!(fs::read_to_string(&bind.source).unwrap(), "b = 2\n");
+    let refused = session_spec(
+        &env,
+        &ctx,
+        &plan,
+        &shape,
+        &scratch,
+        Tier::Reduced,
+        Target::LinuxReduced,
+    )
+    .unwrap_err();
+    assert!(
+        refused.message.contains("/etc/codex/requirements.toml"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -486,4 +552,48 @@ fn no_browser_without_abi9_or_bwrap_or_program() {
     );
     assert_eq!(none.kind, "program");
     assert_eq!(none.fix, "run drgnx browser install");
+}
+
+/// [D]a one-shot run in a session's tree (a commit) removes the placeholders it made to pin the absent protected
+/// files, and only those: the session's own stubs, made at its launch, stay listed and in place for its sandbox.
+#[test]
+fn a_one_shot_run_removes_only_the_stubs_it_made() {
+    let fx = Fx::new();
+    let (scratch, wt) = (fx.p("scratch"), fx.p("wt"));
+    fs::create_dir_all(&scratch).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    // the session's launch pinned `.envrc`
+    fs::write(wt.join(".envrc"), "").unwrap();
+    fs::write(
+        stubs_file(&scratch),
+        format!("{}\n", wt.join(".envrc").display()),
+    )
+    .unwrap();
+    let mark = stubs_mark(&scratch);
+    // the one-shot run pinned `mise.toml` and `.claude`
+    let (_, made) = pin_protected(
+        &wt,
+        &[
+            PathBuf::from(".envrc"),
+            PathBuf::from("mise.toml"),
+            PathBuf::from(".claude"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(made, [wt.join("mise.toml"), wt.join(".claude")]);
+    let mut list = fs::read_to_string(stubs_file(&scratch)).unwrap();
+    for p in &made {
+        list.push_str(&format!("{}\n", p.display()));
+    }
+    fs::write(stubs_file(&scratch), list).unwrap();
+    remove_stubs_since(&scratch, &wt, mark);
+    assert!(!wt.join("mise.toml").exists() && !wt.join(".claude").exists());
+    assert!(wt.join(".envrc").is_file(), "the session's own stub stays");
+    assert_eq!(
+        fs::read_to_string(stubs_file(&scratch)).unwrap(),
+        format!("{}\n", wt.join(".envrc").display())
+    );
+    // the session's end removes its own as before
+    remove_stubs(&scratch, &wt);
+    assert!(!wt.join(".envrc").exists());
 }

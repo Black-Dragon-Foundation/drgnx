@@ -103,6 +103,8 @@ fn the_host_starts_under_its_layer() {
         enforced: Enforced::Yes,
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     };
     let data = data_dir();
     let shape = SessionShape {
@@ -245,6 +247,8 @@ fn launch_with(agent: &str, probe: bool) -> Launched {
         enforced: Enforced::Yes,
         gateway: false,
         trace: None,
+        ro_files: Vec::new(),
+        gateway_url_env: Vec::new(),
     };
     let data = data_dir();
     let mut read = vec![data.clone()];

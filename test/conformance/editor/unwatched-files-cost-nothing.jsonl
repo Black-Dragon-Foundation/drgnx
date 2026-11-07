@@ -1,0 +1,35 @@
+{"scenario": "editor/unwatched-files-cost-nothing", "requires": ["v1", "test-hooks"], "doc": "Nothing is built for a file no view shows: an agent moving in an unwatched file, and in one whose view was unwatched, makes no agent-buffer frame and builds no frame body (the hub's count, __test_buffer_views, stays at the watch's own). Pattern B on the hub's virtual clock: the moves are gated by agents/presence/get, each flush by __test_advance; with the clock held no flush runs between two advances, so the counts are read right after one."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$ROOT/work/mock-moves.txt", "text": "1\n2\n3\n4\n5\n6\n7\n8\n"}
+{"do": "write_file", "path": "$ROOT/work/other.txt", "text": "x\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-clock"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/work/other.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"view": "v1", "version": 1, "base": 0, "agents": []}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/buffer/watch", "params": {"view": "v2", "file": "$ROOT/work/mock-moves.txt"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"view": "v2", "version": 1, "base": 0}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "agents/buffer/unwatch", "params": {"view": "v2"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "agents/buffer/unwatch", "params": {"view": "v2"}}}
+{"do": "expect", "conn": "e", "json": {"id": 5, "result": false}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_buffer_views"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"views": 1, "built": 2}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "moves 2 3\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 4, "result": {"entries": [{"session": "$sid", "live": true, "line": 2}]}}, "within_ms": 30000, "every_ms": 20}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "__test_advance", "params": {"ms": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 6, "method": "agents/presence/get", "params": {"file": "$ROOT/work/mock-moves.txt"}}, "expect": {"id": 6, "result": {"entries": [{"session": "$sid", "live": true, "line": 4}]}}, "within_ms": 30000, "every_ms": 20}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "__test_advance", "params": {"ms": 60}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"now_ms": "$number"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 8, "method": "__test_buffer_views"}}
+{"do": "expect", "conn": "c", "json": {"id": 8, "result": {"views": 1, "built": 2}}}
+{"do": "count_events", "conn": "e", "for_ms": 200, "none": ["agent-buffer"]}

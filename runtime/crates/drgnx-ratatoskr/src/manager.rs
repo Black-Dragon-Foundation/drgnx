@@ -196,7 +196,7 @@ async fn slice_of(f: &Front, id: &str, from: u64, n: Option<u64>) -> Result<Slic
         .map_err(|e| session::internal(format!("agents/slice: {e}")))?;
     let more = rows.len() as u64 > n;
     let mut steps: Vec<runstav::methods::timeline::Step> =
-        rows.into_iter().map(crate::timeline::step_of).collect();
+        rows.into_iter().map(|r| f.core.timeline.wire(r)).collect();
     steps.truncate(n as usize);
     let mids: HashSet<String> = steps.iter().filter_map(|s| s.message_id.clone()).collect();
     let entries = s.entries_for(&mids, SLICE_ENTRIES);
@@ -1155,6 +1155,8 @@ async fn merge(
         }
         None => git.merge_gate(&repo, &tree).await.map_err(|e| e.stderr)?,
     };
+    // the job tree's commit before the merge: the history records what the merge changed
+    let old = crate::timeline::snapshot::head_of(&job_tree);
     match answer {
         Gate::Ask(card) => {
             f.core.manager.st().gates.insert(tree.branch.clone(), card);
@@ -1165,6 +1167,10 @@ async fn merge(
         Gate::Never(why) => Err(format!("the merge gate refuses: {why}")),
         Gate::Allow => match git.merge_into(&job_tree, &tree).await {
             Ok(runner::git::MergeOutcome::Merged) => {
+                if let Some(d) = f.dirs.get() {
+                    let h = &f.core.history;
+                    crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old).await;
+                }
                 Ok(json!({"merged": true, "into": target}).to_string())
             }
             Ok(runner::git::MergeOutcome::Conflict(files)) => {

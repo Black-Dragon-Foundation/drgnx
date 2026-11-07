@@ -222,7 +222,22 @@ pub fn scratch_dir(env: &Env, sid: &str) -> Result<PathBuf, Refusal> {
 /// Validate and prepare `shape` for `plan` on this host, in the sandbox [`detect`] finds.  Nothing is spawned.
 pub async fn launch(env: &Env, plan: &LaunchPlan, shape: &SessionShape) -> Result<Launch, Refusal> {
     let sb = detect().await?;
-    launch_on(env, &sb, plan, shape)
+    let shape = with_replay_dirs(shape, crate::recording::replay_dirs().as_ref());
+    launch_on(env, &sb, plan, &shape)
+}
+
+/// SHAPE with a replay's directories added (the recording and the replayer's directory readable, its scratch directory
+/// writable): the replayed agent runs in the same sandbox as the live one did.  No replay: SHAPE as it is.
+pub fn with_replay_dirs(
+    shape: &SessionShape,
+    dirs: Option<&crate::recording::ReplayDirs>,
+) -> SessionShape {
+    let mut s = shape.clone();
+    if let Some(d) = dirs {
+        s.read.extend(d.read.iter().cloned());
+        s.write.extend(d.write.iter().cloned());
+    }
+    s
 }
 
 /// The tier that passed the check here, kept for the hub's life once it passed; a failed check is run again at the

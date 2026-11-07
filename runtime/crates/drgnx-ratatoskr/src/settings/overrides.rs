@@ -143,6 +143,10 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-agents-repeat-limit" => values.agents_repeat_limit = de(v)?,
         "drgnx-agents-no-progress-tokens" => values.agents_no_progress_tokens = de(v)?,
         "drgnx-agents-manager-context" => values.agents_manager_context = de(v)?,
+        "drgnx-agents-model-prices" => {
+            let Alist(pairs) = de::<Alist<super::ModelPrice>>(v)?;
+            values.agents_model_prices = super::prices(pairs).map_err(|m| refused("", m))?;
+        }
         "drgnx-runners-send" => {
             let s: String = de(v)?;
             if !["all", "heavy", "none"].contains(&s.as_str()) {
@@ -161,6 +165,8 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
             values.runners_project_visibility = s;
         }
         "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(v)?,
+        "drgnx-runners-job-keys" => values.runners_job_keys = de(v)?,
+        "drgnx-runners-origin-key" => values.runners_origin_key = de(v)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
             values.sandbox_proxy_pins = pairs;
@@ -170,6 +176,13 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-include" => values.search_include = de(v)?,
         "drgnx-search-exclude" => values.search_exclude = de(v)?,
         "drgnx-search-off" => values.search_off = de(v)?,
+        "drgnx-search-base" => values.search_base = de(v)?,
+        "drgnx-agents-plugins" => values.agents_plugins = de(v)?,
+        "drgnx-agents-hook-rules" => {
+            values.agents_hook_rules =
+                super::hook_rules(v).map_err(|(path, message)| refused(path, message))?;
+        }
+        "drgnx-agents-hook-rules-off" => values.agents_hook_rules_off = de(v)?,
         "drgnx-agents-browser-program" => {
             let p = de(v)?;
             super::check_browser_program(&p).map_err(|m| refused("", m))?;
@@ -279,12 +292,21 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-agents-repeat-limit" => json!(values.agents_repeat_limit),
         "drgnx-agents-no-progress-tokens" => json!(values.agents_no_progress_tokens),
         "drgnx-agents-manager-context" => json!(values.agents_manager_context),
+        "drgnx-agents-model-prices" => object(
+            values
+                .agents_model_prices
+                .iter()
+                .map(|p| (p.key.as_str(), enc(p)))
+                .collect(),
+        ),
         "drgnx-runners-send" => json!(values.runners_send),
         "drgnx-runners-heavy" => json!(values.runners_heavy),
         "drgnx-runners-image" => json!(values.runners_image),
         "drgnx-runners-weight" => json!(values.runners_weight),
         "drgnx-runners-project-visibility" => json!(values.runners_project_visibility),
         "drgnx-runners-shared-overlay" => json!(values.runners_shared_overlay),
+        "drgnx-runners-job-keys" => json!(values.runners_job_keys),
+        "drgnx-runners-origin-key" => json!(values.runners_origin_key),
         "drgnx-sandbox-proxy-pinned-addresses" => object(
             values
                 .sandbox_proxy_pins
@@ -297,6 +319,13 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-include" => json!(values.search_include),
         "drgnx-search-exclude" => json!(values.search_exclude),
         "drgnx-search-off" => json!(values.search_off),
+        "drgnx-search-base" => json!(values.search_base),
+        "drgnx-agents-plugins" => json!(values.agents_plugins),
+        "drgnx-agents-hook-rules" => match &values.agents_hook_rules {
+            Value::Null => json!([]),
+            rules => rules.clone(),
+        },
+        "drgnx-agents-hook-rules-off" => json!(values.agents_hook_rules_off),
         "drgnx-agents-browser-program" => json!(values.agents_browser_program),
         "drgnx-agents-browser-local-ports" => json!(values.agents_browser_local_ports),
         "drgnx-agents-browser-deny-hosts" => json!(values.agents_browser_deny_hosts),
@@ -333,9 +362,17 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-runners-weight",
     "drgnx-runners-project-visibility",
     "drgnx-runners-shared-overlay",
+    "drgnx-runners-job-keys",
+    "drgnx-runners-origin-key",
     "drgnx-search-include",
     "drgnx-search-exclude",
     "drgnx-search-off",
+    "drgnx-search-base",
+    // the user's own per-project plugin choice and hook rules: the Lisp declares them `:scope project :workspace never`,
+    // and only the user's private workspace file holds a project's value
+    "drgnx-agents-plugins",
+    "drgnx-agents-hook-rules",
+    "drgnx-agents-hook-rules-off",
 ];
 
 /// The first override of LIST that cannot be one: its index and why (a name not in [`RUNTIME_NAMES`], one not in
@@ -360,6 +397,8 @@ pub fn validate(list: &[Override], project: bool) -> Result<(), (usize, Refused)
         from_json(&o.name, &o.value, &mut RuntimeValues::default()).map_err(|mut e| {
             e.path = if e.path.is_empty() {
                 "value".into()
+            } else if e.path.starts_with('[') {
+                format!("value{}", e.path)
             } else {
                 format!("value.{}", e.path)
             };
@@ -623,7 +662,11 @@ mod tests {
                     || [
                         "drgnx-search-include",
                         "drgnx-search-exclude",
-                        "drgnx-search-off"
+                        "drgnx-search-off",
+                        "drgnx-search-base",
+                        "drgnx-agents-plugins",
+                        "drgnx-agents-hook-rules",
+                        "drgnx-agents-hook-rules-off"
                     ]
                     .contains(&name),
                 "{name}"

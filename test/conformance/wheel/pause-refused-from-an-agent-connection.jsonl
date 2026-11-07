@@ -1,0 +1,14 @@
+{"scenario": "wheel/pause-refused-from-an-agent-connection", "requires": ["v1", "test-hooks"], "doc": "Gated (B). An agent's own hub connection can neither pause a session nor take or give its wheel (agents/pause and agents/wheel/* are the user's only): each is not-allowed, whatever session it names, its own included."}
+{"do": "root"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "agents/pause", "params": {"id": "s1"}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 2, "method": "agents/wheel/take", "params": {"id": "s1"}}}
+{"do": "expect", "conn": "a", "json": {"id": 2, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "agents/wheel/give", "params": {"id": "s1"}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 4, "method": "agents/wheel/take", "params": {"id": "s2"}}}
+{"do": "expect", "conn": "a", "json": {"id": 4, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "a", "json": {"id": 5, "method": "agents/wheel/saved", "params": {"req": 1, "unsaved": []}}}
+{"do": "expect", "conn": "a", "json": {"id": 5, "error": {"code": "not-allowed"}}}

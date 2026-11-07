@@ -78,6 +78,17 @@ pub enum CopyKind {
 }
 
 impl SlotKey {
+    /// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now. The runner names a
+    /// slot by it, and the hub knows from it whether a runner's `ready` lists the job's slot.
+    pub fn of(spec: &forseti::JobSpec) -> SlotKey {
+        SlotKey {
+            project: spec.project.clone(),
+            worktree: spec.tree.display().to_string(),
+            trust: spec.trust,
+            toolchain: String::new(),
+        }
+    }
+
     /// The slot's directory name: 32 hex digits of sha256 over the four words (the trust as the design's word),
     /// each length-prefixed.
     pub fn id(&self) -> String {
@@ -102,6 +113,20 @@ pub(crate) fn trust_word(t: JobTrust) -> &'static str {
         JobTrust::Private => "private",
         JobTrust::PrivateKeys => "private+keys",
     }
+}
+
+/// The ids of the slots under the runner folder `root`, sorted (what `ready` lists as present).
+pub fn present(root: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = fs::read_dir(root.join("slots"))
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    ids
 }
 
 /// The slot's directories under the runner folder `root`.
@@ -640,7 +665,7 @@ mod tests {
         slot.join(".git")
     }
 
-    // [D] pure: H1, a hook a job planted
+    // [D] pure: sync never runs a hook a job planted in its slot
     #[test]
     fn a_planted_post_checkout_hook_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -652,7 +677,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, core.fsmonitor in a config a job planted
+    // [D] pure: sync never runs a core.fsmonitor from a config a job planted in its slot
     #[test]
     fn core_fsmonitor_in_a_planted_config_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -667,7 +692,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, core.hooksPath in a config a job planted, at hooks the job wrote
+    // [D] pure: sync never runs the hooks a job wrote and pointed a planted config's core.hooksPath at
     #[test]
     fn a_planted_core_hookspath_never_runs() {
         let t = tempfile::tempdir().unwrap();
@@ -684,7 +709,7 @@ mod tests {
         });
     }
 
-    // [D] pure: H1, a `.git` file (and a `.git` link) naming a git dir the job made outside the slot
+    // [D] pure: sync never follows a `.git` file (or a `.git` link) naming a git dir the job made outside the slot
     #[test]
     fn a_dot_git_file_in_the_slot_is_deleted_not_followed() {
         let t = tempfile::tempdir().unwrap();
@@ -723,7 +748,7 @@ mod tests {
         );
     }
 
-    // [D] pure: H1, links a job planted never lead a write out of the slot
+    // [D] pure: links a job planted never lead sync's writes out of the slot
     #[test]
     fn a_planted_link_never_leads_a_write_outside() {
         let t = tempfile::tempdir().unwrap();
@@ -875,5 +900,21 @@ mod tests {
         assert_eq!(a.slot.parent().unwrap(), root.join("slots"));
         assert_eq!(a.git_dir.parent().unwrap(), root.join("slots-git"));
         assert_eq!(a.target.parent().unwrap(), root.join("slots-target"));
+    }
+
+    // [D] pure (a folder): the slots present are the folders under `slots/`, by id; a stray file is none, and a root
+    // with no slots has none
+    #[test]
+    fn present_lists_the_slot_folders() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(present(d.path()).is_empty());
+        let (a, b) = (paths(d.path(), &key("w")), paths(d.path(), &key("w2")));
+        for p in [&b, &a] {
+            fs::create_dir_all(&p.slot).unwrap();
+        }
+        fs::write(d.path().join("slots/stray"), b"").unwrap();
+        let mut want = vec![key("w").id(), key("w2").id()];
+        want.sort();
+        assert_eq!(present(d.path()), want);
     }
 }

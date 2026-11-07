@@ -24,6 +24,10 @@
 //!
 //! A key is read from [`Keys`] per attempt and goes only into the upstream request's sensitive header
 //! (`rewrite::headers`). Logs carry provider ids and statuses, never a key or a token.
+//!
+//! A [`Tap`] ([`Gateway::set_tap`]; a recording's) sees each sent attempt: its body (and the client's, when rewritten)
+//! with every held key scrubbed, its headers without the sensitive ones, then its head, each chunk as read from
+//! upstream and its [`End`]. It is ended before the upstream body is dropped.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -117,6 +121,58 @@ pub trait Ledger: Send + Sync {
     fn record(&self, row: SpendRow) -> BoxFuture<'_, ()>;
 }
 
+/// One attempt as it goes upstream, for a [`Tap`]. Every held key in `body` and `client` is already `$SECRET`
+/// ([`Keys::scrub`]), and `headers` leaves out the sensitive ones (the provider's auth header).
+pub struct Sent<'a> {
+    pub provider: &'a str,
+    /// The session the request is for: the one whose socket it came in on, else the job a loopback registration is
+    /// booked under (a session's own id when it has no job); none for the editor.
+    pub session: Option<&'a str>,
+    /// The client's path: an agent's target (`/v1/messages…`), the editor's REST (`/chat/completions`).
+    pub path: &'a str,
+    /// This attempt's step, from 1, of `of` steps (the editor's: 1 of 1).
+    pub attempt: usize,
+    pub of: usize,
+    pub headers: Vec<(String, String)>,
+    /// The body sent (after the rewrite).
+    pub body: &'a [u8],
+    /// The client's body, when the rewrite changed it.
+    pub client: Option<&'a [u8]>,
+    pub at: Instant,
+}
+
+/// How an attempt's answer ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum End {
+    /// To its end; also a head the gateway moved on from (its body is not read).
+    Complete,
+    /// The provider gave no head, or broke off the body.
+    Dropped,
+    /// The client hung up after `chunk` chunks were passed on.
+    ClientLeft { chunk: usize },
+}
+
+/// What sees every attempt the gateway sends (a recording, docs/develop/recordings.md): one [`Tap::begin`] per sent
+/// request, then its head, its chunks as read from upstream, and its end. A dropped [`Exchange`] that was never ended
+/// is an attempt the hub stopped with.
+pub trait Tap: Send + Sync {
+    fn begin(&self, sent: Sent<'_>) -> Box<dyn Exchange>;
+}
+
+/// One attempt a [`Tap`] follows. Chunks are key-scrubbed like the body.
+pub trait Exchange: Send {
+    fn head(&mut self, at: Instant, status: u16, headers: &http::HeaderMap);
+    fn chunk(&mut self, at: Instant, data: &[u8]);
+    fn end(self: Box<Self>, at: Instant, end: End);
+}
+
+/// An exchange being followed while its answer streams.
+struct Tapped {
+    x: Box<dyn Exchange>,
+    keys: Arc<RwLock<Keys>>,
+    chunks: usize,
+}
+
 /// The gateway: what every listener of one hub shares.
 pub struct Gateway {
     registry: Arc<dyn Registry>,
@@ -130,6 +186,8 @@ pub struct Gateway {
     /// Request body bytes taken, and provider body bytes passed on, since start ([`Gateway::traffic`]).
     bytes_in: AtomicU64,
     bytes_out: Arc<AtomicU64>,
+    /// What sees every attempt, once set ([`Gateway::set_tap`]).
+    tap: std::sync::OnceLock<Arc<dyn Tap>>,
     /// The requests sent whose [`GatewayEvent::Request`] is not sent yet (test-hooks: [`Gateway::in_flight`]).
     #[cfg(feature = "test-hooks")]
     in_flight: InFlight,
@@ -192,8 +250,64 @@ impl Gateway {
             told: Mutex::new(HashMap::new()),
             bytes_in: AtomicU64::new(0),
             bytes_out: Arc::new(AtomicU64::new(0)),
+            tap: std::sync::OnceLock::new(),
             #[cfg(feature = "test-hooks")]
             in_flight: InFlight::default(),
+        })
+    }
+
+    /// Every attempt from now on is shown to TAP (once; a second tap is refused and logged).
+    pub fn set_tap(&self, tap: Arc<dyn Tap>) {
+        if self.tap.set(tap).is_err() {
+            tracing::warn!("gateway: a second tap was refused");
+        }
+    }
+
+    /// The tap's exchange for a request about to go to PROVIDER, when a tap is set.
+    #[allow(clippy::too_many_arguments)]
+    fn tap_begin(
+        &self,
+        headers: &http::HeaderMap,
+        body: &[u8],
+        client: Option<&[u8]>,
+        provider: &str,
+        reg: &Registration,
+        path: &str,
+        (attempt, of): (usize, usize),
+    ) -> Option<Tapped> {
+        let tap = self.tap.get()?;
+        let keys = read(&self.keys);
+        let client = client.filter(|c| *c != body).map(|c| keys.scrub(c));
+        let body = keys.scrub(body);
+        let headers = headers
+            .iter()
+            .filter(|(_, v)| !v.is_sensitive())
+            .map(|(n, v)| {
+                (
+                    n.as_str().to_owned(),
+                    String::from_utf8_lossy(v.as_bytes()).into_owned(),
+                )
+            })
+            .collect();
+        let session = match &reg.listener {
+            ListenerId::Session(sid) => Some(sid.as_str()),
+            ListenerId::Loopback => reg.job.as_deref(),
+        };
+        let x = tap.begin(Sent {
+            provider,
+            session,
+            path,
+            attempt,
+            of,
+            headers,
+            body: &body,
+            client: client.as_deref(),
+            at: Instant::now(),
+        });
+        Some(Tapped {
+            x,
+            keys: self.keys.clone(),
+            chunks: 0,
         })
     }
 
@@ -288,7 +402,7 @@ impl Gateway {
         for (i, step) in reg.chain.iter().enumerate() {
             let next = reg.chain.get(i + 1);
             match self
-                .attempt(parts, &body, reg, step, target, next.is_none())
+                .attempt(parts, &body, reg, step, target, (i + 1, reg.chain.len()))
                 .await
             {
                 Attempt::Answer(answer) => return answer,
@@ -315,7 +429,7 @@ impl Gateway {
         )
     }
 
-    /// One step of a chain. `last`: the chain's literal last step, whose provider's refusal is the answer (A-27).
+    /// One step of a chain, step N.0 of N.1. The chain's literal last step's provider's refusal is the answer (A-27).
     async fn attempt(
         &self,
         parts: &Parts,
@@ -323,8 +437,9 @@ impl Gateway {
         reg: &Registration,
         step: &Step,
         target: &str,
-        last: bool,
+        n: (usize, usize),
     ) -> Attempt {
+        let last = n.0 == n.1;
         let id = step.provider.as_str();
         let Some(provider) = read(&self.providers).get(id).cloned() else {
             return Attempt::Next("not configured".into());
@@ -354,27 +469,47 @@ impl Gateway {
                 // the restrictions cannot be applied: refused, sent to no provider
                 Err(r) => return Attempt::Answer(answer(&r, false)),
             };
+            let sent = body.clone();
             match upstream_request(parts, &provider, key, uri, body) {
-                Ok(request) => request,
+                Ok(request) => (request, sent),
                 Err(why) => return Attempt::Next(why),
             }
         };
+        let (request, sent) = request;
+        let mut tapped = self.tap_begin(
+            request.headers(),
+            &sent,
+            Some(&body[..]),
+            id,
+            reg,
+            target,
+            n,
+        );
 
         let mut spend = self.spend(reg, id, step.model.clone(), provider.price);
         tracing::debug!(provider = id, "gateway: forwarding an agent's request");
         match self.upstream.send(request).await {
             Err(e) => {
                 spend.disarm();
+                if let Some(t) = tapped {
+                    t.x.end(Instant::now(), End::Dropped);
+                }
                 Attempt::Next(format!("no answer ({e})"))
             }
             Ok(response) => {
                 let status = response.status().as_u16();
+                if let Some(t) = &mut tapped {
+                    t.x.head(Instant::now(), status, response.headers());
+                }
                 if !last && falls_back(status) {
                     spend.disarm();
+                    if let Some(t) = tapped {
+                        t.x.end(Instant::now(), End::Complete);
+                    }
                     return Attempt::Next(format!("HTTP {status}"));
                 }
                 spend.status = status;
-                Attempt::Answer(relay(response, spend, self.bytes_out.clone()))
+                Attempt::Answer(relay(response, spend, self.bytes_out.clone(), tapped))
             }
         }
     }
@@ -422,22 +557,29 @@ impl Gateway {
                 Ok(uri) => uri,
                 Err(e) => return failed(format!("cannot send ({e})")),
             };
-            match upstream_request(parts, &provider, key, uri, body) {
+            match upstream_request(parts, &provider, key, uri, body.clone()) {
                 Ok(request) => request,
                 Err(why) => return failed(why),
             }
         };
+        let mut tapped = self.tap_begin(request.headers(), &body, None, id, reg, rest, (1, 1));
 
         let mut spend = self.spend(reg, id, None, provider.price);
         tracing::debug!(provider = id, "gateway: forwarding an editor's request");
         match self.upstream.send(request).await {
             Err(e) => {
                 spend.disarm();
+                if let Some(t) = tapped {
+                    t.x.end(Instant::now(), End::Dropped);
+                }
                 failed(format!("no answer ({e})"))
             }
             Ok(response) => {
                 spend.status = response.status().as_u16();
-                relay(response, spend, self.bytes_out.clone())
+                if let Some(t) = &mut tapped {
+                    t.x.head(Instant::now(), spend.status, response.headers());
+                }
+                relay(response, spend, self.bytes_out.clone(), tapped)
             }
         }
     }
@@ -609,12 +751,18 @@ impl Body for Drain {
 
 /// A started answer: the provider's status, `Content-Type` (default `application/json`) and `Retry-After`, then its
 /// body chunk by chunk through the scanner; `out` counts the bytes passed on.
-fn relay(response: Response<Incoming>, spend: Spend, out: Arc<AtomicU64>) -> Response<ReplyBody> {
+fn relay(
+    response: Response<Incoming>,
+    spend: Spend,
+    out: Arc<AtomicU64>,
+    tap: Option<Tapped>,
+) -> Response<ReplyBody> {
     let (head, upstream) = response.into_parts();
     let body = Relay {
         upstream,
         spend: Some(spend),
         out,
+        tap,
     };
     let mut out = Response::new(body.boxed_unsync());
     *out.status_mut() = head.status;
@@ -631,11 +779,27 @@ fn relay(response: Response<Incoming>, spend: Spend, out: Arc<AtomicU64>) -> Res
 }
 
 /// The provider's body on its way to the client. Dropped (the client hung up) or ended, it drops the upstream body,
-/// which ends the upstream connection, and its spend guard, which records the row.
+/// which ends the upstream connection, and its spend guard, which records the row. A tap's exchange is ended first.
 struct Relay {
     upstream: Incoming,
     spend: Option<Spend>,
     out: Arc<AtomicU64>,
+    tap: Option<Tapped>,
+}
+
+impl Relay {
+    fn end_tap(&mut self, end: End) {
+        if let Some(t) = self.tap.take() {
+            t.x.end(Instant::now(), end);
+        }
+    }
+}
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        let chunk = self.tap.as_ref().map_or(0, |t| t.chunks);
+        self.end_tap(End::ClientLeft { chunk });
+    }
 }
 
 impl Body for Relay {
@@ -656,15 +820,26 @@ impl Body for Relay {
                         if let Some(spend) = &mut this.spend {
                             spend.scanner.feed(&data);
                         }
+                        if let Some(t) = &mut this.tap {
+                            let seen = read(&t.keys).scrub(&data).into_owned();
+                            t.x.chunk(Instant::now(), &seen);
+                            t.chunks += 1;
+                        }
+                        // a body of known length ends with its last frame: the client polls no more
+                        if this.upstream.is_end_stream() {
+                            this.end_tap(End::Complete);
+                        }
                         return Poll::Ready(Some(Ok(Frame::data(data))));
                     }
                 }
                 Some(Err(e)) => {
                     // the provider broke off: the client sees a cut answer; what was counted is recorded
+                    this.end_tap(End::Dropped);
                     this.spend = None;
                     return Poll::Ready(Some(Err(e.into())));
                 }
                 None => {
+                    this.end_tap(End::Complete);
                     this.spend = None;
                     return Poll::Ready(None);
                 }

@@ -165,6 +165,32 @@ fn is_alive(s: &Snapshot) -> bool {
     s.status != Some(SessionStatus::Exited)
 }
 
+/// Session SID reviews a task: its record says so (`review`), so the task's forecast sample takes its worker's
+/// profile, not the reviewer's.  Best effort, as the session's own record is.
+async fn mark_review(front: &Front, sid: &str) {
+    use urdr::graph::entity::{self, Changes};
+    let id = format!("session:{sid}");
+    let refused = |e: urdr::graph::WriteError| norn::store::CoordError::Refused(e.to_string());
+    let r = front
+        .writer
+        .write(&user(), "agents/start", move |tx| {
+            let found = entity::by_id(tx.sql(), &id)
+                .map_err(|e| norn::store::CoordError::Refused(e.to_string()))?;
+            if let Some(e) = found.filter(|e| e.retired_tx.is_none()) {
+                let patch = Changes {
+                    data_patch: Some(json!({"review": true})),
+                    ..Changes::default()
+                };
+                entity::update(tx, e.n, None, patch).map_err(refused)?;
+            }
+            Ok(())
+        })
+        .await;
+    if let Err(e) = r {
+        tracing::warn!(sid, "the reviewer's session is not marked: {e}");
+    }
+}
+
 fn count(data: &Map<String, Value>, bucket: &str, task: &str) -> i64 {
     data_for(data, bucket, task)
         .and_then(Value::as_i64)
@@ -634,6 +660,7 @@ impl PlanHooks {
         self.st()
             .reviewers
             .insert(tid.to_owned(), Reviewer { sid: sid.clone() });
+        mark_review(front, &sid).await;
         let prompt = format!(
             "[drgnx review {tid}] {}\n\nReview the changes: git diff job/{job}...HEAD.  Answer with a last line \
              VERDICT: pass, or VERDICT: fail: what to change.",
@@ -931,8 +958,16 @@ impl PlanHooks {
             Gate::Allow => {
                 front.core.runs.set_busy(tid, Some("merging"));
                 changed(front, job).await;
+                let old = crate::timeline::snapshot::head_of(&job_tree);
                 match git.merge_into(&job_tree, &tree).await {
-                    Ok(super::git::MergeOutcome::Merged) => self.merged(front, job, t).await,
+                    Ok(super::git::MergeOutcome::Merged) => {
+                        if let Some(d) = front.dirs.get() {
+                            let h = &front.core.history;
+                            crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old)
+                                .await;
+                        }
+                        self.merged(front, job, t).await
+                    }
                     Ok(super::git::MergeOutcome::Conflict(files)) => {
                         let names: Vec<_> = files.iter().map(|f| f.display().to_string()).collect();
                         raise_card(

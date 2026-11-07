@@ -333,6 +333,11 @@ check_emacs() { # the CI check (core/drgnx-check.el); exec'd, see ui_exec
         -l drgnx-check -f drgnx-check-cli -- "$@"
 }
 
+affected_emacs() { # A..B [--run] [--no-cache] — the test groups a git range can affect (core/drgnx-affected.el); --run runs them
+  exec "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-affected -f drgnx-affected-cli -- "$@"
+}
+
 test_batch_emacs() { # [FUNCTION ARGS…] — SIGPIPE ignored, as the hub runs (tests serve one in-process): a test may fail, never end the run
   local fn="${1:-drgnx-run-ert-batch}"; shift || true   # --find-polluter runs its own entry point of the runner
   trap '' PIPE
@@ -548,7 +553,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   # the run-control variables go in with their values when set: a narrowed run stays narrow, the files run at once
   # (CI: the runner's cores), a failed file reruns once, wall clock is skipped, the perf run's results and factors,
   # the sessions' monitor size, count and scales
-  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_PERF_RESULTS
+  local v pass=(DRGNX_TEST_SELECTOR DRGNX_TEST_JOBS DRGNX_TEST_RERUN DRGNX_TEST_NO_TIMING DRGNX_TEST_FROZEN DRGNX_WORK_DB_GATE NIDHOGG_TEST_CLOCK NIDHOGG_TEST_SEED NIDHOGG_WORKERS DRGNX_TEST_HUB_CHAOS DRGNX_TEST_GATE_SWAP DRGNX_TEST_ONLY DRGNX_TEST_SHUFFLE DRGNX_TEST_LEAKS DRGNX_TEST_AUDIT DRGNX_TEST_AUDIT_ALL DRGNX_TEST_AUDIT_FAIL DRGNX_NIDHOGG_STRICT DRGNX_PERF_RESULTS
                 DRGNX_PERF_CPU_FACTOR DRGNX_PERF_WORKLOADS DRGNX_PERF_MACHINE DRGNX_PERF_WORKERS DRGNX_PERF_LANDED
                 DRGNX_PERF_WATCHDOG DRGNX_UITEST_SETTLE_SCALE DRGNX_UITEST_TICK DRGNX_UI_TEST_TIMEOUT
                 DRGNX_UI_SIZE DRGNX_UI_MONITORS DRGNX_UI_SCALE DRGNX_UI_SCALES)
@@ -962,6 +967,7 @@ cmd_test() {
       else
         test_batch
       fi ;;
+    --affected) shift; affected_emacs "$@" ;;
     --orders) shift; test_orders "$@" ;;
     --stress) shift; test_stress "$@" ;;
     --preflight) shift; test_preflight "$@" ;;
@@ -989,8 +995,90 @@ cmd_test() {
     --day) shift; run_in_tmp ui_exec test-day "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test --affected A..B [--run [--no-cache]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
+}
+
+## drgnx record / replay — live recordings (docs/develop/recordings.md)
+
+RECORD_SELECTOR='"^drgnx-agents-smoke/"'   # an ERT selector, read as a Lisp string (the smoke script's tests)
+
+record_lisp() { # SUBCOMMAND ARGS… — stop, lint, export and path are core/drgnx-record.el's, in a batch Emacs
+  "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+        -l drgnx-record -f drgnx-record-cli -- "$@"
+}
+
+record_usage() {
+  echo "usage: drgnx record start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- drgnx-ARGS…" >&2
+  echo "       drgnx record stop NAME | lint DIR-OR-NAME… | export NAME --to DIR" >&2
+  echo "       drgnx replay NAME-OR-DIR [--speed 0|1|N] [--strict] [-- drgnx-ARGS…]" >&2
+}
+
+record_number() { # VALUE — a plain decimal number
+  [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+cmd_record() { # start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- ARGS… | stop NAME | lint … | export …
+  local sub="${1:-}"; [ "$#" -gt 0 ] && shift
+  case "$sub" in
+    stop | lint | export | path | root) record_lisp "$sub" "$@"; return ;;
+    start) ;;
+    *) record_usage; return 2 ;;
+  esac
+  local name="${1:-}" usd="" weekly="" minutes=""
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { record_usage; return 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --cap-usd) usd="${2:-}"; record_number "$usd" || { record_usage; return 2; }; shift 2 ;;
+      --cap-weekly) weekly="${2:-}"; record_number "$weekly" || { record_usage; return 2; }; shift 2 ;;
+      --max-minutes) minutes="${2:-}"; [[ "$minutes" =~ ^[0-9]+$ ]] || { record_usage; return 2; }; shift 2 ;;
+      --) shift; break ;;
+      *) record_usage; return 2 ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || { echo "drgnx record start: the command to run goes after --" >&2; return 2; }
+  local root dir caps="" provenance=live rc=0 ended
+  root="$(record_lisp root)" || return 1
+  dir="$root/$(date +%F)-$name"
+  [ ! -e "$dir" ] || { echo "drgnx record start: $dir exists already: record into a new name" >&2; return 1; }
+  mkdir -p "$dir/bundle" || return 1
+  # only the scripted mocks make a recording a mock: the repository keeps those and no others
+  [ "${DRGNX_SMOKE_PROFILES:-}" != mock ] || provenance=mock
+  [ -z "$usd" ] || caps="${caps:+$caps,}\"usd\":$usd"
+  [ -z "$weekly" ] || caps="${caps:+$caps,}\"weekly_pct\":$weekly"
+  [ -z "$minutes" ] || caps="${caps:+$caps,}\"minutes\":$minutes"
+  echo "drgnx record: recording into $dir ($provenance)" >&2
+  # a narrowed run: the smoke script, unless the caller picked tests
+  local run=("$here/bin/drgnx")
+  [ -z "$minutes" ] || run=(timeout --foreground "${minutes}m" "$here/bin/drgnx")
+  DRGNX_RECORD="$dir" DRGNX_RECORD_PROVENANCE="$provenance" DRGNX_RECORD_CAPS="{$caps}" \
+    DRGNX_TEST_SELECTOR="${DRGNX_TEST_SELECTOR:-$RECORD_SELECTOR}" "${run[@]}" "$@" || rc=$?
+  ended="$(date -u +%FT%TZ)"
+  printf '{"exit":%s,"ended":"%s","provenance":"%s"}\n' "$rc" "$ended" "$provenance" > "$dir/bundle/run.json"
+  echo "drgnx record: the command ended with $rc; \`drgnx record stop $name' finishes the record" >&2
+  return "$rc"
+}
+
+cmd_replay() { # NAME-OR-DIR [--speed 0|1|N] [--strict] [-- ARGS…] — run drgnx ARGS with the recording backing the outside ends
+  local name="${1:-}" speed=0 strict=""
+  [ -n "$name" ] && [[ "$name" != -* ]] || { record_usage; return 2; }
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --speed) speed="${2:-}"; record_number "$speed" || { record_usage; return 2; }; shift 2 ;;
+      --strict) strict=1; shift ;;
+      --) shift; break ;;
+      *) record_usage; return 2 ;;
+    esac
+  done
+  [ "$#" -gt 0 ] || set -- test --ui
+  local dir
+  dir="$(record_lisp path "$name")" || return 1
+  [ -f "$dir/manifest.json" ] || { echo "drgnx replay: $dir is not a recording" >&2; return 1; }
+  # a replay keeps the scratch dir of the run it is in: the test row reads the misses file from there
+  DRGNX_REPLAY="$dir" DRGNX_REPLAY_SPEED="$speed" DRGNX_REPLAY_STRICT="$strict" \
+    DRGNX_TEST_SELECTOR="${DRGNX_TEST_SELECTOR:-$RECORD_SELECTOR}" "$here/bin/drgnx" "$@"
 }
 
 ## drgnx lease — the host lease: how many test runs the machine carries at once (docs/develop/check.md, "The host lease")
@@ -1085,6 +1173,7 @@ lease_self() { # CLASS ARGS… — take the lease for this command: re-exec as `
 
 lease_test_class() { # ARGS of `drgnx test` → light (the batch tier), heavy (the GUI, tty and container tiers), exclusive (A/B perf)
   case "${1:-}" in
+    --affected) case " $* " in *" --run "*) echo heavy ;; *) echo light ;; esac ;;
     --ui|--tty|--scenario|--bench|--soak|--day|--container|--podman|--install|--bootstrap|--stress|--preflight) echo heavy ;;
     --perf) case " $* " in *" --ab "*|*" --ab-env "*) echo exclusive ;; *) echo heavy ;; esac ;;
     --orders) case " $* " in *" --container "*|*" --podman "*) echo heavy ;; *) echo light ;; esac ;;
@@ -2013,15 +2102,24 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                the exit test of a second machine: install.sh --yes --config … --identity …
                                in a fresh Fedora container (default 45) must end in a green doctor,
                                with the keys in the keyring and a second run changing nothing (slow, network)
-       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]]
+       drgnx sync [--offline] [--seed DIR] [--prune [--dry-run]] [--add NAME[@V]…] [--remove NAME…] [--pending] [--wait]
                                install the packages drgnx needs (the only thing that installs);
                                --offline: from the lock and the cache; --seed: copy another elpa first;
                                --prune: remove the packages the manifest no longer needs (listed);
-                               --prune --dry-run: only list them
-       drgnx upgrade           newest packages; the previous generation comes back if they break
+                               --prune --dry-run: only list them; --add/--remove: install (and mark as
+                               yours in the lock) or remove packages, all or nothing; --pending: run the
+                               Extensions view's queue; --wait: wait for a running sync instead of refusing
+       drgnx upgrade [--only NAME…] [--stage | --staged]
+                               newest packages; the previous generation comes back if they break;
+                               --only: those (and a dependency too old for them), the rest stays;
+                               --stage: fetch and check into the cache only; --staged: install that
        drgnx rollback [N]      the packages of generation N (default: the one before)
+                               (sync, upgrade and rollback take --progress FILE: JSON steps, for the editor)
        drgnx generations | lock
-       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+       drgnx extensions refresh [--progress FILE] | fetch-readme ARCHIVE NAME
+                               write the catalog of the archives' packages (the Extensions view reads it), or cache
+                               one package's readme; reaches the network, changes nothing you have installed
+       drgnx lock --ship      (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
@@ -2031,6 +2129,12 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
                                sharded; GUI jobs as memory allows; bench, then perf, alone); one summary
        drgnx fmt [--check] [FILE…]
                                format drgnx's Emacs Lisp (all of it, or FILEs); --check: only report
+       drgnx record start NAME [--cap-usd N] [--cap-weekly P] [--max-minutes M] -- drgnx-ARGS…
+                               run drgnx ARGS with the outside ends recorded (docs/develop/recordings.md)
+       drgnx record stop NAME | lint DIR-OR-NAME… | export NAME --to DIR
+                               finish a record (report, lint) / the secret lint / a mock-made run as a repo fixture
+       drgnx replay NAME-OR-DIR [--speed 0|1|N] [--strict] [-- drgnx-ARGS…]
+                               run drgnx ARGS (default: test --ui) with a recording backing the outside ends
        drgnx work record [--task ID] [SHA…]
                                link commits (default HEAD) to a task (default $DRGNX_TASK); no commit message changes
        drgnx work scan [--board FILE] [DIR…]
@@ -2095,6 +2199,9 @@ case "${1:-help}" in
   sync|upgrade|rollback|generations|lock|bisect|service-unit)
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-pkg -f drgnx-pkg-cli -- "$@" ;;
+  extensions) shift
+        "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
+              -l drgnx-extensions-refresh -f drgnx-extensions-refresh-cli -- "$@" ;;
   onboard) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -L "$here/wb" \
               -l drgnx-onboard -f drgnx-onboard-cli -- "$@" ;;
@@ -2175,6 +2282,8 @@ case "${1:-help}" in
   fmt) shift
         "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" \
               -l drgnx-fmt -f drgnx-fmt-cli -- "$@" ;;
+  record) shift; cmd_record "$@" ;;
+  replay) shift; cmd_replay "$@" ;;
   update) shift; cmd_update "$@" ;;
   open) shift; cmd_open "$@" ;;
   -t|--gui) cmd_open "$@" ;;

@@ -9,6 +9,12 @@
 //!
 //! [`Presence`] is pure: it takes the hub's times as arguments and keeps no store of its own; after a restart it is
 //! rebuilt from the timeline's steps and their details ([`Presence::rebuild`]).
+//!
+//! **Live entries** (part 3): a tool call still running is fed as its `tool_call` / `tool_call_update` arrive
+//! ([`Presence::apply_live`]), so a cursor moves before the step closes. A session's live entry in a file stands in
+//! for its closed one there; the step's close replaces it ([`Presence::close_live`]: the closed step's entry, or
+//! nothing for a failed or denied call), and an update that arrives for a call already closed is dropped, so the order
+//! of the reader and the step writer does not matter. Live entries are never rebuilt after a restart.
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -17,7 +23,7 @@ use runstav::methods::work::{
     PresenceSource as Source, PresenceSubscribe,
 };
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -25,6 +31,9 @@ use std::time::Duration;
 
 /// `presence-stale-after`: an entry older than this is history, unless it is its session's latest.
 pub const STALE_AFTER: f64 = 120.0;
+
+/// The most closed tool calls a session's live feed remembers (an update for one of them is dropped).
+const CLOSED_CALLS: usize = 1024;
 
 /// An absolute path in one of the workspace's repositories.
 pub type RepoPath = String;
@@ -36,9 +45,18 @@ pub struct Entry {
     pub file: RepoPath,
     pub mode: Mode,
     pub line: Option<u32>,
+    /// The last line of its range; none: `line` only.
+    pub line_end: Option<u32>,
+    /// The column after the last character an edit inserted (0-based, characters).
+    pub col: Option<u32>,
     pub source: Source,
+    /// The timeline step; 0 while live.
     pub step: i64,
     pub at: f64,
+    /// From a tool call still running.
+    pub live: bool,
+    /// The tool call of a live entry.
+    pub tool_call: Option<String>,
 }
 
 /// A file a step was in, and how.
@@ -48,6 +66,29 @@ pub struct Touch {
     pub mode: Mode,
     pub line: Option<u32>,
     pub source: Source,
+}
+
+/// A tool call's ACP status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// What a running tool call's latest update says of the file it is in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveUpdate {
+    pub path: RepoPath,
+    pub mode: Mode,
+    pub line: Option<u32>,
+    pub line_end: Option<u32>,
+    pub col: Option<u32>,
+    pub status: CallStatus,
+    pub source: Source,
+    /// The hub's time of the update.
+    pub at: f64,
 }
 
 /// What the model is told.
@@ -62,6 +103,22 @@ pub enum PresenceEv {
     },
     /// SESSION ended: none of its entries is "now" any more.
     SessionEnd { session: String },
+    /// SESSION's tool call TOOL_CALL, still running, is where UPDATE says (a failed one is dropped).
+    Live {
+        session: String,
+        tool_call: String,
+        update: LiveUpdate,
+    },
+    /// SESSION's tool call TOOL_CALL ended: its live entry gives way to CLOSED, its step's entry (none: it failed or
+    /// was denied).
+    CloseLive {
+        session: String,
+        tool_call: String,
+        closed: Option<Entry>,
+    },
+    /// SESSION's live entry under TOOL_CALL goes, and the call is not closed: an allowed permission request whose call
+    /// the agent reports under an id of its own (its updates may still come under this one).
+    Withdraw { session: String, tool_call: String },
 }
 
 /// What changed: a file whose entries may read differently now.
@@ -76,6 +133,10 @@ pub struct Presence {
     /// Each session's latest entry per file.
     by_session: BTreeMap<String, BTreeMap<RepoPath, Entry>>,
     ended: BTreeSet<String>,
+    /// Each session's running tool calls' entries, by tool call.
+    live: BTreeMap<String, BTreeMap<String, Entry>>,
+    /// Each session's tool calls that ended (the latest [`CLOSED_CALLS`]): an update for one is late and dropped.
+    closed_calls: BTreeMap<String, VecDeque<String>>,
 }
 
 impl Presence {
@@ -85,6 +146,17 @@ impl Presence {
 
     pub fn apply(&mut self, ev: PresenceEv) -> Vec<PresenceOut> {
         let mut changed: BTreeSet<RepoPath> = BTreeSet::new();
+        let session = match &ev {
+            PresenceEv::Step { session, .. }
+            | PresenceEv::SessionEnd { session }
+            | PresenceEv::Live { session, .. }
+            | PresenceEv::CloseLive { session, .. }
+            | PresenceEv::Withdraw { session, .. } => session.clone(),
+        };
+        if self.ended.contains(&session) {
+            return Vec::new();
+        }
+        let before = self.latest(&session).map(|e| e.file.clone());
         match ev {
             PresenceEv::Step {
                 session,
@@ -92,41 +164,106 @@ impl Presence {
                 at,
                 files,
             } => {
-                if self.ended.contains(&session) {
-                    return Vec::new();
-                }
-                let before = self.latest(&session).map(|e| e.file.clone());
-                let mine = self.by_session.entry(session.clone()).or_default();
                 for t in files {
                     let e = Entry {
                         session: session.clone(),
                         file: t.file,
                         mode: t.mode,
                         line: t.line,
+                        line_end: None,
+                        col: None,
                         source: t.source,
                         step,
                         at,
+                        live: false,
+                        tool_call: None,
                     };
-                    let newer = mine.get(&e.file).is_none_or(|old| rank(&e) > rank(old));
-                    if newer {
-                        changed.insert(e.file.clone());
-                        mine.insert(e.file.clone(), e);
-                    }
-                }
-                // the session's latest moved: the file it left may read differently now
-                let after = self.latest(&session).map(|e| e.file.clone());
-                if before != after {
-                    changed.extend(before);
-                    changed.extend(after);
+                    self.put_closed(e, &mut changed);
                 }
             }
             PresenceEv::SessionEnd { session } => {
-                if self.ended.insert(session.clone())
-                    && let Some(mine) = self.by_session.get(&session)
-                {
+                self.ended.insert(session.clone());
+                if let Some(mine) = self.by_session.get(&session) {
                     changed.extend(mine.keys().cloned());
                 }
+                if let Some(mine) = self.live.remove(&session) {
+                    changed.extend(mine.into_values().map(|e| e.file));
+                }
+                self.closed_calls.remove(&session);
             }
+            PresenceEv::Live {
+                session,
+                tool_call,
+                update,
+            } => {
+                let late = self
+                    .closed_calls
+                    .get(&session)
+                    .is_some_and(|c| c.contains(&tool_call));
+                if late {
+                    return Vec::new();
+                }
+                let mine = self.live.entry(session.clone()).or_default();
+                if update.status == CallStatus::Failed {
+                    if let Some(old) = mine.remove(&tool_call) {
+                        changed.insert(old.file);
+                    }
+                    self.close_call(&session, &tool_call);
+                } else {
+                    let e = Entry {
+                        session: session.clone(),
+                        file: update.path,
+                        mode: update.mode,
+                        line: update.line,
+                        line_end: update.line_end,
+                        col: update.col,
+                        source: update.source,
+                        step: 0,
+                        at: update.at,
+                        live: true,
+                        tool_call: Some(tool_call.clone()),
+                    };
+                    let old = mine.insert(tool_call, e.clone());
+                    if old.as_ref() != Some(&e) {
+                        changed.extend(old.map(|o| o.file));
+                        changed.insert(e.file);
+                    }
+                }
+            }
+            PresenceEv::CloseLive {
+                session,
+                tool_call,
+                closed,
+            } => {
+                if let Some(old) = self
+                    .live
+                    .get_mut(&session)
+                    .and_then(|m| m.remove(&tool_call))
+                {
+                    changed.insert(old.file);
+                }
+                self.close_call(&session, &tool_call);
+                if let Some(mut e) = closed {
+                    e.live = false;
+                    e.tool_call = None;
+                    self.put_closed(e, &mut changed);
+                }
+            }
+            PresenceEv::Withdraw { session, tool_call } => {
+                if let Some(old) = self
+                    .live
+                    .get_mut(&session)
+                    .and_then(|m| m.remove(&tool_call))
+                {
+                    changed.insert(old.file);
+                }
+            }
+        }
+        // the session's latest moved: the file it left may read differently now
+        let after = self.latest(&session).map(|e| e.file.clone());
+        if before != after {
+            changed.extend(before);
+            changed.extend(after);
         }
         changed
             .into_iter()
@@ -134,22 +271,101 @@ impl Presence {
             .collect()
     }
 
-    /// SESSION's latest entry: of its highest step, the strongest mode.
+    /// SESSION's tool call TOOL_CALL is running where UPDATE says (see [`PresenceEv::Live`]).
+    pub fn apply_live(
+        &mut self,
+        session: &str,
+        tool_call: &str,
+        update: LiveUpdate,
+    ) -> Vec<PresenceOut> {
+        self.apply(PresenceEv::Live {
+            session: session.into(),
+            tool_call: tool_call.into(),
+            update,
+        })
+    }
+
+    /// SESSION's tool call TOOL_CALL ended (see [`PresenceEv::CloseLive`]).
+    pub fn close_live(
+        &mut self,
+        session: &str,
+        tool_call: &str,
+        closed: Option<Entry>,
+    ) -> Vec<PresenceOut> {
+        self.apply(PresenceEv::CloseLive {
+            session: session.into(),
+            tool_call: tool_call.into(),
+            closed,
+        })
+    }
+
+    /// The step of SESSION's closed entry in FILE (0: none): where an entry no step carries (a pair write the editor
+    /// applied) ranks beside the session's own.
+    pub fn step_in(&self, session: &str, file: &str) -> i64 {
+        self.by_session
+            .get(session)
+            .and_then(|m| m.get(file))
+            .map_or(0, |e| e.step)
+    }
+
+    /// E as its session's entry in its file, when it ranks above the one there.
+    fn put_closed(&mut self, e: Entry, changed: &mut BTreeSet<RepoPath>) {
+        let mine = self.by_session.entry(e.session.clone()).or_default();
+        if mine.get(&e.file).is_none_or(|old| rank(&e) > rank(old)) {
+            changed.insert(e.file.clone());
+            mine.insert(e.file.clone(), e);
+        }
+    }
+
+    fn close_call(&mut self, session: &str, tool_call: &str) {
+        let calls = self.closed_calls.entry(session.to_string()).or_default();
+        if !calls.iter().any(|c| c == tool_call) {
+            calls.push_back(tool_call.to_string());
+            if calls.len() > CLOSED_CALLS {
+                calls.pop_front();
+            }
+        }
+    }
+
+    /// SESSION's live entry in FILE: of its running calls there, the strongest mode, then the latest.
+    fn live_in(&self, session: &str, file: &str) -> Option<&Entry> {
+        self.live
+            .get(session)?
+            .values()
+            .filter(|e| e.file == file)
+            .max_by(|a, b| {
+                (a.mode, a.at)
+                    .partial_cmp(&(b.mode, b.at))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    /// SESSION's latest entry: a running call's (the latest update), else of its highest step, the strongest mode.
     fn latest(&self, session: &str) -> Option<&Entry> {
+        if let Some(e) = self.live.get(session).and_then(|m| {
+            m.values()
+                .max_by(|a, b| a.at.total_cmp(&b.at).then_with(|| b.file.cmp(&a.file)))
+        }) {
+            return Some(e);
+        }
         self.by_session
             .get(session)?
             .values()
             .max_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| b.file.cmp(&a.file)))
     }
 
-    /// Who is in FILE at AT: each live session's entry there that is younger than [`STALE_AFTER`] or is the session's
-    /// latest, by session.
+    /// Who is in FILE at AT: each live session's running call there, else its entry there that is younger than
+    /// [`STALE_AFTER`] or is the session's latest, by session.
     pub fn now(&self, file: &str, at: f64) -> Vec<&Entry> {
-        self.by_session
-            .iter()
-            .filter(|(s, _)| !self.ended.contains(*s))
-            .filter_map(|(s, files)| {
-                let e = files.get(file)?;
+        let sessions: BTreeSet<&String> = self.by_session.keys().chain(self.live.keys()).collect();
+        sessions
+            .into_iter()
+            .filter(|s| !self.ended.contains(*s))
+            .filter_map(|s| {
+                if let Some(e) = self.live_in(s, file) {
+                    return Some(e);
+                }
+                let e = self.by_session.get(s)?.get(file)?;
                 let fresh = at - e.at < STALE_AFTER;
                 (fresh || self.latest(s).is_some_and(|l| l.file == e.file)).then_some(e)
             })
@@ -162,6 +378,7 @@ impl Presence {
             .by_session
             .values()
             .flat_map(BTreeMap::keys)
+            .chain(self.live.values().flat_map(|m| m.values().map(|e| &e.file)))
             .filter(|f| under(f, root))
             .collect();
         all.into_iter()
@@ -232,7 +449,9 @@ pub fn touches_of_detail(d: &norn::write::work::StepDetail, dir: &Path) -> Vec<T
     }]
 }
 
-/// P in DIR as the model keys it: absolute, its links followed when it exists, else lexically clean.
+/// P in DIR as the model keys it: absolute, its links followed when it exists; else lexically clean, under the true name
+/// of its nearest folder that exists, so a file not made yet is named as its folder is (macOS's `/tmp/…` is
+/// `/private/tmp/…`).
 pub fn place(dir: &Path, p: &str) -> RepoPath {
     let joined = dir.join(p);
     if let Ok(c) = std::fs::canonicalize(&joined) {
@@ -247,6 +466,16 @@ pub fn place(dir: &Path, p: &str) -> RepoPath {
             Component::CurDir => {}
             other => out.push(other),
         }
+    }
+    let mut rest = Vec::new();
+    let mut at = out.as_path();
+    while let Some(parent) = at.parent() {
+        rest.extend(at.file_name());
+        if let Ok(mut c) = std::fs::canonicalize(parent) {
+            c.extend(rest.iter().rev());
+            return c.to_string_lossy().into_owned();
+        }
+        at = parent;
     }
     out.to_string_lossy().into_owned()
 }
@@ -272,6 +501,12 @@ impl Sub {
     }
 }
 
+/// A file or folder a caller names (an editor's buffer, a workspace root) as the model keys it: the model's files come
+/// from [`place`], so one that exists is known by its true name (macOS's `/tmp/…` is `/private/tmp/…`).
+pub fn true_name(asked: &str) -> RepoPath {
+    place(Path::new("/"), asked)
+}
+
 /// Whether FILE is ROOT or under it, at a `/`.
 fn under(file: &str, root: &str) -> bool {
     let root = root.trim_end_matches('/');
@@ -289,7 +524,14 @@ pub struct Live {
     pending: Mutex<BTreeSet<RepoPath>>,
     armed: AtomicBool,
     editors: OnceLock<Arc<crate::settings::agents::Editors>>,
+    /// Each folder's checkout ([`checkout_of`]), at most [`CHECKOUTS_MAX`] (emptied when full).
+    checkouts: Mutex<BTreeMap<PathBuf, Option<(PathBuf, String)>>>,
+    /// Told the files each change touched, at once (the editors' buffer views, [`crate::editor`]).
+    listener: OnceLock<Listener>,
 }
+
+/// What [`Live::on_change`] calls with the files a change touched.
+pub type Listener = Arc<dyn Fn(&[RepoPath]) + Send + Sync>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -301,9 +543,62 @@ fn wire(e: &Entry) -> PresenceEntry {
         file: e.file.clone(),
         mode: e.mode,
         line: e.line,
+        line_end: e.line_end,
+        col: e.col,
         source: e.source,
         step: e.step,
         at: e.at,
+        live: e.live,
+        tool_call: e.tool_call.clone(),
+    }
+}
+
+/// The most folders [`Live`] remembers the checkout of.
+const CHECKOUTS_MAX: usize = 4096;
+
+/// The git checkout FILE (an absolute path, by its true name) is in: its top folder and its project id (16 hex digits
+/// of the sha256 of the main checkout's real path, as [`crate::search::project::project_id`]; every linked worktree of
+/// a repository has its main checkout's). Read from the `.git` entries alone: no git runs, in no agent's tree.
+pub fn checkout_of(file: &Path) -> Option<(PathBuf, String)> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let (top, main) = top_and_main(file)?;
+    let sum = Sha256::digest(main.as_os_str().as_bytes());
+    let id = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    Some((top, id))
+}
+
+/// The main checkout (real path) of the repository FILE is in: for a linked worktree, the checkout whose `.git` it
+/// shares.  Read as [`checkout_of`] reads.
+pub fn main_checkout(file: &Path) -> Option<PathBuf> {
+    top_and_main(file).map(|(_, main)| main)
+}
+
+/// FILE's checkout top folder and its main checkout's real path.
+fn top_and_main(file: &Path) -> Option<(PathBuf, PathBuf)> {
+    let mut dir = file.parent()?;
+    loop {
+        let dotgit = dir.join(".git");
+        if let Ok(meta) = std::fs::symlink_metadata(&dotgit) {
+            let common = if meta.is_dir() {
+                dotgit
+            } else {
+                // a linked worktree (or a submodule): `gitdir: DIR`, whose `commondir` names the shared one
+                let text = std::fs::read_to_string(&dotgit).ok()?;
+                let gitdir = dir.join(text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim());
+                match std::fs::read_to_string(gitdir.join("commondir")) {
+                    Ok(c) => gitdir.join(c.trim()),
+                    Err(_) => gitdir,
+                }
+            };
+            let common = std::fs::canonicalize(common).ok()?;
+            let main = match common.file_name() {
+                Some(n) if n == ".git" => common.parent()?.to_path_buf(),
+                _ => common,
+            };
+            return Some((dir.to_path_buf(), main));
+        }
+        dir = dir.parent()?;
     }
 }
 
@@ -319,7 +614,17 @@ impl Live {
         if !files.is_empty() && !lock(&self.subs).is_empty() {
             self.pending_flush(&files);
         }
+        if !files.is_empty()
+            && let Some(l) = self.listener.get()
+        {
+            l(&files);
+        }
         files
+    }
+
+    /// L is told the files each change touches from now on (one listener; a second is ignored).
+    pub fn on_change(&self, l: Listener) {
+        let _ = self.listener.set(l);
     }
 
     /// Who is in each of FILES now (at the hub's time), file by file.
@@ -376,15 +681,90 @@ impl Live {
         }
     }
 
+    /// Who is in the file a caller named ASKED: looked up by its true name ([`true_name`]), the answer naming it as
+    /// asked.
+    fn file_asked(&self, asked: &str, at: f64) -> FilePresence {
+        FilePresence {
+            file: asked.to_string(),
+            ..self.file(&true_name(asked), at)
+        }
+    }
+
     fn file(&self, file: &str, at: f64) -> FilePresence {
+        let (rel, repo) = self.rel_and_repo(file).unzip();
         FilePresence {
             file: file.to_string(),
+            rel,
+            repo,
             entries: lock(&self.model)
                 .now(file, at)
                 .into_iter()
                 .map(wire)
                 .collect(),
         }
+    }
+
+    /// FILE (a true name) relative to its checkout's top, and the checkout's project id; none outside git.
+    pub fn rel_and_repo(&self, file: &str) -> Option<(String, String)> {
+        let path = Path::new(file);
+        let dir = path.parent()?.to_path_buf();
+        let known = lock(&self.checkouts).get(&dir).cloned();
+        let found = match known {
+            Some(f) => f,
+            None => {
+                let f = checkout_of(path);
+                let mut all = lock(&self.checkouts);
+                if all.len() >= CHECKOUTS_MAX {
+                    all.clear();
+                }
+                all.insert(dir, f.clone());
+                f
+            }
+        };
+        let (top, repo) = found?;
+        let rel = path.strip_prefix(&top).ok()?.to_string_lossy().into_owned();
+        Some((rel, repo))
+    }
+
+    /// SESSION's running tool call TOOL_CALL is where UPDATE says; the files it changed, as [`Live::apply`].
+    pub fn apply_live(
+        self: &Arc<Self>,
+        session: &str,
+        tool_call: &str,
+        update: LiveUpdate,
+    ) -> Vec<RepoPath> {
+        self.apply(PresenceEv::Live {
+            session: session.into(),
+            tool_call: tool_call.into(),
+            update,
+        })
+    }
+
+    /// SESSION's tool call TOOL_CALL ended: its step's entry CLOSED (none: failed or denied) replaces its live one.
+    pub fn close_live(
+        self: &Arc<Self>,
+        session: &str,
+        tool_call: &str,
+        closed: Option<Entry>,
+    ) -> Vec<RepoPath> {
+        self.apply(PresenceEv::CloseLive {
+            session: session.into(),
+            tool_call: tool_call.into(),
+            closed,
+        })
+    }
+
+    /// See [`Presence::step_in`].
+    pub fn step_in(&self, session: &str, file: &str) -> i64 {
+        lock(&self.model).step_in(session, file)
+    }
+
+    /// SESSION's live entry under TOOL_CALL goes, the call left open (see [`PresenceEv::Withdraw`]).
+    pub fn withdraw_live(self: &Arc<Self>, session: &str, tool_call: &str) -> Vec<RepoPath> {
+        self.apply(PresenceEv::Withdraw {
+            session: session.into(),
+            tool_call: tool_call.into(),
+        })
     }
 
     /// Connection CONN is gone: its subscriptions with it.
@@ -473,7 +853,9 @@ pub async fn subscribe(
     let live = &f.core.presence;
     let _ = live.editors.set(f.editors.clone());
     let at = crate::clock::wall_secs();
-    let files: Vec<RepoPath> = {
+    // the names asked, by their true names (the model's keys): a root's files are named as the model has them, a
+    // single file as it was asked
+    let files: Vec<FilePresence> = {
         let mut subs = lock(&live.subs);
         let s = subs.entry(c.conn_id).or_default();
         match (&p.workspace, &p.file) {
@@ -481,39 +863,42 @@ pub async fn subscribe(
                 let roots: Vec<String> = ws
                     .roots
                     .iter()
-                    .map(|r| r.to_string_lossy().into_owned())
+                    .map(|r| true_name(&r.to_string_lossy()))
                     .collect();
                 s.roots.extend(roots.iter().cloned());
-                let model = lock(&live.model);
                 let mut all: BTreeSet<RepoPath> = BTreeSet::new();
-                for r in &roots {
-                    all.extend(model.files_under(r, at));
+                {
+                    let model = lock(&live.model);
+                    for r in &roots {
+                        all.extend(model.files_under(r, at));
+                    }
                 }
-                all.into_iter().collect()
+                all.iter().map(|file| live.file(file, at)).collect()
             }
             (None, Some(file)) => {
-                s.files.insert(file.clone());
-                vec![file.clone()]
+                s.files.insert(true_name(file));
+                vec![live.file_asked(file, at)]
             }
             (None, None) => Vec::new(),
         }
     };
     Ok(PresenceFiles {
         files: files
-            .iter()
-            .map(|file| live.file(file, at))
+            .into_iter()
             .filter(|fp| !fp.entries.is_empty())
             .collect(),
     })
 }
 
-/// `agents/presence/get`: who is in P's file now.
+/// `agents/presence/get`: who is in P's file now, by whichever of its names P gives.
 pub async fn get(
     f: &Front,
     _: &Caller,
     p: PresenceGet,
 ) -> Result<FilePresence, runstav::wire::Error> {
-    Ok(f.core.presence.file(&p.file, crate::clock::wall_secs()))
+    Ok(f.core
+        .presence
+        .file_asked(&p.file, crate::clock::wall_secs()))
 }
 
 #[cfg(test)]

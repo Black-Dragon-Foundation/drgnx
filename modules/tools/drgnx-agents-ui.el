@@ -22,6 +22,7 @@
 (require 'drgnx-view)
 (require 'drgnx-trust)
 (require 'drgnx-agents)
+(require 'drgnx-agents-hooks)
 (require 'drgnx-exec)
 
 ;; `agents' is a segment of the status bar, defined by this module's setup (the bar's library comes with `ui/face')
@@ -301,9 +302,9 @@ Its rows are a view of type `agent-transcript' (read-only, no undo), drawn only 
 
 (defvar-local drgnx-agents-ui--synced nil
   "What this transcript's last full sync saw: [SESSION ENTRIES COUNT PERMISSIONS REVIEWS STATUS QUEUE-VECTOR
-COMMANDS PAUSED EXIT STDERR LIVE PERMISSION-COUNT REVIEW-COUNT], LIVE being ((ENTRY . SIGNATURE)...) for its tool
-and plan entries not done yet (they change in place).  When all of it is the same, a sync only looks at the growing
-text (`drgnx-agents-ui--sync').")
+COMMANDS PAUSED EXIT STDERR LIVE PERMISSION-COUNT REVIEW-COUNT HOOKS HOOKED PANEL USAGE PLUGINS-CHANGED], LIVE being
+\((ENTRY . SIGNATURE)...) for its tool and plan entries not done yet (they change in place).  When all of it is the
+same, a sync only looks at the growing text (`drgnx-agents-ui--sync').")
 
 (defun drgnx-agents-ui--tool-lines (e depth)
   "Tool entry E and its children (nested DEPTH deep) as a list of lines."
@@ -317,10 +318,45 @@ text (`drgnx-agents-ui--sync').")
   "A copy of LABEL made a text button that calls ACTION."
   (make-text-button (copy-sequence label) nil 'action (lambda (_) (funcall action)) 'follow-link t))
 
+(defun drgnx-agents-ui--verdict-line (indent text row record)
+  "One line under a step: TEXT, a button whose action (RET) shows the provenance of RECORD in hook ROW."
+  (concat (make-string indent ?\s)
+          (drgnx-agents-ui--button text (lambda () (drgnx-agents-hooks-show-provenance row record)))
+          "\n"))
+
+(defun drgnx-agents-ui--verdict-lines (s e)
+  "The hook verdict lines under tool entry E of session S (refused, changed, failed, busy; where the hub's server
+hooks it), from the hook rows the mirror kept, plus the line of an edit a hook refused after the agent made it."
+  (concat
+   (when-let* ((r (plist-get e :refused_by_hook)))
+     (let ((who (plist-get (drgnx-agents-hooks-source (plist-get r :hook)) :text)))
+       (concat "  "
+               (propertize (format "%s refused by %s%s" (drgnx-face-glyph 'refused) who
+                                   (if (plist-get r :reason) (format " · \"%s\"" (plist-get r :reason)) ""))
+                           'face 'drgnx-agents-hooks-refused)
+               "\n")))
+   (mapconcat (lambda (l) (drgnx-agents-ui--verdict-line 2 (plist-get l :text) (plist-get l :row) (plist-get l :record)))
+              (drgnx-agents-hooks-lines (drgnx-agents-hooks-rows-for-tool s (plist-get e :id)))
+              "")))
+
+(defun drgnx-agents-ui--header-text (s)
+  "The header of S's transcript: context % (a button to the breakdown when the agent sends one), then what is hooked
+by whom and the plugin restart notice; nil when there is nothing to say.  Built from the mirror's cached state."
+  (let* ((c (drgnx-agents-hooks-context s))
+         (pct (if (and c (numberp (plist-get c :size)) (> (plist-get c :size) 0))
+                  (min 100 (round (* 100.0 (or (plist-get c :used) 0)) (plist-get c :size)))
+                (drgnx-agents-context-percent s)))
+         (parts (append (when pct
+                          (list (if c
+                                    (drgnx-agents-ui--button (format "context %d%%" pct) (lambda () (drgnx-agents-ui-context s)))
+                                  (propertize (format "context %d%%" pct) 'face 'drgnx-agents-ui-dim))))
+                        (drgnx-agents-hooks-header-parts s))))
+    (when parts (concat (string-join parts (drgnx-face-glyph 'sep)) "\n\n"))))
+
 (defun drgnx-agents-ui--blank-p (e)
   "Non-nil if entry E shows nothing (a turn's end that was not a Stop)."
   (pcase (plist-get e :type)
-    ((or 'user 'agent 'thought 'tool 'plan 'error) nil)
+    ((or 'user 'agent 'thought 'tool 'plan 'error 'note) nil)
     ('stop (not (equal (plist-get e :stop) "cancelled")))
     (_ t)))
 
@@ -328,6 +364,7 @@ text (`drgnx-agents-ui--sync').")
   "Session S's rows, in order: `:commands' (when it has commands), each entry that shows something, each permission
 and review to answer, `:status' (working or exited) and `:queue' (when messages wait)."
   (let (keys)
+    (when (drgnx-agents-ui--header-text s) (push :header keys))
     (when (drgnx-agent-session-commands s) (push :commands keys))
     (dolist (e (drgnx-agent-session-entries s)) (unless (drgnx-agents-ui--blank-p e) (push e keys)))
     (dolist (p (drgnx-agent-session-permissions s)) (push p keys))
@@ -336,13 +373,28 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
     (when (drgnx-agent-session-queue s) (push :queue keys))
     (nreverse keys)))
 
-(defun drgnx-agents-ui--entry-row (e)
-  "Entry E's row: a string ending in a newline, or (BODY . SUFFIX) for the agent's text and thinking (they grow)."
+(defun drgnx-agents-ui--note-row (s e)
+  "The row of a hook's note E of session S: its line, a button to the provenance when the hook's row is known."
+  (let ((line (drgnx-agents-hooks-note-line e)) (row (drgnx-agents-hooks-row-of-note s e)))
+    (concat (if row
+                (drgnx-agents-ui--button line
+                                         (lambda ()
+                                           (drgnx-agents-hooks-show-provenance
+                                            row (seq-find (lambda (r) (equal (plist-get r :source) (plist-get e :source)))
+                                                          (append (plist-get row :records) nil)))))
+              line)
+            "\n")))
+
+(defun drgnx-agents-ui--entry-row (e &optional s)
+  "Entry E's row: a string ending in a newline, or (BODY . SUFFIX) for the agent's text and thinking (they grow).
+S is E's session: its hook rows give a tool entry its verdict lines and a note its provenance."
   (pcase (plist-get e :type)
+    ('note (drgnx-agents-ui--note-row s e))
     ('user (concat (propertize (concat (if (plist-get e :steer) "↪ " "▸ ") (plist-get e :text)) 'face 'drgnx-agents-ui-user) "\n\n"))
     ('agent (cons (drgnx-agents-entry-text e) "\n\n"))
     ('thought (cons (propertize (concat "… " (drgnx-agents-entry-text e)) 'face 'drgnx-agents-ui-dim) "\n"))
-    ('tool (apply #'concat (drgnx-agents-ui--tool-lines e 0)))
+    ('tool (concat (apply #'concat (drgnx-agents-ui--tool-lines e 0))
+                   (and s (drgnx-agents-ui--verdict-lines s e))))
     ('plan (concat (mapconcat (lambda (p) (concat (pcase (plist-get p :status) ("completed" "☑ ") ("in_progress" "◐ ") (_ "☐ "))
                                                   (plist-get p :content) "\n"))
                               (plist-get e :entries))
@@ -353,6 +405,7 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
 (defun drgnx-agents-ui--row (s key)
   "The text of session S's row KEY (`drgnx-agents-ui--keys').  Buttons are made here, their closures with them."
   (pcase key
+    (:header (drgnx-agents-ui--header-text s))
     (:commands
      (concat (propertize (concat "Commands: " (mapconcat (lambda (c) (concat "/" (plist-get c :name))) (drgnx-agent-session-commands s) " "))
                          'face 'drgnx-agents-ui-dim)
@@ -379,7 +432,7 @@ and review to answer, `:status' (working or exited) and `:queue' (when messages 
                                                                (lambda () (drgnx-agents-unqueue s n))))))
                           (drgnx-agent-session-queue s))
                "\n")))
-    ((guard (plist-get key :type)) (drgnx-agents-ui--entry-row key))
+    ((guard (plist-get key :type)) (drgnx-agents-ui--entry-row key s))
     ((guard (memq key (drgnx-agent-session-reviews s)))
      (concat (propertize (format "? the agent wants to change %s  " (plist-get key :path)) 'face 'drgnx-agents-ui-ask)
              (drgnx-agents-ui--button "[Review]" (lambda () (drgnx-agents-ui-review s key)))
@@ -424,13 +477,16 @@ review is its own; the footer rows take the session's status, exit and each queu
 show)."
   (let ((s drgnx-agents-ui--session))
     (pcase key
+      (:header (vector (drgnx-agent-session-hooked s) (drgnx-agent-session-panel s)
+                       (drgnx-agent-session-plugins-changed s) (drgnx-agent-session-usage s)))
       (:commands (vector (drgnx-agent-session-commands s)))
       (:status (vector (drgnx-agent-session-status s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)))
       (:queue (apply #'vector (drgnx-agent-session-paused s) (drgnx-agent-session-queue s)))
       ((guard (memq (plist-get key :type) '(agent thought))) (vector (plist-get key :type)))
       ((guard (plist-get key :type))
        (apply #'vector (plist-get key :type) (plist-get key :status) (plist-get key :title) (plist-get key :children)
-              (plist-get key :entries) (plist-get key :done) (drgnx-agents-ui--tool-fields (plist-get key :children))))
+              (plist-get key :entries) (plist-get key :done) (drgnx-agent-session-hooks s) (plist-get key :refused_by_hook)
+              (drgnx-agents-ui--tool-fields (plist-get key :children))))
       (_ key))))
 
 (defun drgnx-agents-ui--same-sig-p (a b)
@@ -465,6 +521,9 @@ agent's text or thinking not done yet that is longer than its drawn body is mark
                      (drgnx-agents-ui--same-items-p (drgnx-agent-session-queue s) (aref old 6))
                      (eq (drgnx-agent-session-commands s) (aref old 7)) (eq (drgnx-agent-session-paused s) (aref old 8))
                      (eq (drgnx-agent-session-exit s) (aref old 9)) (eq (drgnx-agent-session-stderr s) (aref old 10))
+                     (eq (drgnx-agent-session-hooks s) (aref old 14)) (eq (drgnx-agent-session-hooked s) (aref old 15))
+                     (eq (drgnx-agent-session-panel s) (aref old 16)) (eq (drgnx-agent-session-usage s) (aref old 17))
+                     (eq (drgnx-agent-session-plugins-changed s) (aref old 18))
                      (= (length live) (length (aref old 11)))
                      (let ((ok t) (pairs (aref old 11)))
                        (while (and ok pairs)
@@ -478,7 +537,9 @@ agent's text or thinking not done yet that is longer than its drawn body is mark
                         (drgnx-agent-session-status s) (vconcat (drgnx-agent-session-queue s)) (drgnx-agent-session-commands s)
                         (drgnx-agent-session-paused s) (drgnx-agent-session-exit s) (drgnx-agent-session-stderr s)
                         (mapcar (lambda (e) (cons e (drgnx-agents-ui--sig e))) live)
-                        (length (drgnx-agent-session-permissions s)) (length (drgnx-agent-session-reviews s)))))
+                        (length (drgnx-agent-session-permissions s)) (length (drgnx-agent-session-reviews s))
+                        (drgnx-agent-session-hooks s) (drgnx-agent-session-hooked s) (drgnx-agent-session-panel s)
+                        (drgnx-agent-session-usage s) (drgnx-agent-session-plugins-changed s))))
         (dolist (e texts)
           (let ((body (drgnx-view-body-length view e)))
             (when (and body (/= body (+ (drgnx-agents-entry-length e) (if (eq (plist-get e :type) 'thought) 2 0))))
@@ -543,7 +604,10 @@ from its own timer, at most every 0.1 s, only while shown).  Called from the age
   (let* ((b (get-buffer (format "*agent: %s*" (drgnx-agent-session-name s))))
          (view (and b (buffer-local-value 'drgnx-view b))))
     (when (drgnx-view-p view) (drgnx-view-touch view)))
-  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view)))
+  (when-let* ((view (drgnx-agents-ui--list-view))) (drgnx-view-touch view))
+  (when (get-buffer (format "*agent context: %s*" (drgnx-agent-session-name s)))
+    (drgnx-timer-soon (cons 'agents-ui-context (drgnx-agent-session-name s)) 0.5 #'drgnx-agents-ui--context-refresh
+                      :args (list s) :owner 'tools/agents)))
 
 ;;;; Commands
 
@@ -608,6 +672,19 @@ exists is connected to (asynchronously)."
   (let* ((s (drgnx-agents-ui--session)) (p (or (car (drgnx-agent-session-permissions s)) (user-error "Nothing to answer")))
          (choice (completing-read (format "%s: " (plist-get p :title)) (mapcar (lambda (o) (plist-get o :name)) (plist-get p :options)) nil t)))
     (drgnx-agents-answer-permission s p (plist-get (seq-find (lambda (o) (equal (plist-get o :name) choice)) (plist-get p :options)) :optionId))))
+
+(defun drgnx-agents-ui-context (&optional s)
+  "Show the context breakdown of session S (default: this transcript's, else asked): the bar, each part and its
+items, with drop and pin where the agent offers them.  An agent that sends no breakdown has none to show."
+  (interactive)
+  (let ((s (or s (drgnx-agents-ui--session))))
+    (unless (drgnx-agents-hooks-context s) (user-error "%s sends no context breakdown" (drgnx-agent-session-name s)))
+    (pop-to-buffer (drgnx-agents-hooks-context-buffer s))))
+
+(defun drgnx-agents-ui--context-refresh (s)
+  "A session changed: its breakdown buffer, when one is open, is drawn again from the mirror."
+  (when (get-buffer (format "*agent context: %s*" (drgnx-agent-session-name s)))
+    (drgnx-agents-hooks-context-buffer s)))
 
 (defun drgnx-agents-ui-job-log (id)
   "Show durable job ID's log."
@@ -809,6 +886,8 @@ answered once the commands are gone, and must not stay counted (the next change 
                                         (agents-deliver "Deliver Queued Messages" drgnx-agents-ui-deliver "Send what a Stop held back")
                                         (agents-edit-queued "Edit Queued Message…" drgnx-agents-ui-edit-queued "Change or remove a message before it is sent")
                                         (agents-answer "Answer Agent…" drgnx-agents-ui-answer "Allow or reject what the agent asks")
+                                        (agents-context "Context Breakdown…" drgnx-agents-ui-context
+                                                        "What fills the agent's context, with drop and pin where the agent offers them")
                                         (jobs-log "Show Job Log…" drgnx-agents-ui-job-log "A durable job's output")
                                         (jobs-stop "Stop Job…" drgnx-agents-ui-job-stop "Stop a durable job")))
                          (drgnx-command-define id :category "Agents" :title title :command fn :doc doc))

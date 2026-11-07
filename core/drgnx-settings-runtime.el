@@ -89,6 +89,13 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
   :type 'boolean :group 'drgnx :safe #'booleanp :scope 'project
   :on-error 'strict :agents 'never :runtime "bool" :schema 'boolean)
 
+(drgnx-defsetting drgnx-search-base nil
+  "The checkout a project's search index is built from (its base); nil: the main checkout.
+Every other worktree is an overlay of what differs from it, so a base on the line most worktrees branch from keeps
+the overlays small.  Changing it builds the base again."
+  :type '(choice (const :tag "The main checkout" nil) directory) :group 'drgnx :scope 'project :workspace 'never
+  :on-error 'strict :agents 'never :runtime "Option<String>" :schema '(or null string))
+
 ;;;; Encoding: Lisp values as the runtime types' JSON
 
 (defun drgnx-settings-runtime--str (x)
@@ -135,6 +142,27 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
          (cons :doc (plist-get p :doc))
          (cons :job_safe (and (plist-get p :job-safe) t)))))
 
+(defun drgnx-settings-runtime--price (p)
+  "A price row's plist P (:in :out :cache-read :write-5m :write-1h :as-of) as `ModelPrice' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :in (plist-get p :in))
+         (cons :out (plist-get p :out))
+         (cons :cache_read (plist-get p :cache-read))
+         (cons :write_5m (plist-get p :write-5m))
+         (cons :write_1h (plist-get p :write-1h))
+         (cons :as_of (plist-get p :as-of)))))
+
+(defun drgnx-settings-runtime--rule (r)
+  "A hook rule's plist R (:id :point :tool-kinds :paths :command :verdict :reason) as the hub's `Rule' takes it."
+  (drgnx-settings-runtime--plist
+   (list (cons :id (plist-get r :id))
+         (cons :point (drgnx-settings-runtime--str (plist-get r :point)))
+         (cons :tool_kinds (and (plist-get r :tool-kinds) (drgnx-settings-runtime--strings (plist-get r :tool-kinds))))
+         (cons :paths (and (plist-get r :paths) (vconcat (plist-get r :paths))))
+         (cons :command (plist-get r :command))
+         (cons :verdict (drgnx-settings-runtime--str (plist-get r :verdict)))
+         (cons :reason (plist-get r :reason)))))
+
 (defun drgnx-settings-runtime--alist (alist fn)
   "ALIST (KEY . VALUE)… as an object: KEY → (FN VALUE), in order."
   (cl-loop for (k . v) in alist append (list (drgnx-settings-runtime--key k) (funcall fn v))))
@@ -172,6 +200,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-search-include . drgnx-settings-runtime--strings)
     (drgnx-search-exclude . drgnx-settings-runtime--strings)
     (drgnx-search-off . drgnx-settings-runtime--bool)
+    (drgnx-search-base . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-agents-start-env-names . drgnx-settings-runtime--strings)
     (drgnx-agents-trace-opens . drgnx-settings-runtime--strings)
     ;; the agent limits (`drgnx-agents-matrix.el'); the matrix itself is read from settings.el alone
@@ -187,6 +216,7 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-agents-repeat-limit . identity)
     (drgnx-agents-no-progress-tokens . identity)
     (drgnx-agents-manager-context . identity)
+    (drgnx-agents-model-prices . ,(lambda (v) (drgnx-settings-runtime--alist v #'drgnx-settings-runtime--price)))
     ;; the agent browser and its session's memory cap
     (drgnx-agents-browser-program . ,(lambda (v) (or v :null)))
     (drgnx-agents-browser-local-ports . vconcat)
@@ -203,6 +233,12 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
     (drgnx-runners-weight . identity)
     (drgnx-runners-project-visibility . drgnx-settings-runtime--str)
     (drgnx-runners-shared-overlay . drgnx-settings-runtime--bool)
+    (drgnx-runners-job-keys . drgnx-settings-runtime--strings)
+    (drgnx-runners-origin-key . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
+    ;; plugins and hook rules: a project's values come from your private workspace file only
+    (drgnx-agents-plugins . drgnx-settings-runtime--strings)
+    (drgnx-agents-hook-rules . ,(lambda (v) (vconcat (mapcar #'drgnx-settings-runtime--rule v))))
+    (drgnx-agents-hook-rules-off . drgnx-settings-runtime--strings)
     (drgnx-search-model-mirror . ,(lambda (v) (or (drgnx-settings-runtime--str v) :null)))
     (drgnx-sandbox-proxy-pinned-addresses . ,(lambda (v) (drgnx-settings-runtime--alist v #'identity))))
   "Runtime setting → the function that turns its Lisp value into the JSON of its runtime type.  `drgnx-agents-matrix'

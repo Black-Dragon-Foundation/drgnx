@@ -506,24 +506,43 @@ types `infocmp' was asked about."
                 (buffer-string))))
     (should (equal out "((nil nil) t)"))))
 
-(defun drgnx-tty-frames-test--status-column (graphic)
-  "The :align-to expression of the Explorer's status letter for a modified file, with the selected frame GRAPHIC or not."
+(defun drgnx-tty-frames-test--tail-columns (graphic)
+  "How a terminal draws the right edge of the Explorer's row for a modified file, painted while the selected frame is
+GRAPHIC (an 8-pixel cell, a 12-pixel ⋯ and a 7-pixel mark) or a terminal: (MARK DOTS END TEXT), the columns from the
+right edge where the mark and the ⋯ start and the tail ends (a terminal cuts a column count down to a whole one), and
+the tail's text."
   (require 'drgnx-explorer)
-  (with-temp-buffer
-    (insert "  name.txt\n")
-    (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
-              ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic)))
-      (let ((drgnx-explorer-git t))
-        (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
-    (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)))
-      (list (plist-get (cdr (get-text-property 0 'display s)) :align-to) (substring-no-properties s)))))
+  (drgnx-wb-mark-memo-clear)
+  (unwind-protect
+      (with-temp-buffer
+        (insert "  name.txt\n")
+        (cl-letf (((symbol-function 'drgnx-git-status) (lambda (_) 'modified))
+                  ((symbol-function 'display-graphic-p) (lambda (&rest _) graphic))
+                  ((symbol-function 'frame-char-width) (lambda (&rest _) (if graphic 8 1)))
+                  ((symbol-function 'drgnx-look-pixel-width)
+                   (lambda (s &optional _face) (if graphic (if (equal s "M") 7 12) (string-width s)))))
+          (let ((drgnx-explorer-git t))
+            (drgnx-explorer--git-decorate (point-min) (1- (point-max)) "/x/name.txt" nil 3)))
+        (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)) cols)
+          (dotimes (i (length s))
+            (let ((d (get-text-property i 'display s)))
+              (when (eq (car-safe d) 'space)
+                (pcase (plist-get (cdr d) :align-to)
+                  (`(- right ,(and n (pred numberp))) (push (truncate n) cols))
+                  (other (push other cols))))))
+          (append (nreverse cols) (list (substring-no-properties s)))))
+    (drgnx-wb-mark-memo-clear)))
 
 (ert-deftest drgnx-tty-frames/the-git-letter-keeps-off-the-last-column-whoever-paints-it ()
   ;; a terminal window has no fringe: its last column shows the truncation `$', so a letter put at the edge
   ;; (right - 2) is lost.  The overlay is painted once into a buffer every frame shows: a graphical frame being
-  ;; the selected one when it is painted must not decide.
-  (should (equal (drgnx-tty-frames-test--status-column nil) '((- right 3) " M")))
-  (should (equal (drgnx-tty-frames-test--status-column t) '((- right 3) " M"))))
+  ;; the selected one when it is painted must not decide.  Pattern D (pure: the overlay's string is read).
+  (dolist (graphic '(nil t))
+    (pcase-let ((`(,mark ,dots ,end ,text) (drgnx-tty-frames-test--tail-columns graphic)))
+      (should (string-match-p "M.*⋯" text))
+      (should (and (integerp end) (>= end 2)))              ; the tail stops 2 columns in
+      (should (and (integerp dots) (>= dots (1+ end))))     ; the ⋯ (one column) ends there
+      (should (and (integerp mark) (>= mark (1+ dots)))))))  ; the mark (one column) ends before the ⋯
 
 (ert-deftest drgnx-tty-frames/ignored-files-are-told-by-more-than-colour ()
   (require 'drgnx-git)

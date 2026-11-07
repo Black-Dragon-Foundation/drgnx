@@ -84,11 +84,14 @@ impl HostAddrsWatch {
 
 /// Every address of every interface (`getifaddrs`), up or not, loopback included.
 pub fn interface_addrs() -> io::Result<HostAddrs> {
-    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
-    // SAFETY: getifaddrs fills HEAD with a list that freeifaddrs frees below; nothing of it outlives that.
-    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+    let mut head = std::mem::MaybeUninit::<*mut libc::ifaddrs>::uninit();
+    // SAFETY: HEAD is valid for a write; getifaddrs writes it when it returns 0, with a list that freeifaddrs frees
+    // below; nothing of it outlives that.
+    if unsafe { libc::getifaddrs(head.as_mut_ptr()) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: getifaddrs returned 0, so it wrote HEAD (null for an empty list, which the loop handles).
+    let head = unsafe { head.assume_init() };
     let mut out = BTreeSet::new();
     let mut p = head;
     while !p.is_null() {

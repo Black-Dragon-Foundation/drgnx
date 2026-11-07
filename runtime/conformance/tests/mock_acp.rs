@@ -21,7 +21,17 @@ struct Acp {
 
 impl Acp {
     fn start(extra: &[&str]) -> Acp {
-        let mut child = Command::new(MOCK)
+        Acp::start_env(extra, &[])
+    }
+
+    /// As `start`, with ENV set and the lock variables it does not set unset.
+    fn start_env(extra: &[&str], env: &[(&str, &str)]) -> Acp {
+        let mut cmd = Command::new(MOCK);
+        for v in ["CODEX_CONFIG", "INITIAL_AGENT_MODE"] {
+            cmd.env_remove(v);
+        }
+        let mut child = cmd
+            .envs(env.iter().copied())
             .arg("acp")
             .args(extra)
             .stdin(Stdio::piped())
@@ -65,6 +75,29 @@ impl Acp {
                 return m;
             }
             if m.get("method").is_some() && m.get("id").is_some() {
+                // the editor's side of the file calls: read and write what the path names
+                match m["method"].as_str() {
+                    Some("fs/read_text_file") => {
+                        let text = std::fs::read_to_string(m["params"]["path"].as_str().unwrap())
+                            .unwrap_or_default();
+                        self.write(
+                            json!({"jsonrpc": "2.0", "id": m["id"], "result": {"content": text}}),
+                        );
+                        self.seen.push(m);
+                        continue;
+                    }
+                    Some("fs/write_text_file") => {
+                        std::fs::write(
+                            m["params"]["path"].as_str().unwrap(),
+                            m["params"]["content"].as_str().unwrap(),
+                        )
+                        .unwrap();
+                        self.write(json!({"jsonrpc": "2.0", "id": m["id"], "result": null}));
+                        self.seen.push(m);
+                        continue;
+                    }
+                    _ => {}
+                }
                 let answer = if self.allow == "cancelled" {
                     json!({"outcome": "cancelled"})
                 } else {
@@ -179,6 +212,226 @@ fn gemini_has_no_fork_list_resume_or_close() {
     assert!(r["result"].is_object());
 }
 
+// [C] handshake: DeepSeek Harness 0.2.2's `--patch` takes a top-level YAML array of loader patches and refuses
+// anything else at boot (`packages/boot/app-boot/src/index.ts:536-545`, `:571-589`); the patches to rows its base
+// bundle has (`sandbox-policy`, `approval`: `packages/bundle/base/cordis.patch.yml:243-262`) apply, and the
+// inserted ask plugin's `kinds` are what it asks about.
+#[test]
+fn dsh_boots_only_on_a_patch_list() {
+    let d = dir();
+    let map = d.path().join("map.yml");
+    std::fs::write(
+        &map,
+        "sandbox:\n  mode: danger-full-access\napproval:\n  policy: ask\nplugins:\n  drgnx-ask:\n    kinds: [execute]\n",
+    )
+    .unwrap();
+    let out = Command::new(MOCK)
+        .args(["acp", "--as", "dsh", "--patch", map.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("must be a top-level YAML array"), "{err}");
+    let list = d.path().join("list.yml");
+    std::fs::write(
+        &list,
+        "# x\n- id: sandbox-policy\n  config:\n    mode: danger-full-access\n\n- id: approval\n  config:\n    policy: ask\n\n\
+         - insert:\n    - id: drgnx-ask\n      name: '@deepseek-ai/dsh-acp-drgnx-ask'\n      config:\n        kinds: [execute, edit]\n",
+    )
+    .unwrap();
+    let log = d.path().join("log");
+    let mut a = Acp::start(&[
+        "--as",
+        "dsh",
+        "--log",
+        log.to_str().unwrap(),
+        "--patch",
+        list.to_str().unwrap(),
+    ]);
+    a.init();
+    a.new_session(d.path().to_str().unwrap(), json!({}));
+    let l = log_lines(&log);
+    let note = l.iter().find_map(|v| v.get("dsh")).unwrap();
+    assert_eq!(
+        note,
+        &json!({"policy": "ask", "sandbox": "danger-full-access", "kinds": ["execute", "edit"]})
+    );
+}
+
+// [C] handshake: Gemini CLI 0.67 loads an `--admin-policy` file whose every rule has a toolName, a known decision and
+// a priority in 0..=999 (`packages/core/src/policy/toml-loader.ts:39-70`), and drops a file that has not, running on
+// without it (`:376-389`); the Gemini personality logs which.
+#[test]
+fn gemini_loads_or_drops_its_admin_policy() {
+    let d = dir();
+    let good = "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+                [[rule]]\nmcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n";
+    let bad = "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+               [[rule]]\nmcpName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n";
+    for (name, text, want) in [("good", good, "loaded"), ("bad", bad, "dropped")] {
+        let file = d.path().join(format!("{name}.toml"));
+        let log = d.path().join(format!("{name}.log"));
+        std::fs::write(&file, text).unwrap();
+        let mut a = Acp::start(&[
+            "--as",
+            "gemini",
+            "--log",
+            log.to_str().unwrap(),
+            "--admin-policy",
+            file.to_str().unwrap(),
+        ]);
+        a.init();
+        let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+        assert!(!sid.is_empty(), "{name}: the session starts either way");
+        let l = log_lines(&log);
+        let note = l.iter().find_map(|v| v.get("gemini")).unwrap();
+        let got = note["admin_policy"].as_str().unwrap_or_default();
+        assert!(got.starts_with(want), "{name}: {note}");
+        if want == "dropped" {
+            assert!(got.contains("rule 2") && got.contains("toolName"), "{got}");
+        }
+    }
+}
+
+// [C] handshake: drgnx's Gemini fork (`--panel-policy`) answers an `initialize` that offers `_drgnx/panel` version 1
+// with `agentCapabilities._meta["_drgnx/panel"].adminPolicy {loaded, rules}`, the rules Gemini holds from the
+// `--admin-policy` files by their names (`packages/cli/src/acp/acpRpcDispatcher.ts:94-123`, `acpDrgnxPanel.ts:52-106`):
+// none when the file was dropped; `--panel-policy short` reports one rule fewer.  The stock adapter (no flag) and a
+// client that offers nothing get no report.
+#[test]
+fn gemini_fork_reports_its_admin_policy() {
+    let d = dir();
+    let good = d.path().join("good.toml");
+    std::fs::write(
+        &good,
+        "[[rule]]\ntoolName = \"read_file\"\ndecision = \"ask_user\"\npriority = 999\n\n\
+         [[rule]]\nmcpName = \"*\"\ntoolName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+    )
+    .unwrap();
+    let bad = d.path().join("bad.toml");
+    std::fs::write(
+        &bad,
+        "[[rule]]\nmcpName = \"*\"\ndecision = \"ask_user\"\npriority = 999\n",
+    )
+    .unwrap();
+    let offer = json!({"protocolVersion": 1, "clientCapabilities": {"fs": {"readTextFile": false,
+        "writeTextFile": false}, "terminal": false, "_meta": {"_drgnx/panel": {"version": 1}}}});
+    let report = |extra: &[&str], file: &std::path::Path, offered: bool| {
+        let mut args = vec!["--as", "gemini", "--admin-policy", file.to_str().unwrap()];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        let r = if offered {
+            a.call("initialize", offer.clone())
+        } else {
+            a.init()
+        };
+        r["result"]["agentCapabilities"]["_meta"]["_drgnx/panel"]["adminPolicy"].clone()
+    };
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &good, true),
+        json!({"loaded": true, "rules": 2})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &bad, true),
+        json!({"loaded": false, "rules": 0})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "short"], &good, true),
+        json!({"loaded": true, "rules": 1})
+    );
+    assert_eq!(
+        report(&["--panel-policy", "engine"], &good, false),
+        Value::Null
+    );
+    assert_eq!(report(&[], &good, true), Value::Null);
+}
+
+// [C] handshake: a fork that advertises `before-tool` asks `_drgnx/before_tool` about a step before it asks the client
+// for permission, with the same tool call id (the forks' listeners run before the confirmation); the stock adapter, and a
+// fork without the feature, only ask for permission.
+#[test]
+fn a_fork_with_before_tool_asks_the_adapter_site_first() {
+    let d = dir();
+    let order = |extra: &[&str]| {
+        let mut args = vec!["--as", "claude"];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        a.init();
+        let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+        a.prompt(
+            &sid,
+            "ask:tool {\"kind\": \"execute\", \"title\": \"ls\", \"rawInput\": {\"command\": \"ls\"}}",
+        );
+        a.seen
+            .iter()
+            .filter_map(|m| {
+                let method = m["method"].as_str()?;
+                matches!(method, "_drgnx/before_tool" | "session/request_permission").then(|| {
+                    (
+                        method.to_owned(),
+                        m["params"]["toolCall"]["toolCallId"].clone(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let fork = order(&["--panel", "context,before-tool"]);
+    assert_eq!(fork.len(), 2, "{fork:?}");
+    assert_eq!(fork[0].0, "_drgnx/before_tool");
+    assert_eq!(fork[1].0, "session/request_permission");
+    assert!(fork[0].1.is_string() && fork[0].1 == fork[1].1, "{fork:?}");
+    let no_feature = order(&["--panel", "context"]);
+    assert_eq!(
+        no_feature.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(),
+        ["session/request_permission"]
+    );
+    let stock = order(&[]);
+    assert_eq!(stock.len(), 1, "{stock:?}");
+}
+
+// [C] handshake: Kimi Code's ACP server reports its four modes and `default` when a session opens
+// (`packages/acp-server/src/modes.ts:22-46`), refuses a mode id it does not know (`:52-54`), and tells the client a
+// switch with `current_mode_update` (`session.ts:1138-1156`); the personality's `--start-mode MODE` opens in MODE (a
+// Kimi the lock must refuse), and the word `mode MODE` switches during a turn.
+#[test]
+fn kimi_reports_its_modes_and_switches() {
+    let d = dir();
+    let opened = |extra: &[&str]| {
+        let mut args = vec!["--as", "kimi"];
+        args.extend_from_slice(extra);
+        let mut a = Acp::start(&args);
+        a.init();
+        let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+        (a, r)
+    };
+    let (mut a, r) = opened(&[]);
+    let modes = &r["result"]["modes"];
+    assert_eq!(modes["currentModeId"], "default", "{r}");
+    let ids: Vec<&str> = modes["availableModes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["default", "plan", "auto", "yolo"]);
+    let sid = r["result"]["sessionId"].as_str().unwrap().to_string();
+    let bad = a.call(
+        "session/set_mode",
+        json!({"sessionId": sid, "modeId": "read-only"}),
+    );
+    assert_eq!(bad["error"]["code"], -32602, "{bad}");
+    a.prompt(&sid, "mode plan");
+    let switched = a.updates("current_mode_update");
+    assert_eq!(
+        switched.last().map(|u| u["currentModeId"].clone()),
+        Some(json!("plan")),
+        "{switched:?}"
+    );
+    let (_, r) = opened(&["--start-mode", "plan"]);
+    assert_eq!(r["result"]["modes"]["currentModeId"], "plan", "{r}");
+}
+
 #[test]
 fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
     let d = dir();
@@ -205,7 +458,7 @@ fn claude_logs_its_options_and_sends_usage_and_a_rate_limit() {
 }
 
 #[test]
-fn codex_reads_overrides_from_argv_and_sends_usage_and_a_window() {
+fn codex_logs_its_lock_and_sends_usage_and_a_window() {
     let d = dir();
     let log = d.path().join("log");
     let mut a = Acp::start(&[
@@ -228,8 +481,78 @@ fn codex_reads_overrides_from_argv_and_sends_usage_and_a_window() {
             && m["params"]["primary"]["windowMinutes"] == 300)
     );
     let l = log_lines(&log);
-    let o = l.iter().find_map(|v| v.get("codex_overrides")).unwrap();
-    assert_eq!(o, &json!(["approval_policy=never", "model=x"]));
+    // what codex-acp 2.x reads is its environment (unset here); the argv overrides it ignores are logged beside it
+    let o = l.iter().find_map(|v| v.get("codex_config")).unwrap();
+    assert_eq!(
+        o["argv_overrides"],
+        json!(["approval_policy=never", "model=x"])
+    );
+    assert!(o["config"].is_null() && o["mode"].is_null(), "{o}");
+}
+
+// [C] handshake: codex-acp 2.5.0 answers `session/new` with the session's mode and knows four ids
+// (`src/AgentMode.ts:135-142`); an unset or unknown `INITIAL_AGENT_MODE` is its default, `agent` (`:95`,
+// `:144-151`), and `session/set_mode` to an unknown id is invalid params (`src/CodexAcpServer.ts:2752-2756`).
+#[test]
+fn codex_reports_its_mode_as_codex_acp_picks_it() {
+    let d = dir();
+    for (asked, got) in [
+        (None, "agent"),
+        (Some(""), "agent"),
+        (Some("permission-profile:drgnx"), "agent"),
+        (Some("read-only"), "read-only"),
+        (Some("agent-full-access"), "agent-full-access"),
+    ] {
+        let env: Vec<(&str, &str)> = asked
+            .map(|m| ("INITIAL_AGENT_MODE", m))
+            .into_iter()
+            .collect();
+        let mut a = Acp::start_env(&["--as", "codex"], &env);
+        a.init();
+        let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+        let modes = &r["result"]["modes"];
+        assert_eq!(modes["currentModeId"], got, "{asked:?}: {r}");
+        let ids: Vec<&str> = modes["availableModes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            ["read-only", "workspace-write", "agent", "agent-full-access"]
+        );
+        let sid = r["result"]["sessionId"].clone();
+        let bad = a.call(
+            "session/set_mode",
+            json!({"sessionId": sid, "modeId": "permission-profile:drgnx"}),
+        );
+        assert_eq!(bad["error"]["code"], -32602, "{bad}");
+        let ok = a.call(
+            "session/set_mode",
+            json!({"sessionId": sid, "modeId": "read-only"}),
+        );
+        assert!(ok["result"].is_object(), "{ok}");
+    }
+}
+
+// [C] handshake: Codex 0.165 refuses a config whose `approval_policy` is `untrusted`
+// (`core/src/config/mod.rs:3898-3903`), so no session starts on it.
+#[test]
+fn codex_refuses_the_retired_untrusted_policy() {
+    let d = dir();
+    let mut a = Acp::start_env(
+        &["--as", "codex"],
+        &[("CODEX_CONFIG", r#"{"approval_policy":"untrusted"}"#)],
+    );
+    a.init();
+    let r = a.call("session/new", json!({"cwd": d.path(), "mcpServers": []}));
+    assert!(
+        r["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("no longer supported")),
+        "{r}"
+    );
 }
 
 fn fork_at(who: &str, msg: &str) -> Value {
@@ -492,4 +815,168 @@ fn llm_gets_one_request_per_turn() {
     let _ = llm.kill();
     let _ = llm.wait();
     assert_eq!(n, 2);
+}
+
+/// A session in a fresh directory holding `a.txt`; the agent started as WHO.
+fn editing(who: &str, text: &str) -> (tempfile::TempDir, Acp, String) {
+    let d = dir();
+    std::fs::write(d.path().join("a.txt"), text).unwrap();
+    let mut a = Acp::start(&["--as", who]);
+    a.init();
+    let sid = a.new_session(d.path().to_str().unwrap(), json!({}));
+    (d, a, sid)
+}
+
+/// The `tool_call` and `tool_call_update` payloads, in the order they were sent.
+fn tool_updates(a: &Acp) -> Vec<Value> {
+    a.seen
+        .iter()
+        .map(|m| m["params"]["update"].clone())
+        .filter(|u| u["sessionUpdate"] == "tool_call" || u["sessionUpdate"] == "tool_call_update")
+        .collect()
+}
+
+#[test]
+fn claude_edit_stream_names_the_path_first_then_fills_the_input_then_completes() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:edit-stream a.txt \"old text\" new");
+    let u = tool_updates(&a);
+    assert_eq!(u.len(), 4);
+    assert_eq!(u[0]["sessionUpdate"], "tool_call");
+    assert_eq!(u[0]["kind"], "edit");
+    assert_eq!(u[0]["status"], "pending");
+    assert_eq!(u[0]["_meta"]["claudeCode"]["toolName"], "Edit");
+    assert_eq!(u[0]["locations"][0]["path"], "a.txt");
+    assert_eq!(u[0]["rawInput"], json!({"file_path": "a.txt"}));
+    assert_eq!(
+        u[1]["rawInput"],
+        json!({"file_path": "a.txt", "old_string": "old text"})
+    );
+    assert_eq!(
+        u[2]["rawInput"],
+        json!({"file_path": "a.txt", "old_string": "old text", "new_string": "new"})
+    );
+    assert_eq!(u[3]["status"], "completed");
+    assert_eq!(u[3]["content"][0]["type"], "diff");
+    assert_eq!(u[3]["content"][0]["oldText"], "old text");
+    assert_eq!(u[3]["content"][0]["newText"], "new");
+    assert_eq!(u[0]["toolCallId"], u[3]["toolCallId"]);
+}
+
+#[test]
+fn pending_edit_asks_with_the_diff_before_the_edit_is_reported() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:pending-edit a.txt one two");
+    let ask = a
+        .seen
+        .iter()
+        .position(|m| m["method"] == "session/request_permission")
+        .expect("a request");
+    let call = a
+        .seen
+        .iter()
+        .position(|m| m["params"]["update"]["sessionUpdate"] == "tool_call")
+        .expect("the edit");
+    assert!(ask < call);
+    let tc = &a.seen[ask]["params"]["toolCall"];
+    assert_eq!(tc["kind"], "edit");
+    assert_eq!(tc["content"][0]["type"], "diff");
+    assert_eq!(tc["content"][0]["path"], "a.txt");
+    assert_eq!(tc["content"][0]["oldText"], "one");
+    assert_eq!(tc["content"][0]["newText"], "two");
+    assert_eq!(tool_updates(&a).last().unwrap()["status"], "completed");
+    assert!(a.said().contains("permission: allow_once"));
+}
+
+#[test]
+fn a_rejected_pending_edit_is_never_reported() {
+    let (_d, mut a, sid) = editing("codex", "one\n");
+    a.allow = "reject_once";
+    a.prompt(&sid, "provider:pending-edit a.txt one two");
+    assert!(tool_updates(&a).is_empty());
+    assert!(a.said().contains("permission: reject_once"));
+}
+
+#[test]
+fn codex_diff_hunks_sends_one_diff_per_hunk() {
+    let (_d, mut a, sid) = editing("codex", "one\n");
+    a.prompt(&sid, "provider:diff-hunks a.txt a b c d e f");
+    let u = tool_updates(&a);
+    let first = &u[0];
+    assert_eq!(first["kind"], "edit");
+    assert!(first.get("_meta").is_none());
+    let diffs = first["content"].as_array().unwrap();
+    assert_eq!(diffs.len(), 3);
+    for (i, (old, new)) in [("a", "b"), ("c", "d"), ("e", "f")].iter().enumerate() {
+        assert_eq!(diffs[i]["type"], "diff");
+        assert_eq!(diffs[i]["path"], "a.txt");
+        assert_eq!(diffs[i]["oldText"], *old);
+        assert_eq!(diffs[i]["newText"], *new);
+    }
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn gemini_whole_diff_has_no_raw_input_and_writes_through_the_editor() {
+    let (d, mut a, sid) = editing("gemini", "one\n");
+    a.prompt(&sid, "provider:whole-diff a.txt");
+    let u = tool_updates(&a);
+    assert!(u[0].get("rawInput").is_none());
+    assert_eq!(u[0]["kind"], "edit");
+    assert_eq!(u[0]["content"][0]["type"], "diff");
+    assert_eq!(u[0]["content"][0]["oldText"], "one\n");
+    let new = u[0]["content"][0]["newText"].as_str().unwrap();
+    assert!(new.starts_with("one\n") && new.len() > 4);
+    let at = |method: &str| a.seen.iter().position(|m| m["method"] == method).unwrap();
+    assert!(at("fs/read_text_file") < at("fs/write_text_file"));
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+        new
+    );
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn native_edit_is_attempted_in_each_personalitys_shape_and_fails() {
+    for (who, tool) in [("claude", Some("Edit")), ("codex", None), ("gemini", None)] {
+        let (d, mut a, sid) = editing(who, "one\n");
+        a.prompt(&sid, "provider:native-edit a.txt");
+        let u = tool_updates(&a);
+        assert_eq!(u.len(), 2, "{who}");
+        assert_eq!(u[0]["kind"], "edit", "{who}");
+        assert_eq!(u[0]["locations"][0]["path"], "a.txt", "{who}");
+        assert_eq!(
+            u[0]["_meta"]["claudeCode"]["toolName"].as_str(),
+            tool,
+            "{who}"
+        );
+        assert_eq!(u[1]["status"], "failed", "{who}");
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("a.txt")).unwrap(),
+            "one\n",
+            "{who}"
+        );
+    }
+}
+
+#[test]
+fn moves_sends_the_cursor_through_n_lines_per_second() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "moves 20 0.5");
+    let u = tool_updates(&a);
+    let lines: Vec<u64> = u
+        .iter()
+        .filter_map(|x| x["locations"][0]["line"].as_u64())
+        .collect();
+    assert_eq!(lines.len(), 10);
+    assert!(lines.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(u.last().unwrap()["status"], "completed");
+}
+
+#[test]
+fn the_new_words_leave_the_old_ones_alone() {
+    let (_d, mut a, sid) = editing("claude", "one\n");
+    a.prompt(&sid, "provider:write a.txt");
+    let u = tool_updates(&a);
+    assert_eq!(u[0]["rawInput"]["content"], "written by the mock\n");
 }

@@ -1069,6 +1069,41 @@ what `ratatoskr doctor --json' said)."
     ;; no section (no hub, no work.db): nothing to say
     (should (eq (car (funcall check nil)) 'ok))))
 
+(ert-deftest drgnx-doctor/history-row-names-the-last-history-copy ()
+  ;; D: the `history' check reads the `store' section's `history' facts
+  (let ((check (lambda (store)
+                 (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+                        (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store))))
+                   (drgnx-doctor-check 'history (list :ratatoskr fact))))))
+    (let ((r (funcall check '(:schema 7 :history (:copies 2 :newest_age_s 7300)))))
+      (should (eq (car r) 'ok))
+      (should (string-search "2 project copies, newest 2 h ago" (nth 1 r))))
+    (let ((r (funcall check '(:schema 7 :history (:copies 1 :newest_age_s 100)))))
+      (should (string-search "1 project copy, newest 0 h ago" (nth 1 r))))
+    (should (string-search "no copy of an edit history yet"
+                           (nth 1 (funcall check '(:schema 7 :history (:copies 0))))))
+    (should (eq (car (funcall check nil)) 'ok))))
+
+(ert-deftest drgnx-doctor/history-row-names-size-cap-and-pins ()
+  ;; D: the sweep's report per project: size against the cap, the biggest pin, and a warning near the cap
+  (let ((check (lambda (store)
+                 (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+                        (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store))))
+                   (drgnx-doctor-check 'history (list :ratatoskr fact)))))
+        (small '(:project "p1" :size 5242880 :cap 2147483648
+                          :pins [(:kind "frozen" :name "wt-x" :bytes 1048576)]))
+        (full '(:project "p2" :size 1900000000 :cap 2147483648
+                         :pins [(:kind "frozen" :name "wt-big" :bytes 1500000000)])))
+    (let ((r (funcall check `(:schema 7 :history (:copies 1 :newest_age_s 100) :history_size [,small]))))
+      (should (eq (car r) 'ok))
+      (should (string-search "1 project copy" (nth 1 r)))
+      (should (string-search "p1 5 MiB of 2048 MiB" (nth 1 r)))
+      (should (string-search "pinned by wt-x" (nth 1 r))))
+    (let ((r (funcall check `(:schema 7 :history (:copies 1 :newest_age_s 100) :history_size [,full]
+                                      :history_warnings ["the edit history of p2 is 1811 MiB of its 2048 MiB cap; the biggest thing keeping it is wt-big"]))))
+      (should (eq (car r) 'warn))
+      (should (string-search "wt-big" (nth 1 r))))))
+
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
   ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
   (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))

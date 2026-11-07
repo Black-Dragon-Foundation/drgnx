@@ -134,16 +134,19 @@ PASSWORD, PASSPHRASE or CREDENTIAL), whatever this lists.  Only you can set it, 
 
 (drgnx-defsetting drgnx-agents-trace-opens '("claude")
   "The agents whose shell commands' opens the hub sees on Linux (\"seen open\" in the Work space), by provider:
-\"claude\", \"codex\", \"gemini\".  Claude Code is traced per shell step; Codex and Gemini over their whole process
-tree, which costs every command they run (a test suite run as one command: about a third longer), so they are off
-unless listed.  An agent not listed shows only the files its commands name.  Read when a session starts."
-  :type '(repeat (choice (const "claude") (const "codex") (const "gemini"))) :group 'drgnx :scope 'global
+\"claude\", \"codex\", \"gemini\", \"kimi\" (Kimi Code), \"deepseek\" (DeepSeek Harness).  Claude Code is traced per
+shell step; the others over their whole process tree, which costs every command they run (a test suite run as one
+command: about a third longer), so they are off unless listed.  An agent not listed shows only the files its
+commands name.  Read when a session starts."
+  :type '(repeat (choice (const "claude") (const "codex") (const "gemini") (const "kimi") (const "deepseek")))
+  :group 'drgnx :scope 'global
   :workspace 'never :on-error 'strict :agents 'never :runtime "Vec<String>" :schema '(list-of string))
 
 (cl-defstruct (drgnx-agent-session (:constructor drgnx-agents--make) (:copier nil))
   name profile cwd conn acp-id (status 'starting) entries queue (mode 'queue) capabilities usage commands
   permissions reviews stderr exit stopping paused turn draining task via gateway id job remote
-  mcp-dir mcp-sid mcp-socket)           ; unused since the hub runs every session; kept so the shape stays
+  mcp-dir mcp-sid mcp-socket            ; unused since the hub runs every session; kept so the shape stays
+  hooked panel plugins-changed hooks)   ; a hub session's hook reach, panel, plugin flag and ((STEP TOOL-ID ROWS)…)
 
 (defvar drgnx-agents--sessions nil "Live and finished sessions, newest first.")
 

@@ -4,7 +4,7 @@ use crate::incoming::{Incoming, Responder};
 use crate::schema::v1 as acp;
 use crate::stamp;
 use crate::types::{
-    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Error, Event, ForkPoint, McpServer,
+    AgentInfo, ClientCaps, ConnOpts, ContentBlock, Dir, Error, Event, ForkInto, LineTap, McpServer,
     PromptOutcome, SessionId,
 };
 use bytes::BytesMut;
@@ -32,6 +32,8 @@ pub(crate) struct Shared {
     pub(crate) closed: watch::Sender<bool>,
     next: AtomicI64,
     cwds: Mutex<HashMap<String, PathBuf>>,
+    /// The mode each session is in, as the answer that opened it reported it (`modes.currentModeId`).
+    modes: Mutex<HashMap<String, String>>,
 }
 
 impl Shared {
@@ -80,12 +82,17 @@ impl Conn {
             closed: watch::channel(false).0,
             next: AtomicI64::new(1),
             cwds: Mutex::new(HashMap::new()),
+            modes: Mutex::new(HashMap::new()),
         });
         let (tx, mut wrx) = mpsc::unbounded_channel::<String>();
         let (etx, erx) = mpsc::channel(EVENT_QUEUE);
 
+        let wtap = opts.tap.clone();
         tokio::spawn(async move {
             while let Some(mut line) = wrx.recv().await {
+                if let Some(t) = &wtap {
+                    t.line(Dir::In, &line, std::time::Instant::now());
+                }
                 line.push('\n');
                 if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                     break;
@@ -98,9 +105,11 @@ impl Conn {
             shared.clone(),
             tx.downgrade(),
             etx.clone(),
+            opts.tap.clone(),
         ));
 
         let sh = shared.clone();
+        let (tail_max, xtap) = (opts.stderr_tail, opts.tap.clone());
         tokio::spawn(async move {
             let status = child.wait().await.ok().flatten();
             let mut reader = reader;
@@ -117,8 +126,11 @@ impl Conn {
                 (s.code(), s.signal())
             });
             let tail = child.stderr_tail();
-            let skip = tail.chars().count().saturating_sub(opts.stderr_tail);
-            let stderr = tail.chars().skip(skip).collect();
+            let skip = tail.chars().count().saturating_sub(tail_max);
+            let stderr: String = tail.chars().skip(skip).collect();
+            if let Some(t) = &xtap {
+                t.exit(code, signal, &stderr);
+            }
             let _ = etx
                 .send(Event::Exit {
                     code,
@@ -210,6 +222,10 @@ impl Conn {
         set_meta(&mut params, meta);
         let r: acp::NewSessionResponse = self.typed("session/new", params).await?;
         self.remember(&r.session_id, cwd);
+        self.note_mode(
+            &r.session_id,
+            r.modes.map(|m| m.current_mode_id.to_string()),
+        );
         Ok(r.session_id)
     }
 
@@ -223,8 +239,9 @@ impl Conn {
     ) -> Result<(), Error> {
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
-        self.typed::<Value>("session/load", params).await?;
+        let r = self.typed::<Value>("session/load", params).await?;
         self.remember(sid, cwd);
+        self.note_mode(sid, reported_mode(&r));
         Ok(())
     }
 
@@ -238,9 +255,21 @@ impl Conn {
     ) -> Result<(), Error> {
         let mut params = json!({"sessionId": sid, "cwd": cwd, "mcpServers": mcp});
         set_meta(&mut params, meta);
-        self.typed::<Value>("session/resume", params).await?;
+        let r = self.typed::<Value>("session/resume", params).await?;
         self.remember(sid, cwd);
+        self.note_mode(sid, reported_mode(&r));
         Ok(())
+    }
+
+    /// The mode session SID is in, as the agent's answer that opened it on this connection (`session/new`,
+    /// `session/load`, `session/resume` or `session/fork`) reported it; `None` when it reported none.
+    pub fn reported_mode(&self, sid: &SessionId) -> Option<String> {
+        self.shared
+            .modes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&*sid.0)
+            .cloned()
     }
 
     pub async fn close_session(&self, sid: &SessionId) -> Result<(), Error> {
@@ -251,6 +280,7 @@ impl Conn {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&*sid.0);
+        self.note_mode(sid, None);
         Ok(())
     }
 
@@ -258,6 +288,32 @@ impl Conn {
         self.typed::<Value>(
             "session/set_mode",
             json!({"sessionId": sid, "modeId": mode}),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Set the session's config option CONFIG_ID (`mode`, `model`, …) to VALUE.  An agent without the method answers
+    /// `-32601` ([`Error::Rpc`]); the caller falls back to [`Conn::set_mode`] or [`Conn::set_model`].
+    pub async fn set_config_option(
+        &self,
+        sid: &SessionId,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), Error> {
+        self.typed::<Value>(
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": config_id, "value": value}),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Switch the session's model (`session/set_model`).
+    pub async fn set_model(&self, sid: &SessionId, model: &str) -> Result<(), Error> {
+        self.typed::<Value>(
+            "session/set_model",
+            json!({"sessionId": sid, "modelId": model}),
         )
         .await
         .map(drop)
@@ -293,25 +349,36 @@ impl Conn {
         self.tx.send(line.to_string()).map_err(|_| Error::Closed)
     }
 
-    /// Fork a session, at a message when given (`_meta.jetbrains.air.fork {version: 1, messageId}`).  The new
-    /// session starts in the directory of the one it forks, which this connection must have opened.
-    pub async fn fork(&self, sid: &SessionId, at: Option<ForkPoint>) -> Result<SessionId, Error> {
-        let cwd = self
-            .shared
-            .cwds
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&*sid.0)
-            .cloned()
-            .ok_or_else(|| Error::UnknownSession(sid.0.to_string()))?;
-        let mut params = json!({"sessionId": sid, "cwd": cwd});
-        let meta = at.map(
-            |p| json!({"jetbrains": {"air": {"fork": {"version": 1, "messageId": p.message_id}}}}),
-        );
+    /// Fork F's source into a new session in F's directory, with F's tools and `_meta` (a lock's options), at a
+    /// message when given (`_meta.jetbrains.air.fork {version: 1, messageId}`, merged into F's `_meta`).  The source
+    /// need not be one this connection opened: the agent reads it from its own store.
+    pub async fn fork_into(&self, f: ForkInto) -> Result<SessionId, Error> {
+        let mut meta = f.meta;
+        if let Some(p) = f.at {
+            let point =
+                json!({"jetbrains": {"air": {"fork": {"version": 1, "messageId": p.message_id}}}});
+            merge(meta.get_or_insert_with(|| json!({})), point);
+        }
+        let mut params = json!({"sessionId": f.source, "cwd": f.cwd, "mcpServers": f.mcp});
         set_meta(&mut params, meta);
         let r: acp::ForkSessionResponse = self.typed("session/fork", params).await?;
-        self.remember(&r.session_id, &cwd);
+        self.remember(&r.session_id, &f.cwd);
+        self.note_mode(
+            &r.session_id,
+            r.modes.map(|m| m.current_mode_id.to_string()),
+        );
         Ok(r.session_id)
+    }
+
+    /// An extension request METHOD (a `_`-prefixed method the agent advertised, e.g. `_drgnx/context/drop`) with
+    /// PARAMS, answered within DEADLINE: the agent's result as it sent it, for the caller to check.
+    pub async fn ext_request(
+        &self,
+        method: &str,
+        params: Value,
+        deadline: Duration,
+    ) -> Result<Value, Error> {
+        self.call(method, params, Some(deadline)).await
     }
 
     fn remember(&self, sid: &SessionId, cwd: &Path) {
@@ -320,6 +387,35 @@ impl Conn {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(sid.0.to_string(), cwd.to_path_buf());
+    }
+
+    /// SID's reported MODE (none: forgotten, so an earlier answer's mode is never taken for this one's).
+    fn note_mode(&self, sid: &SessionId, mode: Option<String>) {
+        let mut modes = self.shared.modes.lock().unwrap_or_else(|e| e.into_inner());
+        match mode {
+            Some(m) => modes.insert(sid.0.to_string(), m),
+            None => modes.remove(&*sid.0),
+        };
+    }
+}
+
+/// `modes.currentModeId` of an answer that opened a session.
+fn reported_mode(answer: &Value) -> Option<String> {
+    answer
+        .pointer("/modes/currentModeId")
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// FROM's keys into INTO, objects merged key by key; anything else in FROM replaces what INTO has.
+fn merge(into: &mut Value, from: Value) {
+    match (into, from) {
+        (Value::Object(a), Value::Object(b)) => {
+            for (k, v) in b {
+                merge(a.entry(k).or_insert(Value::Null), v);
+            }
+        }
+        (slot, v) => *slot = v,
     }
 }
 
@@ -338,13 +434,22 @@ async fn read_loop(
     shared: Arc<Shared>,
     wtx: WeakUnboundedSender<String>,
     etx: mpsc::Sender<Event>,
+    tap: Option<Arc<dyn LineTap>>,
 ) {
     let mut codec = runstav::line::codec();
     let mut buf = BytesMut::with_capacity(8192);
+    let seen = |line: &str| {
+        if let Some(t) = &tap {
+            t.line(Dir::Out, line, std::time::Instant::now());
+        }
+    };
     loop {
         loop {
             match codec.decode(&mut buf) {
-                Ok(Some(line)) => handle(&line, &shared, &wtx, &etx).await,
+                Ok(Some(line)) => {
+                    seen(&line);
+                    handle(&line, &shared, &wtx, &etx).await;
+                }
                 Ok(None) => break,
                 Err(e) => tracing::warn!("hermod: dropped a line from the agent: {e}"),
             }
@@ -355,6 +460,7 @@ async fn read_loop(
         }
     }
     if let Ok(Some(line)) = codec.decode_eof(&mut buf) {
+        seen(&line);
         handle(&line, &shared, &wtx, &etx).await;
     }
 }
@@ -441,6 +547,11 @@ async fn handle(
                 }),
                 "fs/write_text_file" => decode_req(params).map(|r| {
                     Incoming::WriteFile(r, Responder::new(id.clone(), wtx.clone(), shared))
+                }),
+                m if m.starts_with('_') => Ok(Incoming::Ext {
+                    method: method.clone(),
+                    params,
+                    resp: Responder::new(id.clone(), wtx.clone(), shared),
                 }),
                 _ => {
                     reply_error(wtx, &id, jsonrpc::METHOD_NOT_FOUND, "method not found");

@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 25] = [
+    let rows: [(Action, [Verdict; 3]); 29] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -41,6 +41,7 @@ fn balanced_is_the_mockups_table() {
         (CodeCiConfig, [Ask, Ask, Never]),
         (Machines, [Allow, Allow, Never]),
         (JobContainer, [Allow, Allow, Never]),
+        (JobKeys, [Ask, Ask, Never]),
         (Network, [Allow, Allow, Allow]),
         (Browser, [Allow, Allow, Ask]),
         (BrowserWeb, [Ask, Ask, Ask]),
@@ -50,8 +51,11 @@ fn balanced_is_the_mockups_table() {
         (UserPrivate, [Never, Never, Never]),
         (UserEmacs, [Ask, Never, Never]),
         (ChatProjectRead, [Never, Never, Ask]),
+        (PluginAbilities, [Allow, Allow, Ask]),
+        (ChatProjectEdit, [Never, Never, Ask]),
+        (Huddles, [Allow, Allow, Allow]),
     ];
-    assert_eq!(p.cells.len(), 25 * 3);
+    assert_eq!(p.cells.len(), 29 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -101,7 +105,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 25);
+    assert_eq!(Action::ALL.len(), 29);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -111,6 +115,43 @@ fn browser_rows_per_preset() {
         [Browser.id(), BrowserWeb.id(), BrowserPrivate.id()],
         ["browser", "browser.web", "browser.private"]
     );
+}
+
+/// `chat.project-edit` (a chat edits your checkout): only the chat column ever opens, and only as the preset says:
+/// Cautious never, Balanced ask (the Pair toggle is allowed), Autonomous allow (paired from the start).  The chat's
+/// `code.edit` stays never in every preset.
+#[test]
+fn chat_project_edit_per_preset_and_column() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [
+        (Cautious, [Never, Never, Never]),
+        (Balanced, [Never, Never, Ask]),
+        (Autonomous, [Never, Never, Allow]),
+    ] {
+        let m = preset(p);
+        for (r, v) in [Role::Manager, Role::Worker, Role::Chat]
+            .into_iter()
+            .zip(want)
+        {
+            let c = m.cells[&(Action::ChatProjectEdit, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (v, None), "{p:?} {r:?}");
+            assert_eq!(
+                decide(&eff(&[&m], &who(r)), Action::ChatProjectEdit, None),
+                v
+            );
+        }
+        assert_eq!(
+            m.cells[&(Action::CodeEdit, Column::Role(Role::Chat))].verdict,
+            Never,
+            "{p:?}"
+        );
+    }
+    assert_eq!(
+        Action::from_id("chat.project-edit"),
+        Some(Action::ChatProjectEdit)
+    );
+    assert!(Action::ALL.contains(&Action::ChatProjectEdit));
 }
 
 #[test]
@@ -219,6 +260,22 @@ fn job_container_follows_the_users_call() {
     for p in [Preset::Cautious, Preset::Balanced, Preset::Autonomous] {
         assert_eq!(jc(p, Role::Chat), Verdict::Never);
     }
+}
+
+/// [D] `job.keys` (the manager's call 11): Ask in Cautious and Balanced, Allow in Autonomous, Never for chat.
+#[test]
+fn job_keys_presets_are_the_managers_call() {
+    use Verdict::*;
+    let jk = |p| {
+        let m = preset(p);
+        [Role::Manager, Role::Worker, Role::Chat]
+            .map(|r| m.cells[&(Action::JobKeys, Column::Role(r))].verdict)
+    };
+    assert_eq!(jk(Preset::Cautious), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Balanced), [Ask, Ask, Never]);
+    assert_eq!(jk(Preset::Autonomous), [Allow, Allow, Never]);
+    assert_eq!(Action::JobKeys.id(), "job.keys");
+    assert_eq!(Action::from_id("job.keys"), Some(Action::JobKeys));
 }
 
 #[test]
@@ -537,4 +594,20 @@ fn a_widening_names_the_action() {
         w.to_string(),
         format!("{} is wider than the parent allows", Action::PushMain.id())
     );
+}
+
+/// [D] Huddles: Autonomous and Balanced allow them in every column, Cautious asks (a card, nothing prompts).
+#[test]
+fn huddles_per_preset() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [(Cautious, Ask), (Balanced, Allow), (Autonomous, Allow)] {
+        let m = preset(p);
+        for r in [Role::Manager, Role::Worker, Role::Chat] {
+            let c = m.cells[&(Action::Huddles, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{p:?} {r:?}");
+            assert_eq!(decide(&eff(&[&m], &who(r)), Action::Huddles, None), want);
+        }
+    }
+    assert_eq!(Action::from_id("huddles"), Some(Action::Huddles));
 }

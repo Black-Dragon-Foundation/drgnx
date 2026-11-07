@@ -45,9 +45,11 @@ concurrency:
 # The cargo caches (docs/develop/ci.md, "What is cached"): keyed by the job, the toolchain and the hash of Cargo.lock
 # and the manifests, restored from the newest entry of the same job and toolchain when the lock moved (cargo rebuilds
 # whatever is stale); saved at the end of a job whose build passed, after .github/ci/cargo-prune.sh dropped what every
-# run rebuilds. Saved by main's runs (CACHE_SAVE), which come first. A pull request from a branch of this repository
-# saves only the two families that pay off, `linux` and `macos` (CACHE_SAVE_PR; GitHub scopes its cache to the pull
-# request's merge ref: main never restores it); the other jobs restore main's and rebuild only what changed. ci/*
+# run rebuilds. Saved only by main's runs (CACHE_SAVE), and only for `linux` (and the fuzz build the fuzz shards take):
+# the repository has 10 GB, and entries saved by pull requests (scoped to their merge refs, never read by another
+# one) pushed main's out (2026-11-06: 9.2 GB of PR 3's entries, none of main's left). A pull request restores main's;
+# the other jobs get their speed from sccache (.github/actions/sccache), which main writes and pull requests only read
+# (docs/develop/ci.md, "What is cached": the budget). ci/*
 # branches and a fork's pull requests only restore. No incremental data: CI never reuses it. Each entry carries the commit it was built from (runtime/target/.drgnx-built-from): after the
 # restore, .github/ci/commit-times.sh gives each tracked file its last commit's time and leaves what changed since
 # then new, so cargo rebuilds only that (a checkout's files all carry its time); the checkouts fetch the whole history
@@ -60,13 +62,13 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CACHE_SAVE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-  CACHE_SAVE_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
 
 jobs:
   # The Fedora 45 job's prebuilt container (`Test images`, images.yml: test/container/Containerfile.rust), by digest: a
   # job's container is named before its steps run, so this job looks it up, by the tag of this checkout's inputs
-  # (test/container/image-tag.sh). The output is empty when GHCR has no image for them (a change not yet on main), and
-  # the job then installs what the image holds itself. (The escape legs look their bubblewrap up in their own step.)
+  # (test/container/image-tag.sh). ci.yml's `images` job built and pushed any missing tag before this workflow ran; the
+  # output is empty when GHCR still has none (a fork's pull request), and the job then installs what the image holds
+  # itself. (The escape legs look their bubblewrap up in their own step.)
   images:
     name: Prebuilt image (Fedora 45 job)
     if: ${{ github.event_name != 'schedule' && (!inputs.only || contains(format(' {0} ', inputs.only), ' rt-linux ')) }}
@@ -101,15 +103,16 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg), else plain Fedora 45 and the steps install them
-    container:
-      image: ${{ needs.images.outputs.rust || 'registry.fedoraproject.org/fedora:45' }}
-      credentials:
-        username: ${{ needs.images.outputs.rust && github.actor || '' }}
-        password: ${{ needs.images.outputs.rust && github.token || '' }}
-      # a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
-      # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
-      options: --init
+    # the prebuilt image (Fedora 45 with rust-packages.sh and Nidhogg) with a token to pull it, else plain Fedora 45
+    # and the steps install them. One expression for the whole container: GitHub refuses a job whose `credentials`
+    # come out empty ("Unexpected value ''") before any step runs, so the fallback names none.
+    # --init: a real PID 1 that reaps orphans: draugr's reap tests check a killed group is gone, and an unreaped zombie
+    # still answers kill(-pgid, 0) (the same reason ctr.sh runs podman with --init)
+    container: >-
+      ${{ needs.images.outputs.rust
+      && fromJSON(format('{{"image":"{0}","options":"--init","credentials":{{"username":"{1}","password":"{2}"}}}}',
+      needs.images.outputs.rust, github.actor, github.token))
+      || fromJSON('{"image":"registry.fedoraproject.org/fedora:45","options":"--init"}') }}
     timeout-minutes: 45
     defaults:
       run:
@@ -128,6 +131,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - name: Tools (in the prebuilt image already)
         if: ${{ env.PREBUILT == '' }}
         working-directory: ${{ github.workspace }}
@@ -172,12 +176,20 @@ jobs:
         run: |
           bash .github/ci/models.sh ../test-models
           echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ../test-models
           key: ${{ steps.models.outputs.cache-primary-key }}
           enableCrossOsArchive: true
+      # the plugin tests load WASM components built for wasm32-wasip2 (Fedora's packaged Rust has no wasip2 standard
+      # library and cannot use an upstream one: wasm-target.sh installs the same rustc version with rustup-init, checked
+      # by its SHA-256, for the fixtures alone and sets DRGNX_WASM_CARGO): built first, so a missing target or a broken
+      # fixture is named here, before the tests
+      - name: wasm32-wasip2 and the plugin fixtures
+        if: ${{ !cancelled() }}
+        working-directory: ${{ github.workspace }}
+        run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run. The GPU tests run the real shaders on llvmpipe, Mesa's
       # software Vulkan driver (rust-packages.sh installs it), so they need no GPU
       - if: ${{ !cancelled() }}
@@ -271,7 +283,7 @@ jobs:
           if-no-files-found: error
       # last, whatever the tests said: a red test keeps the dependencies the build made
       - id: prune
-        if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         working-directory: ${{ github.workspace }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
@@ -305,6 +317,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - id: registry
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -333,11 +346,6 @@ jobs:
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
           # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
           if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
       # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
       # main's) is not saved again
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
@@ -380,6 +388,7 @@ jobs:
       # by digest), else built here (build.sh, the image's own recipe: checksum verified, from source). /usr/bin:
       # Gleipnir trusts a bwrap only where root alone can change it, and the runner image makes /usr/local
       # group-writable (Gleipnir rightly refuses /usr/local/bin/bwrap)
+      - uses: ./.github/actions/sccache
       - name: bubblewrap 0.12.0 (prebuilt, or built from source)
         env:
           ARCH: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
@@ -463,11 +472,39 @@ jobs:
       # on the full tier (tests/launch_sandboxed.rs), which needs bubblewrap 0.12 only. --no-fail-fast: every test
       # binary's failures in one run. The crate's timing rows (#[ignore = "timing: …"], test/timing-rust.txt) are
       # ignored too, but they are the timing lane's: a debug build on a shared runner judges no budget, so they are skipped.
+      # The agent browser's rows (tests/browser_sandboxed.rs) need Landlock ABI 9 on both tiers, which these runners'
+      # Linux 7.0 lacks (ABI 8): they run in the Fedora 45 VM of the next step instead (x64 only), by the names their
+      # binary lists.
       - name: agent core, sandbox lane (--ignored)
         if: ${{ !cancelled() && steps.core-build.outcome == 'success' }}
         run: |
           skips=$(sed 's/#.*//' test/timing-rust.txt | awk '$1 == "drgnx-ratatoskr" { printf " --skip %s", $3 }')
+          vm=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed -- --list --format terse --ignored | sed -n 's/: test$//p')
+          [ -n "$vm" ] || { echo "browser_sandboxed lists no rows" >&2; exit 1; }
+          skips="$skips$(printf '%s\n' "$vm" | awk '{ printf " --skip %s", $1 }')"
           cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks -- --ignored --test-threads 1 $skips
+      # The agent browser's rows where they can run: a Fedora 45 VM on the x64 runners (Linux 7.1 or later, Landlock ABI 9
+      # or later, as the Fedora hosts drgnx supports have), booted under QEMU with KVM by .github/ci/browser-vm.sh, with
+      # this job's bubblewrap and the binaries copied in at their own paths (the test binary names its data and the hub by
+      # their absolute paths). docs/develop/ci.md, "The browser rows in a VM"
+      - name: the agent browser's rows in a Fedora 45 VM (Landlock ABI 9)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'X64' }}
+        run: |
+          bin=$(cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features drgnx-ratatoskr/test-hooks --test browser_sandboxed --no-run --message-format=json | jq -r 'select(.reason == "compiler-artifact" and .executable != null and .target.name == "browser_sandboxed" and (.target.kind | index("test"))) | .executable')
+          # the build also reports the ratatoskr bin (the test depends on it): exactly one path must be the test binary
+          [ -n "$bin" ] && [ "$(printf '%s\n' "$bin" | wc -l)" = 1 ] || { echo "expected one browser_sandboxed test binary, got: ${bin:-none}" >&2; exit 1; }
+          t=$PWD/runtime/target/debug
+          bash .github/ci/browser-vm.sh up "$RUNNER_TEMP/vm"
+          bash .github/ci/browser-vm.sh put "$RUNNER_TEMP/vm" /usr/bin/bwrap "$t/ratatoskr" "$t/gleipnir-probe" "$t/ratatoskr-mock" \
+            "$PWD/runtime/crates/drgnx-ratatoskr/tests/data" "$bin"
+          bash .github/ci/browser-vm.sh run "$RUNNER_TEMP/vm" "cd '$PWD/runtime' && '$bin' --ignored --test-threads 1"
+      # The arm runners have no KVM, and an emulated guest never answered within 20 minutes. The rows' only arm64-specific
+      # part, the browser host's seccomp filter, is installed for real by gleipnir's own tests above
+      # (`installed_filter_denies`, its `browser-` cases); the rest is the same code as on x64, whose VM runs it.
+      - name: the agent browser's rows skip on arm64 (Landlock ABI 8 here; they run in the x64 legs' VM)
+        if: ${{ !cancelled() && steps.core-build.outcome == 'success' && runner.arch == 'ARM64' }}
+        run: |
+          echo "::notice title=browser rows skipped::the arm runners have no KVM for the Fedora 45 VM and boot Linux $(uname -r), whose Landlock ABI the browser's rows need at 9 or later: tests/browser_sandboxed.rs runs in the x64 legs' VM"
       # The real-start rows (docs/develop/runtime.md, "The real-start rows"): a release hub, no test hooks, so each
       # agents/start goes through the real launch, Gleipnir's validation and bwrap. --require-all: a row that cannot
       # start sandboxed fails here; the browser row is an excused skip on this runner (no Chromium, and a Landlock ABI
@@ -486,11 +523,6 @@ jobs:
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
           # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
           if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
       # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
       # main's) is not saved again
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
@@ -516,6 +548,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: podman --version
       - run: rustup toolchain install stable --profile minimal
       - id: rv
@@ -592,11 +625,6 @@ jobs:
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
           # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
           if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
       # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
       # main's) is not saved again
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
@@ -623,6 +651,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: podman --version
       - run: rustup toolchain install stable --profile minimal
       - name: runners up
@@ -652,6 +681,7 @@ jobs:
           fetch-depth: 0          # the whole history, for commit-times.sh
           filter: blob:none       # without old file contents
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: rustup target add aarch64-linux-android
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
@@ -688,11 +718,6 @@ jobs:
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
           # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
           if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
       # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
       # main's) is not saved again
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}
@@ -742,6 +767,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/sccache
       - run: rustup toolchain install "$NIGHTLY" --profile minimal
       # the key names the nightly and the cargo-fuzz version (the step below), so a bump is a new cache
       - id: cache
@@ -895,6 +921,7 @@ jobs:
           filter: blob:none       # without old file contents
           persist-credentials: false
       # the image's rustup (as the Linux runner jobs), not Homebrew's rust: no formula download and install per run
+      - uses: ./.github/actions/sccache
       - run: rustup toolchain install stable --profile minimal --component clippy
       - id: rv
         run: echo "v=$(rustc -V | tr -cs 'A-Za-z0-9.' '-')" >> "$GITHUB_OUTPUT"
@@ -934,15 +961,30 @@ jobs:
         run: |
           /bin/bash .github/ci/models.sh ../test-models
           echo "DRGNX_TEST_MODELS=$(cd ../test-models && pwd)" >> "$GITHUB_ENV"
-      - if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
+      - if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.models.outputs.cache-hit != 'true' && steps.models-fetch.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ../test-models
           key: ${{ steps.models.outputs.cache-primary-key }}
           enableCrossOsArchive: true
+      # the plugin tests load WASM components built for wasm32-wasip2: the target, then the fixtures, before the tests
+      - name: wasm32-wasip2 and the plugin fixtures
+        run: bash .github/ci/wasm-target.sh
       # --no-fail-fast: every crate's failures in one run (no Mac to try them on before CI). No GPU adapter is named: the
       # GPU tests are ignored on macOS (the runner has no GPU; Metal parity is a real Mac's)
       - run: cargo test --locked --no-fail-fast --manifest-path runtime/Cargo.toml --workspace --features drgnx-ratatoskr/test-hooks
+      # The hub on a Mac: the runner rows of tests/macos.rs ran above with the workspace; this is the one that needs a
+      # real sshd. Remote Login on with a throwaway key (.github/ci/macos-sshd.sh), then the generated ssh config and
+      # the transport against it. The key's folder is removed with the step, whatever it said.
+      - name: the generated ssh config against a localhost sshd
+        if: ${{ !cancelled() }}
+        env:
+          SSHD_DIR: ${{ runner.temp }}/drgnx-sshd
+        run: |
+          trap 'bash .github/ci/macos-sshd.sh down "$SSHD_DIR"; rm -rf "$SSHD_DIR"' EXIT
+          DRGNX_TEST_SSHD_HOST=$(bash .github/ci/macos-sshd.sh up "$SSHD_DIR" | tail -n 1)
+          export DRGNX_TEST_SSHD_HOST
+          cargo test --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr --features test-hooks --test macos -- --ignored
       # (+ gleipnir-probe and gleipnir-escape for the Seatbelt rows below). The workspace tests above already run
       # `eitri` and `draugr` on macOS (their O_NOFOLLOW_ANY, xcode-select-link and CLOEXEC-loop paths).
       - id: build
@@ -1026,17 +1068,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --manifest-path runtime/Cargo.toml --all-targets -p runstav -p draugr -p eitri -p gleipnir -p mimir -p bifrost -p huginn -p heimdall -- -D warnings
       - id: prune
-        if: ${{ !cancelled() && (env.CACHE_SAVE == 'true' || env.CACHE_SAVE_PR == 'true') && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && env.CACHE_SAVE == 'true' && steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success' }}
         run: |
           bash .github/ci/cargo-prune.sh runtime/Cargo.toml runtime/target
           # the commit it was built from, only when every step before passed: after a step that failed some outputs
           # may be older than the sources, so the commit restored stays (or none: the next run rebuilds everything)
           if [ "${{ job.status }}" = success ]; then git -c safe.directory="$PWD" rev-parse HEAD > runtime/target/.drgnx-built-from; fi
-      - if: ${{ !cancelled() && steps.prune.outcome == 'success' }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: runtime/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
       # the registry once per lock and OS, for every job: one already there (main's, for a pull request whose lock is
       # main's) is not saved again
       - if: ${{ !cancelled() && steps.prune.outcome == 'success' && steps.registry.outputs.cache-hit != 'true' }}

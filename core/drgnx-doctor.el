@@ -74,6 +74,7 @@ PLATFORM (`linux' or `macos'): only run on that platform, as `drgnx-platform' sa
     (error (error-message-string err))))
 
 (declare-function drgnx-pkg-status "drgnx-pkg")
+(declare-function drgnx-pkg-gpg-facts "drgnx-pkg")
 (declare-function drgnx-pkg-service-unit-file "drgnx-pkg")
 (declare-function drgnx-pkg--unit-exec-start "drgnx-pkg")
 (declare-function drgnx-file-read-bounded "drgnx-file")
@@ -482,8 +483,13 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :onboarding (drgnx-doctor--state-file "onboarding.eld")
            :packages (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-status))
                        (error (list :error (error-message-string err))))
+           :packages-gpg (condition-case err (progn (require 'drgnx-pkg) (drgnx-pkg-gpg-facts))
+                           (error (list :error (error-message-string err))))
+           :package-modes-off (drgnx-doctor--package-modes-off)
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
+           :font-fallbacks (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
+           :agent-colours (and (fboundp 'drgnx-agent-identity-colour-count) (drgnx-agent-identity-colour-count))
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)
            :search (drgnx-doctor--search)
@@ -681,6 +687,23 @@ severity, the fix the first `:fix'."
                      :check (lambda (f)
                               (if-let* ((g (plist-get f :gui))) (list 'ok (format "graphical build (%s)" g) nil)
                                 (list 'ok "terminal-only Emacs: drgnx runs in terminals (no images, one font size)" nil))))
+
+(drgnx-doctor-define 'fonts :group "Emacs" :doc "The look's font families are installed (a missing one falls back down its list)"
+                     :check (lambda (f)
+                              (when-let* ((r (plist-get f :font-fallbacks)))
+                                (if-let* ((entries (plist-get r :fallbacks)))
+                                    (list 'warn
+                                          (mapconcat (lambda (e)
+                                                       (format "%s: %s is not installed, %s" (nth 0 e) (nth 1 e)
+                                                               (if (nth 2 e) (format "using %s" (nth 2 e)) "no fallback found")))
+                                                     entries "; ")
+                                          (or (plist-get r :fix) "install the font families the look names (docs/guide/install.md, \"Fonts\")"))
+                                  (list 'ok "every font role has its family" nil)))))
+
+(drgnx-doctor-define 'agent-colours :group "Emacs" :doc "How many colours the active theme gives agents (6 to 12; marks tell the rest apart)"
+                     :check (lambda (f)
+                              (when-let* ((n (plist-get f :agent-colours)))
+                                (list 'ok (format "%d agent colours, %d agents told apart by colour and mark" n (* 6 n)) nil))))
 
 (defun drgnx-doctor--security-issues (version &optional nidhogg)
   "The `drgnx-doctor-security-issues' that apply to Emacs VERSION, as \"ID\" or \"ID (partly fixed here)\" strings.
@@ -1022,6 +1045,34 @@ server, as abbreviated names (the readers of `drgnx-agent-config-read'; a kind t
                      :doc "The work store (work.db): its schema, WAL size, nightly backups, opt-in file and old copies"
                      :check (lambda (f) (drgnx-doctor--store-check f)))
 
+;; The edit history (history.db, verdandi): the nightly copies of each project's history, from the `store' section.
+(defun drgnx-doctor--history-check (f)
+  "The `history' check of the fact F: the newest nightly copy of the edit histories (a failed copy warns in `store')."
+  (let* ((store (plist-get (plist-get (plist-get f :ratatoskr) :report) :store))
+         (h (plist-get store :history))
+         (copies (or (plist-get h :copies) 0))
+         (age (plist-get h :newest_age_s))
+         (sizes (mapconcat
+                 (lambda (row)
+                   (let ((pin (aref (or (plist-get row :pins) [nil]) 0)))
+                     (format "%s %d MiB of %d MiB%s" (plist-get row :project)
+                             (/ (or (plist-get row :size) 0) 1048576) (/ (or (plist-get row :cap) 0) 1048576)
+                             (if pin (format ", pinned by %s" (plist-get pin :name)) ""))))
+                 (plist-get store :history_size) "; "))
+         (warnings (append (plist-get store :history_warnings) nil)))
+    (cond
+     ((null store) (list 'ok "no work.db yet, or no answer from the hub" nil))
+     (warnings (list 'warn (mapconcat #'identity warnings "; ") "Pin less, drop old forks and worktrees, or let the 90-day expiry run"))
+     ((zerop copies) (list 'ok "no copy of an edit history yet (the nightly backup makes one per project)" nil))
+     (t (list 'ok (format "%d project cop%s, newest %s ago%s" copies (if (= copies 1) "y" "ies")
+                          (if age (format "%d h" (/ age 3600)) "?")
+                          (if (string-empty-p sizes) "" (concat "; " sizes)))
+              nil)))))
+
+(drgnx-doctor-define 'history :group "Agents"
+                     :doc "The edit history (history.db): its nightly copies, one per project, beside work.db's"
+                     :check (lambda (f) (drgnx-doctor--history-check f)))
+
 ;; The agent browser: the `browser' section of `ratatoskr doctor --json' (what a session would get, the tier and Landlock
 ;; ABI, the web proxy's refusals judged in-process, the memory cap, the last cached smoke check).
 (defun drgnx-doctor--agent-browser-check (f)
@@ -1083,6 +1134,41 @@ a last check that failed; otherwise `ok', with the last check's start time and p
                                       (t (list 'ok (format "%d packages installed, locked; %d generations"
                                                            (length (plist-get p :installed)) (or (plist-get p :generations) 0))
                                                nil))))))
+
+(defvar drgnx-pkg--gpg-needed)
+(defvar drgnx-pkg--gpg-fix)
+
+(drgnx-doctor-define 'packages-gpg :group "drgnx"
+                     :doc "gpg is there to check the signatures of the archives that sign (GNU and NonGNU ELPA)"
+                     :check (lambda (f)
+                              (let ((g (plist-get f :packages-gpg)))
+                                (cond ((plist-get g :error)
+                                       (list 'warn (plist-get g :error) "fix packages.eld; drgnx sync says the same"))
+                                      ((null (plist-get g :signed)) (list 'ok "no archive in use signs its packages" nil))
+                                      ((null (plist-get g :gpg))
+                                       (list 'fail (format "%s (%s sign; no gpg program found)" drgnx-pkg--gpg-needed
+                                                           (string-join (plist-get g :signed) ", "))
+                                             drgnx-pkg--gpg-fix))
+                                      (t (list 'ok (format "%s checks the signatures of %s" (plist-get g :gpg)
+                                                           (string-join (plist-get g :signed) ", "))
+                                               nil))))))
+
+(declare-function drgnx-extensions-project-misses "drgnx-extensions-project" ())
+
+(defun drgnx-doctor--package-modes-off ()
+  "The open buffers where a package's mode is on though the package is off in their project: ((BUFFER PKG MODE)…),
+or nil (also when per-project packages are not loaded, as in `drgnx doctor' from the shell)."
+  (and (fboundp 'drgnx-extensions-project-misses) (ignore-errors (drgnx-extensions-project-misses))))
+
+(drgnx-doctor-define 'package-modes-off :group "drgnx"
+                     :doc "A package off in a project has its modes off in that project's open files"
+                     :check (lambda (f)
+                              (if-let* ((misses (plist-get f :package-modes-off)))
+                                  (list 'warn (mapconcat (lambda (m) (format "%s on in %s (%s is off in its project)"
+                                                                             (nth 2 m) (nth 0 m) (nth 1 m)))
+                                                         misses "; ")
+                                        "M-x normal-mode in that buffer, or reopen it")
+                                (list 'ok "no package mode is on where its package is off" nil))))
 
 (drgnx-doctor-define 'onboarding :group "drgnx" :doc "The onboarding steps (drgnx onboard, Help → Welcome)"
                      :check (lambda (f)

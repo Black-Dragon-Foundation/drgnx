@@ -20,7 +20,7 @@ pub const PROTO_MIN: u32 = 1;
 /// The records layout: 2 is JSON (design 4.5).
 pub const RECORDS: u32 = 2;
 /// The work.db schema this code knows (the hub makes it, or migrates an older file to it at start).
-pub const SCHEMA: u32 = 10;
+pub const SCHEMA: u32 = 12;
 
 /// What a connection proved (design 4.2): `user` a valid `hello` proof, `agent` the agent socket it came in on,
 /// `service` nothing.
@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 142, "{names:?}");
+        assert_eq!(names.len(), 199, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -379,13 +379,17 @@ mod tests {
             .map(|m| m.name)
             .collect();
         let mut want = vec![
+            "agents/config",
             "agents/do",
+            "agents/huddle/start",
             "agents/kill",
             "agents/pause",
             "agents/permission",
             "agents/send",
             "agents/start",
             "agents/stop",
+            "agents/wheel/give",
+            "agents/wheel/take",
         ];
         want.extend(FRONT_WRITES);
         want.extend(CORE_WRITES);
@@ -399,6 +403,26 @@ mod tests {
             "runners/remove",
             "runners/set",
             "runners/unbench",
+        ]);
+        // say's: a planning session, the proposal it writes, its end
+        want.extend(["say/end", "say/revise", "say/start"]);
+        // the plugins': an approval and a switch-off change what the hub may run
+        want.extend(["plugins/approve", "plugins/disable"]);
+        // the edit history's: the editor's buffers, as the user's operations
+        want.extend([
+            "history/batch",
+            "history/register",
+            "history/resync",
+            "history/unregister",
+        ]);
+        // a revert to here: the files, the steps, the conversation and a commit; and one hunk of a record
+        want.extend(["history/revert/apply", "history/revert/hunk"]);
+        // a fork from here, its drop, and the text taken across or redone
+        want.extend([
+            "history/fork",
+            "history/fork/drop",
+            "history/redo",
+            "history/take",
         ]);
         want.extend(
             registry()
@@ -651,7 +675,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 101);
+        assert_eq!(with, 151);
     }
 
     #[test]

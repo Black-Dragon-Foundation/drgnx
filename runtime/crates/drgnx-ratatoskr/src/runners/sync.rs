@@ -3,7 +3,8 @@
 //!
 //! - [`freeze`]: the commit, its tree, the overlay manifest and the declared extras (`sleipnir::sync::capture`), with
 //!   every overlay file's bytes copied into the hub's blob store, so later edits never change what the job runs.
-//! - [`job_trust`]: `public` only for a public project whose commit the public origin's refs reach (H7).
+//! - [`job_trust`]: `public` only for a public project whose commit the public origin's refs reach (a commit not
+//!   pushed yet keeps the job `private`).
 //! - [`plan`]: an origin fetch, a resumable bundle, a push, or never, by the job's trust, the runner's and the gap.
 //! - [`overlay_for`]: what of the overlay a runner gets: never the lock's protected files; for a `shared` runner only
 //!   with `drgnx-runners-shared-overlay` on and every file passing the secret scan.

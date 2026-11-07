@@ -162,10 +162,21 @@ impl Link {
 
 /// `serve` in ROOT on RUNNER over one `ssh`: its stdin and stdout are the control channel.
 fn serve(runner: &str, root: &str, prefix: &str, hub: &str) -> (Channels, tokio::process::Child) {
+    serve_with(runner, root, prefix, hub, "")
+}
+
+/// [`serve`] with EXTRA options after the usual ones.
+fn serve_with(
+    runner: &str,
+    root: &str,
+    prefix: &str,
+    hub: &str,
+    extra: &str,
+) -> (Channels, tokio::process::Child) {
     let mut child = tokio::process::Command::new("ssh")
             .args(["-F", &ssh_config(), "-o", "BatchMode=yes", runner])
             .arg(format!(
-                "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated"
+                "{root}/bin/test/sleipnir serve --root {root} --prefix {prefix} --hub-id {hub} --profile dedicated {extra}"
             ))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -528,6 +539,7 @@ mod queue {
                         id,
                         attempt,
                         result,
+                        ..
                     } if id == "xheavy" => Some((*attempt, result.clone())),
                     _ => None,
                 })
@@ -547,6 +559,180 @@ mod queue {
         );
         let log = std::fs::read_to_string(dir.path().join("xheavy/log")).unwrap_or_default();
         assert!(log.contains("heavy"), "{log}");
+    }
+}
+
+mod drill {
+    use super::*;
+    use drgnx_ratatoskr::runners::queue::{ROWS, Suite};
+
+    /// [`drive`], with a lost link handed to the queue as the hub's own loop does.
+    async fn drive_through_losses<T>(
+        q: &Queue,
+        events: &mut UnboundedReceiver<LinkEvent>,
+        outcomes: &mut Vec<Outcome>,
+        what: &str,
+        mut check: impl FnMut(&[Outcome]) -> Option<T>,
+    ) -> T {
+        skuld::wait_until_async(what, WAIT, || {
+            while let Ok(ev) = events.try_recv() {
+                outcomes.extend(q.on_link(ev, now()));
+            }
+            outcomes.extend(q.tick(now()).outcomes);
+            std::future::ready(check(outcomes))
+        })
+        .await
+    }
+
+    /// [C] A job of 240 rows (plist lines; a row runs when the selector the hub puts in its command picks it) runs on
+    /// r1, a runner with no grace. It parks after row 150; once the hub's copy of its log shows that row, the link is
+    /// cut. The hub takes rows 1–150 from its copy and requeues the job, and attempt 2 runs only rows 151–240, on r2.
+    /// When r1 is back its late attempt 1 is stopped, so no row runs to its end twice. The result counts all 240 rows
+    /// and says how they split.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_dropped_link_at_row_150_of_240_reruns_only_the_rest() {
+        let (prefix, hub) = ("fldrill", "hubdrill");
+        let (root1, root2) = (root("r1", "fl-drill"), root("r2", "fl-drill"));
+        let img = image("r1");
+        assert_eq!(image("r2"), img, "both runners hold the same base image");
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events) = Queue::new(QueueCfg {
+            hub_id: hub.into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        q.adopt("xbusy", Priority::P1, now());
+        let runner = |name: &str, grace_s: u64| RemoteRunner {
+            name: name.into(),
+            trust: forseti::RunnerTrust::Mine,
+            accept: forseti::Accept::All,
+            grace_s,
+            image: Some(img.clone()),
+        };
+        let (channels, mut child1) = serve("r1", &root1, prefix, hub);
+        q.add_runner(
+            runner("r1", 0),
+            Session::start("r1", channels, q.route(), q.link_events()),
+        );
+        let script = format!(
+            "sel='{ROWS}'; for i in $(seq 1 240); do printf 't%s\\n' $i | grep -q -- \"$sel\" || continue; \
+             echo \"(:name \\\"t$i\\\" :verdict pass)\"; \
+             if [ $i = 150 ]; then mkfifo /tmp/gate; read x < /tmp/gate; fi; done"
+        );
+        let mut s = spec(&script);
+        s.weight = Weight::Heavy;
+        q.submit(
+            Submit {
+                id: "xdrill".into(),
+                session: Some("s1".into()),
+                own: Priority::P3,
+                spec: s,
+                place: Placement {
+                    heavy: true,
+                    send: SendMode::Heavy,
+                    image: Some(img.clone()),
+                    suite: Some(Suite {
+                        parser: "plist".into(),
+                        listed: (1..=240).map(|i| format!("t{i}")).collect(),
+                    }),
+                    ..Placement::default()
+                },
+                pending: serde_json::Value::Null,
+                inputs: None,
+            },
+            now(),
+        );
+        let mut outcomes = vec![];
+        let log = dir.path().join("xdrill/log");
+        drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "row 150 in the hub's copy of the log",
+            |_, _| {
+                std::fs::read_to_string(&log)
+                    .ok()
+                    .filter(|l| l.contains("\"t150\""))
+                    .map(|_| ())
+            },
+        )
+        .await;
+        let (channels, _child2) = serve("r2", &root2, prefix, hub);
+        q.add_runner(
+            runner("r2", 600),
+            Session::start("r2", channels, q.route(), q.link_events()),
+        );
+        // the cut: r1's link is lost, and with no grace attempt 1 ends at once
+        let _ = child1.kill().await;
+        let (attempt, result) =
+            drive_through_losses(&q, &mut events, &mut outcomes, "attempt 2's result", |o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Done {
+                        id,
+                        attempt,
+                        result,
+                        ..
+                    } if id == "xdrill" => Some((*attempt, result.clone())),
+                    _ => None,
+                })
+            })
+            .await;
+        assert_eq!(
+            (attempt, &result["verdict"]),
+            (2, &json!("Pass")),
+            "{result}"
+        );
+        assert_eq!(
+            result["counts"],
+            json!({"ran": 240, "passed": 240, "failed": 0, "skipped": 0, "crashed": 0})
+        );
+        assert_eq!(
+            result["split"],
+            "rows 1–150 on r1 (attempt 1), 151–240 on r2 (attempt 2)"
+        );
+        let rows = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|l| l.starts_with("(:name"))
+                .map(String::from)
+                .collect()
+        };
+        let first = rows(&std::fs::read_to_string(dir.path().join("xdrill/log.1")).unwrap());
+        let second = rows(&std::fs::read_to_string(&log).unwrap());
+        assert_eq!(first.len(), 150, "{first:?}");
+        assert_eq!(
+            second.len(),
+            90,
+            "attempt 2 reran only the rest: {second:?}"
+        );
+        assert!(second[0].contains("\"t151\"") && second[89].contains("\"t240\""));
+        // r1 is back: its attempt 1, late, is stopped where it parked
+        let (channels, _child1) = serve("r1", &root1, prefix, hub);
+        assert!(q.set_session(
+            "r1",
+            Session::start("r1", channels, q.route(), q.link_events())
+        ));
+        let late = drive_through_losses(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "attempt 1's late result",
+            |o| {
+                o.iter().find_map(|o| match o {
+                    Outcome::Late {
+                        id,
+                        attempt: 1,
+                        result,
+                    } if id == "xdrill" => Some(result.clone()),
+                    _ => None,
+                })
+            },
+        )
+        .await;
+        assert_eq!(late["verdict"], "Cancelled", "{late}");
+        let late_rows = late["rows"].as_array().map_or(0, Vec::len);
+        assert!(late_rows <= 150, "attempt 1 ran on past row 150: {late}");
     }
 }
 
@@ -654,5 +840,155 @@ mod link {
         b.send(Frame::Bye { why: "test".into() });
         b.next("bye", |e| matches!(e, LinkEvent::Bye { .. }).then_some(()))
             .await;
+    }
+}
+
+mod watchdog {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// `POST /__mock/NAME` with BODY to the fleet's mock cloud (`fleet.sh up --cloud`).
+    fn knob(name: &str, body: &str) {
+        let base = std::env::var("DRGNX_TEST_CLOUD_ENDPOINT_AWS")
+            .expect("a fleet up with --cloud: fleet.sh test passes the mock's endpoint");
+        let addr = base.trim_start_matches("http://").trim_end_matches('/');
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        let req = format!(
+            "POST /__mock/{name} HTTP/1.1\r\nHost: mock\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.1 200"), "{name}: {out}");
+    }
+
+    /// [C] r1 plays a spot machine (`fleet.sh up --runners 1 --cloud MOCK`): its watchdog reads the mock's IMDSv2 for a
+    /// seeded instance, and `serve` runs with `--watchdog`. A job parks there; the mock posts a spot notice. The watchdog
+    /// sees it and tells `serve`, which sends `preempting`: the hub requeues the attempt at once (the job still runs on
+    /// r1, so this is no job end and no 600 s grace), with no strike and no verdict, and offers r1 nothing more. The
+    /// watchdog's clock is a file, so none of its own limits comes due.
+    #[tokio::test]
+    #[ignore = "fleet"]
+    async fn a_spot_notice_requeues_at_once_with_no_strike() {
+        let (r1, prefix, hub) = ("r1", "flspot", "hubspot");
+        let root = root(r1, "fl-spot");
+        let img = image(r1);
+        let endpoint = std::env::var("DRGNX_TEST_CLOUD_ENDPOINT_AWS")
+            .expect("a fleet up with --cloud: fleet.sh test passes the mock's endpoint");
+        let id = format!("i-spot{}", std::process::id());
+        knob("seed", &format!(r#"{{"provider": "aws", "id": "{id}"}}"#));
+        let wd = format!("{root}/watchdog");
+        sh(
+            r1,
+            &format!(
+                "mkdir -p {wd} && printf 1000 > {wd}/clock && systemd-run --user --collect --unit={prefix}-watchdog \
+                 {root}/bin/test/sleipnir watchdog --provider aws --idle 900 --lifetime 28800 --unattended 7200 \
+                 --root {root} --dir {wd} --clock-file {wd}/clock --poweroff-cmd /bin/true \
+                 --metadata-url {endpoint}__metadata/{id}"
+            ),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let (q, mut events) = Queue::new(QueueCfg {
+            hub_id: hub.into(),
+            exec_root: dir.path().to_path_buf(),
+            local: LocalRunner::new(Admission::Fixed(1), dir.path()),
+            db: None,
+        });
+        // this machine's one slot is taken, so the requeued job has nowhere to go
+        q.adopt("xbusy", Priority::P1, now());
+        let (channels, _child) = serve_with(r1, &root, prefix, hub, &format!("--watchdog {wd}"));
+        let session = Session::start(r1, channels, q.route(), q.link_events());
+        q.add_runner(
+            RemoteRunner {
+                name: r1.into(),
+                trust: forseti::RunnerTrust::Mine,
+                accept: forseti::Accept::All,
+                grace_s: 600,
+                image: Some(img.clone()),
+            },
+            session,
+        );
+        let mut job = heavy_job("xspot", Some(&img));
+        job.spec.command = vec![
+            "sh".into(),
+            "-c".into(),
+            "echo started; mkfifo /tmp/gate; read x < /tmp/gate".into(),
+        ];
+        q.submit(job, now());
+        let mut outcomes = vec![];
+        let log = dir.path().join("xspot/log");
+        drive(
+            &q,
+            &mut events,
+            &mut outcomes,
+            "the job running on r1",
+            |q, _| {
+                let on_r1 = q.row("xspot")?.machine.as_deref() == Some("r1");
+                let started = std::fs::read(&log).is_ok_and(|l| l.ends_with(b"started\n"));
+                (on_r1 && started).then_some(())
+            },
+        )
+        .await;
+
+        knob("spot-notice", &format!(r#"{{"id": "{id}", "in_s": 0}}"#));
+        // the requeue's reason shows until the next tick says why the job waits now, so each event is looked at as
+        // it is taken in, before any tick
+        let row = skuld::wait_until_async("the attempt requeued for the preemption", WAIT, || {
+            let mut got = None;
+            while got.is_none()
+                && let Ok(ev) = events.try_recv()
+            {
+                if let LinkEvent::Lost { why, .. } = &ev {
+                    panic!("the link was lost waiting for the requeue: {why}");
+                }
+                outcomes.extend(q.on_link(ev, now()));
+                got = q
+                    .row("xspot")
+                    .filter(|r| r.waiting.as_deref().is_some_and(|w| w.contains("requeued")));
+            }
+            if got.is_none() {
+                outcomes.extend(q.tick(now()).outcomes);
+            }
+            std::future::ready(got)
+        })
+        .await;
+        assert_eq!(
+            row.waiting.as_deref(),
+            Some("requeued (infra: preempted)"),
+            "{row:?}"
+        );
+        assert_eq!(row.machine, None, "{row:?}");
+        let runner = q.runner("r1").expect("r1");
+        assert_eq!(
+            (
+                runner.state.as_str(),
+                runner.strikes,
+                runner.last.as_deref()
+            ),
+            ("preempting", 0, None),
+            "a preemption is no strike: {runner:?}"
+        );
+        assert!(
+            !outcomes
+                .iter()
+                .any(|o| matches!(o, Outcome::Done { id, .. } if id == "xspot")),
+            "a preemption is no verdict: {outcomes:?}"
+        );
+        // the job itself still ran: the requeue came from the notice, not from its end
+        let running = sh(
+            r1,
+            &format!("podman ps --filter label=drgnx.runner={hub} --format '{{{{.Names}}}}'"),
+        );
+        assert!(!running.is_empty(), "the job's container ended");
+        let seen = sh(r1, &format!("cat {wd}/preempting"));
+        assert!(!seen.is_empty(), "the watchdog's notice");
+        sh(
+            r1,
+            &format!(
+                "systemctl --user stop {prefix}-watchdog; podman rm -f $(podman ps -q --filter label=drgnx.runner={hub}) \
+                 >/dev/null 2>&1; true"
+            ),
+        );
     }
 }

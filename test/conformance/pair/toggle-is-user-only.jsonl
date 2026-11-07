@@ -1,0 +1,24 @@
+{"scenario": "pair/toggle-is-user-only", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under Balanced a chat starts unpaired and only the user turns pair on (agents/pair is user-class: from an agent's socket it is not-allowed). Where chat.project-edit is never (here a cell of the agent's column), turning it on is refused with the reason, and the chat stays unpaired."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project && echo readme > $ROOT/project/README"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset balanced :cells ((:action chat.project-edit :column (:agent \"mock-never\") :verdict never)))) (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")) (\"mock-never\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid"}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"session": {"id": "$sid", "paired": false}}}}
+{"do": "send", "conn": "a", "json": {"id": 1, "method": "agents/pair", "params": {"id": "$sid", "on": true}}}
+{"do": "expect", "conn": "a", "json": {"id": 1, "error": {"code": "not-allowed"}}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/pair", "params": {"id": "$sid", "on": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "agents/get", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"session": {"id": "$sid", "paired": true}}}}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/start", "params": {"profile": "mock-never", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$capture:never"}}}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/pair", "params": {"id": "$never", "on": true}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "error": {"code": "not-allowed", "message": "pair mode is not allowed for this chat: the matrix's chat.project-edit is never for it"}}}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "agents/get", "params": {"id": "$never"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"session": {"id": "$never", "paired": false}}}}

@@ -8,6 +8,9 @@
 ;; an SVG tile at 128, 192 and 256 px, of recolouring an edge, of refacing 40 card rows plus 4 tiles.  The cost rows
 ;; message their numbers (`S1 ...') and assert only that a measurement happened, so a slow machine cannot fail
 ;; them.  Run on the native shell at scales 1 and 2 (DRGNX_UI_SCALE).
+;; The motion rows drive the map's side of Glitnir's layout leg against the real presenter, which announces that it
+;; holds the old picture (`glitnir-layout-captured-p'): a layout the user asks for moves, one whose picture is not
+;; held jumps, reduced motion asks for nothing, a live arrival never moves the map, and keys stay fast during a leg.
 
 (require 'ert)
 (require 'cl-lib)
@@ -22,6 +25,10 @@
 (add-to-list 'load-path (expand-file-name "modules/ui" drgnx-work-gui--repo))
 (require 'drgnx)
 (require 'drgnx-decor)
+(require 'drgnx-work-client)
+(load (expand-file-name "test/fixtures/work-space-fixture" drgnx-work-gui--repo) nil t)
+(load (expand-file-name "test/fixtures/modules-fixture" drgnx-work-gui--repo) nil t)
+(load (expand-file-name "test/fixtures/wait-fixture" drgnx-work-gui--repo) nil t)
 
 (defconst drgnx-work-gui--ink "#ff00ff" "A colour no card or background draws, for the pixel probe.")
 
@@ -267,5 +274,407 @@ full-width band (the first draft) for comparison; size in device pixels at the d
             (push (drgnx-work-gui--ms t0) times)))
         (drgnx-work-gui--log "S1reface 40 rows + 4 tiles ms med=%.2f p95=%.2f" (drgnx-work-gui--med times) (drgnx-work-gui--p95 times))
         (should (= (length times) drgnx-work-gui--iters))))))
+
+;;;; Motion: the map's side of the layout leg
+
+(defvar drgnx-view)
+(defvar drgnx-work-space--view)
+(defvar drgnx-work-map--outline)
+(defvar drgnx-work-map--motion)
+(defvar drgnx-work-map-motion-stats)
+(defvar drgnx-work-map-motion-duration)
+(defvar glitnir-reduced-motion)
+(declare-function drgnx-work-map-mode "drgnx-work-map")
+(declare-function drgnx-work-map-overlaps "drgnx-work-map")
+(declare-function drgnx-work-map-right "drgnx-work-map")
+(declare-function drgnx-work-map-left "drgnx-work-map")
+(declare-function drgnx-work-map--state "drgnx-work-map")
+(declare-function drgnx-work-map--margin-px "drgnx-work-map")
+(declare-function drgnx-work-map--px "drgnx-work-map")
+(declare-function drgnx-work-map-motion-clear "drgnx-work-map")
+(declare-function drgnx-view-attach "drgnx-view")
+(declare-function drgnx-view-touch "drgnx-view")
+(declare-function drgnx-view-draw-now "drgnx-view")
+(declare-function drgnx-view-pending-p "drgnx-view")
+(declare-function glitnir-layout-captured-p "glitnir")
+(declare-function nhwl-presenter-stats "nhwlterm.c")
+
+(defconst drgnx-work-gui--view "work-motion" "The map view of the motion rows.")
+
+(defun drgnx-work-gui--leg-p ()
+  "Non-nil where the map can move: Glitnir draws the root frame and has the layout leg (Nidhogg with it)."
+  (and (drgnx-uitest-glitnir-p) (fboundp 'glitnir-layout-captured-p)))
+
+(defun drgnx-work-gui--stat (key) (plist-get drgnx-work-map-motion-stats key))
+
+(defmacro drgnx-work-gui--with-map (&rest body)
+  "BODY with tools/work-space on and the fixture frame's map alone in the root frame's selected window, drawn and
+presented; `buf' and `win' are bound.  The view is the client's, with no hub: events are fed to it."
+  (declare (indent 0))
+  `(drgnx-work-gui--with-frame-map (drgnx-work-fixture-frame) ,@body))
+
+(defmacro drgnx-work-gui--with-frame-map (frame &rest body)
+  "BODY with tools/work-space on and the map of FRAME (a form) alone in the root frame's selected window, drawn and
+presented; `buf' and `win' are bound.  The view is the client's, with no hub: events are fed to it."
+  (declare (indent 1))
+  `(drgnx-test-with-modules '(tools/work-space)
+     (let* ((drgnx-work-client--views (make-hash-table :test #'equal))
+            (root (drgnx-uitest-root-frame)) (buf (generate-new-buffer " *work-motion*")) (win nil))
+       (puthash drgnx-work-gui--view
+                (drgnx-work-client--make-view :id drgnx-work-gui--view
+                                              :state (drgnx-work-client-init ,frame) :status 'live)
+                drgnx-work-client--views)
+       (unwind-protect
+           (with-selected-frame root
+             (delete-other-windows)
+             (setq win (selected-window))
+             (set-window-buffer win buf)
+             (with-current-buffer buf
+               (drgnx-work-map-mode)
+               (setq drgnx-work-space--view drgnx-work-gui--view drgnx-work-map--outline 'off)
+               (drgnx-view-attach 'work-map)
+               (drgnx-view-touch drgnx-view)
+               (drgnx-view-draw-now drgnx-view)
+               (set-window-start win (point-min))
+               (drgnx-test-wait-presented)
+               ,@body))
+         (when (buffer-live-p buf)
+           (when (fboundp 'drgnx-work-map-motion-clear) (drgnx-work-map-motion-clear buf))
+           (kill-buffer buf))))))
+
+(defun drgnx-work-gui--relaid ()
+  "The hub's answer to a layout the user asked for, a full `work-map' event: the fixture frame with agents a1 and a2
+swapped, the two branches swapped, and the machine gone."
+  (let* ((f (drgnx-work-fixture-frame)) (layout (plist-get f :layout)) (at (copy-sequence (plist-get layout :at)))
+         (gone "machine:desktop"))
+    (pcase-dolist (`(,a . ,b) '((:agent:a1 . :agent:a2) (:branch:drgnx/rp-df-hub . :branch:drgnx/rp-fx-sess)))
+      (let ((ra (plist-get at a)) (rb (plist-get at b)))
+        (setq at (plist-put (plist-put at a (plist-put (copy-sequence ra) :x (plist-get rb :x)))
+                            b (plist-put (copy-sequence rb) :x (plist-get ra :x))))))
+    (setq at (cl-loop for (k v) on at by #'cddr unless (equal (substring (symbol-name k) 1) gone) append (list k v)))
+    (list :view drgnx-work-gui--view :version (1+ (plist-get f :version)) :full t
+          :changed (seq-remove (lambda (it) (equal (plist-get it :id) gone)) (plist-get f :items))
+          :edges (seq-remove (lambda (e) (member gone (list (plist-get e :from) (plist-get e :to)))) (plist-get f :edges))
+          :layout (plist-put (copy-sequence layout) :at at)
+          :needs_you (plist-get f :needs_you) :chips (plist-get f :chips))))
+
+(defun drgnx-work-gui--arrival (base)
+  "A live `work-map' delta on BASE: agent a9 arrives in a free place of the agents' row and the machine leaves."
+  (let* ((f (drgnx-work-fixture-frame))
+         (new (plist-put (plist-put (copy-sequence (drgnx-work-fixture-item f "agent:a2")) :id "agent:a9") :label "a9")))
+    (list :view drgnx-work-gui--view :version (1+ base) :base base :changed (list new) :removed '("machine:desktop")
+          :places (list :agent:a9 (list :rect (list :x 122 :y 45 :w 58 :h 25) :form "rich")))))
+
+(defun drgnx-work-gui--field-change (base)
+  "A live `work-map' delta on BASE: agent a2's activity changes."
+  (list :view drgnx-work-gui--view :version (1+ base) :base base
+        :changed (list (drgnx-work-fixture-changed (drgnx-work-fixture-frame) "agent:a2" :activity "reading"))))
+
+(defun drgnx-work-gui--relayout (buf win)
+  "The user asks for a layout (`work-overlaps') in BUF, shown in WIN: the window asks for a capture, the redisplay
+hands it to the presenter, which announces that it holds the old picture; then the hub's frame comes.  Returns the
+motion WIN was given."
+  (with-current-buffer buf (drgnx-work-map-overlaps))
+  (drgnx-work-gui--log "motion waiting %S" (cdr (buffer-local-value 'drgnx-work-map--motion buf)))
+  (should (window-parameter win 'glitnir-layout-capture))
+  (should-not (window-parameter win 'glitnir-layout-motion))
+  (drgnx-test-wait (lambda () (redisplay t) (glitnir-layout-captured-p win)) :secs 10
+                   :what "the presenter holds the old picture")
+  (drgnx-work-client-event "work-map" (drgnx-work-gui--relaid))
+  (window-parameter win 'glitnir-layout-motion))
+
+(defun drgnx-work-gui--shoot (name)
+  "Capture the root frame and keep it in the evidence folder as work-motion-NAME-sSCALE.png."
+  (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "work-motion" t)) :root))
+        (out (expand-file-name (format "work-motion-%s-s%d.png" name (round (frame-scale-factor))) temporary-file-directory)))
+    (should (file-exists-p shot))
+    (copy-file shot out t)
+    (drgnx-uitest--evidence out)
+    (drgnx-work-gui--log "motion shot %s" out)))
+
+(defun drgnx-work-gui--card-y (buf win id)
+  "The y of the first line of ID's card in BUF below WIN's first line, after a redisplay (both text, so both
+`posn-at-point' answers have the same origin)."
+  (redisplay t)
+  (with-current-buffer buf
+    (- (cdr (posn-x-y (posn-at-point (drgnx-work-gui--card-pos id) win)))
+       (cdr (posn-x-y (posn-at-point (window-start win) win))))))
+
+(defun drgnx-work-gui--card-pos (id)
+  "The first position of ID's card in the current buffer (`text-property-any' compares with `eq'), or nil."
+  (let ((pos (point-min)))
+    (while (and pos (not (equal (get-text-property pos 'drgnx-work-id) id)))
+      (setq pos (next-single-property-change pos 'drgnx-work-id)))
+    pos))
+
+(ert-deftest drgnx-work-gui/relayout-moves-with-motion ()
+  "A layout the user asks for moves, dark and light: the key asks the presenter for the old picture, the hub's frame
+is drawn once the picture is held, and before the redisplay that shows it the window says what moved: the swapped
+agents and branches move between their rectangles, the machine exits.  The shell takes the leg; at its end the
+parameters go and a leg is counted.  Screenshots of the map before and after."
+  (skip-unless (drgnx-work-gui--leg-p))
+  (dolist (theme '(modus-vivendi modus-operandi))
+    (mapc #'disable-theme custom-enabled-themes)
+    (load-theme theme t)
+    (unwind-protect
+        (drgnx-work-gui--with-map
+          (let* ((legs (drgnx-work-gui--stat :legs)) (tag (if (eq theme 'modus-vivendi) "dark" "light"))
+                 (stats0 (ignore-errors (nhwl-presenter-stats root)))
+                 ;; the machine's row is below the window's bottom at scale 2: then it exits unseen
+                 (machine-shown (pos-visible-in-window-p (drgnx-work-gui--card-pos "machine:desktop") win t)))
+            (drgnx-work-gui--shoot (concat tag "-before"))
+            (let* ((m (drgnx-work-gui--relayout buf win)) (moves (plist-get m :moves))
+                   (a1 (assoc "agent:a1" moves)) (a2 (assoc "agent:a2" moves)) (margin (drgnx-work-map--margin-px)))
+              (drgnx-work-gui--log "motion %s %S" tag m)
+              (should m)
+              (should a1) (should a2)
+              (should (assoc "branch:drgnx/rp-df-hub" moves))
+              (should (assoc "branch:drgnx/rp-fx-sess" moves))
+              (should (eq (and machine-shown t) (and (assoc "machine:desktop" (plist-get m :exits)) t)))
+              (should-not (plist-get m :enters))
+              (should (= (nth 0 (nth 1 a1)) (+ margin (drgnx-work-map--px 0))))
+              (should (= (nth 0 (nth 2 a1)) (+ margin (drgnx-work-map--px 61))))
+              (should (= (nth 1 (nth 1 a1)) (nth 1 (nth 2 a1))))
+              (should (= 0.16 (plist-get m :duration)))
+              (should (eq 'ease-out (plist-get m :curve)))
+              ;; the rectangles are where the cards are drawn: a1's new one at its card's first line
+              (let ((y (drgnx-work-gui--card-y buf win "agent:a1")))
+                (drgnx-work-gui--log "motion a1 card y=%S rect=%S" y (nth 2 a1))
+                (should (<= (abs (- y (nth 1 (nth 2 a1)))) 2)))
+              ;; the new layout is the one drawn, and the shell took the leg from the capture
+              (should (= 61 (plist-get (drgnx-work-client-rect (drgnx-work-map--state) "agent:a1") :x)))
+              (let ((sent (window-parameter win 'glitnir--leg-sent)))
+                (should (> (nth 2 sent) 0))
+                (should (nth 4 sent))))
+            (drgnx-test-wait (lambda () (null (window-parameter win 'glitnir-layout-capture))) :secs 10
+                             :what "the leg's end takes the capture off")
+            (should-not (window-parameter win 'glitnir-layout-motion))
+            (should (= (1+ legs) (drgnx-work-gui--stat :legs)))
+            (drgnx-test-wait-presented)
+            (drgnx-work-gui--log "motion presenter %s before=%S after=%S" tag stats0
+                                 (ignore-errors (nhwl-presenter-stats root)))
+            (drgnx-work-gui--shoot (concat tag "-after"))))
+      (disable-theme theme))))
+
+(ert-deftest drgnx-work-gui/no-ack-is-a-jump ()
+  "A capture the presenter does not hold means no leg: here the window's text area moved after the capture was asked
+for, so the picture is dropped.  One period after the hub's frame came, the new layout is drawn plain, the window
+keeps no capture and no motion, and a skipped leg is counted."
+  (skip-unless (drgnx-work-gui--leg-p))
+  (drgnx-work-gui--with-map
+    (let ((skipped (drgnx-work-gui--stat :skipped)) (legs (drgnx-work-gui--stat :legs)))
+      (unwind-protect
+          (progn
+            (drgnx-work-map-overlaps)
+            (should (window-parameter win 'glitnir-layout-capture))
+            (redisplay t)
+            (set-window-margins win 1 0)
+            (redisplay t)
+            (should-not (glitnir-layout-captured-p win))
+            (drgnx-work-client-event "work-map" (drgnx-work-gui--relaid))
+            (drgnx-test-wait (lambda () (null drgnx-work-map--motion)) :secs 10 :what "one period passed")
+            (should (= (1+ skipped) (drgnx-work-gui--stat :skipped)))
+            (should (= legs (drgnx-work-gui--stat :legs)))
+            (should-not (window-parameter win 'glitnir-layout-capture))
+            (should-not (window-parameter win 'glitnir-layout-motion))
+            (should (= 61 (plist-get (drgnx-work-client-rect (drgnx-work-map--state) "agent:a1") :x)))
+            (should-not (drgnx-view-pending-p drgnx-view)))
+        (set-window-margins win 0 0)))))
+
+(defun drgnx-work-gui--reduced (fn)
+  "Call FN with motion reduced, by Glitnir's setting where Glitnir is loaded (elsewhere the map never moves)."
+  (if (boundp 'glitnir-reduced-motion)
+      (let ((glitnir-reduced-motion t)) (funcall fn))
+    (funcall fn)))
+
+(ert-deftest drgnx-work-gui/reduced-motion-sends-no-capture ()
+  "Under reduced motion a layout the user asks for asks the presenter for nothing: the hub's frame is drawn with no
+motion, and nothing is counted (a jump by choice is not a skipped leg)."
+  (drgnx-work-gui--with-map
+    (let ((skipped (drgnx-work-gui--stat :skipped)) (legs (drgnx-work-gui--stat :legs)))
+      (drgnx-work-gui--reduced
+       (lambda ()
+         (drgnx-work-map-overlaps)
+         (should-not (window-parameter win 'glitnir-layout-capture))
+         (redisplay t)
+         (drgnx-work-client-event "work-map" (drgnx-work-gui--relaid))
+         (should-not (window-parameter win 'glitnir-layout-capture))
+         (should-not (window-parameter win 'glitnir-layout-motion))
+         (should (= 61 (plist-get (drgnx-work-client-rect (drgnx-work-map--state) "agent:a1") :x)))
+         (should (= skipped (drgnx-work-gui--stat :skipped)))
+         (should (= legs (drgnx-work-gui--stat :legs))))))))
+
+(ert-deftest drgnx-work-gui/a-live-arrival-never-moves-the-map ()
+  "A live delta (an agent arrives, the machine exits) never moves the map: no capture, no motion, nothing counted.
+And while a layout the user asked for waits for its frame, a live delta does not give it motion either."
+  (drgnx-work-gui--with-map
+    (let ((skipped (drgnx-work-gui--stat :skipped)) (legs (drgnx-work-gui--stat :legs)))
+      (drgnx-work-client-event "work-map" (drgnx-work-gui--arrival 3))
+      (redisplay t)
+      (should (drgnx-work-client-item (drgnx-work-map--state) "agent:a9"))
+      (should-not (drgnx-work-client-item (drgnx-work-map--state) "machine:desktop"))
+      (should-not (window-parameter win 'glitnir-layout-capture))
+      (should-not (window-parameter win 'glitnir-layout-motion))
+      (drgnx-work-map-overlaps)
+      (redisplay t)
+      (drgnx-work-client-event "work-map" (drgnx-work-gui--field-change 4))
+      (redisplay t)
+      (should-not (window-parameter win 'glitnir-layout-motion))
+      (should (= skipped (drgnx-work-gui--stat :skipped)))
+      (should (= legs (drgnx-work-gui--stat :legs))))))
+
+(defun drgnx-work-gui--key-times ()
+  "Milliseconds of 40 map keys (the selection right, then left), each with its redisplay."
+  (let ((times nil))
+    (dotimes (i 40)
+      (let ((t0 (float-time)))
+        (if (cl-evenp i) (drgnx-work-map-right) (drgnx-work-map-left))
+        (redisplay t)
+        (push (drgnx-work-gui--ms t0) times)))
+    times))
+
+(ert-deftest drgnx-work-gui/keys-stay-fast-during-a-leg ()
+  "Measured on a long leg: a key on the map (the selection moves, rows are refaced) with its redisplay while the leg
+runs, 40 times: p95 under 16 ms."
+  :tags '(:timing)
+  (skip-unless (drgnx-work-gui--leg-p))
+  (drgnx-work-gui--with-map
+    (let ((drgnx-work-map-motion-duration 3.0) (times nil) (base (drgnx-work-gui--key-times)))
+      (should (drgnx-work-gui--relayout buf win))
+      (redisplay t)
+      (setq times (drgnx-work-gui--key-times))
+      (let ((sent (window-parameter win 'glitnir--leg-sent)))
+        (drgnx-work-gui--log "motion keys: no leg med=%.2f p95=%.2f max=%.2f | during a leg med=%.2f p95=%.2f max=%.2f leg=%S"
+                             (drgnx-work-gui--med base) (drgnx-work-gui--p95 base) (apply #'max base)
+                             (drgnx-work-gui--med times) (drgnx-work-gui--p95 times) (apply #'max times) (nth 2 sent))
+        (should (> (nth 2 sent) 0))
+        (should (< (drgnx-work-gui--p95 times) 16))))))
+
+;;;; Scenes: the 30-agent map, dark, light and high contrast
+
+(load (expand-file-name "test/fixtures/work-space-thirty-fixture" drgnx-work-gui--repo) nil t)
+
+(defvar drgnx-work-space-roots)
+(declare-function drgnx-work-thirty-start "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-stop "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-map "work-space-thirty-fixture")
+(declare-function drgnx-work-thirty-premise "work-space-thirty-fixture")
+
+(defun drgnx-work-gui--scene-shoot (theme)
+  "Capture the root frame as work-space-THEME-sSCALE.png in the evidence folder; the file's name."
+  (let ((shot (plist-get (drgnx-uitest-capture (make-temp-file "work-scene" t)) :root))
+        (out (expand-file-name (format "work-space-%s-s%g.png" theme (frame-scale-factor)) temporary-file-directory)))
+    (should (file-exists-p shot))
+    (copy-file shot out t)
+    (drgnx-uitest--evidence out)
+    (drgnx-work-gui--log "scene shot %s" out)
+    out))
+
+(ert-deftest drgnx-work-gui/thirty-agent-scenes ()
+  "The map of the 30-agent workspace in a real hub (mock agents, all streaming), alone in the root frame: a screenshot
+in the drgnx dark, light and high-contrast themes at the session's scale (the lab runs scales 1, 1.25 and 2).  Asserts
+the premise (30 agents streaming and on the map), that the map drew rows, and that each shot exists; the eye judges the
+rest."
+  ;; the UI session does not inherit DRGNX_RATATOSKR_BIN: the checkout's own build is the fallback
+  (let ((bin (or (getenv "DRGNX_RATATOSKR_BIN") (expand-file-name "runtime/target/debug/ratatoskr" drgnx-work-gui--repo))))
+    (unless (file-executable-p bin) (ert-fail (format "needs a test-hooks ratatoskr built in the checkout (%s)" bin)))
+    (drgnx-work-gui--scenes bin)))
+
+(defun drgnx-work-gui--scenes (bin)
+  "The scenes' body: the 30-agent map in the hub BIN, shot in three themes."
+  (drgnx-test-with-modules '(tools/work-space)
+    (let ((root (drgnx-uitest-root-frame)) buf)
+      (unwind-protect
+          (with-selected-frame root
+            (delete-other-windows)
+            (drgnx-work-thirty-start bin)
+            (setq buf (drgnx-work-thirty-map t))
+            (delete-other-windows)
+            (set-window-buffer (selected-window) buf)
+            (dolist (theme '(drgnx-dark drgnx-light drgnx-high-contrast))
+              (mapc #'disable-theme custom-enabled-themes)
+              (load-theme theme t)
+              (with-current-buffer buf (drgnx-view-touch drgnx-view))
+              (drgnx-test-wait (lambda () (redisplay t) (not (drgnx-view-pending-p (buffer-local-value 'drgnx-view buf))))
+                               :secs 30 :what "the map drawn")
+              (set-window-start (selected-window) (point-min))
+              (drgnx-test-wait-presented)
+              (drgnx-work-thirty-premise buf t)
+              (should (> (plist-get (drgnx-view-stats (buffer-local-value 'drgnx-view buf)) :rows-drawn) 0))
+              (drgnx-work-gui--scene-shoot theme)))
+        (mapc #'disable-theme custom-enabled-themes)
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-work-thirty-stop)))))
+
+;;;; Cards inside their rectangles
+
+(defun drgnx-work-gui--golden-frame (name)
+  "A frame of vegvisir's golden layout NAME (runtime/crates/vegvisir/tests/golden/NAME.json): an item per placed id,
+each with a label and fields far longer than its card, as a busy agent's are."
+  (let* ((layout (with-temp-buffer
+                   (insert-file-contents (expand-file-name (format "runtime/crates/vegvisir/tests/golden/%s.json" name)
+                                                           drgnx-work-gui--repo))
+                   (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
+         (i 0) items)
+    (cl-loop for (k _) on (plist-get layout :at) by #'cddr
+             do (let* ((id (substring (symbol-name k) 1)) (kind (car (split-string id ":"))))
+                  (push (list :id id :kind (if (and (equal kind "agent") (string-search "/" id)) "subagent" kind)
+                              :label (format "perf-%s-toolu-%d · the agent's task, far longer than any card" id i)
+                              :live t :order (cl-incf i) :warn (zerop (% i 7)) :needs_you nil
+                              :fields (list :state "running" :minutes 12 :model "Opus" :task "SESSION-END-LOSES-STARTED-1"
+                                            :spend "$1.20" :progress '(3 6) :activity "reading a long file name"
+                                            :conclusion "turn_core drops the started flag" :edits '(2 52 4) :reads 14))
+                        items)))
+    (list :version 1 :items (nreverse items) :edges nil :layout layout :needs_you nil :chips nil)))
+
+(defun drgnx-work-gui--card-runs ()
+  "Each card text run in the current buffer: (ID FROM TO), TO after its closing `align-to' space."
+  (let ((pos (point-min)) out)
+    (while (< pos (point-max))
+      (let ((next (or (next-single-property-change pos 'drgnx-work-id) (point-max))) (id (get-text-property pos 'drgnx-work-id)))
+        (when id (push (list id pos next) out))
+        (setq pos next)))
+    (nreverse out)))
+
+(defun drgnx-work-gui--cards-inside (name width)
+  "The map of golden layout NAME drawn in the drgnx dark theme in a window WIDTH px wide (nil: the whole frame): each
+card on screen, checked against its rectangle; the shot of the frame is kept in the evidence folder."
+  (drgnx-work-gui--with-frame-map (drgnx-work-gui--golden-frame name)
+    (unwind-protect
+        (progn
+          (when width (split-window win width 'right t))
+          (load-theme 'drgnx-dark t)
+          (drgnx-view-touch drgnx-view)
+          (drgnx-view-draw-now drgnx-view)
+          (set-window-start win (point-min))
+          (redisplay t)
+          (let ((state (drgnx-work-map--state)) (bad nil) (n 0))
+            ;; the cards on screen (the map is taller than the window)
+            (pcase-dolist (`(,id ,from ,to) (drgnx-work-gui--card-runs))
+              (let ((rect (drgnx-work-client-rect state id))
+                    (p0 (posn-at-point from win)) (p1 (posn-at-point (1- to) win)))
+                (when (and rect p0 p1)
+                  (let ((left (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (plist-get rect :x))))
+                        (right (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))))
+                        (x0 (car (posn-x-y p0))) (x1 (car (posn-x-y p1))))
+                    (cl-incf n)
+                    (unless (and (<= (abs (- x0 left)) 2) (<= x1 right))
+                      (push (list id :left left :drawn-at x0 :right right :closes-at x1) bad))))))
+            (drgnx-test-wait-presented)
+            (drgnx-work-gui--scene-shoot (format "cards-%s-%dpx" name (window-pixel-width win)))
+            (drgnx-work-gui--log "%s in %d px: cards checked %d, outside %d: %S" name (window-pixel-width win) n
+                                 (length bad) (seq-take bad 6))
+            (should (> n 30))
+            (should-not bad)))
+      (disable-theme 'drgnx-dark))))
+
+(ert-deftest drgnx-work-gui/thirty-cards-stay-inside-their-rectangles ()
+  "The 30-agent golden layouts at 1000 px (in a window that wide) and at 1600 px (the frame), every card's label far
+longer than its card, drawn by the map view in the drgnx dark theme: each card line starts at its rectangle's left
+and its text ends by its right, so the space that closes it starts no later than the right edge and no card is drawn
+over the next (the map once ran off the right edge, each line drawing the cards of the line before again, and lanes
+on one column side by side pushing the next card)."
+  (drgnx-work-gui--cards-inside "thirty-1000" 1000)
+  (drgnx-work-gui--cards-inside "thirty-1600" nil))
 
 ;;; work-space-gui-test.el ends here

@@ -6,7 +6,8 @@
 ;; and the candidates show in a child frame of the editor frame, while the minibuffer window and keyboard focus
 ;; stay in the editor frame.  Needs vertico from $DRGNX_CHILDFRAME_ELPA.  Without Glitnir the float is switched on
 ;; by stubbing `glitnir-active-p' (the route is a plain child frame, so it is the same code); the screenshot row
-;; needs the real thing.
+;; needs the real thing.  The stub takes the primitive's optional FRAME: once the callers are native-compiled (the
+;; session compiles them while the tier runs) they reach the stub through a trampoline that passes every argument.
 
 (require 'ert)
 (require 'cl-lib)
@@ -21,7 +22,7 @@
 
 (defvar vertico-multiform-categories)
 (defvar vertico-count)
-(defvar drgnx-look-palette)
+(declare-function drgnx-look-palette-current "drgnx-look" ())
 (defvar drgnx-palette-float-test--ran nil "The command the palette ran.")
 (declare-function glitnir-active-p "glitnir")
 (declare-function vertico-mode "vertico")
@@ -49,7 +50,7 @@
        (add-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
        (vertico-mode 1) (vertico-multiform-mode 1)
        (unwind-protect
-           (cl-letf (((symbol-function 'glitnir-active-p) (lambda () t)))
+           (cl-letf (((symbol-function 'glitnir-active-p) (lambda (&optional _frame) t)))
              ,@body)
          (remove-hook 'minibuffer-exit-hook #'drgnx-palette-frame-hide)
          (unless was-multiform (vertico-multiform-mode -1))
@@ -129,9 +130,10 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
            (drgnx-test-wait-presented)
            (should (eq (frame-parent f) root))
            (should (frame-visible-p f))
-           ;; the look: the parameters of `drgnx-look-palette'
+           ;; the look: the parameters for the theme's variant (`drgnx-look-palette-for'; the session's theme is a
+           ;; light one, whose shadow is 0.22, not the dark 0.5 `drgnx-look-palette' holds as its standard value)
            (dolist (k '(corner-radius shadow backdrop-blur transition))
-             (should (equal (frame-parameter f k) (alist-get k drgnx-look-palette))))
+             (should (equal (frame-parameter f k) (alist-get k (drgnx-look-palette-current)))))
            ;; top-centre, inside the editor frame, at most 640 logical px wide
            (let ((e (drgnx-palette-float-test--edges f)) (w (frame-pixel-width root)))
              (should (<= (frame-pixel-width f) (drgnx-palette-frame--px root 640)))

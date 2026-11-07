@@ -21,6 +21,7 @@
 (declare-function drgnx-work-edges-lane "drgnx-work-edges")
 (declare-function drgnx-work-edges-row-metrics "drgnx-work-edges")
 (declare-function drgnx-work-edges-geometry "drgnx-work-edges")
+(declare-function drgnx-work-edges-lane-parts "drgnx-work-edges")
 (declare-function drgnx-work-map-row-text "drgnx-work-map")
 (defvar drgnx-work-map-scale)
 
@@ -139,6 +140,22 @@
   (let ((m (drgnx-work-edges-row-metrics)))
     (should (and (integerp (car m)) (> (car m) 0)))
     (should (and (integerp (cdr m)) (<= 1 (cdr m) 100)))))
+
+(ert-deftest drgnx-work-edges/lanes-on-one-column-draw-once ()
+  ;; lanes at the same x are one line on screen; drawn one image each, side by side in the text, five of them took
+  ;; 10 px of a 12 px gap and pushed the next card right.  One image per column: the chain's stroke when one of them
+  ;; is on the chain, its alt naming every edge there
+  (let* ((geometry (drgnx-work-edges-test--geometry '(("p>s2>came-from" . t))))
+         (lanes (list (list :row 3 :x 150 :from "p" :to "s1" :kind "came-from")
+                      (list :row 3 :x 150 :from "p" :to "s2" :kind "came-from")
+                      (list :row 3 :x 150 :from "p" :to "s3" :kind "came-from")
+                      (list :row 3 :x 149 :from "q" :to "s4" :kind "came-from")
+                      (list :row 4 :x 150 :from "p" :to "s5" :kind "came-from")))
+         (parts (drgnx-work-edges-lane-parts 3 lanes geometry drgnx-work-edges-test--colours)))
+    (should (equal (mapcar #'car parts) '(599 595)))
+    (let ((image (get-text-property 1 'display (cdr (car parts)))))
+      (should (string-search "stroke=\"#303030\"" (plist-get (cdr image) :data)))
+      (dolist (to '("s1" "s2" "s3")) (should (string-search to (plist-get (cdr image) :alt)))))))
 
 (ert-deftest drgnx-work-edges/the-fixture-draws-bands-lanes-and-a-port ()
   (let* ((drgnx-work-map-scale 1) (state (drgnx-work-client-init (drgnx-work-fixture-frame)))

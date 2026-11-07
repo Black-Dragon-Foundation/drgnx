@@ -384,12 +384,15 @@ pub enum Frame {
         #[serde(skip)]
         bytes: Vec<u8>,
     },
-    /// hub → runner: fetch COMMIT from the project's origin.
+    /// hub → runner: fetch COMMIT from the project's origin; with CRED, through the deploy key or token of that name,
+    /// sent just before in a `key` frame of the attempt's (held in memory for the fetch only).
     OriginFetch {
         r: JobRef,
         repo: String,
         url: String,
         commit: String,
+        #[serde(default)]
+        cred: Option<String>,
     },
 
     // ---- a job's run

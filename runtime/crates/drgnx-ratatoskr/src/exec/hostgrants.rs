@@ -147,7 +147,7 @@ pub(crate) async fn start(
         steps: steps_tx,
     };
     a.reload().await;
-    let task = tokio::spawn(run(a, events, answers));
+    let task = crate::clock::spawn("exec:host-grant-cards", run(a, events, answers));
     (task, steps)
 }
 

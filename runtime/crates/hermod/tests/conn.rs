@@ -1,10 +1,14 @@
-//! hermod against scripted children: `/bin/sh` scripts that print canned JSON-RPC lines (the mock agent is Task 2).
+//! hermod against scripted children: `/bin/sh` scripts that print canned JSON-RPC lines, and for a fork the mock agent
+//! (`ratatoskr-mock acp`, a real process; a test waits for its answers and reads its log after them).
 
 use hermod::schema::v1::{
     PermissionOptionId, RequestPermissionOutcome, RequestPermissionResponse, SessionUpdate,
 };
-use hermod::{ClientCaps, Conn, ConnOpts, Error, Event, ForkPoint, Incoming};
-use std::path::Path;
+use hermod::{
+    ClientCaps, Conn, ConnOpts, Dir, Error, Event, ForkInto, ForkPoint, Incoming, LineTap,
+};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
@@ -45,6 +49,7 @@ fn opts() -> ConnOpts {
     ConnOpts {
         deadline: Duration::from_secs(10),
         stderr_tail: 4000,
+        ..ConnOpts::default()
     }
 }
 
@@ -84,6 +89,25 @@ async fn initialize_then_session() {
         next(&mut rx).await,
         Event::Exit { code: Some(0), .. }
     ));
+}
+
+// [C] handshake: the mode an answer that opens a session reports is the session's; a later one that reports none
+// forgets it, so an earlier answer's mode is never taken for the last one's.
+#[tokio::test]
+async fn the_reported_mode_is_the_opening_answers() {
+    let new = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","modes":{"currentModeId":"read-only","availableModes":[]}}}"#;
+    let resume = r#"{"jsonrpc":"2.0","id":3,"result":{}}"#;
+    let script = format!(
+        "read a; printf '%s\\n' '{INIT}'; read b; printf '%s\\n' '{new}'; read c; printf '%s\\n' '{resume}'; \
+         cat >/dev/null"
+    );
+    let (conn, _rx) = start(&script, opts()).await;
+    let sid = open(&conn).await;
+    assert_eq!(conn.reported_mode(&sid).as_deref(), Some("read-only"));
+    conn.resume_session(&sid, Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(conn.reported_mode(&sid), None);
 }
 
 #[tokio::test]
@@ -240,38 +264,322 @@ async fn a_deadline_fails_the_call_not_the_conn() {
     assert_eq!(&*sid.0, "s9");
 }
 
+/// A line tap that keeps what it sees: each line with its direction and instant, and the exit.
+#[derive(Default)]
+struct Kept {
+    lines: std::sync::Mutex<Vec<(Dir, String, std::time::Instant)>>,
+    exits: std::sync::Mutex<Vec<(Option<i32>, String)>>,
+}
+
+impl LineTap for Kept {
+    fn line(&self, dir: Dir, line: &str, at: std::time::Instant) {
+        self.lines.lock().unwrap().push((dir, line.to_owned(), at));
+    }
+    fn exit(&self, code: Option<i32>, _signal: Option<i32>, stderr: &str) {
+        self.exits.lock().unwrap().push((code, stderr.to_owned()));
+    }
+}
+
+// Pattern C (handshake): every line the tap is asked about was answered or seen as an event first, and the exit comes
+// after the child's own Exit event.
+#[tokio::test]
+async fn a_tap_sees_both_directions_in_order() {
+    let tap = std::sync::Arc::new(Kept::default());
+    let o = ConnOpts {
+        tap: Some(tap.clone()),
+        ..opts()
+    };
+    let rest = format!(
+        "printf '%s\\n' '{}'; read p; echo tapped >&2; exit 0",
+        chunk("a", None)
+    );
+    let (conn, mut rx) = start(&script(&rest), o).await;
+    open(&conn).await;
+    while !matches!(next(&mut rx).await, Event::Update { .. }) {}
+    conn.cancel(&hermod::SessionId::new("s1")).unwrap();
+    let Event::Exit { code, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert_eq!(code, Some(0));
+    let lines = tap.lines.lock().unwrap().clone();
+    let seen: Vec<(Dir, String)> = lines
+        .iter()
+        .map(|(d, l, _)| {
+            let v: Value = serde_json::from_str(l).expect("a JSON line");
+            let what = v["method"]
+                .as_str()
+                .map_or_else(|| format!("answer {}", v["id"]), str::to_owned);
+            (*d, what)
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (Dir::In, "initialize".to_string()),
+            (Dir::Out, "answer 1".to_string()),
+            (Dir::In, "session/new".to_string()),
+            (Dir::Out, "answer 2".to_string()),
+            (Dir::Out, "session/update".to_string()),
+            (Dir::In, "session/cancel".to_string()),
+        ]
+    );
+    assert!(
+        lines.windows(2).all(|w| w[0].2 <= w[1].2),
+        "the instants never go back"
+    );
+    let exits = tap.exits.lock().unwrap().clone();
+    assert!(
+        matches!(&exits[..], [(Some(0), stderr)] if stderr.contains("tapped")),
+        "{exits:?}"
+    );
+}
+
+fn fork_of(source: &hermod::SessionId, cwd: &str, at: Option<&str>) -> ForkInto {
+    ForkInto {
+        source: source.clone(),
+        cwd: cwd.into(),
+        mcp: vec![],
+        at: at.map(|m| ForkPoint {
+            message_id: m.into(),
+        }),
+        meta: None,
+    }
+}
+
 #[tokio::test]
 async fn fork_sends_the_jetbrains_meta() {
     let rest = r#"read f; echo "$f" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"s2"}}'; cat >/dev/null"#;
     let (conn, mut rx) = start(&script(rest), opts()).await;
     let sid = open(&conn).await;
-    let forked = conn
-        .fork(
-            &sid,
-            Some(ForkPoint {
-                message_id: "m7".into(),
-            }),
-        )
-        .await
-        .unwrap();
+    let mut f = fork_of(&sid, "/elsewhere", Some("m7"));
+    // a meta of the caller's own under `jetbrains` stays beside the fork point
+    f.meta = Some(json!({"jetbrains": {"other": 1}, "claudeCode": {"options": {"x": 1}}}));
+    let forked = conn.fork_into(f).await.unwrap();
     assert_eq!(&*forked.0, "s2");
-    assert!(matches!(
-        conn.fork(&hermod::SessionId::new("nope"), None).await,
-        Err(Error::UnknownSession(_))
-    ));
     drop(conn);
     let Event::Exit { stderr, .. } = next(&mut rx).await else {
         panic!("exit")
     };
-    let sent: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    let sent: Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(sent["method"], "session/fork");
     assert_eq!(sent["params"]["sessionId"], "s1");
-    assert_eq!(sent["params"]["cwd"], "/work");
-    let fork = &sent["params"]["_meta"]["jetbrains"]["air"]["fork"];
+    assert_eq!(sent["params"]["cwd"], "/elsewhere");
+    assert_eq!(sent["params"]["mcpServers"], json!([]));
+    let meta = &sent["params"]["_meta"];
+    let fork = &meta["jetbrains"]["air"]["fork"];
     assert_eq!(
         (fork["version"].as_i64(), fork["messageId"].as_str()),
         (Some(1), Some("m7"))
     );
+    assert_eq!(meta["jetbrains"]["other"], 1);
+    assert_eq!(meta["claudeCode"]["options"]["x"], 1);
+}
+
+/// `ratatoskr-mock` (domr's binary): `RATATOSKR_MOCK`, else beside this test's binary (`target/<profile>/`), built
+/// there once when it is missing.
+fn mock_bin() -> PathBuf {
+    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        if let Some(p) = std::env::var_os("RATATOSKR_MOCK") {
+            return p.into();
+        }
+        let exe = std::env::current_exe().unwrap();
+        let dir = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
+        let bin = dir.join("ratatoskr-mock");
+        if !bin.exists() {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let profile = dir.file_name().unwrap().to_str().unwrap();
+            let profile = if profile == "debug" { "dev" } else { profile };
+            let ok = std::process::Command::new(cargo)
+                .args([
+                    "build",
+                    "-p",
+                    "domr",
+                    "--bin",
+                    "ratatoskr-mock",
+                    "--profile",
+                ])
+                .arg(profile)
+                .arg("--target-dir")
+                .arg(dir.parent().unwrap())
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok && bin.exists(), "ratatoskr-mock is not built");
+        }
+        bin
+    })
+    .clone()
+}
+
+/// The mock agent's files, in a folder of the test's own under the temporary directory: its `--state` folder and its
+/// logs, one per process.  Removed when dropped.
+struct Mock {
+    dir: PathBuf,
+}
+
+impl Drop for Mock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+impl Mock {
+    fn new() -> Mock {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("hermod-mock-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        Mock { dir }
+    }
+
+    /// A mock `--as claude` process with the shared state and its own LOG, initialized; its events drained.
+    async fn start(&self, log: &str) -> Conn {
+        let p = |s: &str| self.dir.join(s).into_os_string();
+        let spec = draugr::Spec {
+            program: mock_bin(),
+            args: vec![
+                "acp".into(),
+                "--as".into(),
+                "claude".into(),
+                "--log".into(),
+                p(log),
+                "--state".into(),
+                p("state"),
+            ],
+            env: draugr::env::build(&["PATH"], &[], &[]),
+            cwd: None,
+            stdin_null: false,
+            pass_fds: vec![],
+            new_session: false,
+        };
+        let (conn, mut rx) = Conn::spawn(spec, opts()).await.expect("spawn the mock");
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        conn.initialize(ClientCaps::default())
+            .await
+            .expect("initialize");
+        conn
+    }
+
+    /// The values of KEY in LOG, in order.
+    fn logged(&self, log: &str, key: &str) -> Vec<Value> {
+        std::fs::read_to_string(self.dir.join(log))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter_map(|v| v.get(key).cloned())
+            .collect()
+    }
+}
+
+async fn say(conn: &Conn, sid: &hermod::SessionId, text: &str) {
+    let block = hermod::ContentBlock::Text(hermod::schema::v1::TextContent::new(text));
+    conn.prompt(sid, vec![block], None).await.expect("a turn");
+}
+
+#[tokio::test]
+async fn fork_into_carries_cwd_mcp_and_lock_meta() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    let mcp: hermod::McpServer = serde_json::from_value(
+        json!({"name": "drgnx", "command": "/bin/true", "args": ["mcp-bridge"], "env": []}),
+    )
+    .unwrap();
+    let mut f = fork_of(&sid, "/elsewhere", None);
+    f.mcp = vec![mcp];
+    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+    let forked = conn.fork_into(f).await.unwrap();
+    let line = &m.logged("a.log", "session/fork")[0];
+    assert_eq!(line["sessionId"], json!(&*forked.0));
+    assert_eq!(line["cwd"], "/elsewhere");
+    assert_eq!(line["mcpServers"][0]["name"], "drgnx");
+    assert_eq!(line["claude_options"]["permissionMode"], "default");
+}
+
+#[tokio::test]
+async fn fork_into_keeps_the_lock_meta_beside_the_fork_point() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&conn, &sid, "hello").await;
+    let mut f = fork_of(&sid, "/work", Some("a-1-1"));
+    f.meta = Some(json!({"claudeCode": {"options": {"permissionMode": "default"}}}));
+    conn.fork_into(f).await.unwrap();
+    let line = &m.logged("a.log", "session/fork")[0];
+    assert_eq!(line["claude_options"]["permissionMode"], "default");
+    assert_eq!(line["messageId"], "a-1-1");
+    assert_eq!(line["kept"], 2, "the user's message and the first answer");
+}
+
+#[tokio::test]
+async fn fork_into_works_on_a_connection_that_never_saw_the_session() {
+    let m = Mock::new();
+    let first = m.start("a.log").await;
+    let sid = first
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&first, &sid, "hello").await;
+    drop(first);
+    let second = m.start("b.log").await;
+    let forked = second
+        .fork_into(fork_of(&sid, "/work", None))
+        .await
+        .expect("a fork on a fresh connection");
+    assert_ne!(forked, sid);
+    let line = &m.logged("b.log", "session/fork")[0];
+    assert_eq!(line["from"], json!(&*sid.0));
+    assert_eq!(line["kept"], 3, "the whole history");
+}
+
+#[tokio::test]
+async fn fork_into_unknown_message_is_an_error() {
+    let m = Mock::new();
+    let conn = m.start("a.log").await;
+    let sid = conn
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&conn, &sid, "hello").await;
+    let r = conn.fork_into(fork_of(&sid, "/work", Some("nope"))).await;
+    assert!(matches!(r, Err(Error::Rpc { code: -32602, .. })), "{r:?}");
+    assert!(m.logged("a.log", "session/fork").is_empty());
+}
+
+#[tokio::test]
+async fn fork_from_a_second_process_reads_state() {
+    let m = Mock::new();
+    let first = m.start("a.log").await;
+    let sid = first
+        .new_session(Path::new("/work"), vec![], None)
+        .await
+        .unwrap();
+    say(&first, &sid, "one").await;
+    say(&first, &sid, "two").await;
+    drop(first);
+    let second = m.start("b.log").await;
+    let forked = second
+        .fork_into(fork_of(&sid, "/work", Some("a-1-2")))
+        .await
+        .unwrap();
+    let line = &m.logged("b.log", "session/fork")[0];
+    assert_eq!(
+        (line["kept"].as_u64(), line["turns"].as_u64()),
+        (Some(3), Some(1)),
+        "the cut: turn one's three messages"
+    );
+    // the fork goes on from the cut: its next turn is the second
+    say(&second, &forked, "three").await;
+    let prompts = m.logged("b.log", "prompt");
+    assert_eq!(prompts[0]["turn"], 2);
+    assert_eq!(prompts[0]["sessionId"], json!(&*forked.0));
 }
 
 #[tokio::test]
@@ -294,6 +602,71 @@ async fn unknown_notifications_are_ignored_unknown_requests_get_32601() {
     };
     assert!(
         stderr.contains("-32601") && stderr.contains(r#""id":50"#),
+        "{stderr}"
+    );
+}
+
+/// An extension request (`_`-prefixed, outside the schema) reaches the owner with its params as sent and a responder;
+/// another unknown request still gets -32601. Pattern C (handshake): the child echoes our answer before it exits.
+#[tokio::test]
+async fn an_extension_request_comes_with_a_responder() {
+    let rest = r#"printf '%s\n' '{"jsonrpc":"2.0","id":60,"method":"_drgnx/before_tool","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1"}}}'; read r; echo "$r" >&2"#;
+    let (conn, mut rx) = start(&script(rest), opts()).await;
+    open(&conn).await;
+    let Event::Request(Incoming::Ext {
+        method,
+        params,
+        resp,
+    }) = next(&mut rx).await
+    else {
+        panic!("an extension request")
+    };
+    assert_eq!(method, "_drgnx/before_tool");
+    assert_eq!(params["toolCall"]["toolCallId"], "t1");
+    resp.respond(json!({"outcome": "allow"})).unwrap();
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert!(
+        stderr.contains(r#""id":60"#) && stderr.contains(r#""outcome":"allow""#),
+        "{stderr}"
+    );
+}
+
+/// `ext_request` sends an extension method and returns the agent's result as it is; a request the agent leaves
+/// unanswered ends at its deadline and the connection goes on. Pattern C (handshake): the child answers only after
+/// it read the request, and never answers the second.
+#[tokio::test]
+async fn ext_request_returns_the_answer_or_ends_at_its_deadline() {
+    let rest = r#"read r; echo "$r" >&2; printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"frees":12}}'; cat >/dev/null"#;
+    let (conn, mut rx) = start(&script(rest), opts()).await;
+    open(&conn).await;
+    let got = conn
+        .ext_request(
+            "_drgnx/compact/preview",
+            json!({"sessionId": "s1"}),
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("the agent's answer");
+    assert_eq!(got, json!({"frees": 12}));
+    let late = conn
+        .ext_request(
+            "_drgnx/context/drop",
+            json!({"sessionId": "s1", "item": "x"}),
+            Duration::from_millis(200),
+        )
+        .await;
+    assert!(
+        matches!(&late, Err(Error::Deadline(m)) if m == "_drgnx/context/drop"),
+        "{late:?}"
+    );
+    drop(conn);
+    let Event::Exit { stderr, .. } = next(&mut rx).await else {
+        panic!("exit")
+    };
+    assert!(
+        stderr.contains(r#""method":"_drgnx/compact/preview""#),
         "{stderr}"
     );
 }
