@@ -62,6 +62,8 @@ runs:
         if [ -z "$base" ]; then
           base="$(bash test/container/image.sh podman "$NAME" "test/container/$FILE")"
         fi
+        # the release in the base goes first: a build that still calls itself that version would unpack over it and mix
+        # old and new files
         tarballs=("$RUNNER_TEMP"/nidhogg-dist/*.tar.xz)
         [ "${#tarballs[@]}" = 1 ] && [ -f "${tarballs[0]}" ] || { echo "::error::expected one Nidhogg tarball in $OVERLAY"; exit 1; }
         ctx="$(mktemp -d "$RUNNER_TEMP/overlay.XXXXXX")"
@@ -69,7 +71,7 @@ runs:
         cp "${tarballs[0]}" "$ctx/nidhogg.tar.xz"
         printf '%s\n' "FROM $base" \
           "COPY nidhogg.sh nidhogg.tar.xz /tmp/" \
-          "RUN bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz && rm /tmp/nidhogg.sh /tmp/nidhogg.tar.xz" \
+          "RUN rm -rf /opt/nidhogg/* && bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz && rm /tmp/nidhogg.sh /tmp/nidhogg.tar.xz" \
           "ENV DRGNX_EMACS=/usr/local/bin/nidhogg" > "$ctx/Containerfile"
         podman build --memory 3g --memory-swap 3g -q -t "localhost/$NAME-nidhogg:run" -f "$ctx/Containerfile" "$ctx" >/dev/null
         podman run --rm "localhost/$NAME-nidhogg:run" /usr/local/bin/nidhogg --version | sed -n 1p

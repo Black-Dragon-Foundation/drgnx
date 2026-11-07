@@ -41,7 +41,10 @@
                   ("macos.yml" "macos") ("tty.yml" "tty")))
     (let ((yml (drgnx-ci-test--yml (car spec))))
       (skip-unless yml)
-      (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: release"
+      ;; Nidhogg's integration line while drgnx's next release is unreleased, its App passed on
+      (drgnx-ci-test--has yml "uses: ./.github/workflows/drgnx-tiers.yml" "nidhogg: line"
+                          "NIDHOGG_LINE_APP_ID: ${{ secrets.NIDHOGG_LINE_APP_ID }}"
+                          "NIDHOGG_LINE_APP_KEY: ${{ secrets.NIDHOGG_LINE_APP_KEY }}"
                           (concat "tiers: " (cadr spec) "\n"))
       ;; no test step of its own: the tiers workflow is the one place those steps live
       (should-not (string-search "bin/drgnx test" yml)))))
@@ -55,12 +58,12 @@
                              (drgnx-ci-test--job tiers job))))
     ;; every job checks drgnx out into drgnx/ (in Nidhogg's run the caller's checkout is Nidhogg), at the asked ref
     (let ((count (lambda (needle) (length (drgnx-ci-test--matches (concat "\\(" (regexp-quote needle) "\\)") tiers)))))
-      (should (= 10 (funcall count "runs-on:")))
-      (should (= 10 (funcall count "          path: drgnx\n")))
-      (should (= 10 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
+      (should (= 11 (funcall count "runs-on:")))   ; the ten tiers and nidhogg-line
+      (should (= 11 (funcall count "          path: drgnx\n")))
+      (should (= 11 (funcall count "          ref: ${{ inputs.drgnx_ref || github.event.pull_request.head.sha }}\n"))))
     ;; the Linux jobs that run Ratatoskr fetch the binaries the run built once; macOS builds its own
     (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
-      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: bins-linux" "uses: ./drgnx/.github/actions/fetch-test-bins"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "needs: [bins-linux, nidhogg-line]" "uses: ./drgnx/.github/actions/fetch-test-bins"))
     ;; and bins-linux runs for each of them
     (dolist (tier '("unit" "no-lisp-writes" "hub-chaos" "ui" "perf"))
       (should (string-search (format "contains(format(' {0} ', inputs.tiers), ' %s ')" tier)
@@ -74,8 +77,26 @@
     (should-not (string-search "brew install ripgrep rust" tiers))
     (should-not (string-search "brew install rust" (drgnx-ci-test--yml "runtime.yml")))
     ;; `nidhogg: artifact' puts the run's own build under the tests: the overlay on Linux, the tarball on macOS
-    (drgnx-ci-test--has tiers "nidhogg-artifact: ${{ inputs.nidhogg == 'artifact' && 'tarball-fedora-45' || '' }}"
+    (drgnx-ci-test--has tiers "nidhogg-artifact: ${{ (inputs.nidhogg == 'artifact' || inputs.nidhogg == 'line') && 'tarball-fedora-45' || '' }}"
                         "name: tarball-macos")))
+
+(ert-deftest drgnx-ci/nidhogg-line-installs-the-line-s-green-build-or-fails ()
+  ;; `nidhogg: line': the nidhogg-line job copies the tarballs of Nidhogg's green build of the line's head into the run
+  ;; under the artifact names, every tier job waits for it and installs them as `artifact' does; it never falls back
+  (let ((tiers (drgnx-ci-test--yml "drgnx-tiers.yml"))
+        (sh (drgnx-ci-test--file ".github/ci/nidhogg-line.sh"))
+        (line (drgnx-ci-test--file ".github/ci/nidhogg-line")))
+    (skip-unless (and tiers sh line))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "nidhogg-line")
+                        "if: ${{ inputs.nidhogg == 'line' }}" "uses: actions/create-github-app-token@"
+                        "permission-actions: read" "repositories: nidhogg" "bash drgnx/.github/ci/nidhogg-line.sh $NAMES"
+                        "run-id: ${{ steps.line.outputs.run }}" "github-token: ${{ steps.token.outputs.token }}"
+                        "uses: actions/upload-artifact@" "name: tarball-fedora-45" "name: tarball-macos")
+    (dolist (job '("unit" "no-lisp-writes" "hub-chaos" "ui" "scenario" "perf" "tty" "timing" "macos"))
+      (drgnx-ci-test--has (drgnx-ci-test--job tiers job) "nidhogg-line" "needs.nidhogg-line.result != 'failure'"))
+    (drgnx-ci-test--has (drgnx-ci-test--job tiers "macos") "if [ \"$MODE\" = artifact ] || [ \"$MODE\" = line ]; then")
+    (drgnx-ci-test--has sh "status=success" "never falls back to the release" "exit 1")
+    (should (string-match-p "^[a-z0-9][a-z0-9./_-]*$" line))))   ; a line of its own names the branch
 
 (ert-deftest drgnx-ci/gui-runs-on-push-to-main ()
   (let ((gui (drgnx-ci-test--yml "gui.yml")) (tiers (drgnx-ci-test--yml "drgnx-tiers.yml")))
@@ -797,7 +818,7 @@
   (let ((action (drgnx-ci-test--action "test-image")))
     (skip-unless action)
     (drgnx-ci-test--has action "uses: actions/download-artifact@" "name: ${{ inputs.nidhogg-artifact }}"
-                        "\"FROM $base\"" "RUN bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz"
+                        "\"FROM $base\"" "RUN rm -rf /opt/nidhogg/* && bash /tmp/nidhogg.sh fedora-45 /tmp/nidhogg.tar.xz"
                         "expected one Nidhogg tarball" "echo \"$VAR=localhost/$NAME-nidhogg:run\"")))
 
 (ert-deftest drgnx-ci/nidhogg-sh-installs-a-local-tarball-without-a-download ()
