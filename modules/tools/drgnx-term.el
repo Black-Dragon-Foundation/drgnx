@@ -653,13 +653,40 @@ does not hold are passed over."
 
 ;;;; Opening
 
+(defun drgnx-term--terminfo ()
+  "The folder holding Ghostty's compiled xterm-ghostty entry (`drgnx build' puts it in <data>/terminfo), or nil."
+  (let ((dir (expand-file-name "terminfo" (drgnx-paths-dir 'data))))
+    (and (file-exists-p (expand-file-name "x/xterm-ghostty" dir)) dir)))
+
+(defun drgnx-term--term-entries ()
+  "TERM and TERMINFO from `drgnx-term-term': xterm-ghostty only while its entry is compiled, else xterm-256color."
+  (let ((dir (and (equal drgnx-term-term "xterm-ghostty") (drgnx-term--terminfo))))
+    (cond (dir (list "TERM=xterm-ghostty" (concat "TERMINFO=" dir)))
+          ((equal drgnx-term-term "xterm-ghostty") (list "TERM=xterm-256color" "TERMINFO"))
+          (t (list (concat "TERM=" drgnx-term-term) "TERMINFO")))))
+
+(defun drgnx-term--integration-entries ()
+  "The shell integration's entries (etc/shell/drgnx.*, docs/guide/terminal.md): DRGNX_TERMINAL, the features
+\(`drgnx-term-shell-integration-features'; unset when `drgnx-term-shell-integration' is none), the one shell meant, the
+ssh choice; Ghostty's own variables from a Ghostty around this Emacs are unset."
+  (append (list "DRGNX_TERMINAL=1" "TERM_PROGRAM=drgnx" (format "DRGNX_TERMINAL_SSH=%s" drgnx-term-ssh-terminfo)
+                "GHOSTTY_BIN_DIR" "GHOSTTY_RESOURCES_DIR" "GHOSTTY_SHELL_INTEGRATION_XDG_DIR")
+          (if (eq drgnx-term-shell-integration 'none)
+              (list "GHOSTTY_SHELL_FEATURES")
+            (list (concat "GHOSTTY_SHELL_FEATURES=" (string-join drgnx-term-shell-integration-features ","))))
+          (if (memq drgnx-term-shell-integration '(detect none))
+              (list "DRGNX_TERMINAL_SHELL")
+            (list (concat "DRGNX_TERMINAL_SHELL=" (symbol-name drgnx-term-shell-integration))))))
+
 (defun drgnx-term--env ()
   "The program's whole environment, as `[[NAME, VALUE]…]': `drgnx-term-env', then drgnx's terminal entries (TERM
-from `drgnx-term-term'), then `drgnx-terminal-environment', then this Emacs's; an entry without `=' unsets its name."
+from `drgnx-term-term', `drgnx-term--integration-entries'), then `drgnx-terminal-environment', then this Emacs's; an
+entry without `=' unsets its name."
   (let ((seen (make-hash-table :test #'equal)) (out nil))
     (dolist (e (append drgnx-term-env
-                       (list (concat "TERM=" drgnx-term-term) "COLORTERM=truecolor"
-                             (format "INSIDE_EMACS=%s,drgnx" emacs-version) "COLUMNS" "LINES")
+                       (drgnx-term--term-entries)
+                       (list "COLORTERM=truecolor" (format "INSIDE_EMACS=%s,drgnx" emacs-version) "COLUMNS" "LINES")
+                       (drgnx-term--integration-entries)
                        (drgnx-terminal-environment) process-environment))
       (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
         (unless (gethash name seen)
@@ -805,8 +832,12 @@ does a shell's that failed at once (`drgnx-term-abnormal-command-exit-runtime'),
              (kill-new (plist-get data :data)))))))))
 
 (defun drgnx-term--cwd (cwd)
-  "The shell says its directory is CWD (OSC 7: a `file://' URL or a path): the buffer's `default-directory' follows."
-  (when-let* ((dir (if (string-prefix-p "file://" cwd) (drgnx-term--link-file cwd) cwd))
+  "The shell says its directory is CWD (OSC 7: a `file://' URL, Ghostty's bash and zsh's `kitty-shell-cwd://HOST/PATH'
+with the path raw, or a path): the buffer's `default-directory' follows, for a local folder."
+  (when-let* ((dir (cond ((string-prefix-p "file://" cwd) (drgnx-term--link-file cwd))
+                         ((string-match "\\`kitty-shell-cwd://\\([^/]*\\)\\(/.*\\)\\'" cwd)
+                          (and (member (match-string 1 cwd) (list "" "localhost" (system-name))) (match-string 2 cwd)))
+                         (t cwd)))
               ((file-directory-p dir)))
     (setq default-directory (file-name-as-directory dir))))
 

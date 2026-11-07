@@ -133,7 +133,7 @@ case $cmd in
       _arguments '--json[machine-readable]'
     fi ;;
   build)
-    _arguments '1:what:(runner-bundle)' '--arch[the bundle'"'"'s architecture]:architecture:(x86_64 aarch64)' ;;
+    _arguments '1:what:(runner-bundle terminfo)' '--arch[the bundle'"'"'s architecture]:architecture:(x86_64 aarch64)' ;;
   runtime)
     if (( CURRENT == 2 )); then
       _values 'runtime command' 'build[cargo build of Ratatoskr]' 'install[the built binary into drgnx'"'"'s data folder]'

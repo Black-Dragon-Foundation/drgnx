@@ -204,8 +204,11 @@ program runs).
 `drgnx-term-usable-p`). Lisp inserts rows, places the cursor, sends input and runs commands; the worker computes.
 
 - **Open:** `term/open` goes on the subscribed connection, the one the rows come back on, with the window's size in
-  cells, the program's whole environment (`TERM`, `COLORTERM`, `INSIDE_EMACS`, then `drgnx-terminal-environment`,
-  then this Emacs's) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
+  cells, the program's whole environment (`drgnx-term-env`; `TERM` and `TERMINFO` from `drgnx-term--term-entries`:
+  `xterm-ghostty` only while `<data>/terminfo/x/xterm-ghostty` exists; `COLORTERM`, `INSIDE_EMACS`; the shell
+  integration's `DRGNX_TERMINAL`, `TERM_PROGRAM`, `GHOSTTY_SHELL_FEATURES`, `DRGNX_TERMINAL_SHELL`,
+  `DRGNX_TERMINAL_SSH`, with Ghostty's other variables unset; then `drgnx-terminal-environment`, then this Emacs's;
+  the shell side is `etc/shell/drgnx.*`, docs/guide/shell.md) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
   `term:<id>` in the class `term` (one class for every terminal: the worker builds rows for cells, so a text scale or
   a font change never re-pairs the buffer, and no `view/env` is sent). A reset that came before the answer found no
   buffer, so the answer sends `view/resync` when nothing was applied yet. With no subscription the buffer waits and

@@ -168,8 +168,10 @@ terminals."
 Applies to new terminals."
   :type '(repeat string) :group 'drgnx :scope 'global :agents 'never :schema '(list-of string))
 
-(drgnx-defsetting drgnx-term-term "xterm-256color"
-  "The TERM a new terminal's program sees.  Applies to new terminals."
+(drgnx-defsetting drgnx-term-term "xterm-ghostty"
+  "The TERM a new terminal's program sees.  \"xterm-ghostty\" (Ghostty's entry, which `drgnx build' compiles into
+<data>/terminfo; TERMINFO then names that folder) falls back to \"xterm-256color\" while the entry is not there.
+Applies to new terminals."
   :type 'string :group 'drgnx :scope 'global :agents 'never :schema 'string)
 
 (drgnx-defsetting drgnx-term-working-directory nil
@@ -186,8 +188,15 @@ those, or `none'.  It marks prompts and commands, reports the folder and sets th
 
 (drgnx-defsetting drgnx-term-shell-integration-features '("cursor" "title" "sudo")
   "The features of the shell integration a new terminal turns on (Ghostty's names: \"cursor\", \"title\", \"sudo\",
-\"path\").  Applies to new terminals."
+\"path\").  Ghostty's ssh features are `drgnx-term-ssh-terminfo'.  Applies to new terminals."
   :type '(repeat string) :group 'drgnx :scope 'global :agents 'never :schema '(list-of string))
+
+(drgnx-defsetting drgnx-term-ssh-terminfo 'fallback
+  "What `ssh' typed in a terminal does about TERM (with drgnx's shell file sourced): `fallback', ssh says
+\"xterm-256color\", which every host knows; `install', the first ssh to a host installs Ghostty's entry there with the
+host's tic, once, and later ones keep \"xterm-ghostty\".  Applies to new terminals."
+  :type '(choice (const fallback) (const install)) :group 'drgnx :scope 'global :agents 'never
+  :schema '(enum fallback install))
 
 (drgnx-defsetting drgnx-term-linux-cgroup-memory-limit nil
   "The most memory a new terminal (its program and all it starts) may use, in systemd's form (\"4G\", \"512M\"); nil:
@@ -269,7 +278,8 @@ Applies to new terminals."
     ("term" spawn drgnx-term-term)
     ("working-directory" spawn drgnx-term-working-directory)
     ("shell-integration" spawn drgnx-term-shell-integration)
-    ("shell-integration-features" spawn drgnx-term-shell-integration-features)
+    ("shell-integration-features" spawn drgnx-term-shell-integration-features
+     "ssh-env and ssh-terminfo: `drgnx-term-ssh-terminfo'")
     ("linux-cgroup" none scope)
     ("linux-cgroup-memory-limit" spawn drgnx-term-linux-cgroup-memory-limit)
     ("linux-cgroup-processes-limit" spawn drgnx-term-linux-cgroup-processes-limit)

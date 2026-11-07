@@ -2246,7 +2246,7 @@ those, or `none'.  It marks prompts and commands, reports the folder and sets th
 ## drgnx-term-shell-integration-features
 
 The features of the shell integration a new terminal turns on (Ghostty's names: "cursor", "title", "sudo",
-"path").  Applies to new terminals.
+"path").  Ghostty's ssh features are `drgnx-term-ssh-terminfo'.  Applies to new terminals.
 
 | Key | Value |
 | --- | --- |
@@ -2261,13 +2261,34 @@ The features of the shell integration a new terminal turns on (Ghostty's names: 
 | `:agents` | `never` |
 | `:schema` | `(list-of string)` |
 
-## drgnx-term-term
+## drgnx-term-ssh-terminfo
 
-The TERM a new terminal's program sees.  Applies to new terminals.
+What `ssh' typed in a terminal does about TERM (with drgnx's shell file sourced): `fallback', ssh says
+"xterm-256color", which every host knows; `install', the first ssh to a host installs Ghostty's entry there with the
+host's tic, once, and later ones keep "xterm-ghostty".  Applies to new terminals.
 
 | Key | Value |
 | --- | --- |
-| Default | `"xterm-256color"` |
+| Default | `fallback` |
+| Type | `(choice (const fallback) (const install))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum fallback install)` |
+
+## drgnx-term-term
+
+The TERM a new terminal's program sees.  "xterm-ghostty" (Ghostty's entry, which `drgnx build' compiles into
+<data>/terminfo; TERMINFO then names that folder) falls back to "xterm-256color" while the entry is not there.
+Applies to new terminals.
+
+| Key | Value |
+| --- | --- |
+| Default | `"xterm-ghostty"` |
 | Type | `string` |
 | `:scope` | `global` |
 | `:workspace` | `data` |
