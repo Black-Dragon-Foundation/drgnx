@@ -3844,8 +3844,13 @@ one CDP frame; one over the limit is dropped up to its NUL. A CDP frame while no
 
 **Stop and exit.** `{"op":"stop","why":W}` closes the pipe, sends SIGTERM to Chromium's process group, and SIGKILL after
 2 s. However Chromium ends (stopped, crashed, or on its own), the host waits for the main process without reaping it,
-kills what is left of its group (the group's id is still held by the unreaped leader), reaps it, lets the pipe's last
-messages through for up to 1 s, and sends `{"ev":"exited","code":N|null,"signal":N|null}`. The next `start` is a fresh
+kills what is left of its group (the group's id is still held by the unreaped leader), tells the pipe's reader how many
+bytes the pipe holds then (`FIONREAD`: all the group wrote), reaps it, and sends `{"ev":"exited","code":N|null,
+"signal":N|null}` once the reader has passed those bytes on and stopped. The reader never waits for the pipe's EOF
+there: a copy of its write end outside the group (any fork beside the host holds one until its exec; in the unit
+tests, every thread of the test binary forks) would hold that back, and what such a copy writes is never read as the
+browser. A Chromium without a group of its own (a filter refused `setpgid`) is waited for by the pipe's end, for up to
+1 s. The next `start` is a fresh
 Chromium through the same host.
 
 **The hub goes.** EOF on fd 3 (the hub ended, or restarted: an inherited fd cannot be handed over again), or a reset
@@ -3861,8 +3866,9 @@ waiter thread. The main thread is the one that forks, so Chromium's death signal
 Tests: `browser::host` unit tests run the host on a thread against `tests/data/fake-chromium.sh`, a stand-in that
 speaks the pipe and echoes every command as its reply. It records its argv, its environment and every call in its
 dir, and answers `Target.attachToBrowserTarget` and `Target.detachFromTarget` as Chromium would. On `Fake.attach` it
-sends a paused child target, on `Fake.crash` it dies by SIGKILL, and on `Fake.stubborn` it ignores SIGTERM and the
-pipe's end. `tests/browser_sandboxed.rs` (`#[ignore]`, the
+sends a paused child target, on `Fake.crash` it dies by SIGKILL, on `Fake.stubborn` it ignores SIGTERM and the
+pipe's end, and on `Fake.stray` a process in its own session keeps a copy of the pipe and writes to it once the
+browser is reaped (`a_stray_copy_of_the_pipe_is_never_read_after_the_end`). `tests/browser_sandboxed.rs` (`#[ignore]`, the
 VM) starts the host under a real bwrap launch with the stand-in.
 
 ## Forecasts
