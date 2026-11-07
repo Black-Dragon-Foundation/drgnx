@@ -545,8 +545,8 @@ under its own name; the sha256 check is the same for both sources. Whoever bumps
 (a new toolchain, a new branch whose base has no entry, an entry evicted from the repository's 10 GB) compiles every
 dependency from scratch. On the PR run of 2026-11-06 only `linux` and `macos` restored one (both PR-scoped entries, since
 `main` held none of them: the 4.8 GB macOS entry and the other PR entries fill most of the 10 GB, so older ones go);
-`msrv`, `android`, both `escape-host` runners and `agent-containers` missed and rebuilt everything (2-3 minutes of
-`cargo build` each, 6-8 for the test builds). Those jobs now also run rustc through
+`msrv`, `android`, both `escape-host` runners and `agent-containers` missed and rebuilt everything (88-159 s of
+cargo each in that run). Those jobs now also run rustc through
 [sccache](https://github.com/mozilla/sccache) (`.github/actions/sccache`, the `mozilla-actions/sccache-action` pinned by
 SHA, GitHub's cache service as its store; `build-test-bins` does the same inline). sccache keys every rustc call by the
 compiler, its flags and the source hashes, so a dependency compiled by any job with the same toolchain, target and
@@ -554,8 +554,8 @@ flags is a hit, whatever the branch's target entry. The two layers stack: a rest
 (sccache never sees it); sccache serves what cargo does rebuild. Scope is the same as `actions/cache`: `main`'s runs write
 what pull requests read. A fork's pull request (no cache token) runs without it, and a cache service error never fails a
 build (`SCCACHE_IGNORE_SERVER_IO_ERROR`). Needs `CARGO_INCREMENTAL=0` (set in every workflow). Not covered: the Rust
-built inside container images (`agent-containers`' podman builds) and the fuzz jobs' cargo-fuzz run. The step summary
-of the sccache action prints the hit statistics; read them after the first run on `main`.
+built inside container images (`agent-containers`' podman builds) and the fuzz jobs' cargo-fuzz run. `sccache --show-stats` in a job's
+last step shows the hits; check them after the first run on `main`.
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
