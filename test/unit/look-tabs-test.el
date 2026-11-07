@@ -144,6 +144,8 @@ frame: a terminal frame's tabs keep their × when a graphical frame refreshes ev
         (drgnx-chrome-test--open dir "a.txt")
         (drgnx-chrome-test--open dir "b.txt")
         (setq asked nil)
+        ;; the tab line is kept while what it shows is the same (`drgnx-chrome--tab-lines'): make it again
+        (clrhash drgnx-chrome--tab-lines)
         (drgnx-chrome-apply nil t)
         (should asked)
         (should (seq-every-p (lambda (f) (eq f (window-frame (selected-window)))) asked)))))
