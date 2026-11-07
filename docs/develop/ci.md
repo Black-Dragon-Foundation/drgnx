@@ -227,9 +227,9 @@ serves from this repository, fails the job. The actions save a cache only for dr
 commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 
 - `build-test-bins`: Ratatoskr with the test hooks, `ratatoskr-mock` and huginn's `dump`, with a cargo cache
-  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved by a push or manual run of `main`
-  or a pull request from a branch of this repository, never by a `ci/*` branch or a fork's (Nidhogg's run restores
-  it and never writes). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
+  (`cargo-OS-drgnx-test-bins-TOOLCHAIN-HASH`, [What is cached](#what-is-cached)) saved on Linux by a push or manual run of
+  `main` only, never by a pull request, a `ci/*` branch or a fork (Nidhogg's run restores it and never writes; macOS rebuilds
+  through sccache). `bins-linux` runs it once, for `unit`, `no-lisp-writes`, `hub-chaos`, `ui` and `perf` (whose agent workloads start a hub with
   `ratatoskr-mock` beside it), and uploads the binaries (`drgnx-test-bins-linux`, kept a day); `macos` runs it itself (one macOS job, so no second macOS runner for it: GitHub's free plan runs 5 at once).
 - `fetch-test-bins`: puts them back under the checkout's `runtime/target/debug` (so `bin/drgnx test --container` sees
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
@@ -551,11 +551,20 @@ cargo each in that run). Those jobs now also run rustc through
 SHA, GitHub's cache service as its store; `build-test-bins` does the same inline). sccache keys every rustc call by the
 compiler, its flags and the source hashes, so a dependency compiled by any job with the same toolchain, target and
 flags is a hit, whatever the branch's target entry. The two layers stack: a restored target makes cargo skip rustc
-(sccache never sees it); sccache serves what cargo does rebuild. Scope is the same as `actions/cache`: `main`'s runs write
-what pull requests read. A fork's pull request (no cache token) runs without it, and a cache service error never fails a
+(sccache never sees it); sccache serves what cargo does rebuild. Scope is the same as `actions/cache`: Only a push to `main` writes it (`SCCACHE_GHA_RW_MODE`);
+pull requests and `ci/*` pushes read what `main` wrote. A fork's pull request (no cache token) runs without it, and a cache service error never fails a
 build (`SCCACHE_IGNORE_SERVER_IO_ERROR`). Needs `CARGO_INCREMENTAL=0` (set in every workflow). Not covered: the Rust
 built inside container images (`agent-containers`' podman builds) and the fuzz jobs' cargo-fuzz run. `sccache --show-stats` in a job's
 last step shows the hits; check them after the first run on `main`.
+
+**The 10 GB budget** (everything is written by `main`; estimates, compressed; check `gh cache list` after the first full
+`main` run and trim here if it is over): `linux` target 2.5 GB, Linux test binaries 0.5 GB, pinned models 1.0 GB, Nidhogg
+tarball 0.1 GB, registry and ELPA under 0.1 GB, fuzz build and corpora under 0.5 GB (unmeasured), sccache 1-3 GB (the
+third-party crates of the Linux, MSRV, Android, ARM and macOS builds, each compressed per crate; unmeasured, local runs
+cached 7 GB uncompressed for the whole workspace). About 6-8 GB in all, so a second `main` generation (the lock moved)
+still fits before the least recently used entries go. Replaced since: the `msrv`, `escape-host`, `agent-containers`,
+`android` and `macos` target entries (about 9 GB for macOS and the test binaries alone) and every pull request's entries.
+If the budget is exceeded, the first thing to trim is sccache for `fuzz-build` and `macos`.
 
 | What | Key | Saves | Bust it |
 |---|---|---|---|
@@ -586,14 +595,15 @@ until the lock or the toolchain moves, and more crates rebuild as `main` moves o
 cargo copies them out of `deps/` again), incremental data (CI builds with `CARGO_INCREMENTAL=0`) and the registry's
 unpacked sources. It never fails a job: what it cannot work out it leaves, with a warning. A job saves at its
 end when its build passed, whatever its tests said (a red test keeps the build), and only when its key was not
-already there. Who saves (`CACHE_SAVE` and `CACHE_SAVE_PR` in `runtime.yml`, and the actions' own conditions): `main`
-first, with every family (its pushes, manual runs and the daily run); a pull request from a branch of this repository
-only the families that pay off: `runtime.yml`'s `linux` and `macos` (the slowest Rust jobs), `build-test-bins` (the
-tiers wait for it) and the test ELPA. Its other jobs restore `main`'s and rebuild only what changed. `ci/*` branches
-and a fork's pull requests only restore, so an untrusted change never writes what a trusted run reads, and neither does
-a `drgnx_ref` another repository's run names. GitHub scopes a pull request's entries to its merge ref (it reads its own
-and `main`'s, and `main` never reads them), and the fuzz corpora are grown by the daily run and `main` only. A pull
-request whose lock matches `main`'s restores `main`'s entry under the exact key and saves nothing. CI builds
+already there. Who saves (`CACHE_SAVE` in `runtime.yml`, and the actions' own conditions): `main` only (its pushes, manual runs and the
+daily run), and of the target caches only `runtime.yml`'s `linux` and the Linux `build-test-bins` (and the fuzz build the
+fuzz shards take). A pull request, a `ci/*` branch and a fork only restore, so an untrusted change never writes what a
+trusted run reads, nor does a `drgnx_ref` another repository's run names. The earlier rule let a pull request save its own
+(`linux`, `macos`, `build-test-bins`, the models): GitHub scopes those to the merge ref, so no other run reads them, and
+on 2026-11-06 they (9.2 GB, the macOS target alone 4.8 GB) filled the repository's 10 GB and pushed all of `main`'s out;
+the macOS target also took 204 s to restore. The other jobs, macOS included, rely on sccache. The fuzz corpora are grown by
+the daily run and `main` only. A pull request whose lock matches `main`'s restores `main`'s entry under the exact key and
+saves nothing. CI builds
 with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`: backtraces keep file and line), which halves the
 kept build: the `linux` job's test build is 2.6 GB on disk and 0.6 GB compressed, against 5.3 GB and 1.1 GB with full
 debug info. The registry is one entry per OS and lock, not a copy in each job's entry, and a pull request whose lock

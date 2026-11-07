@@ -1,6 +1,6 @@
 # sccache for the Rust build jobs: rustc runs through it (RUSTC_WRAPPER), its cache is GitHub's (the same service as
 # actions/cache, scoped the same way: a pull request reads the base branch's entries and writes its own). Complements
-# the runtime/target caches, which only help when a job's whole key (or a prefix) was saved: sccache keys each rustc call
+# the runtime/target caches (GitHub's 10 GB is shared with them: only a push to main writes, everything else reads), which only help when a job's whole key (or a prefix) was saved: sccache keys each rustc call
 # by its inputs, so a job, branch or toolchain with no target entry still reuses every dependency another job compiled.
 # Needs CARGO_INCREMENTAL=0 (the workflows set it). A fork's pull request has no cache token: it runs without. A cache
 # service outage never fails a build (SCCACHE_IGNORE_SERVER_IO_ERROR). docs/develop/ci.md, "What is cached"
@@ -13,9 +13,12 @@ runs:
       uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.11
     - if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       shell: bash
+      env:
+        RW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}   # only main writes
       run: |
         {
           echo "RUSTC_WRAPPER=sccache"
           echo "SCCACHE_GHA_ENABLED=true"
+          echo "SCCACHE_GHA_RW_MODE=${RW}"
           echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1"
         } >> "$GITHUB_ENV"
