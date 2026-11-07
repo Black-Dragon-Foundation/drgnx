@@ -355,5 +355,17 @@ hub or its worker."
         (should (equal (string-trim-right (drgnx-term-test--row-matching b "\\`[0-9]+ [0-9]+ *\\'"))
                        (format "%d %d" (nth 1 size) (nth 0 size))))))))
 
+;;;; Quitting
+
+(ert-deftest drgnx-term/quit-question-lists-running-terminal ()
+  ;; a terminal whose shell runs a program is named by the quit question; one at its prompt is not
+  (drgnx-term-test--with
+    (let ((busy (drgnx-term-test--start)) (idle (drgnx-term-test--start)))
+      (drgnx-term-test--run busy "echo g''o; sleep 30")
+      (drgnx-term-test--until-line busy "go" "the echo before the sleep")
+      (let ((rows (drgnx-term-test--ask "term/list" nil)))
+        (should (equal (drgnx-term--running-names rows (list busy idle)) (list (buffer-name busy))))
+        (should (memq 'drgnx-term-running drgnx-session-running-functions))))))
+
 (provide 'term-test)
 ;;; term-test.el ends here

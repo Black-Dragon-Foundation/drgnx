@@ -454,9 +454,11 @@ panel's rules on."
     (drgnx-test-with-modules '(tools/terminal-eat) :strict t
                              (should (eq (plist-get (alist-get 'tools/terminal-eat (drgnx-modules-report)) :status) 'ok))
                              (pcase-dolist (`(,f . ,a) advice) (should (advice-member-p a f)))
-                             (should (memq 'drgnx-terminal-eat--refresh-before-kill (default-value 'kill-buffer-query-functions))))
+                             (should (memq 'drgnx-terminal-eat--refresh-before-kill (default-value 'kill-buffer-query-functions)))
+                             (should (memq 'drgnx-terminal-eat--refresh-for-quit drgnx-session-running-functions)))
     (pcase-dolist (`(,f . ,a) advice) (should-not (advice-member-p a f)))
     (should-not (memq 'drgnx-terminal-eat--refresh-before-kill (default-value 'kill-buffer-query-functions)))
+    (should-not (memq 'drgnx-terminal-eat--refresh-for-quit drgnx-session-running-functions))
     (should-not (memq 'drgnx-terminal-cheatsheet-section (bound-and-true-p drgnx-surfaces-cheatsheet-sections)))))
 
 (provide 'mod-terminal-test)

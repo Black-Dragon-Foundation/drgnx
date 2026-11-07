@@ -172,8 +172,8 @@ the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
   "Keys a terminal always leaves to Emacs: C-c (a prefix: drgnx's terminal keys), C-x, C-g, C-h, C-u, C-q, C-\\,
 M-x, M-:, M-! and M-&.  As key vectors (M-x is [?\\e ?x]).")
 
-(defvar drgnx-surfaces-cheatsheet-sections nil
-  "Abnormal hook of the key sheet: each function returns (TITLE . LINES) or nil; shown after \"Key problems\".")
+(defvar drgnx-surfaces-cheatsheet-sections)
+(defvar drgnx-session-running-functions)
 
 (defun drgnx-terminal--keys-vector (event)
   "EVENT as a key vector: M-x is [?\\e ?x]."
@@ -243,20 +243,6 @@ keys, by default `drgnx-term-reserved-keys')."
                                   (format "%s goes to the shell (%soutside the terminal, or the palette)"
                                           k (if title (concat title ": ") ""))))
                               to-shell)))))))
-
-(defun drgnx-terminal--sheet-sections (&rest _)
-  "Append the `drgnx-surfaces-cheatsheet-sections' to the key sheet unless it shows them itself (after \"Key problems\")."
-  (when-let* ((buffer (get-buffer "*drgnx keys*")))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (save-excursion
-          (dolist (fn drgnx-surfaces-cheatsheet-sections)
-            (pcase (funcall fn)
-              (`(,title . ,lines)
-               (when (and lines (not (save-excursion (goto-char (point-min)) (search-forward (concat "\n" title "\n") nil t))))
-                 (goto-char (point-max))
-                 (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
-                 (dolist (l lines) (insert "  " l "\n")))))))))))
 
 ;;;; The terminal's keymap: raw input, but for the keys that reach drgnx
 
@@ -656,11 +642,16 @@ hub is not up, connect, and the subscription opens it (`drgnx-term--connected').
 
 ;;;; Events
 
+(defvar drgnx-term-exit-functions nil
+  "Called in a terminal's buffer with the exit DATA (`:code', `:signal') when its program ended, before a shell's
+buffer goes.  A caller watching its terminal adds to it buffer-locally (Export Keys forgets the typed keys).")
+
 (defun drgnx-term--exited (data)
   "The terminal's program ended (DATA: its code or signal): a shell's buffer goes, a command's stays to be read."
   (setq drgnx-term--state 'exited)
   (remhash drgnx-term--id drgnx-term--buffers)
   (setq drgnx-term--id nil)
+  (run-hook-with-args 'drgnx-term-exit-functions data)
   (if drgnx-term--shell
       (kill-buffer (current-buffer))
     (setq mode-line-process
@@ -743,6 +734,35 @@ command's stays, so what it printed can be read."
     (drgnx-term--open buffer)
     buffer))
 
+;;;; Quitting: what still runs, and the clean exit
+
+(defconst drgnx-term-list-wait 0.2
+  "Seconds the quit question waits for the hub's `term/list'; with no answer every terminal counts as running.")
+
+(defun drgnx-term--running-names (rows buffers)
+  "The names of BUFFERS (terminal buffers) whose program runs by ROWS (`term/list''s answer): a shell at its prompt
+does not; a terminal ROWS does not name counts as running."
+  (delq nil (mapcar (lambda (b)
+                      (let* ((id (buffer-local-value 'drgnx-term--id b))
+                             (row (seq-find (lambda (r) (equal (plist-get r :id) id)) rows)))
+                        (and (or (null row) (eq (plist-get row :running) t)) (buffer-name b))))
+                    buffers)))
+
+(defun drgnx-term-running ()
+  "`drgnx-session-running-functions': this Emacs's terminals whose program still runs, by name.  Asks the hub
+\(`term/list'), waiting at most `drgnx-term-list-wait'; with no answer every open terminal counts as running, so the
+quit question never stops a program unasked."
+  (when-let* ((buffers (seq-filter (lambda (b) (eq (buffer-local-value 'drgnx-term--state b) 'open))
+                                   (drgnx-term-buffers))))
+    (let ((rows (condition-case nil (drgnx-hub-call-sync "term/list" nil drgnx-term-list-wait) (error :none))))
+      (if (eq rows :none) (mapcar #'buffer-name buffers) (drgnx-term--running-names rows buffers)))))
+
+(defun drgnx-term--session-end ()
+  "`kill-emacs-hook': a clean exit ends this Emacs's terminals (`term/session-end'); after a crash they keep running
+and the next Emacs of the session adopts them."
+  (when (drgnx-term--up-p)
+    (ignore-errors (drgnx-hub--call-on drgnx-hub--events "term/session-end" nil #'ignore))))
+
 (defun drgnx-term-usable-p (dir)
   "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, DIR not remote, module tools/term has run."
   (and (not (eq system-type 'windows-nt))
@@ -767,7 +787,8 @@ command's stays, so what it printed can be read."
                        (drgnx-term-apply-keys)
                        (advice-add 'drgnx-keys-apply :after #'drgnx-term-apply-keys)
                        (add-hook 'drgnx-surfaces-cheatsheet-sections #'drgnx-terminal-cheatsheet-section)
-                       (advice-add 'drgnx-surfaces-cheatsheet :after #'drgnx-terminal--sheet-sections)
+                       (add-hook 'drgnx-session-running-functions #'drgnx-term-running)
+                       (add-hook 'kill-emacs-hook #'drgnx-term--session-end)
                        (drgnx-state-subscribe 'windows-changed #'drgnx-term--windows-changed)
                        (drgnx-notice-define-source 'term :title "Terminal")
                        (drgnx-command-define 'terminal-copy :category "Terminal" :title "Copy" :scope 'editing

@@ -13,6 +13,5 @@
  "test/unit/mod-tty-frames-test.el: drgnx-tty-mouse"
  "test/unit/mod-tty-popups-test.el: standard-display-table"
  "test/unit/terminal-keys-test.el: drgnx-keys-last"
- "test/unit/terminal-keys-test.el: drgnx-surfaces-cheatsheet-sections"
  "test/unit/tty-fallback-test.el: drgnx-keys-last"
  )

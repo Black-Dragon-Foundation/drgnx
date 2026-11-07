@@ -5,7 +5,6 @@
 (require 'seq)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
-(defvar drgnx-surfaces-cheatsheet-sections)
 (defvar drgnx-terminal-skip-shell-keys)
 (defvar drgnx-term--queue)
 (declare-function drgnx-term-mode "drgnx-term")
@@ -20,8 +19,7 @@
           (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-profiles nil)
           (drgnx-keys-problems nil) (drgnx-keys-last nil)
           (ring-bell-function ring-bell-function) (use-dialog-box use-dialog-box)
-          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen)
-          (drgnx-surfaces-cheatsheet-sections (bound-and-true-p drgnx-surfaces-cheatsheet-sections)))
+          (use-short-answers use-short-answers) (inhibit-startup-screen inhibit-startup-screen))
      (unwind-protect
          (progn
            (drgnx--core-commands)
