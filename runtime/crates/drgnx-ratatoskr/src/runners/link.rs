@@ -125,6 +125,11 @@ impl Session {
         &self.0.runner
     }
 
+    /// Whether the link has ended (lost, or closed): nothing more will arrive on it.
+    pub fn ended(&self) -> bool {
+        self.0.tasks().get(1).is_none_or(|t| t.is_finished())
+    }
+
     /// Queues F for the runner; false once the link has ended.
     pub fn send(&self, f: Frame) -> bool {
         let ended = self.0.tasks().first().is_none_or(|t| t.is_finished());

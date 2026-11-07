@@ -840,7 +840,7 @@ impl Registry {
             };
             clocks.retain(|n, _| recs.iter().any(|r| &r.name == n));
             for rec in recs {
-                let out = self.cfg.queue.is_unreachable(&rec.name);
+                let out = self.cfg.queue.needs_redial(&rec.name);
                 if !clocks.entry(rec.name.clone()).or_default().tick(out, now) {
                     continue;
                 }
