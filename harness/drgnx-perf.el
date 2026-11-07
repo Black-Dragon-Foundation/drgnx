@@ -307,7 +307,8 @@ histograms.  The largest bucket is read by EDGES (default `drgnx-perf--drain-edg
 (defun drgnx-perf--stall-record (record)
   "A `nidhogg-watchdog-record-functions' entry: keep what RECORD says of the stall (wall time, felt, signature, culprit)."
   (push (list :wall-ms (plist-get record :wall-ms) :felt (plist-get record :felt)
-              :signature (plist-get record :signature) :culprit (plist-get record :culprit))
+              :signature (plist-get record :signature) :culprit (plist-get record :culprit)
+              :phases (plist-get record :phases))
         drgnx-perf--stalls))
 
 (defvar drgnx-perf--stalls-snapshot nil "The watchdog's counters when the stalls probe began.")
@@ -336,23 +337,45 @@ CULPRIT)\" for the five most frequent signatures, the most frequent first (an em
                                          (let ((u (nth 3 c))) (cond ((stringp u) u) (u (format "%S" u)) (t "-")))))
                      (seq-take (sort by (lambda (a b) (> (nth 1 a) (nth 1 b)))) 5)))))
 
+(defconst drgnx-perf-lab-waits '("drgnx-perf--await-present" "drgnx-perf--wait" "drgnx-work-thirty--wait")
+  "The lab's own waits: a command's wait for its present, a workload's wait for its premise.  To the watchdog they are
+busy spans; a stall spent in one is the lab's (`drgnx-perf--lab-stall-p').")
+
+(defun drgnx-perf--lab-stall-p (stall)
+  "Non-nil when STALL (a record of `drgnx-perf--stall-record') is the lab's own: its culprit is one of
+`drgnx-perf-lab-waits', waiting (phase \"process-wait\"), and the time not in it is under the watchdog's threshold, so
+nothing else in the span was a stall of its own."
+  (let ((c (plist-get stall :culprit)))
+    (and (consp c) (member (plist-get c :fn) drgnx-perf-lab-waits) (equal (plist-get c :phase) "process-wait")
+         (numberp (plist-get c :share)) (numberp (plist-get stall :wall-ms))
+         (< (* (plist-get stall :wall-ms) (- 1 (plist-get c :share)))
+            (if (boundp 'nidhogg-watchdog-threshold) nidhogg-watchdog-threshold 100)))))
+
 (defun drgnx-perf--stalls-end ()
-  "The probe's keys (:stalls :stalls-felt :stall-max-ms :watchdog) for the workload just run: only :watchdog nil
-without the watchdog."
+  "The probe's keys (:stalls :stalls-lab :stalls-felt :stall-max-ms :watchdog) for the workload just run: only
+:watchdog nil without the watchdog.  The lab's own stalls (`drgnx-perf--lab-stall-p') are `:stalls-lab', not in
+the others."
   (if (not (drgnx-perf--watchdog-on-p))
       (list :watchdog nil)
     (nidhogg-watchdog-drain-now)
     (remove-hook 'nidhogg-watchdog-record-functions #'drgnx-perf--stall-record)
-    (let ((d (drgnx-perf-watchdog-delta drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot)))
-          (walls (delq nil (mapcar (lambda (s) (plist-get s :wall-ms)) drgnx-perf--stalls))))
+    (let* ((d (drgnx-perf-watchdog-delta drgnx-perf--stalls-snapshot (drgnx-perf-watchdog-snapshot)))
+           (lab (seq-count #'drgnx-perf--lab-stall-p drgnx-perf--stalls))
+           (own (seq-remove #'drgnx-perf--lab-stall-p drgnx-perf--stalls))
+           (walls (delq nil (mapcar (lambda (s) (plist-get s :wall-ms)) own))))
       ;; the count is the C counter's delta: the watchdog keeps only its newest 32 records and the ring is not drained
-      ;; during a workload, so the records give the stacks, the felt count and the longest wall time, not the number
-      (list :stalls (max (plist-get d :stalls) (length drgnx-perf--stalls))
-            :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) drgnx-perf--stalls))
+      ;; during a workload, so the records give the stacks, the felt count and the longest wall time, not the number.
+      ;; Only a record says a stall was the lab's: one the ring dropped counts against the workload.
+      (list :stalls (- (max (plist-get d :stalls) (length drgnx-perf--stalls)) lab)
+            :stalls-lab lab
+            :stalls-felt (length (seq-filter (lambda (s) (plist-get s :felt)) own))
             :stalls-ge16 (seq-count (lambda (w) (>= w 16)) walls)
             :stalls-ge100 (seq-count (lambda (w) (>= w 100)) walls)
             :stall-max-ms (drgnx-perf--round (if walls (apply #'max walls) 0.0))
             :stall-top (drgnx-perf--stall-top drgnx-perf--stalls)
+            :stall-own (vconcat (mapcar (lambda (s) (format "%.0f ms %s %S" (or (plist-get s :wall-ms) 0.0)
+                                                            (plist-get s :signature) (plist-get s :phases)))
+                                        (seq-take own 8)))
             :watchdog (list :missed (plist-get d :missed) :spans (plist-get d :spans) :samples (plist-get d :samples)
                             :monitor-cpu-ms (plist-get d :monitor-cpu-ms)
                             :drain-p95-ms (plist-get d :drain-p95-ms)
