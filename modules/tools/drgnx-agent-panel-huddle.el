@@ -26,11 +26,23 @@
 (defvar-local drgnx-agent-panel-huddle--keys nil "The row keys drawn, in order.")
 
 (defvar drgnx-agent-panel-huddle--open (make-hash-table :test #'equal)
-  "Huddle id → t while the huddle is asked or open (the status bar counts them).")
+  "Huddle id → its latest record while the huddle is asked or open (the status bar and the needs-you strip read them).")
 
 (defun drgnx-agent-panel-huddle-open-count ()
   "How many huddles wait for you or are going on."
   (hash-table-count drgnx-agent-panel-huddle--open))
+
+(defun drgnx-agent-panel-huddle-open-records ()
+  "The records of the huddles that wait for you or are going on, oldest id first."
+  (mapcar (lambda (id) (gethash id drgnx-agent-panel-huddle--open))
+          (sort (hash-table-keys drgnx-agent-panel-huddle--open) #'string<)))
+
+(defun drgnx-agent-panel-huddle-of (session)
+  "The record of an open huddle that SESSION is in, or nil."
+  (seq-find (lambda (rec) (seq-contains-p (plist-get rec :participants) session #'equal))
+            (drgnx-agent-panel-huddle-open-records)))
+
+(defvar drgnx-agent-panel-huddle-changed-hook nil "Run when a huddle opens or ends: the needs-you strip draws again.")
 
 (defun drgnx-agent-panel-huddle--participants ()
   (append (plist-get drgnx-agent-panel-huddle--rec :participants) nil))
@@ -136,8 +148,9 @@
         (when-let* ((b (get-buffer (format "*drgnx huddle: %s*" (plist-get rec :id)))))
           (with-current-buffer b (drgnx-agent-panel-huddle--take rec)))
         (if (member (format "%s" (plist-get rec :state)) '("asked" "open"))
-            (puthash (plist-get rec :id) t drgnx-agent-panel-huddle--open)
-          (remhash (plist-get rec :id) drgnx-agent-panel-huddle--open))))))
+            (puthash (plist-get rec :id) rec drgnx-agent-panel-huddle--open)
+          (remhash (plist-get rec :id) drgnx-agent-panel-huddle--open))
+        (run-hooks 'drgnx-agent-panel-huddle-changed-hook)))))
 
 (defun drgnx-agent-panel-huddle-setup ()
   (drgnx-command-define 'agents-huddle-send :category "Agents" :title "Write to Both Huddle Agents"

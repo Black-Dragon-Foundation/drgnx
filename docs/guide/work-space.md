@@ -57,6 +57,9 @@ says: *why* (you › spec › plan › task), what it *touches* (what it edits, 
 conclusion, and what you can do with it. Reads show as a count here; the list of each file with how it was seen
 arrives with the files picker.
 
+Two agents whose work overlaps can meet in a **huddle**: select one and press `H` to start it with the other. An open huddle
+appears in the needs-you strip; its key jumps to the agents in it.
+
 ### The strip, the lens and the filters
 
 - The **strip** is the map's header line and stays when you scroll. On the left, one chip for each thing that needs

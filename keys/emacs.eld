@@ -169,6 +169,7 @@
         (work-pause "p")
         (work-resume "u")
         (work-stop "x")
+        (work-huddle "H")
         (work-keys-sheet "?")
         (work-conclusion-steps "l")
         (work-step-conclusions "L")

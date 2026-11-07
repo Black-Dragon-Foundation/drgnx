@@ -996,7 +996,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-revert-here agents-panel-fork-here
                               agents-panel-chip agents-panel-revoke-always
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
-                              agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open))   ; part 3: the agent panel
+                              agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
+                              work-huddle))   ; part 3: the agent panel; H on a map overlap
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

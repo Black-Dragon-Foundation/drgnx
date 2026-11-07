@@ -210,25 +210,3 @@ yet gets the next ordinal first, as its `agent' snapshot would give it."
 
 (provide 'agents-editor-here-test)
 ;;; agents-editor-here-test.el ends here
-
-(declare-function drgnx-agents-here-mark "drgnx-agents-editor-here")
-(declare-function drgnx-agents-here-huddle "drgnx-agents-editor-here")
-
-(ert-deftest drgnx-agents-editor-hub/start-a-huddle-from-two-rows ()
-  (let (calls)
-    (cl-letf (((symbol-function 'drgnx-hub-call)
-               (lambda (method params &rest _) (push (cons method params) calls) 1)))
-      (drgnx-test-with-modules '(tools/agents-in-editor)
-        (let ((buf (drgnx-agents-editor-here-show '(("s1" 1 "edit" "/x/a.el" 3) ("s2" 2 "edit" "/x/b.el" 4) ("s3" 3 "edit" "/x/c.el" 5)))))
-          (unwind-protect
-              (with-current-buffer buf
-                (goto-char (point-min))
-                ;; one row marked is not enough
-                (drgnx-agents-here-mark)
-                (should-error (drgnx-agents-here-huddle) :type 'user-error)
-                (should-not (assoc "agents/huddle/start" calls))
-                (goto-char (point-min)) (forward-line 2)
-                (drgnx-agents-here-mark)
-                (drgnx-agents-here-huddle)
-                (should (equal '("agents/huddle/start" :sessions ["s1" "s3"]) (assoc "agents/huddle/start" calls))))
-            (kill-buffer buf)))))))

@@ -794,7 +794,25 @@ and its latest conclusion.  The form of terminals, of a map that does not fit an
                              (drgnx-work-client-ids state))))
     (append cards (mapcar (lambda (id) (cons (format "%s needs you" (plist-get (drgnx-work-client-item state id) :label))
                                              (list id)))
-                          (sort agents #'string<)))))
+                          (sort agents #'string<))
+            (drgnx-work-map--huddle-entries state))))
+
+(declare-function drgnx-agent-panel-huddle-open-records "drgnx-agent-panel-huddle")
+
+(defun drgnx-work-map--huddle-entries (state)
+  "One entry for each open huddle: its subject, jumping to the agents in it that STATE's map shows."
+  (when (fboundp 'drgnx-agent-panel-huddle-open-records)
+    (mapcar (lambda (rec)
+              (cons (format "huddle: %s" (or (plist-get rec :clash) (plist-get rec :id)))
+                    (seq-filter (lambda (id) (drgnx-work-client-item state id))
+                                (mapcar (lambda (sid) (concat "agent:" sid)) (append (plist-get rec :participants) nil)))))
+            (drgnx-agent-panel-huddle-open-records))))
+
+(defun drgnx-work-map--huddles-changed ()
+  "A huddle opened or ended: every map draws its strip again."
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-work-map-mode)
+      (with-current-buffer b (drgnx-work-map--refresh-strip)))))
 
 (defun drgnx-work-map--strip-string (state)
   "The needs-you strip of STATE: a chip with its jump key for each of the first nine entries, +N for the rest, and the

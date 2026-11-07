@@ -73,6 +73,7 @@
   "drgnx-agents-editor-hub/follow-moves-with-the-agent"
   "drgnx-agents-editor-hub/follow-here-stops-on-navigation"
   "drgnx-agents-editor-hub/give-saves-without-prompting"
+  "drgnx-agents-editor-hub/start-a-huddle-from-two-rows"
   "drgnx-agents-editor-hub/give-on-a-chat-saves-nothing"
   "drgnx-agents-editor-hub/give-refused-lists-unsaved-buffers"
   "drgnx-agents-editor-hub/the-interim-save-hook-is-gone"

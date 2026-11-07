@@ -328,6 +328,12 @@ it was recorded in, and computes the steps it rests on. `work/conclusions {sessi
   session's `machine` is the job's machine, so the "runs on" edge points at the runner. The agent item carries `job`;
   the Lisp card turns it into `job · MACHINE · M:SS/Nm`, and the side panel of a machine lists the jobs on it
   (`drgnx-work-detail--machine-queue`), `l` (`work-job-log`) calling `exec/log` for the row's job.
+- Huddles on the map (client only): `drgnx-work-map--needs-you` appends one strip entry for each open huddle
+  (`drgnx-agent-panel-huddle-open-records`, subject = the clash; its jump selects the agents in it), and the huddle
+  module's `drgnx-agent-panel-huddle-changed-hook` redraws the strips. On an agent with an `overlap` edge, `H`
+  (`work-huddle`, `drgnx-work-huddle-overlap`) starts a huddle with the agent at the other end through
+  `agents/huddle/start`; the side panel's edge line says "H huddle". In the editor, a `conflict` gutter range of an agent
+  in an open huddle reads "huddle open · o opens it" on hover, and `o` in the follow view opens the thread.
 - `machines/report` takes user connections only (`classes: [User]`, in `test/conformance/class-matrix.json`); a report
   for `local`, a ttl outside 0..86400, more than 256 slots or a slot without id and kind is `invalid-params`.
 - The local pool is read from the job runner (`exec::Runner::slot_counts`, the queue's `local_slots`): one `local-N`

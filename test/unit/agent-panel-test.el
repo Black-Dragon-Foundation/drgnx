@@ -507,6 +507,26 @@ unanswered, and panel \"s1\" as `buf'."
                 (should (equal (with-current-buffer file (buffer-string)) "NEW typed\n"))))
           (kill-buffer file))))))
 
+;;;; Huddles on the editor's conflict ranges
+
+(declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
+(declare-function drgnx-agents-editor-draw--conflict-help "drgnx-agents-editor-draw")
+(defvar drgnx-agent-panel-huddle--open)
+
+(ert-deftest drgnx-agent-panel/conflict-range-hover-names-the-open-huddle ()
+  (drgnx-agent-panel-test--with
+    (load (expand-file-name "modules/tools/drgnx-agents-editor-draw" drgnx-dir) nil t)
+    (unwind-protect
+        (progn
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1")))
+          (drgnx-agent-panel-huddle--event "huddle" (list :huddle (drgnx-agent-panel-test--huddle)))
+          (should (equal "x · huddle open · o opens it" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'changed "x" "s1")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s9")))
+          (drgnx-agent-panel-huddle--event "huddle" (list :huddle (plist-put (drgnx-agent-panel-test--huddle) :state "decided")))
+          (should (equal "x" (drgnx-agents-editor-draw--conflict-help 'conflict "x" "s1"))))
+      (clrhash drgnx-agent-panel-huddle--open))))
+
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
 

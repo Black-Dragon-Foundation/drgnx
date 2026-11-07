@@ -183,6 +183,7 @@
         (work-pause "p")
         (work-resume "u")
         (work-stop "x")
+        (work-huddle "H")
         (work-keys-sheet "?")
         (work-conclusion-steps "g l")
         (work-step-conclusions "g L")
