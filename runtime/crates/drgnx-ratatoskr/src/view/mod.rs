@@ -31,7 +31,8 @@ use drgnx_rows::fit_tty;
 use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
-    Display, ViewAck, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel, ViewResync,
+    Display, ViewAck, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel,
+    ViewResync,
 };
 use runstav::wire::Error;
 use serde_json::json;

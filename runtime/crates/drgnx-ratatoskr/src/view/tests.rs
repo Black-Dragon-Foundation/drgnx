@@ -25,6 +25,7 @@ enum Act {
 
 /// What the store sent, in order.
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // a test log: a patch per entry, never moved in bulk
 enum Out {
     Env(&'static str, u64),
     Patch(Patch),
