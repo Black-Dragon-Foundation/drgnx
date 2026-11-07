@@ -11,6 +11,7 @@
 (drgnx-test-modules-preload '(tools/agents-in-editor))
 
 (declare-function drgnx-agents-follow-start "drgnx-agents-follow")
+(declare-function drgnx-agents-follow-probe "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-stop "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-resume "drgnx-agents-follow")
 (declare-function drgnx-agents-follow-edit-hint "drgnx-agents-follow")
@@ -124,6 +125,16 @@
           (should-not (buffer-modified-p))
           (should (= (marker-position marker) (save-excursion (goto-char (point-min)) (forward-line 2) (point)))))
         (should (= 4 (drgnx-agents-follow-test--line w)))))))
+
+(ert-deftest drgnx-agents-follow/probe-times-moves-and-a-refresh ()
+  (drgnx-agents-follow-test--with
+    (let ((file (expand-file-name "big.el" root)))
+      (drgnx-agents-follow-test--write file (mapconcat (lambda (i) (format "line %d" i)) (number-sequence 1 3000) "\n"))
+      (drgnx-agents-follow-start "s1")
+      (let ((r (drgnx-agents-follow-probe file 5)))
+        (should (= 5 (length (car r))))
+        (should (cl-every #'numberp (car r)))
+        (should (numberp (cdr r)))))))
 
 (ert-deftest drgnx-agents-follow/buffer-stays-read-only-until-held ()
   (drgnx-agents-follow-test--with

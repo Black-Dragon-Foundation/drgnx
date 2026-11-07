@@ -146,6 +146,7 @@ three gutter ranges, an 80 to 95 row window). These are readings; the verdicts w
 - Pixels: the strip shows the agent's colour in the fringe of its lines and not elsewhere; the read range's rows hold none
   of the default background along their text, in both themes at both scales.
 - `agents-line-tick` has its probe (`drgnx-agents-editor-line-probe`) and no GUI reading yet.
+- `agents-follow-tick` has its probe (`drgnx-agents-follow-probe`: N follow moves and a refresh of a 3,000-line file) and no GUI reading yet.
 
 ## Not yet in this branch
 

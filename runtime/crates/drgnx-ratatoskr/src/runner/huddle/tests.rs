@@ -215,3 +215,30 @@ fn the_brief_is_facts() {
         assert!(b.contains(want), "{want:?} not in {b}");
     }
 }
+
+// ---- the hub's shell ----
+
+/// Pattern D (a real graph store, no sessions): the user's choice on a huddle card settles its huddle in a hub that
+/// restarted since the card was made, from the card and the huddle's record.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_card_settles_its_huddle_after_a_restart() {
+    let d = tempfile::tempdir().unwrap();
+    let f = crate::runner::graph_plan_tests::front(d.path());
+    let mut h = huddle();
+    h.state = HuddleState::Split;
+    // the hub before the restart: the huddle's record and its card
+    save(&f, &h).await;
+    let card = result_card(&f, &h).await.unwrap();
+    f.writer
+        .db
+        .write(
+            urdr::graph::TxMeta::new("user", urdr::graph::Class::User, "test"),
+            move |tx| norn::write::cards::card_settle(tx, card, "dismiss", 1.0).map(|_| ()),
+        )
+        .await
+        .unwrap();
+    // the hub after it: nothing in memory
+    let hub = Huddles::default();
+    hub.card_settled(&f, card).await;
+    assert_eq!(hub.get(&f, "h1").await.unwrap().state, HuddleState::Closed);
+}
