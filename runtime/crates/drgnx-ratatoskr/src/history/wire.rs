@@ -355,7 +355,9 @@ mod tests {
     #[test]
     fn a_linked_worktree_is_its_projects_history() {
         let d = tempfile::tempdir().unwrap();
-        let (main, linked) = (d.path().join("main"), d.path().join("main/.claude/wt"));
+        // git records the real path (`/private/var` on macOS), so the fixture lives there too
+        let root = std::fs::canonicalize(d.path()).unwrap();
+        let (main, linked) = (root.join("main"), root.join("main/.claude/wt"));
         std::fs::create_dir_all(&main).unwrap();
         let git = |args: &[&str]| {
             let ok = std::process::Command::new("git")

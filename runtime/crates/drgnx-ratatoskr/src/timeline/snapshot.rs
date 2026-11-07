@@ -379,7 +379,10 @@ pub fn head_of(worktree: &Path) -> Option<String> {
         (dot.fd, None)
     } else {
         let line = text(wt.as_fd(), ".git")?;
-        let to = worktree.join(line.trim_end().strip_prefix("gitdir: ")?);
+        // a relative gitdir is read from the worktree's own place: `open_path` refuses a link in any component, and
+        // the folder the hub was told (`/tmp`, `/var` on macOS) may lie behind one
+        let base = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_owned());
+        let to = base.join(line.trim_end().strip_prefix("gitdir: ")?);
         let gitdir = open_path(&to, Kind::Dir).ok()?.fd;
         let common = text(gitdir.as_fd(), "commondir")
             .and_then(|c| open_path(&to.join(c.trim_end()), Kind::Dir).ok());
@@ -976,7 +979,9 @@ mod tests {
     #[test]
     fn head_of_reads_a_linked_worktree() {
         let d = tempfile::tempdir().unwrap();
-        let (main, wt) = (d.path().join("main"), d.path().join("wt"));
+        // git records the real path (`/private/var` on macOS), so the fixture lives there too
+        let root = std::fs::canonicalize(d.path()).unwrap();
+        let (main, wt) = (root.join("main"), root.join("wt"));
         let one = repo_with_a_commit(&main);
         fixture_git(
             &main,
@@ -992,6 +997,44 @@ mod tests {
         assert_eq!(head_of(&main).as_deref(), Some(one.as_str()));
         fixture_git(&main, &["pack-refs", "--all"]);
         assert_eq!(head_of(&wt).as_deref(), Some(feat.as_str()));
+    }
+
+    /// Pattern D: a worktree reached through a link (`/tmp` is `/private/tmp` on macOS) with a relative `gitdir` is
+    /// still read: the link is in the path the hub was given, not in the `.git` file.
+    #[test]
+    fn head_of_reads_a_linked_worktree_given_through_a_link() {
+        let d = tempfile::tempdir().unwrap();
+        let (main, wt) = (d.path().join("main"), d.path().join("real/wt"));
+        std::fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        let one = repo_with_a_commit(&main);
+        fixture_git(
+            &main,
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        );
+        let rel = std::fs::canonicalize(&main)
+            .unwrap()
+            .join(".git/worktrees/wt");
+        let up = pathdiff(&rel, &std::fs::canonicalize(&wt).unwrap());
+        std::fs::write(wt.join(".git"), format!("gitdir: {up}\n")).unwrap();
+        let link = d.path().join("link");
+        std::os::unix::fs::symlink(d.path().join("real"), &link).unwrap();
+        assert_eq!(head_of(&link.join("wt")).as_deref(), Some(one.as_str()));
+    }
+
+    /// `to` as a path relative to the folder `from`, both canonical.
+    fn pathdiff(to: &Path, from: &Path) -> String {
+        let (t, f): (Vec<_>, Vec<_>) = (
+            to.components().collect::<Vec<_>>(),
+            from.components().collect::<Vec<_>>(),
+        );
+        let n = t.iter().zip(&f).take_while(|(a, b)| a == b).count();
+        let mut out: Vec<String> = f[n..].iter().map(|_| "..".to_owned()).collect();
+        out.extend(
+            t[n..]
+                .iter()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+        );
+        out.join("/")
     }
 
     /// Pattern D: what an agent points these files at never reaches the record: `.git` naming a text file or a folder
