@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-registry)
 (require 'drgnx-gc)
+(require 'drgnx-term (expand-file-name "drgnx-term" (file-name-directory (macroexp-file-name))))   ; the key split
 (defvar drgnx-keys-last)
 (defvar eat-semi-char-non-bound-keys)
 (defvar eat-semi-char-mode-map)
@@ -29,7 +30,6 @@
 (declare-function eat-exec "eat")
 (declare-function eat-term-make-keymap "eat")
 (declare-function eat-self-input "eat")
-(declare-function eat-yank "eat")
 (declare-function eat-update-semi-char-mode-map "eat")
 
 ;;;; Is a program running in the terminal?  (the quit and close-buffer questions)
@@ -131,23 +131,10 @@ stays when it ends."
 is quiet (no key handled in `drgnx-gc-gap-quiet', none waiting) and the threshold is nearly reached."
   (drgnx-gc-gap))
 
-;;;; Which keys reach drgnx, which the shell
-
-(defcustom drgnx-terminal-skip-shell-keys '("C-p" "C-b" "C-k" "C-f")
-  "First keys that reach drgnx in a terminal even though readline uses them: VS Code's commandsToSkipShell.
-Quick Open (C-p), Toggle Sidebar (C-b), every C-k chord, and Find (C-f, which searches the terminal's text).
-It only applies to keys the active key stack binds to an app or window command, so the Emacs and Vim profiles,
-which bind none of them, leave these keys to the shell.  Every other control or Alt key of such a command goes to
-the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
-  :type '(repeat string) :group 'drgnx)
-
-(defconst drgnx-terminal--meta-bit #x8000000 "The meta modifier bit of an event.")
+;;;; Which keys reach drgnx, which the shell (the split itself is the terminal's: `drgnx-terminal-key-split')
 
 (defvar drgnx-terminal--eat-default-non-bound nil
   "Eat's `eat-semi-char-non-bound-keys' as it was when eat loaded (set once, by `drgnx-terminal-apply-keys').")
-
-(defvar drgnx-surfaces-cheatsheet-sections nil
-  "Abnormal hook of the key sheet: each function returns (TITLE . LINES) or nil; shown after \"Key problems\".")
 
 (defun drgnx-terminal--eat-default ()
   "Eat's own non-bound keys, captured once eat is loaded; nil when eat is not there."
@@ -159,114 +146,22 @@ the shell.  Key descriptions of one event, e.g. \"C-p\" or \"M-j\"."
   "Keys eat leaves to Emacs: its non-bound list, and C-c (a prefix there: C-c C-c sends, other C-c keys are Emacs's)."
   (cons [?\C-c] (drgnx-terminal--eat-default)))
 
-(defun drgnx-terminal--eat-keys (event)
-  "EVENT as eat's keys vector: M-x is [?\\e ?x]."
-  (if (and (integerp event) (/= 0 (logand event drgnx-terminal--meta-bit)))
-      (vector ?\e (logand event (lognot drgnx-terminal--meta-bit)))
-    (vector event)))
-
-(defun drgnx-terminal--shell-event-p (event)
-  "Non-nil when EVENT is an ASCII character, control or plain, or M- plus one: what readline and zle mean."
-  (and (integerp event) (<= 0 (logand event (lognot drgnx-terminal--meta-bit)) 127)))
-
-(defun drgnx-terminal--bindings ()
-  "Global bindings (plists of `drgnx-keys-last') of the active stack's app and window commands."
-  (seq-filter (lambda (b)
-                (and (memq (plist-get b :map) '(nil global-map))
-                     (let ((cmd (drgnx-commands-get (plist-get b :id))))
-                       (and cmd (memq (drgnx-cmd-scope cmd) '(app window))))))
-              (plist-get drgnx-keys-last :bindings)))
-
-(defun drgnx-terminal-key-split ()
-  "Where the active key profile's keys go in a terminal: (:to-drgnx KEYS :to-shell KEYS), key strings.
-Only global bindings of commands with scope app or window count.  A key whose first event is an ASCII control
-or Alt character that eat sends to the shell goes to the shell (C-a, C-e, C-w, C-k, M-f as readline mean them),
-unless its first key is in `drgnx-terminal-skip-shell-keys'; every other key reaches drgnx (as do the keys eat
-leaves to Emacs: C-x, C-c, C-g, C-h, C-u, C-q, C-\\, M-x, M-:, M-!, M-&)."
-  (let ((reserved (drgnx-terminal--eat-reserved)) to-drgnx to-shell)
-    (dolist (b (drgnx-terminal--bindings))
-      (let* ((key (plist-get b :key)) (event (aref (key-parse key) 0)))
-        (if (and (drgnx-terminal--shell-event-p event)
-                 (not (member (drgnx-terminal--eat-keys event) reserved))
-                 (not (member (key-description (vector event)) drgnx-terminal-skip-shell-keys)))
-            (cl-pushnew key to-shell :test #'equal)
-          (cl-pushnew key to-drgnx :test #'equal))))
-    (list :to-drgnx (nreverse to-drgnx) :to-shell (nreverse to-shell))))
-
 (defun drgnx-terminal-apply-keys (&rest _)
-  "Make eat's semi-char keymap leave the keys that reach drgnx to drgnx (and so the key sheet's \"In the terminal\").
+  "Make eat's semi-char keymap leave the keys that reach drgnx to drgnx.
 Eat's own list plus the first events of `:to-drgnx' that eat would send to the shell; the keymap is rebuilt and
 put into `minor-mode-map-alist' (the alist keeps the old map).  Runs when eat loads and after `drgnx-keys-apply'."
   (when (featurep 'eat)
     (let* ((default (drgnx-terminal--eat-default))
            (reference (eat-term-make-keymap #'eat-self-input '(:ascii :arrow :navigation) nil))
            (extra nil))
-      (dolist (key (plist-get (drgnx-terminal-key-split) :to-drgnx))
-        (let ((keys (drgnx-terminal--eat-keys (aref (key-parse key) 0))))
+      (dolist (key (plist-get (drgnx-terminal-key-split (drgnx-terminal--eat-reserved)) :to-drgnx))
+        (let ((keys (drgnx-terminal--keys-vector (aref (key-parse key) 0))))
           (when (and (not (member keys (drgnx-terminal--eat-reserved))) (commandp (lookup-key reference keys)))
             (cl-pushnew keys extra :test #'equal))))
       (setq-default eat-semi-char-non-bound-keys (append default (nreverse extra)))
       (eat-update-semi-char-mode-map)
       (when-let* ((cell (assq 'eat--semi-char-mode minor-mode-map-alist)))
         (setcdr cell eat-semi-char-mode-map)))))
-
-(defun drgnx-terminal--key-title (key)
-  "The title of the first command the active stack binds KEY to."
-  (when-let* ((b (seq-find (lambda (b) (equal (plist-get b :key) key)) (drgnx-terminal--bindings)))
-              (cmd (drgnx-commands-get (plist-get b :id))))
-    (drgnx-cmd-title cmd)))
-
-(defun drgnx-terminal--collapse-chords (keys)
-  "KEYS with the chords of one first key (two or more, e.g. C-k C-s and C-k C-o) shown once, as \"C-k chords\"."
-  (let (seen out)
-    (dolist (k keys)
-      (let* ((v (key-parse k)) (prefix (key-description (vector (aref v 0)))))
-        (if (or (< (length v) 2)
-                (= 1 (seq-count (lambda (k2) (let ((v2 (key-parse k2))) (and (> (length v2) 1) (equal (aref v2 0) (aref v 0)))))
-                                keys)))
-            (push k out)
-          (unless (member prefix seen)
-            (push prefix seen)
-            (push (concat prefix " chords") out)))))
-    (nreverse out)))
-
-(defun drgnx-terminal-cheatsheet-section ()
-  "The key sheet's \"In the terminal\" section: (TITLE . LINES), or nil without eat or keys."
-  (when (and (drgnx-modules--ok-p 'tools/terminal-eat) (drgnx-terminal--eat-default))
-    (let* ((split (drgnx-terminal-key-split))
-           (to-drgnx (drgnx-terminal--collapse-chords (plist-get split :to-drgnx)))
-           (to-shell (drgnx-terminal--collapse-chords (plist-get split :to-shell))))
-      (when (or to-drgnx to-shell)
-        (cons "In the terminal"
-              (append (when to-drgnx (list (format "Reach drgnx: %s" (string-join to-drgnx ", "))))
-                      (mapcar (lambda (k)
-                                (let ((title (drgnx-terminal--key-title k)))   ; nil for "C-k chords"
-                                  (format "%s goes to the shell (%soutside the terminal, or the palette)"
-                                          k (if title (concat title ": ") ""))))
-                              to-shell)))))))
-
-(defun drgnx-terminal--sheet-sections (&rest _)
-  "Append the `drgnx-surfaces-cheatsheet-sections' to the key sheet unless it shows them itself (after \"Key problems\")."
-  (when-let* ((buffer (get-buffer "*drgnx keys*")))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (save-excursion
-          (dolist (fn drgnx-surfaces-cheatsheet-sections)
-            (pcase (funcall fn)
-              (`(,title . ,lines)
-               (when (and lines (not (save-excursion (goto-char (point-min)) (search-forward (concat "\n" title "\n") nil t))))
-                 (goto-char (point-max))
-                 (insert "\n" (propertize title 'face 'drgnx-sheet-heading) "\n")
-                 (dolist (l lines) (insert "  " l "\n")))))))))))
-
-(defun drgnx-terminal-copy ()
-  "Copy the selected text of the terminal to the kill ring and deselect it; with no selection do nothing."
-  (interactive)
-  (when (use-region-p)
-    (copy-region-as-kill (region-beginning) (region-end))
-    (deactivate-mark)))
-
-(defun drgnx-terminal--in-terminal-p () (derived-mode-p 'eat-mode))
 
 (defun drgnx-terminal-eat--doctor ()
   "Problems that make eat ask or fail (eat is not loaded for this: its terminfo is found beside its library)."
@@ -308,17 +203,7 @@ added the keys that reach drgnx).  The options, hooks and advice are recorded."
                        (eval-after-load 'eat (drgnx-modules-with-owner
                                                (drgnx-terminal-eat--options)
                                                (drgnx-terminal-apply-keys)))
-                       (advice-add 'drgnx-keys-apply :after #'drgnx-terminal-apply-keys)
-                       (add-hook 'drgnx-surfaces-cheatsheet-sections #'drgnx-terminal-cheatsheet-section)
-                       (advice-add 'drgnx-surfaces-cheatsheet :after #'drgnx-terminal--sheet-sections)
-                       (drgnx-command-define 'terminal-copy :category "Terminal" :title "Copy" :scope 'editing
-                                             :command #'drgnx-terminal-copy :map '(eat . eat-mode-map)
-                                             :when #'drgnx-terminal--in-terminal-p
-                                             :doc "Copy the selected text of the terminal to the kill ring")
-                       (drgnx-command-define 'terminal-paste :category "Terminal" :title "Paste" :scope 'editing
-                                             :command #'eat-yank :map '(eat . eat-mode-map)
-                                             :when #'drgnx-terminal--in-terminal-p
-                                             :doc "Paste the kill ring into the terminal")))
+                       (advice-add 'drgnx-keys-apply :after #'drgnx-terminal-apply-keys)))
 
 (provide 'drgnx-terminal-eat)
 ;;; drgnx-terminal-eat.el ends here

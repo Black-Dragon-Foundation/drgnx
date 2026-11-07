@@ -8,7 +8,12 @@
 //! - the hub's instance id ([`Store::hub`], drawn at start) is on every patch, so a patch of an earlier hub never
 //!   matches a base the editor holds;
 //! - the first patch per (view, class) after a `view/env` with a new epoch is a `reset`;
-//! - a (view, class) with no env gets nothing.
+//! - a (view, class) with no env gets nothing;
+//! - a view whose options ask for acks (a terminal's) has at most one patch in flight per (view, class): the next
+//!   waits, its rows kept, until `view/ack` names the version sent; a `view/resync` answers a reset at once, and a
+//!   reconnect starts afresh, so a lost ack never stalls the view;
+//! - a view whose options exempt it from the epoch reset (a terminal's: its faces repaint in the editor) answers a new
+//!   epoch with a diff, not a reset.
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
@@ -26,7 +31,8 @@ use drgnx_rows::fit_tty;
 use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
-    Display, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel, ViewResync,
+    Display, ViewAck, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel,
+    ViewResync,
 };
 use runstav::wire::Error;
 use serde_json::json;
@@ -40,18 +46,40 @@ use crate::front::Front;
 pub type Key = (u64, String, String);
 
 /// What one (view, class) holds: its env, the version and rows the editor was last sent, and the images it holds.
+/// ACKED: the last version the editor acknowledged; PENDING: the rows waiting for that ack (an acknowledged view).
 struct Pair {
     env: ViewEnv,
     version: u64,
     rows: Vec<Row>,
     images: ImageSet,
     reset_due: bool,
+    acked: u64,
+    pending: Option<Vec<Row>>,
+}
+
+/// How a view's patches go, set by its builder: ACK, at most one unacknowledged patch per (view, class);
+/// EPOCH_RESET, a new env epoch makes the next patch a reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewOpts {
+    pub ack: bool,
+    pub epoch_reset: bool,
+}
+
+impl Default for ViewOpts {
+    fn default() -> Self {
+        ViewOpts {
+            ack: false,
+            epoch_reset: true,
+        }
+    }
 }
 
 /// The pure core: every (view, class)'s env, version and rows, and every view's model, for one hub instance.
 pub struct Store {
     hub: u64,
     pairs: BTreeMap<Key, Pair>,
+    /// (connection, view) → its options (none: the defaults).
+    opts: BTreeMap<(u64, String), ViewOpts>,
     /// (connection, view) → the model its editor was last sent (views with a model only).
     models: BTreeMap<(u64, String), model::Sent>,
 }
@@ -61,6 +89,7 @@ impl Store {
         Store {
             hub,
             pairs: BTreeMap::new(),
+            opts: BTreeMap::new(),
             models: BTreeMap::new(),
         }
     }
@@ -112,6 +141,34 @@ impl Store {
         }
     }
 
+    /// CONN's VIEW goes by OPTS from now on.
+    pub fn options(&mut self, conn: u64, view: &str, opts: ViewOpts) {
+        self.opts.insert((conn, view.to_owned()), opts);
+    }
+
+    fn opts_of(&self, conn: u64, view: &str) -> ViewOpts {
+        self.opts
+            .get(&(conn, view.to_owned()))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// Whether KEY's editor was sent a patch it has not acknowledged yet (an acknowledged view only).
+    pub fn in_flight(&self, key: &Key) -> bool {
+        self.opts_of(key.0, &key.1).ack && self.pairs.get(key).is_some_and(|p| p.acked < p.version)
+    }
+
+    /// KEY's editor applied VERSION: the rows that waited for it go (the patch), when it is the version last sent.
+    pub fn ack(&mut self, key: &Key, version: u64) -> Option<Patch> {
+        let p = self.pairs.get_mut(key)?;
+        if version != p.version {
+            return None;
+        }
+        p.acked = version;
+        let rows = p.pending.take()?;
+        self.publish(key, rows, &[])
+    }
+
     /// The hub's instance id.
     pub fn hub(&self) -> u64 {
         self.hub
@@ -120,10 +177,12 @@ impl Store {
     /// CONN's env for (view, class). The caller builds the pair's rows again after it and publishes them.
     pub fn env(&mut self, conn: u64, env: ViewEnv) {
         let key = (conn, env.view.clone(), env.class.clone());
+        let epoch_reset = self.opts_of(conn, &env.view).epoch_reset;
         match self.pairs.get_mut(&key) {
-            // a new epoch is a new look: the next patch is a reset; the same epoch (a width) is answered by a diff
+            // a new epoch is a new look: the next patch is a reset (unless the view repaints in place); the same epoch
+            // (a width) is answered by a diff
             Some(p) => {
-                p.reset_due |= p.env.epoch != env.epoch;
+                p.reset_due |= epoch_reset && p.env.epoch != env.epoch;
                 p.env = env;
             }
             None => {
@@ -135,6 +194,8 @@ impl Store {
                         rows: Vec::new(),
                         images: ImageSet::default(),
                         reset_due: true,
+                        acked: 0,
+                        pending: None,
                     },
                 );
             }
@@ -156,15 +217,24 @@ impl Store {
     }
 
     /// The patch that turns what KEY's editor holds into ROWS (IMAGES: every image the rows may name); none when the
-    /// pair has no env or nothing changed.
+    /// pair has no env, nothing changed, or (an acknowledged view) a patch is in flight: then ROWS wait for its ack.
     pub fn publish(
         &mut self,
         key: &Key,
         rows: Vec<Row>,
         images: &[(ImageId, String)],
     ) -> Option<Patch> {
+        let held = self.in_flight(key);
         let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
+        if held {
+            for (id, svg) in images {
+                p.images.put(*id, svg);
+            }
+            p.pending = Some(rows);
+            return None;
+        }
+        p.pending = None;
         let ops = if p.reset_due {
             vec![Op::Reset(rows.clone())]
         } else {
@@ -206,6 +276,8 @@ impl Store {
             env_epoch: p.env.epoch,
             ops,
             images: new,
+            styles: Vec::new(),
+            term: None,
             model,
         }
     }
@@ -214,6 +286,10 @@ impl Store {
     pub fn resync(&mut self, key: &Key, images: &[(ImageId, String)]) -> Option<Patch> {
         let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
+        // the rows waiting for an ack go with it: the reset is what is in flight now
+        if let Some(rows) = p.pending.take() {
+            p.rows = rows;
+        }
         let ops = vec![Op::Reset(p.rows.clone())];
         Some(Self::send(self.hub, key, p, ops, images, model))
     }
@@ -222,6 +298,7 @@ impl Store {
     pub fn close(&mut self, conn: u64, view: &str) -> bool {
         let before = self.pairs.len() + self.models.len();
         self.pairs.retain(|(c, v, _), _| !(*c == conn && v == view));
+        self.opts.remove(&(conn, view.to_owned()));
         self.models.retain(|(c, v), _| !(*c == conn && v == view));
         self.pairs.len() + self.models.len() != before
     }
@@ -229,6 +306,7 @@ impl Store {
     /// Connection CONN is gone: its pairs and models with it.
     pub fn gone(&mut self, conn: u64) {
         self.pairs.retain(|(c, _, _), _| *c != conn);
+        self.opts.retain(|(c, _), _| *c != conn);
         self.models.retain(|(c, _), _| *c != conn);
     }
 }
@@ -451,12 +529,18 @@ impl Views {
 
     /// `__test_view_rows {view, rows, images?, labels?}` (test hooks): CONN's fixture view VIEW shows ROWS in every
     /// class, then LABELS fitted with each class's fonts.
-    pub fn fixture(&self, f: &Front, conn: u64, view: String, fixture: Fixture) {
+    pub fn fixture(&self, f: &Front, conn: u64, view: String, fixture: Fixture, opts: ViewOpts) {
+        lock(&self.store).options(conn, &view, opts);
         lock(&self.fixtures).insert((conn, view.clone()), fixture);
         let classes = lock(&self.store).classes(conn, &view);
         for class in classes {
             self.build(f, &(conn, view.clone(), class));
         }
+    }
+
+    /// The hub's instance id the patches carry.
+    pub fn hub_id(&self) -> u64 {
+        lock(&self.store).hub()
     }
 
     /// Keep the front once; the searches' threads send through it.
@@ -501,6 +585,22 @@ pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
         Some(p) => f.send_to(key.0, "view-patch", json!(p)),
         None => false,
     })
+}
+
+/// `view/ack`: the editor applied a patch; an acknowledged view's waiting rows go (false for a pair with no env).
+pub fn ack(f: &Front, c: &Caller, p: ViewAck) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let key = (c.conn_id, p.view, p.class);
+    let mut store = lock(&views.store);
+    if store.env_of(&key).is_none() {
+        return Ok(false);
+    }
+    let patch = store.ack(&key, p.version);
+    drop(store);
+    if let Some(patch) = patch {
+        f.send_to(key.0, "view-patch", json!(patch));
+    }
+    Ok(true)
 }
 
 /// `view/glyphs`: the editor's advances for the chars the hub asked of it; the (view, class) is built again by them.

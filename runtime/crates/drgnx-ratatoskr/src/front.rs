@@ -310,6 +310,7 @@ impl Front {
         self.core.trails.gone(conn);
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
+        self.core.terms.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -525,12 +526,23 @@ impl Front {
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
-                hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
+                let r = hello::hello(s, &self.cap, &p, schema).map(|r| json!(r));
+                // the connection carries an editor session: its terminals draw on it once it subscribes
+                if r.is_ok()
+                    && let Some(session) = &p.session
+                {
+                    self.core.terms.note_session(s.conn, session.as_str());
+                }
+                r
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
             Params::Status(_) => Ok(json!(self.status())),
             Params::Subscribe(_) => {
                 self.editors.subscribe(s.conn, out.clone());
+                // the events reach this connection now: its session's terminals draw here, from a reset each
+                if let Some(session) = self.core.terms.session_of(s.conn) {
+                    self.core.terms.hello(s.conn, &session);
+                }
                 need_keys = self.gate.pending_need_keys();
                 settings_notices = self.settings.current().notices();
                 Ok(json!(true))
@@ -649,8 +661,43 @@ impl Front {
                 files: p.files.iter().map(|o| (opened(&o.file), o.kind)).collect(),
             }))),
             // hub-built rows (`view/*`)
+            // a terminal's view (`term:<id>`): its worker keeps the rows, versions and acknowledgements
+            Params::ViewEnv(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                let msg = drgnx_term::proto::In::Env { env_epoch: p.epoch };
+                Ok(json!(self.core.terms.send(id, &msg)))
+            }
+            Params::ViewResync(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                Ok(json!(
+                    self.core.terms.send(id, &drgnx_term::proto::In::Resync)
+                ))
+            }
+            Params::ViewAck(p) if crate::term::methods::view_id(&p.view).is_some() => {
+                let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
+                let msg = drgnx_term::proto::In::Ack { version: p.version };
+                Ok(json!(self.core.terms.send(id, &msg)))
+            }
+            p @ (Params::TermOpen(_)
+            | Params::TermConfig(_)
+            | Params::TermKey(_)
+            | Params::TermText(_)
+            | Params::TermPaste(_)
+            | Params::TermFocus(_)
+            | Params::TermMouse(_)
+            | Params::TermResize(_)
+            | Params::TermScroll(_)
+            | Params::TermFetch(_)
+            | Params::TermSearch(_)
+            | Params::TermTextRange(_)
+            | Params::TermClose(_)
+            | Params::TermList(_)
+            | Params::TermSessionEnd(_)) => {
+                crate::term::methods::serve(&self.core.terms, s.conn, p).await
+            }
             Params::ViewEnv(p) => crate::view::env(self, &caller, p).map(|b| json!(b)),
             Params::ViewResync(p) => crate::view::resync(self, &caller, p).map(|b| json!(b)),
+            Params::ViewAck(p) => crate::view::ack(self, &caller, p).map(|b| json!(b)),
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),

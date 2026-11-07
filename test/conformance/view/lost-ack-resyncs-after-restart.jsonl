@@ -1,0 +1,32 @@
+{"scenario": "view/lost-ack-resyncs-after-restart", "requires": ["v1", "test-hooks"], "doc": "A patch whose ack is lost (the hub restarts while it is in flight) never stalls the view: the restarted hub's first patch, after the editor's view/env, is a reset sent at once; and a view/resync while a patch is in flight answers a reset at once too, which is then the patch in flight."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "demo", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [["accent", "#123456"]], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "1", "text": "one"}]}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$capture:old", "base": 0, "version": 1}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 2, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "1", "text": "one"}, {"key": "2", "text": "two"}]}}}
+{"do": "expect", "conn": "e2", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 3, "method": "view/env", "params": {"view": "demo", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [["accent", "#123456"]], "epoch": 1}}}
+{"do": "expect", "conn": "e2", "json": {"event": "view-patch", "data": {"hub": "$not:old", "base": 0, "version": 1, "ops": [{"reset": [{"key": "1", "text": "one"}, {"key": "2", "text": "two"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"id": 3, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 4, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "2", "text": "two"}]}}}
+{"do": "expect", "conn": "e2", "json": {"id": 4, "result": true}}
+{"do": "count_events", "conn": "e2", "for_ms": 300, "none": ["view-patch"]}
+{"do": "send", "conn": "e2", "json": {"id": 5, "method": "view/resync", "params": {"view": "demo", "class": "gui-1", "version": 0}}}
+{"do": "expect", "conn": "e2", "json": {"event": "view-patch", "data": {"base": 1, "version": 2, "ops": [{"reset": [{"key": "2", "text": "two"}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"id": 5, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 6, "method": "view/ack", "params": {"view": "demo", "class": "gui-1", "version": 2}}}
+{"do": "expect", "conn": "e2", "json": {"id": 6, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 7, "method": "__test_view_rows", "params": {"view": "demo", "ack": true, "rows": [{"key": "2", "text": "two"}, {"key": "3", "text": "three"}]}}}
+{"do": "expect", "conn": "e2", "json": {"event": "view-patch", "data": {"base": 2, "version": 3, "ops": [{"insert": {"after": "2", "rows": [{"key": "3", "text": "three"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"id": 7, "result": true}}

@@ -2,7 +2,8 @@
 //! (`view/env`), the hub sends that (view, class) its rows as patches (the event `view-patch`), and the editor asks
 //! for a whole set again when a patch does not fit what it holds (`view/resync`). Glyphs the hub cannot measure are
 //! asked of the editor (the event `view-glyphs`, answered by `view/glyphs`); the editor's fit guard reports what it
-//! measured (`view/measured`). Ids are in arrays, never object keys.
+//! measured (`view/measured`). A view that asked for acknowledged patches says `view/ack` after it applied one; the
+//! hub then sends that (view, class) at most one patch it has not acknowledged. Ids are in arrays, never object keys.
 
 use super::{invalid, method};
 use crate::registry::Method;
@@ -10,7 +11,9 @@ use crate::wire::Error;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub use drgnx_rows::{ImageId, Op, Patch, Row, RowHeight};
+pub use drgnx_rows::{
+    Colour, CursorShape, ImageId, Op, Patch, Row, RowHeight, Style, StyleId, TermMeta,
+};
 
 /// The longest view id, in bytes.
 pub const VIEW_MAX: usize = 64;
@@ -92,6 +95,16 @@ pub struct ViewModel {
     pub model: String,
 }
 
+/// `view/ack`: the editor applied (VIEW, CLASS)'s patch VERSION. For a view whose patches are acknowledged (a
+/// terminal's), the hub holds the next patch until this; a reconnect or a `view/resync` clears what it waits for.
+/// Other views may send it or not.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ViewAck {
+    pub view: String,
+    pub class: String,
+    pub version: u64,
+}
+
 /// `view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ViewGlyphs {
@@ -162,6 +175,12 @@ pub(crate) fn methods() -> Vec<Method> {
             check: |p: &ViewResync| check_ids(&p.view, (!p.model).then_some(p.class.as_str())),
         ),
         method!(
+            "view/ack", ViewAck(ViewAck) -> bool,
+            classes: [User], writes: false,
+            doc: "the editor applied a (view, class)'s patch of this version: an acknowledged view's next patch may go",
+            check: |p: &ViewAck| check_ids(&p.view, Some(&p.class)),
+        ),
+        method!(
             "view/glyphs", ViewGlyphs(ViewGlyphs) -> bool,
             classes: [User], writes: false,
             doc: "the editor's advances for the glyphs a view-glyphs asked for, [role, char, px] each",
@@ -218,7 +237,7 @@ mod tests {
             .collect();
         assert_eq!(
             methods.len(),
-            5,
+            6,
             "the view/ methods: {:?}",
             methods.iter().map(|m| m.name).collect::<Vec<_>>()
         );

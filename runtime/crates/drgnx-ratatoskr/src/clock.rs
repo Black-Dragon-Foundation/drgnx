@@ -82,6 +82,14 @@ pub fn real_now() -> std::time::Instant {
     std::time::Instant::now()
 }
 
+/// Ticks every PERIOD of real time, whatever clock the hub runs on: only for watching something outside the hub (a
+/// parent process), which no test advance decides and which a woken virtual sleeper outside a task would muddle.
+pub fn real_interval(period: Duration) -> tokio::time::Interval {
+    let mut t = tokio::time::interval(period);
+    t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    t
+}
+
 /// Wait D on the hub's clock.
 #[inline]
 pub async fn sleep(d: Duration) {

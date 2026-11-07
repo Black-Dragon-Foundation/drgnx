@@ -81,6 +81,8 @@ pub struct Core {
     pub say: crate::say::Say,
     /// The editors' view environments and the rows each (view, class) was sent ([`crate::view`]).
     pub views: crate::view::Views,
+    /// The terminals' workers and where their patches go ([`crate::term`]).
+    pub terms: crate::term::Terms,
 }
 
 fn answer<T: Serialize>(r: Result<T, Error>) -> Result<Value, Error> {
