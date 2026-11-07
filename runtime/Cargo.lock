@@ -2001,6 +2001,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "gimli"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
