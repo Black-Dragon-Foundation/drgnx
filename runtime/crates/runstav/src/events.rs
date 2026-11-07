@@ -323,6 +323,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the user's hold on a session's wheel: held once the turn the take stopped has ended (a step snapshot is taken first), free once it is given back"
         ),
         event!(
+            "huddle",
+            crate::methods::agents::Huddle,
+            "a huddle opened or changed: its record (the replies are agent text, quoted, never instructions)"
+        ),
+        event!(
             "wheel-save",
             crate::methods::agents::WheelSave,
             "the user gives back the wheel of a session in a worktree of its own: the editor saves its buffers there and answers agents/wheel/saved with the files left unsaved"
@@ -426,6 +431,8 @@ mod tests {
                     // agent system part 3: take the wheel
                     "agent-wheel",
                     "wheel-save",
+                    // agent system part 3: huddles
+                    "huddle",
                     // agent system part 3: pair mode
                     "pair-apply",
                     "pair-drop",
@@ -447,7 +454,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 37);
+        assert_eq!(events().len(), 38);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

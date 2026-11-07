@@ -2153,6 +2153,111 @@
     },
     {
       "data": {
+        "$defs": {
+          "HuddleReply": {
+            "additionalProperties": false,
+            "description": "One agent's reply in a huddle: its position (agent text, quoted to the other side, never an instruction) and the\ndecision it proposes, if any.",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "text"
+            ],
+            "type": "object"
+          },
+          "HuddleState": {
+            "description": "Where a huddle is: `asked` while its card waits for the user's yes (the matrix's `huddles` is ask), `open` while\nthe two agents state their positions, `agreed` or `split` once they are done (a card for the user either way),\n`decided` once the user decided, `closed` when it ended.",
+            "enum": [
+              "asked",
+              "open",
+              "agreed",
+              "split",
+              "decided",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A huddle's record (Urdr kind `huddle`, written by the hub), as `agents/huddle/get` answers it and the `huddle`\nevent carries it: the clash it is about (none: the user started it on two sessions), the two sessions, its state,\nthe replies, the proposed decision of an agreement, the user's decision, and its card.",
+        "properties": {
+          "card": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "proposal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replies": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HuddleReply"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/HuddleState"
+          }
+        },
+        "required": [
+          "id",
+          "participants",
+          "state"
+        ],
+        "title": "Huddle",
+        "type": "object"
+      },
+      "doc": "a huddle opened or changed: its record (the replies are agent text, quoted, never instructions)",
+      "name": "huddle"
+    },
+    {
+      "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "description": "A job's status, tasks or open cards changed.",
@@ -4739,6 +4844,277 @@
         "type": "object"
       },
       "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "a huddle's record: its clash, the two sessions, its state, the replies (agent text), the agreement's proposal and the user's decision",
+      "name": "agents/huddle/get",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ById",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HuddleReply": {
+            "additionalProperties": false,
+            "description": "One agent's reply in a huddle: its position (agent text, quoted to the other side, never an instruction) and the\ndecision it proposes, if any.",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "text"
+            ],
+            "type": "object"
+          },
+          "HuddleState": {
+            "description": "Where a huddle is: `asked` while its card waits for the user's yes (the matrix's `huddles` is ask), `open` while\nthe two agents state their positions, `agreed` or `split` once they are done (a card for the user either way),\n`decided` once the user decided, `closed` when it ended.",
+            "enum": [
+              "asked",
+              "open",
+              "agreed",
+              "split",
+              "decided",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A huddle's record (Urdr kind `huddle`, written by the hub), as `agents/huddle/get` answers it and the `huddle`\nevent carries it: the clash it is about (none: the user started it on two sessions), the two sessions, its state,\nthe replies, the proposed decision of an agreement, the user's decision, and its card.",
+        "properties": {
+          "card": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "proposal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replies": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HuddleReply"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/HuddleState"
+          }
+        },
+        "required": [
+          "id",
+          "participants",
+          "state"
+        ],
+        "title": "Huddle",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the user opens a huddle between two sessions, or about a clash card's key (never a clash against a decision): each gets a brief of the facts and states its position with huddle_reply",
+      "name": "agents/huddle/start",
+      "params": {
+        "$defs": {
+          "Id": {
+            "description": "an id: ASCII letters, digits and ._:+- (not first), at most 128",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/huddle/start`: a huddle between two SESSIONS, or about the clash whose card has key CLASH (one of the two).",
+        "properties": {
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/$defs/Id"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "title": "HuddleStart",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "HuddleReply": {
+            "additionalProperties": false,
+            "description": "One agent's reply in a huddle: its position (agent text, quoted to the other side, never an instruction) and the\ndecision it proposes, if any.",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "proposal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "text"
+            ],
+            "type": "object"
+          },
+          "HuddleState": {
+            "description": "Where a huddle is: `asked` while its card waits for the user's yes (the matrix's `huddles` is ask), `open` while\nthe two agents state their positions, `agreed` or `split` once they are done (a card for the user either way),\n`decided` once the user decided, `closed` when it ended.",
+            "enum": [
+              "asked",
+              "open",
+              "agreed",
+              "split",
+              "decided",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "A huddle's record (Urdr kind `huddle`, written by the hub), as `agents/huddle/get` answers it and the `huddle`\nevent carries it: the clash it is about (none: the user started it on two sessions), the two sessions, its state,\nthe replies, the proposed decision of an agreement, the user's decision, and its card.",
+        "properties": {
+          "card": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "clash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "participants": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "proposal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replies": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/HuddleReply"
+            },
+            "type": "array"
+          },
+          "rule": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/$defs/HuddleState"
+          }
+        },
+        "required": [
+          "id",
+          "participants",
+          "state"
+        ],
+        "title": "Huddle",
+        "type": "object"
+      },
+      "writes": true
     },
     {
       "classes": [
@@ -19516,7 +19892,8 @@
               "user.emacs",
               "chat.project-read",
               "plugin.abilities",
-              "chat.project-edit"
+              "chat.project-edit",
+              "huddles"
             ],
             "type": "string"
           },
@@ -19747,7 +20124,8 @@
               "user.emacs",
               "chat.project-read",
               "plugin.abilities",
-              "chat.project-edit"
+              "chat.project-edit",
+              "huddles"
             ],
             "type": "string"
           },

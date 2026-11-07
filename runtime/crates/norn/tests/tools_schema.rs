@@ -49,6 +49,7 @@ fn tool_names_are_the_lisp_names() {
                     | "plan_read"
                     | "plan_write"
                     | "extensions_suggest"
+                    | "huddle_reply"
             ) && !n.starts_with("job_")
         })
         .collect();
@@ -92,7 +93,9 @@ const BUDGET_JOBS: usize = 6_000;
 const BUDGET_PART1: usize = 4_266;
 /// `extensions_suggest`, which every agent has (the Extensions view: an agent suggests, the user installs).
 const BUDGET_EXTENSIONS: usize = 800;
-const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS <= 40_000);
+/// `huddle_reply`, which every agent has (a huddle's position).
+const BUDGET_HUDDLE: usize = 800;
+const _: () = assert!(BUDGET_BYTES + BUDGET_JOBS + BUDGET_EXTENSIONS + BUDGET_HUDDLE <= 40_000);
 
 const PART1_TOOLS: [&str; 3] = ["report_submit", "plan_read", "plan_write"];
 
@@ -117,6 +120,13 @@ fn the_tool_list_fits_the_budget() {
     let ext = json!({"tools": listing(norn::tools::extensions::tools())})
         .to_string()
         .len();
+    let huddle = json!({"tools": listing(norn::tools::huddle::tools())})
+        .to_string()
+        .len();
+    assert!(
+        huddle <= BUDGET_HUDDLE,
+        "huddle_reply is {huddle} bytes, over {BUDGET_HUDDLE}"
+    );
     assert!(
         ext <= BUDGET_EXTENSIONS,
         "extensions_suggest is {ext} bytes, over {BUDGET_EXTENSIONS}"
@@ -138,7 +148,7 @@ fn the_tool_list_fits_the_budget() {
         "tools/list is {bytes} bytes, over the {BUDGET_BYTES} budget: trim the descriptions"
     );
     // the 18 alone: what the list weighs without the job tools, part 1's three and extensions_suggest
-    let base = bytes16 - jobs - part1 - ext;
+    let base = bytes16 - jobs - part1 - ext - huddle;
     assert!(
         base <= BUDGET_BYTES_16,
         "tools/list without the tracker, job and part-1 tools is {base} bytes, over {BUDGET_BYTES_16}"

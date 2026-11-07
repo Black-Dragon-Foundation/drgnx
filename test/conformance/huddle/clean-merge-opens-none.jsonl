@@ -20,6 +20,7 @@
 {"do": "send", "conn": "c", "json": {"id": 6, "method": "__test_barrier", "params": {}}}
 {"do": "expect", "conn": "c", "json": {"id": 6, "result": {"marker": "$number"}}, "within_ms": 15000}
 {"do": "sql_expect", "sql": "select count(*) from card where kind = 'clash' and json_extract(data, '$.rule') = 'conflict'", "rows": [[0]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'huddle' and retired_tx is null", "rows": [[0]]}
 {"do": "sql_expect", "sql": "select count(*) from card where job is null", "rows": [[0]]}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "echo from-b >> $ROOT/wt-b/src/a.rs"], "expect_code": 0}
 {"do": "send", "conn": "c", "json": {"id": 7, "method": "__test_advance", "params": {"ms": 31000}}}

@@ -68,7 +68,7 @@ pub struct RunState {
     pub predictions: Vec<crate::runner::predict::Prediction>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Rule {
     Contradiction,

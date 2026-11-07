@@ -19,6 +19,7 @@ pub mod clash;
 pub mod effects;
 pub mod fallback;
 pub mod git;
+pub mod huddle;
 pub mod plan;
 pub mod predict;
 pub mod review;

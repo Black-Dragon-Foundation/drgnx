@@ -387,6 +387,8 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
     for c in &found {
         card_clash(front, id, c).await?;
     }
+    // a predicted conflict or a contradiction between two of the run's sessions opens a huddle
+    front.core.huddles.clashed(front, Some(id), &found);
     if !found.is_empty()
         && let Some(h) = front.core.runs.hooks()
     {

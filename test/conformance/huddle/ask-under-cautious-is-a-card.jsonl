@@ -1,8 +1,8 @@
-{"scenario": "clash/predicted-conflict-is-one-card", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Two agents outside any run in two worktrees of one repository; B's tree has uncommitted lines at the end of src/a.rs and src/b.rs. A's edits to both files close (each its own conflicting prediction against B), then B's own edit of src/a.rs closes (the same pair seen from B): one clash card, rule conflict, for the pair, naming the first file found. Pattern B: work/files naming the edited files (the step snapshot after the edit) is the gate for each turn's edits, __test_barrier settles the hub's prediction jobs before the count is read."}
+{"scenario": "huddle/ask-under-cautious-is-a-card", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Under the Cautious preset (huddles: ask) a predicted conflict between two sessions outside a run still cards the clash, and the huddle it would open waits as a huddle card asking the user (open or dismiss): the huddle is asked, not open, and nothing prompts. Pattern B: work/files gates each edit, __test_barrier settles the prediction and huddle jobs before the store is read."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/src && cd $ROOT/work && git init -q -b main && echo one > src/a.rs && echo one > src/b.rs && git add src && git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b $ROOT/wt-b && echo from-b >> $ROOT/wt-b/src/a.rs && echo from-b >> $ROOT/wt-b/src/b.rs"], "expect_code": 0}
-{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))) (drgnx-agents-matrix (:preset cautious)))\n"}
 {"do": "start", "hub": "h", "args": ["--test-sequencer"]}
 {"do": "connect", "conn": "c", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
@@ -24,3 +24,5 @@
 {"do": "expect", "conn": "c", "json": {"id": 7, "result": {"marker": "$number"}}, "within_ms": 15000}
 {"do": "sql_expect", "sql": "select count(*) from card where kind = 'clash' and json_extract(data, '$.rule') = 'conflict'", "rows": [[1]]}
 {"do": "sql_expect", "sql": "select json_extract(data, '$.files[0]') from card where kind = 'clash'", "rows": [["src/a.rs"]]}
+{"do": "sql_expect", "sql": "select count(*) from entity where kind = 'huddle' and retired_tx is null and json_extract(data, '$.state') = 'asked'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'huddle' and state = 'open' and json_extract(data, '$.ask') = 1", "rows": [[1]]}

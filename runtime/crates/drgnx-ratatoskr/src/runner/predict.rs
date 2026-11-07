@@ -89,6 +89,15 @@ impl Predictions {
             .insert((lo.to_owned(), hi.to_owned(), p.path.clone()), p);
     }
 
+    /// The predictions SESSION is in.
+    pub fn involving(&self, session: &str) -> Vec<Prediction> {
+        self.by
+            .values()
+            .filter(|p| p.a == session || p.b == session)
+            .cloned()
+            .collect()
+    }
+
     /// The predictions between two of SESSIONS.
     pub fn among(&self, sessions: &BTreeSet<&str>) -> Vec<Prediction> {
         self.by
@@ -214,6 +223,11 @@ impl Live {
     /// From now on the predictor runs its checks in FRONT.
     pub fn bind(&self, front: &Arc<Front>) {
         let _ = self.front.set(Arc::downgrade(front));
+    }
+
+    /// The predictions SESSION is in (an escalation's huddle).
+    pub fn involving(&self, session: &str) -> Vec<Prediction> {
+        lock(&self.inner).predictions.involving(session)
     }
 
     /// The predictions between two of SESSIONS (a plan run's clash pass).
@@ -376,9 +390,10 @@ impl Live {
             g.carded.extend(found.iter().map(|c| c.key.clone()));
             found
         };
-        for c in found {
-            let _ = card(front, &c).await;
+        for c in &found {
+            let _ = card(front, c).await;
         }
+        front.core.huddles.clashed(front, None, &found);
     }
 }
 

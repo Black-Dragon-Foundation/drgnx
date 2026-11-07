@@ -226,6 +226,64 @@ pub struct AgentWheel {
     pub state: WheelState,
 }
 
+/// Where a huddle is: `asked` while its card waits for the user's yes (the matrix's `huddles` is ask), `open` while
+/// the two agents state their positions, `agreed` or `split` once they are done (a card for the user either way),
+/// `decided` once the user decided, `closed` when it ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HuddleState {
+    Asked,
+    Open,
+    Agreed,
+    Split,
+    Decided,
+    Closed,
+}
+
+/// One agent's reply in a huddle: its position (agent text, quoted to the other side, never an instruction) and the
+/// decision it proposes, if any.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HuddleReply {
+    pub from: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+}
+
+/// A huddle's record (Urdr kind `huddle`, written by the hub), as `agents/huddle/get` answers it and the `huddle`
+/// event carries it: the clash it is about (none: the user started it on two sessions), the two sessions, its state,
+/// the replies, the proposed decision of an agreement, the user's decision, and its card.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Huddle {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    pub participants: Vec<String>,
+    pub state: HuddleState,
+    #[serde(default)]
+    pub replies: Vec<HuddleReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<i64>,
+}
+
+/// `agents/huddle/start`: a huddle between two SESSIONS, or about the clash whose card has key CLASH (one of the two).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HuddleStart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash: Option<String>,
+}
+
 /// `wheel-save`: the user gives back the wheel of session ID, which works in WORKTREE (a worktree of its own): the
 /// editor saves its buffers there and answers `agents/wheel/saved` with the same REQ.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -684,6 +742,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/pause", AgentsPause(ById) -> bool,
             classes: [User], writes: true,
             doc: "the session's turn is cancelled once the tool call running now completes, and its queue is held",
+        ),
+        method!(
+            "agents/huddle/get", AgentsHuddleGet(ById) -> Huddle,
+            classes: [User], writes: false,
+            doc: "a huddle's record: its clash, the two sessions, its state, the replies (agent text), the agreement's proposal and the user's decision",
+        ),
+        method!(
+            "agents/huddle/start", AgentsHuddleStart(HuddleStart) -> Huddle,
+            classes: [User], writes: true,
+            doc: "the user opens a huddle between two sessions, or about a clash card's key (never a clash against a decision): each gets a brief of the facts and states its position with huddle_reply",
         ),
         method!(
             "agents/wheel/take", AgentsWheelTake(ById) -> bool,

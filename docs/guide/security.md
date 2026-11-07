@@ -440,6 +440,12 @@ project).
   file, or anything outside the checkout, links resolved. Every file the hub serves a chat (its `read_file`, an ACP
   `fs/read_text_file`) skips the same credential files the sandbox hides.
 
+- **`huddles`**: when two agents' work clashes (their changes will conflict when they merge, or their decisions
+  contradict) the hub may open a huddle: each states its position, at most twice, and you decide. Balanced and
+  Autonomous allow it; Cautious asks first (a card, nothing prompts). A reply reaches the other agent quoted, as that
+  agent's text, never as an instruction, and no reply answers a card; an agreement is a card for you, never a
+  recorded decision. A clash against a decision never opens one.
+
 - **Ask** puts one card in front of you showing what the hub itself knows (the command, the paths, the diff's
   hash), never the agent's own description. The same question open twice is one card. An agent's permission request
   waits under that card's id: answering the request settles the card, and settling the card in the Work cockpit

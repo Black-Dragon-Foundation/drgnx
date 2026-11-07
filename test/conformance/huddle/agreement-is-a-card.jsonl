@@ -1,0 +1,30 @@
+{"scenario": "huddle/agreement-is-a-card", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The user opens a huddle between two sessions; each gets a brief and replies with huddle_reply, both proposing the same decision (case aside). The huddle is agreed: a huddle card for the user with the proposal, and no decision is recorded. The user accepts the card: the huddle is decided with that outcome, and still nothing is in the decision log (the user records decisions; the huddle never does). Pattern B: agents/huddle/get polled for each state, the card's event awaited."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "agents/huddle/start", "params": {"sessions": ["$a", "$b"]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"id": "$capture:h", "state": "open", "participants": ["$a", "$b"]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "huddle", "data": {"id": "$h", "state": "open"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "agents/send", "params": {"id": "$a", "text": "call:huddle_reply {\"huddle\": \"$h\", \"text\": \"I kept parse() as it was.\", \"proposal\": \"Keep the old parser API\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 21, "method": "agents/huddle/get", "params": {"id": "$h"}}, "expect": {"id": 21, "result": {"replies": {"$contains": [{"from": "$a"}]}, "state": "open"}}, "within_ms": 30000, "every_ms": 100}
+{"do": "send", "conn": "c", "json": {"id": 22, "method": "agents/send", "params": {"id": "$b", "text": "call:huddle_reply {\"huddle\": \"$h\", \"text\": \"My change needs it, but a shim does it.\", \"proposal\": \"keep the old parser  API\"}"}}}
+{"do": "expect", "conn": "c", "json": {"id": 22, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 23, "method": "agents/huddle/get", "params": {"id": "$h"}}, "expect": {"id": 23, "result": {"state": "agreed", "proposal": "$string", "card": "$capture:card"}}, "within_ms": 30000, "every_ms": 100}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$card", "kind": "huddle"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'huddle' and state = 'open' and json_extract(data, '$.state') = 'agreed'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select count(*) from decision", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 24, "method": "cards/settle", "params": {"card": "$card", "choice": "accept"}}}
+{"do": "expect", "conn": "c", "json": {"id": 24, "result": "$any"}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 25, "method": "agents/huddle/get", "params": {"id": "$h"}}, "expect": {"id": 25, "result": {"state": "decided", "outcome": "$string"}}, "within_ms": 30000, "every_ms": 100}
+{"do": "sql_expect", "sql": "select count(*) from decision", "rows": [[0]]}

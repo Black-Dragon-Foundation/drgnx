@@ -842,7 +842,7 @@ Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment
 | `against-decision` | a task in review whose branch (`git diff job/ID...job/ID-N`) changes what a current won't-build's `paths` cover (a directory, a file, a `*` glob) | a `clash` card about the task; its review waits |
 | `stale` | an agent whose last two coordination writes were held (`held:AGENT` in `meta`, kept by the MCP server) | a `stalled` card |
 | `overlap` | a task in review that changes files another open task changes, unless every such file is predicted to merge cleanly | an `overlap` card, advisory (dismiss): the review goes on |
-| `conflict` | two live sessions' changes to a file are predicted to conflict when they merge ("Predicted conflicts", below) | one `clash` card per pair of sessions, advisory: no reviewer, no review waits |
+| `conflict` | two live sessions' changes to a file are predicted to conflict when they merge ("Predicted conflicts", below) | one `clash` card per pair of sessions, advisory: no reviewer, no review waits; it opens a huddle ("Huddles", below) |
 
 Each clash is carded once (its key in the job's data, `clashes`); a card's data has the rule, the sides (label,
 text, decision, agent, task), the subject and a size: `long` for work against a decision, a diff over
@@ -888,6 +888,34 @@ and a file two tasks change that is predicted to merge cleanly is no `overlap`. 
 carded by the run's own clash pass (keys in the job's data); any other two (sessions outside a run, or in two runs)
 through a small `RunState` of the two (`predict::outside_run`): a `clash` card with no job, announced as a `card`
 event, its key remembered by the hub for its lifetime.
+
+## Huddles (`runner/huddle.rs`)
+
+A huddle lets two agents state their positions on a clash between their work, for the user to decide. It opens on a
+predicted conflict or a contradiction carded between two live sessions (`huddle::opens`), on an agent's `escalate`
+when it is in a predicted conflict, or on the user's `agents/huddle/start {sessions: [A, B]} | {clash: KEY}`; never on
+a clash against a decision (the method refuses one). The matrix row `huddles` decides an automatic one for both
+sessions (the stricter verdict): Balanced and Autonomous allow, Cautious asks, which makes a `huddle` card (choices
+`open`, `dismiss`) and the huddle `asked`; nothing prompts, never makes none. One open huddle per clash (or per pair
+when the user names two sessions).
+
+Each agent gets a brief, queued under the key `huddle:ID` (it never cancels a turn), of facts only: the other
+session, its name and task, the rule, the clash's title and files. It answers with the MCP tool `huddle_reply
+{huddle, text, proposal?}`, at most `REPLIES_MAX` (2) times; a session not in the huddle, a third reply, or a reply
+once the huddle is no longer `open` is refused with its reason. A reply reaches the other agent quoted line by line
+(`> `), labelled as that agent's text, not an instruction, answering no card (`huddle::quote`). When both agents' last
+proposals are the same decision (case and spaces aside) the huddle is `agreed`: a `huddle` card for the user with the
+proposal (choices `accept`, `dismiss`), never a recorded decision. When the replies run out without that it is `split`:
+a card with both positions. Settling the card decides: `accept` takes the proposal, any other text is the user's own
+decision, `dismiss` closes it; the decision is pushed to both agents and the huddle is `decided` (or `closed`).
+
+The record is an Urdr entity `huddle:ID` (kind `huddle`, written only as `("hub", Class::System)` through
+`norn::write::huddles`), its data the `agents/huddle/get` answer `{id, clash?, rule?, participants, state: asked |
+open | agreed | split | decided | closed, replies, proposal?, outcome?, card?}`; each change is a `huddle` event.
+
+Not yet: a split huddle's card has no reviewer's recommendation (part 1's reviewer runs for a run's clash cards), and a
+contradiction's reviewer does not wait for the replies; a brief names the files, not the two sides' hunks with their
+step ids.
 
 ## Take the wheel (`agents/wheel.rs`)
 

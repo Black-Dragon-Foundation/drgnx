@@ -15,6 +15,7 @@ use crate::store::CoordDb;
 pub mod extensions;
 pub mod graph;
 pub mod guard;
+pub mod huddle;
 pub mod identity;
 pub mod job;
 pub mod jobs;
@@ -145,6 +146,21 @@ pub trait Hub: Send + Sync {
     fn pair_write(&self, _sid: &str, _w: pair::PairWrite) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async { Err("pair mode is the hub's: none here".to_string()) })
     }
+
+    /// Session SID's reply in huddle HUDDLE: TEXT, its position, and the decision it PROPOSES, if any.  The answer is
+    /// the tool's text, or the refusal's.  The default (no hub): no huddles.
+    fn huddle_reply(
+        &self,
+        _sid: &str,
+        _huddle: String,
+        _text: String,
+        _proposal: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { Err("huddles are the hub's: none here".to_string()) })
+    }
+
+    /// Session SID escalated (`escalate`): the hub may open a huddle about a clash it is in.  The default: nothing.
+    fn escalated(&self, _sid: &str) {}
 
     /// Session SID's call of the tool TOOL ended; its answer goes out once this returns.  The hub reads what the call
     /// wrote first (the ask it links to).  The default: nothing.

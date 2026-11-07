@@ -71,6 +71,8 @@ pub struct Core {
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
     /// The conflict predictor: two worktrees' changes to one file merged ahead of time ([`crate::runner::predict`]).
     pub predict: std::sync::Arc<crate::runner::predict::Live>,
+    /// The huddles: two agents' positions on a clash, for the user ([`crate::runner::huddle`]).
+    pub huddles: std::sync::Arc<crate::runner::huddle::Huddles>,
     /// The edit history of each open project ([`crate::history`]).
     pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).
@@ -118,6 +120,8 @@ pub async fn serve(
         Params::AgentsCompactPreview(p) => {
             answer(agents::session::panel::compact_preview(f, c, p).await)
         }
+        Params::AgentsHuddleStart(p) => answer(crate::runner::huddle::start(f, c, p).await),
+        Params::AgentsHuddleGet(p) => answer(crate::runner::huddle::get(f, c, p).await),
         Params::AgentsWheelTake(p) => answer(agents::session::wheel_take(f, c, p)),
         Params::AgentsWheelGive(p) => answer(agents::session::wheel_give(f, c, p).await),
         Params::AgentsWheelSaved(p) => answer(agents::session::wheel_saved(f, c, p)),
