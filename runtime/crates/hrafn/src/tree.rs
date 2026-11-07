@@ -5,6 +5,7 @@
 //! shared by every row that names them; the last row to let go of a pair takes its chunks, FTS rows and symbols with
 //! it (the reference sweep).
 
+use crate::door::DoorKind;
 use crate::store::{
     ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, write_version,
 };
@@ -30,30 +31,6 @@ impl View {
         match self {
             View::Base => 0,
             View::Tree(t) => t.0,
-        }
-    }
-}
-
-/// How a tree's git is read: the CLI, or the sandbox-safe in-process door.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Door {
-    Cli,
-    Gix,
-}
-
-impl Door {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Door::Cli => "cli",
-            Door::Gix => "gix",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Door> {
-        match s {
-            "cli" => Some(Door::Cli),
-            "gix" => Some(Door::Gix),
-            _ => None,
         }
     }
 }
@@ -101,7 +78,7 @@ pub struct TreeRow {
     pub head: Option<String>,
     /// The base's `built_from` the overlay was last diffed against.
     pub seeded_from: Option<String>,
-    pub door: Door,
+    pub door: DoorKind,
     pub state: TreeState,
     pub last_used: i64,
 }
@@ -118,7 +95,7 @@ fn tree_row(r: &Row<'_>) -> rusqlite::Result<TreeRow> {
         head: r.get(5)?,
         seeded_from: r.get(6)?,
         // the schema's checks hold these to the known names
-        door: Door::parse(&door).unwrap_or(Door::Cli),
+        door: DoorKind::parse(&door).unwrap_or(DoorKind::Cli),
         state: TreeState::parse(&state).unwrap_or(TreeState::Stale),
         last_used: r.get(9)?,
     })
@@ -132,7 +109,7 @@ impl CodeStore {
         key: &str,
         root: &str,
         git_dir: &str,
-        door: Door,
+        door: DoorKind,
     ) -> Result<TreeId, StoreError> {
         let (key, root, git_dir) = (key.to_string(), root.to_string(), git_dir.to_string());
         Ok(self

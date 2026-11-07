@@ -618,8 +618,9 @@ pub async fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::door::DoorKind;
     use crate::store::{ChunkIn, FileRow, SymbolIn, vec_key};
-    use crate::tree::{Door, View};
+    use crate::tree::View;
 
     /// N chunks of PATH, each defining one symbol `needle`.
     fn needles(path: &str, n: usize) -> (Vec<ChunkIn>, Vec<SymbolIn>) {
@@ -673,7 +674,7 @@ mod tests {
     async fn base_view_filters_before_limit() {
         let dir = tempfile::tempdir().unwrap();
         let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
-        let t = s.tree_open("wt", "/w", "/g", Door::Cli).await.unwrap();
+        let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
         let (c, y) = needles("t.el", 40);
         s.write_file(View::Tree(t), row("t.el", "T"), c, y)
             .await

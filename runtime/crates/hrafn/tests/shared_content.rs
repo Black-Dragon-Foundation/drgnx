@@ -5,7 +5,7 @@
 //! test-pattern: pure (D): the store thread answers in order, nothing here has a clock or a timeout.
 
 use hrafn::query::{Query, Scope, search};
-use hrafn::{ChunkIn, CodeStore, Door, FileRow, MIGRATIONS, SymbolIn, View, vec_key};
+use hrafn::{ChunkIn, CodeStore, DoorKind, FileRow, MIGRATIONS, SymbolIn, View, vec_key};
 use rusqlite::params;
 
 fn chunk(text: &str, symbols: &str, body: &str) -> ChunkIn {
@@ -241,7 +241,7 @@ async fn base_write_keeps_overlay_content() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
     let t = s
-        .tree_open("wt-1", "/w/t", "/w/.git/worktrees/t", Door::Cli)
+        .tree_open("wt-1", "/w/t", "/w/.git/worktrees/t", DoorKind::Cli)
         .await
         .unwrap();
     s.write_file(
@@ -296,11 +296,11 @@ async fn unreferenced_content_is_swept() {
     let dir = tempfile::tempdir().unwrap();
     let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
     let t1 = s
-        .tree_open("wt-1", "/w/1", "/g/1", Door::Cli)
+        .tree_open("wt-1", "/w/1", "/g/1", DoorKind::Cli)
         .await
         .unwrap();
     let t2 = s
-        .tree_open("wt-2", "/w/2", "/g/2", Door::Gix)
+        .tree_open("wt-2", "/w/2", "/g/2", DoorKind::Gix)
         .await
         .unwrap();
     assert_ne!(t1, t2);

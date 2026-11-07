@@ -32,4 +32,4 @@ pub use watch::{Watch, WatchEvent};
 
 pub use schema::{MIGRATIONS, encode_symbol};
 pub use store::{ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, VecRow, vec_key};
-pub use tree::{Door, TreeId, TreeRow, TreeState, View};
+pub use tree::{TreeId, TreeRow, TreeState, View};
