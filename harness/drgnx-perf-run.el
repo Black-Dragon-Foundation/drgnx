@@ -1208,6 +1208,10 @@ version and the commit, as JSON in FILE."
     (make-directory (file-name-directory (expand-file-name file)) t)
     (write-region (concat (json-serialize doc) "\n") nil file nil 'silent)))
 
+(defconst drgnx-perf-run-workers-seeded
+  '(explorer-git quick-open-typing quick-open-typing-old agents-line-motion agents-line-motion-old)
+  "The off-the-main-thread workloads with allocation, CPU and rows budgets (the render offload measured them).")
+
 (defconst drgnx-perf-run-unseeded
   `((agent-stream . "errored in the Emacs 31.1 container: the mock agent was not busy at the end (2026-10-20)")
     (live-view . "the container image has no websocket package")
@@ -1217,7 +1221,7 @@ version and the commit, as JSON in FILE."
     (transcript-replay . "measured and recorded only, until the watchdog's gate runs seed it (the synthetic day's stream)")
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
-              drgnx-perf-workers-names)
+              (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
     ,@(mapcar (lambda (w) (cons w "the Work space's rows are time budgets on the desktop island (typing p95 and the relative +1 ms rules); allocation, CPU and rows follow once the first runs set them"))
               '(work-nav work-relayout work-typing-shown work-typing-hidden work-typing-mirror))
     (view-patch . "report-only until the render offload's combined pass (its numbers on the island)")
