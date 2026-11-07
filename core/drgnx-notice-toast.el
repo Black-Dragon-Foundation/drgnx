@@ -101,7 +101,8 @@ Return non-nil when taken."
 
 (defun drgnx-notice-toast--command-label (command)
   "The registry title of COMMAND (an id, a command or (FN . ARGS)), else its name."
-  (let* ((id (if (consp command) (car command) command)) (cmd (and (fboundp 'drgnx-commands-get) (drgnx-commands-get id))))
+  (let* ((id (if (consp command) (car command) command)) (cmd (and (fboundp 'drgnx-commands-get)
+                                                                   (or (drgnx-commands-get id) (drgnx-commands-for-function id)))))
     (or (and cmd (drgnx-cmd-title cmd)) (symbol-name id))))
 
 (defun drgnx-notice-toast-buttons (notice)

@@ -20,6 +20,11 @@
   (interactive)
   (push (cons 'open args) drgnx-notices-test--ran))
 
+(defun drgnx-notices-test--plain (&rest args)
+  "A command no registry entry names."
+  (interactive)
+  (push (cons 'plain args) drgnx-notices-test--ran))
+
 (defmacro drgnx-notices-test--with (&rest body)
   "BODY on a fresh notice model and virtual time, a registry holding one command (`thing', titled \"Open Thing\"),
 and no list buffer; the list's buffer, view type and hook are gone after."
@@ -106,6 +111,14 @@ and no list buffer; the list's buffer, view type and hook are gone after."
       (let ((dismiss (progn (search-forward "Dismiss") (match-beginning 0))))
         (should (get-text-property dismiss 'keymap))))))
 
+(ert-deftest drgnx-notices/a-button-says-the-title-of-the-command-whose-function-it-runs ()
+  (drgnx-notices-test--with
+    ;; a notice names the function (`drgnx-notices-test--open'), the registry knows it as `thing', "Open Thing"
+    (should (equal "Open Thing" (drgnx-notices--command-title '(drgnx-notices-test--open "x"))))
+    (should (equal "Open Thing" (drgnx-notices--command-title 'drgnx-notices-test--open)))
+    (should (equal "Open Thing" (drgnx-notices--command-title 'thing)))
+    (should (equal "no-such-fn" (drgnx-notices--command-title 'no-such-fn)))))
+
 (ert-deftest drgnx-notices/attention-rows-have-no-dismiss ()
   (drgnx-notices-test--with
     (drgnx-notice-set 'agents (list (list :id 'q :text "s1 asks: run make?" :command 'thing)))
@@ -140,16 +153,16 @@ and no list buffer; the list's buffer, view type and hook are gone after."
 
 (ert-deftest drgnx-notices/the-command-button-runs-its-action ()
   (drgnx-notices-test--with
-    (drgnx-notify 'config 'warn "odd" :id 'a :life 'condition :command '(drgnx-notices-test--open "arg" 2))
+    (drgnx-notify 'config 'warn "odd" :id 'a :life 'condition :command '(drgnx-notices-test--plain "arg" 2))
     (drgnx-notify 'config 'fail "bad" :id 'b :life 'condition :command 'thing)
     (drgnx-notices-test--show)
     (let ((text (drgnx-notices-test--text)))
-      (should (string-search "drgnx-notices-test--open" text))           ; no registry title: the command's name
+      (should (string-search "drgnx-notices-test--plain" text))           ; no registry title: the command's name
       (should (string-search "Open Thing" text)))
-    (drgnx-notices-test--press "drgnx-notices-test--open")
-    (should (equal drgnx-notices-test--ran '((open "arg" 2))))
+    (drgnx-notices-test--press "drgnx-notices-test--plain")
+    (should (equal drgnx-notices-test--ran '((plain "arg" 2))))
     (drgnx-notices-test--press "Open Thing")
-    (should (equal drgnx-notices-test--ran '((open) (open "arg" 2))))
+    (should (equal drgnx-notices-test--ran '((open) (plain "arg" 2))))
     (drgnx-timer-cancel 'surfaces-usage)))              ; the registry button's use count is saved by a timer
 
 (ert-deftest drgnx-notices/redraws-after-a-change-while-live ()
