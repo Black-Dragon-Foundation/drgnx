@@ -19,6 +19,7 @@ pub mod disk;
 pub mod keys;
 #[cfg(feature = "runner")]
 pub mod net;
+pub mod selinux;
 
 use crate::linux::jobexec::JobExec;
 use std::io::{self, Read, Write};
@@ -115,9 +116,12 @@ fn serve(a: &Args) -> Result<(), String> {
     let spec = JobExec::read(&a.dir).map_err(|e| format!("job.json: {e}"))?;
     let h = spec.helper.unwrap_or_default();
     let store = Arc::new(keys::KeyStore::new(h.keys.clone()));
-    let hub =
-        keys::bind(&a.dir, keys::HELPER_SOCK).map_err(|e| format!("{}: {e}", keys::HELPER_SOCK))?;
-    let job = keys::bind(&a.dir, keys::KEY_SOCK).map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
+    let hub = keys::bind(&a.dir, keys::HELPER_SOCK, None)
+        .map_err(|e| format!("{}: {e}", keys::HELPER_SOCK))?;
+    // on an SELinux host the job (container_t, its own categories) may connect only to a container_t socket (k1)
+    let ctx = selinux::job_context().map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
+    let job = keys::bind(&a.dir, keys::KEY_SOCK, ctx.as_deref())
+        .map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
     #[cfg(feature = "runner")]
     let relay = match (&a.hub_allow, &h.net) {
         (None, _) => None,

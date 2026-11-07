@@ -495,6 +495,9 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 a.push(format!("{}:{inside}:rw,Z", mount_source(&c.host)?).into());
             }
             if let Some(k) = &m.keys {
+                // the key socket is created container_t on an SELinux host (k1): the job's type is pinned to match
+                a.push("--security-opt".into());
+                a.push("label=type:container_t".into());
                 a.push("-v".into());
                 a.push(format!("{}:{KEY_SOCKET}:ro,Z", mount_source(&k.socket)?).into());
                 a.push("-v".into());
@@ -931,6 +934,31 @@ mod tests {
             r.runner.as_mut().unwrap().keys.as_mut().unwrap().vars =
                 vec![(name.into(), var.into())];
             assert!(on_runner(&r, &caps()).is_err(), "{name:?} {var:?}");
+        }
+    }
+
+    /// [D] k1: a keyed job's type is pinned to the key socket's.
+    #[test]
+    fn keyed_jobs_pin_the_container_type() {
+        let a = on_runner(&runner_req(&["ls"]), &caps()).unwrap();
+        let i = a
+            .iter()
+            .position(|s| s == "label=type:container_t")
+            .unwrap();
+        assert_eq!(a[i - 1], "--security-opt");
+        assert!(i < a.iter().position(|s| s == REF).unwrap());
+    }
+
+    /// [D]
+    #[test]
+    fn unkeyed_jobs_have_no_pin() {
+        let mut r = runner_req(&["ls"]);
+        r.runner.as_mut().unwrap().keys = None;
+        for a in [
+            on_runner(&r, &caps()).unwrap(),
+            local(&req(&["ls"]), &caps()).unwrap(),
+        ] {
+            assert!(!a.iter().any(|s| s.starts_with("label=")), "{a:?}");
         }
     }
 

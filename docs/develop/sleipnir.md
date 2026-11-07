@@ -202,6 +202,15 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   and no other process of the user can read its memory or `/proc` files;
 - serves the job's keys on `D/key.sock` and takes them from `serve` on `D/helper.sock` (both 0600, this user only;
   "Keys" below);
+- on an SELinux host (`selinux` in `/sys/kernel/security/lsm` and selinuxfs mounted; an AppArmor host is neither),
+  creates `D/key.sock` with the context `<its own SELinux user>:system_r:container_t:s0` (k1, `helper::selinux`): a
+  keyed job runs `container_t` with its own categories (its argv pins the type, `--security-opt
+  label=type:container_t`), the stock policy lets `container_t` connect to a `container_t` socket, and the `:Z` mount's
+  categories keep every other job off it. The context is per thread and inherited, so it is written to
+  `/proc/thread-self/attr/sockcreate`, the socket bound, the empty reset written and read back on a throwaway thread
+  of its own, never a pool thread; a reset that fails or reads back non-empty refuses the job and removes the socket.
+  No libselinux. `drgnx doctor`'s `key sockets:` line runs the create half on the hub's host (bind labelled, read the
+  socket's `security.selinux` back, expect `container_t`);
 - with `--hub-allow`, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the `job.json`'s
   `helper.sidecar_argv`, named `helper.net.sidecar`, `<prefix>-px-<id>`), waits for its `READY` before its own `ready`
   line, and runs Gleipnir's CONNECT proxy on the relay's streams (`Listener::Streams`, `max_conns` 128) with the hub's
