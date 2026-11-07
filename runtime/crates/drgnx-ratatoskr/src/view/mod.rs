@@ -393,6 +393,11 @@ impl Views {
         }
     }
 
+    /// The hub's instance id the patches carry.
+    pub fn hub_id(&self) -> u64 {
+        lock(&self.store).hub()
+    }
+
     pub fn gone(&self, conn: u64) {
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);

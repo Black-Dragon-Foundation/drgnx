@@ -116,3 +116,36 @@ typed**, only counts; a malformed message from the hub is logged by its position
 `cargo test -p drgnx-term` (through the cargo wrapper, in a container): `tests/worker.rs` drives the worker with a fake
 clock (frames, flood and backfill, the in-flight patch, mode 2026, row keys through scrolls, resizes and eviction, the
 kitty, DECCKM, paste and mouse encodings, styles and wide cells); `tests/logging.rs` checks the log.
+
+## Lifetime
+
+A terminal's worker outlives the hub that started it (`runtime/crates/drgnx-ratatoskr/src/term/`, the worker's
+`src/{scope,registry,child}.rs`).
+
+**Spawn:** with a user systemd, the worker runs in a scope of its own, `systemd-run --user --scope --unit
+drgnx-term-<id>`, with `MemoryMax` and `TasksMax` from the `linux-cgroup*` settings: a hub unit stopped with
+`KillMode=mixed` kills its own cgroup, not the scope. Elsewhere the worker gets a process group of its own. The worker
+binds `<state>/term/<id>.sock`; its stderr goes to `<state>/term/<id>.log`. The hub finds the binary at
+`DRGNX_TERM_BIN`, else beside its own.
+
+**Registry:** `<state>/term/<id>.json` holds the unit, the worker's pid and start time, the shell's pid, the view
+(`term:<id>`), the display class, the cwd and the editor session. It is written by a rename, and goes with the
+terminal.
+
+**Adoption:** at the hub's start (in the background), each record's worker is checked: by its unit (`systemctl --user
+is-active`) when there is one, then by its pid and start time (a reused pid is not it). A live one is connected to
+again; a dead one's record and socket go. The worker's hello carries its `term` protocol: another major version
+marks the terminal "from before the update" (its program keeps running; the hub sends it nothing but `close`, and
+`term/list` shows it as old). A newer minor version is adopted as it is.
+
+**Session end:** an editor's `hello` names its Emacs session. When the last connection carrying a session closes, its
+terminals wait 60 seconds for a hello with that session (a dropped socket, a hub restart); then they end (`close`,
+SIGHUP to the program's group). A clean Emacs exit ends them at once. Until its session says hello again, an adopted
+terminal draws nowhere; the hello re-attaches it, and its next patch is a reset.
+
+**Program running:** the worker answers `status` from the shell's OSC 133 marks (C: a command's output started, D: it
+ended), else from whether the shell has a child: Linux `/proc/<pid>/task/<pid>/children`, macOS `proc_listchildpids`.
+
+**Tests:** `cargo test -p drgnx-ratatoskr --lib term::` (fake workers on the socket: adoption by pid and start time,
+the protocol versions, the grace, a clean exit) and `drgnx-term`'s `tests/running.rs` (both ways of telling a
+program runs).

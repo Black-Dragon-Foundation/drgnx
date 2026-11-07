@@ -309,6 +309,7 @@ impl Front {
         self.core.map.gone(conn);
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
+        self.core.terms.gone(conn);
     }
 
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
@@ -522,7 +523,14 @@ impl Front {
         let result = match params {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
-                hello::hello(s, &self.cap, &p, schema).map(|r| json!(r))
+                let r = hello::hello(s, &self.cap, &p, schema).map(|r| json!(r));
+                // the editor session's terminals draw on this connection again
+                if r.is_ok()
+                    && let Some(session) = &p.session
+                {
+                    self.core.terms.hello(s.conn, session.as_str());
+                }
+                r
             }
             Params::Ping(_) => Ok(json!({"pid": self.pid})),
             Params::Status(_) => Ok(json!(self.status())),

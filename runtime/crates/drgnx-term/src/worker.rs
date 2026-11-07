@@ -72,6 +72,8 @@ pub struct Worker {
     out: Vec<Out>,
     pty: Vec<u8>,
     closing: Option<i32>,
+    marks: crate::child::Marks,
+    shell_pid: u32,
 }
 
 impl Worker {
@@ -101,7 +103,14 @@ impl Worker {
             out: Vec::new(),
             pty: Vec::new(),
             closing: None,
+            marks: crate::child::Marks::default(),
+            shell_pid: 0,
         })
+    }
+
+    /// The program's pid (the loop sets it once the program runs).
+    pub fn set_shell_pid(&mut self, pid: u32) {
+        self.shell_pid = pid;
     }
 
     pub fn engine(&mut self) -> &mut Engine {
@@ -158,7 +167,10 @@ impl Worker {
                 }),
                 Effect::Notify { title, body } => self.out.push(Out::Notify { title, body }),
                 Effect::Progress { state, value } => self.out.push(Out::Progress { state, value }),
-                Effect::Prompt { kind, exit } => self.out.push(Out::Prompt { kind, exit }),
+                Effect::Prompt { kind, exit } => {
+                    self.marks.mark(kind);
+                    self.out.push(Out::Prompt { kind, exit });
+                }
             }
         }
     }
@@ -231,6 +243,13 @@ impl Worker {
                     self.config(&name, &value);
                 }
             }
+            In::Status { req } => self.out.push(Out::Status {
+                req,
+                running: self.marks.running(self.shell_pid),
+                cwd: self.engine.pwd(),
+                title: self.engine.title(),
+                shell_pid: self.shell_pid,
+            }),
             In::Close { signal } => self.closing = Some(signal.unwrap_or(1)),
         }
     }

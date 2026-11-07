@@ -43,6 +43,7 @@ pub fn run(
     let mut ctl = ctl;
     let mut inbuf: Vec<u8> = Vec::new();
     let shell_pid = pty.child.id();
+    worker.set_shell_pid(shell_pid);
     let hello = || Out::Hello {
         proto: PROTO,
         pid: std::process::id(),

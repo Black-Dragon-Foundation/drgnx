@@ -32,3 +32,4 @@ tracing-subscriber.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+skuld = { path = "../skuld", version = "0.1.0" }  # bounded waits in the tests

@@ -63,6 +63,8 @@ required-features = ["fleet", "test-hooks"]
 runstav = { path = "../runstav", version = "0.1.0" }
 # hub-built view rows (view): the row and patch types and their diff
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
+# the terminals (term): the worker's wire, records and scopes, without the engine
+drgnx-term = { path = "../drgnx-term", version = "0.1.0", default-features = false }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
 draugr = { path = "../draugr", version = "0.1.0" }
 urdr = { path = "../urdr", version = "0.1.0" }

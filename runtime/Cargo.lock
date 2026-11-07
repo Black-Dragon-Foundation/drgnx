@@ -1353,6 +1353,7 @@ dependencies = [
  "bytes",
  "draugr",
  "drgnx-rows",
+ "drgnx-term",
  "eitri",
  "fastwebsockets",
  "forseti",
@@ -1428,6 +1429,7 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
+ "skuld",
  "tracing",
  "tracing-subscriber",
 ]

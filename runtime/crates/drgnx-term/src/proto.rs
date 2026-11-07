@@ -71,6 +71,10 @@ pub enum In {
     Config {
         config: Vec<(String, serde_json::Value)>,
     },
+    /// Whether a program runs, the working directory and the title: answered by `status` with the same REQ.
+    Status {
+        req: u64,
+    },
     /// End the program (SIGHUP, or SIGNAL).
     Close {
         #[serde(default)]
@@ -114,6 +118,14 @@ pub enum Out {
     Prompt {
         kind: i32,
         exit: Option<i32>,
+    },
+    /// The answer to `status`: RUNNING from the shell's OSC 133 marks, else whether the shell has a child.
+    Status {
+        req: u64,
+        running: bool,
+        cwd: String,
+        title: String,
+        shell_pid: u32,
     },
     /// The program ended: its exit code, or the signal that ended it.
     Exit {

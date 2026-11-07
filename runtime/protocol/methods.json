@@ -16566,6 +16566,14 @@
               "integer",
               "null"
             ]
+          },
+          "session": {
+            "description": "The editor session the connection carries (an editor sends it): its terminals draw here again, and end when\nno connection says it for a minute.",
+            "maxLength": 64,
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
