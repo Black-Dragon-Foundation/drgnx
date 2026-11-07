@@ -6652,6 +6652,76 @@
       "classes": [
         "user"
       ],
+      "doc": "what the user chose for an agent panel's rows (the step types open, rows opened or folded by hand, one window further back): its view-patch follows",
+      "name": "agents/panel/look",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, \"The agent panel's rows\").  Each\nfield given replaces the one before; none given builds the rows again.",
+        "properties": {
+          "older": {
+            "description": "The rows go back one window further (the editor scrolled to their top).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "open": {
+            "description": "The step types whose detail is open (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`).",
+            "items": {
+              "maxLength": 16,
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "rows": {
+            "description": "Rows opened or folded by hand: `[entry index, open]` each.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "type": "array"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "The panel's view, `agent-panel/SESSION`.",
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "PanelLook",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the session's turn is cancelled once the tool call running now completes, and its queue is held",
       "name": "agents/pause",
       "params": {

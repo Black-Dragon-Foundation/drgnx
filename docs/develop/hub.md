@@ -1324,6 +1324,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
+| `agents/panel/look` | user | `{older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
@@ -2339,6 +2340,38 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
   control character as `^X`; the path is the `drgnx-work-id` over the whole row.
 - The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
+
+### The agent panel's rows
+
+The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
+the rows themselves are `agents/session/rows.rs`, pure).
+
+- **The view.** An editor that shows session SID's panel sends `view/env` for the view `agent-panel/SID`; the hub sends
+  every class of it the rows of the session's last 200 entries, a reset first, then each change of the transcript as
+  the patch of the rows it touched. `agent-entries` is unchanged: the mirror and the old panel still read it.
+- **Groups.** An entry is drawn in a group: a tool call with the thoughts right after it, or any other entry alone.
+  A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
+  hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
+  the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+  and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
+  step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
+  your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
+  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
+  are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
+- **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
+  `drgnx-agent-panel-checkpoint` (its step's seq); a hook line `drgnx-agent-panel-hook` (`[seq, row, record]`, for
+  the provenance); a hunk `drgnx-agent-panel-hunk` (`[path, hunk, part]`).
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
+  come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
+  every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
+- `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open
+  (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`; a failed step is open anyway), the rows opened
+  or folded by hand (`[[entry, open], …]`), and `older` to show 200 entries more. It is per connection and view, and
+  is dropped when the view closes or the connection goes.
+- `huddle_rows` builds a huddle thread's rows (`h`, `r:N`, `o`) from its record; the thread still draws in Lisp.
 
 ### The symbol at a line (`search/symbol-at`)
 

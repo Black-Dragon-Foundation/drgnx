@@ -19,6 +19,7 @@
   "agents/list": ["user", "agent", "service"],
   "agents/move": ["user"],
   "agents/pair": ["user"],
+  "agents/panel/look": ["user"],
   "agents/pause": ["user"],
   "agents/permission": ["user"],
   "agents/presence/get": ["user"],

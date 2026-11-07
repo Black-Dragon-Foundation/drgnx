@@ -12,6 +12,7 @@
 #[cfg(test)]
 pub(crate) mod attach_tests;
 pub(crate) mod panel;
+pub(crate) mod rows;
 pub(crate) mod turn_core;
 
 use super::launch;
@@ -1016,6 +1017,8 @@ pub struct Session {
     hooked: Option<runstav::methods::agents::Hooked>,
     /// Its agent's `_drgnx/panel` extension: what it offers, its context breakdown.
     panel: panel::Panel,
+    /// The agent panels' rows: each change of the transcript builds the rows of the groups it touched.
+    panels: Arc<crate::view::panel::Panels>,
     /// The projects' edit histories and the hub's state folder they live under: every write the hub serves for the
     /// agent is recorded there (none: the hub has no state folder).
     history: Option<(Arc<crate::history::wire::Hubs>, PathBuf)>,
@@ -2417,6 +2420,7 @@ fn assemble(
         project: std::sync::OnceLock::new(),
         hooked,
         panel,
+        panels: front.core.views.panels.clone(),
         history: front
             .dirs
             .get()
@@ -2586,6 +2590,62 @@ impl Session {
     }
 
     /// The transcript entries that carry one of MIDS as their `messageId`, at most CAP.
+    /// How many entries the transcript holds.
+    pub(crate) fn entry_count(&self) -> usize {
+        lock(&self.state).entries.len()
+    }
+
+    /// The agent panel's groups ([`rows::groups`]) of the entries from FROM on, each with its entries and, for an agent
+    /// message, its Markdown blocks (the streaming message's as they stand, another's from its text): every group, or
+    /// with ONLY those that hold one of its indexes.
+    pub(crate) fn panel_groups(
+        &self,
+        from: usize,
+        only: Option<&std::collections::BTreeSet<usize>>,
+    ) -> Vec<rows::GroupIn> {
+        let st = lock(&self.state);
+        let tail: Vec<(usize, &Entry)> = st.entries.iter().enumerate().skip(from).collect();
+        rows::groups(&tail)
+            .into_iter()
+            .filter(|(head, thoughts)| {
+                only.is_none_or(|o| o.contains(head) || thoughts.iter().any(|t| o.contains(t)))
+            })
+            .map(|(head, thoughts)| {
+                let entry = st.entries[head].clone();
+                let blocks = (entry.kind == EntryType::Agent).then(|| match st.md.as_ref() {
+                    Some(m) if m.entry == head => m.stream.blocks().to_vec(),
+                    _ => entry
+                        .rest
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(|t| {
+                            let mut md = super::markdown::Stream::default();
+                            md.update(t);
+                            md.blocks().to_vec()
+                        })
+                        .unwrap_or_default(),
+                });
+                rows::GroupIn {
+                    head,
+                    entry,
+                    thoughts: thoughts.iter().map(|t| st.entries[*t].clone()).collect(),
+                    blocks,
+                }
+            })
+            .collect()
+    }
+
+    /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
+    pub(crate) fn always_covers(&self, e: &Entry) -> bool {
+        let title = e.rest.get("title").and_then(Value::as_str);
+        let kind = e.rest.get("kind").and_then(Value::as_str);
+        self.grants.list().iter().any(|g| {
+            !g.revoked
+                && g.title.as_deref() == title
+                && (kind.is_none() || g.tool.is_empty() || Some(g.tool.as_str()) == kind)
+        })
+    }
+
     pub(crate) fn entries_for(
         &self,
         mids: &std::collections::HashSet<String>,
@@ -3801,9 +3861,11 @@ impl Session {
     }
 
     fn emit(&self) {
+        let dirty: std::collections::BTreeSet<usize>;
         let (seq, entries) = {
             let mut st = lock(&self.state);
             let idx: Vec<usize> = std::mem::take(&mut st.dirty).into_iter().collect();
+            dirty = idx.iter().copied().collect();
             let mut entries: Vec<(u64, Entry)> = idx
                 .into_iter()
                 .filter_map(|i| st.entries.get(i).map(|e| (i as u64, e.clone())))
@@ -3835,6 +3897,7 @@ impl Session {
         if entries.is_empty() {
             return;
         }
+        self.panels.changed(self, &dirty);
         let subscribers = self.editors.entry_subscribers(&self.id);
         if subscribers.is_empty() {
             return;
@@ -4470,6 +4533,7 @@ impl Session {
     async fn record_always(&self, tool: Option<Value>, card: Option<i64>) {
         let g = self.grants.record(&self.id, tool.as_ref(), card, now());
         self.save_grant(&g).await;
+        self.panels.refresh(&self.id);
     }
 
     /// Grant G as a record `always:<session>:<key>`, written as the hub.
@@ -4501,6 +4565,7 @@ impl Session {
             .revoke(id, live)
             .map_err(|e| invalid("grant", &e))?;
         self.save_grant(&g).await;
+        self.panels.refresh(&self.id);
         Ok(out)
     }
 

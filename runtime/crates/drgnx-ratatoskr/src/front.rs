@@ -315,6 +315,10 @@ impl Front {
     /// EVENT with DATA to every subscribed connection: queued for each before any is written (a queue never waits),
     /// so a newer event never reaches one subscriber before an older one.
     pub fn broadcast(&self, event: &str, data: Value) {
+        // a revert or a fork changed which steps are undone: the agent panels' rows mark them
+        if event == "history/applied" {
+            self.core.views.panels.history_applied();
+        }
         self.editors.broadcast(event, data);
     }
 
@@ -652,6 +656,9 @@ impl Front {
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::AgentsPanelLook(p) => {
+                crate::view::panel::look(self, &caller, p).map(|b| json!(b))
+            }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
             // a text search streaming rows to a view (`search/grep*`)
             Params::SearchGrep(p) => crate::view::grep::start(self, &caller, p).map(|r| json!(r)),

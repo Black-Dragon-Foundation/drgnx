@@ -205,6 +205,7 @@ params! {
     AgentsSlice(agents::SliceParams),
     AgentsEntriesSubscribe(agents::SessionRef),
     AgentsEntriesUnsubscribe(agents::SessionRef),
+    AgentsPanelLook(agents::PanelLook),
     AgentsToolInput(agents::ToolInputParams),
     AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
