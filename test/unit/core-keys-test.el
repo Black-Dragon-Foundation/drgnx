@@ -963,6 +963,7 @@ The commands of modules that need no installed package are in it, the later stag
                               ;; P9's plugins page: keys in its own page map only
                               plugins-refresh plugins-approve plugins-disable plugins-project-toggle
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
+                              terminal-copy terminal-paste terminal-find terminal-copy-mode ; drgnx's terminal's own map
                               ;; the Extensions list: its open key and its own keys
                               extensions-open extensions-search extensions-details extensions-install extensions-update
                               extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
