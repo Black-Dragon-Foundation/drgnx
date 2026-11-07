@@ -131,6 +131,11 @@ only when every run passed. The rows play the hub with its own parts (the transp
 `runtime.db`); the time a cut or a suspend lasts is the queue's clock moved on, never a wait. `--timing` adds the
 fleet throughput row (a 40-job set on 2 runners within 0.6 × its wall on 1), a timing row the timing lane only names.
 
+The same file's `net::` rows are a networked runner job's: it reaches only the hosts its grant lists through its relay
+sidecar and the helper's proxy (an unlisted host 403, the loopback only, a direct address unreachable), its container
+and sidecar are gone once it ended, and the reserved `host.drgnx.internal` is refused on a runner whatever the port.
+They run as the drills do, with `fleet.sh test net::` on one runner.
+
 ## Cloud machines
 
 `up --cloud MOCKBIN` adds a mock cloud: `ratatoskr-mock cloud` (`docs/develop/scenarios.md`, "The cloud mock") in a

@@ -1365,3 +1365,107 @@ mod drill {
         );
     }
 }
+
+/// A networked runner job (`fleet.sh test net::`): its relay sidecar under the job's helper, the helper's proxy on
+/// the far end of the relay, and what is left when it ends.
+mod net {
+    use super::*;
+
+    /// Job ID on R1 with a grant listing [`LISTED`], whose script SCRIPT parks: what the runner holds while it
+    /// runs (its podman containers' names), then its log after release, once it ended with its own verdict.
+    async fn run_parked(d: &mut Drill, id: &str, script: &str) -> (Vec<String>, String) {
+        let mut job = d.job(id, &format!("{script}; {PARK}"), &[]);
+        job.place.net_hosts = vec![LISTED.into()];
+        d.submit(job);
+        d.parked(id).await;
+        let during = names(&d.runner);
+        d.release(id);
+        let theirs = d.runner_log(id, 1).await;
+        let (attempt, result) = d.done(id).await;
+        d.the_jobs_own_verdict(id, attempt, &result, &theirs);
+        (during, String::from_utf8_lossy(&theirs).into_owned())
+    }
+
+    /// RUNNER's podman containers, by name.
+    fn names(runner: &str) -> Vec<String> {
+        sh(runner, "podman ps -a --format '{{.Names}}'")
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    /// The `net HOST:PORT CODE` answers LOG holds for TARGET.
+    fn answers(log: &str, target: &str) -> Vec<String> {
+        let line = format!("net {target} ");
+        log.lines()
+            .filter_map(|l| l.strip_prefix(line.as_str()).map(String::from))
+            .collect()
+    }
+
+    /// [C] A networked runner job reaches the hosts its grant lists through its proxy and nothing else: an unlisted
+    /// host is refused (403), a listed one passes the allow-list, the container has the loopback only, and an address
+    /// dialled directly is unreachable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn a_networked_runner_job_reaches_only_its_list() {
+        let mut d = Drill::new("netl", "r1", "dedicated");
+        d.link().await;
+        let script = format!(
+            "{NET_PROBE}probe {UNLISTED}; probe {LISTED}; echo \"ifaces $(ls /sys/class/net | tr '\\n' ' ')\"; \
+             if (exec 3<>/dev/tcp/1.1.1.1/80) 2>/dev/null; then echo direct open; else echo direct refused; fi"
+        );
+        let (_, log) = run_parked(&mut d, "xnetl", &script).await;
+        assert_eq!(answers(&log, UNLISTED), ["403"], "{log}");
+        let listed = answers(&log, LISTED);
+        assert!(
+            listed.len() == 1 && !listed[0].is_empty() && listed[0] != "403",
+            "a listed host passes the allow-list: {listed:?}"
+        );
+        assert!(log.lines().any(|l| l.trim_end() == "ifaces lo"), "{log}");
+        assert!(log.lines().any(|l| l == "direct refused"), "{log}");
+        d.end().await;
+    }
+
+    /// [C] While a networked runner job runs, its sidecar runs beside it; once it ended, neither the job's
+    /// container nor its sidecar is left on the runner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn the_runner_job_leaves_no_sidecar() {
+        let mut d = Drill::new("nets", "r1", "dedicated");
+        d.link().await;
+        let (during, _) = run_parked(&mut d, "xnets", "true").await;
+        let job = format!("{}-xnets", d.prefix);
+        assert!(during.contains(&job), "{during:?}");
+        assert!(
+            during
+                .iter()
+                .any(|n| n.contains("-px-") && n.ends_with("xnets")),
+            "the sidecar ran beside the job: {during:?}"
+        );
+        let mine = |n: &String| n.ends_with("xnets");
+        skuld::wait_until("the job's containers are gone", 60, || {
+            (!names(&d.runner).iter().any(mine)).then_some(())
+        });
+        d.end().await;
+    }
+
+    /// [C] A runner job never reaches the reserved host: its proxy refuses `host.drgnx.internal` (a runner has no
+    /// host grants), whatever the port.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn reserved_host_is_refused_on_a_runner() {
+        let mut d = Drill::new("netr", "r1", "dedicated");
+        d.link().await;
+        let script =
+            format!("{NET_PROBE}probe host.drgnx.internal:22; probe host.drgnx.internal:8080");
+        let (_, log) = run_parked(&mut d, "xnetr", &script).await;
+        for p in ["22", "8080"] {
+            assert_eq!(
+                answers(&log, &format!("host.drgnx.internal:{p}")),
+                ["403"],
+                "{log}"
+            );
+        }
+        d.end().await;
+    }
+}
