@@ -2117,7 +2117,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx extensions refresh [--progress FILE] | fetch-readme ARCHIVE NAME
                                write the catalog of the archives' packages (the Extensions view reads it), or cache
                                one package's readme; reaches the network, changes nothing you have installed
-       drgnx lock --ship      (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
+       drgnx lock --ship       (maintainers) write etc/drgnx.lock.eld, the known-good lock a first sync
                                starts from, from your lock (it must cover every module's packages)
        drgnx onboard [--non-interactive] [--again] [--preset minimal|ide|full-ai] [--keys NAME] [--theme THEME]
                      [--roots DIR…] [--todos] [--step ID]
