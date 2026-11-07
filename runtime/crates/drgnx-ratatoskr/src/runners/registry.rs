@@ -861,10 +861,8 @@ impl Registry {
         let mut clocks: std::collections::HashMap<String, super::transport::RedialClock> =
             Default::default();
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs());
+            crate::clock::sleep(std::time::Duration::from_secs(1)).await;
+            let now = crate::clock::wall_secs() as u64;
             let Ok(recs) = self.cfg.store.list().await else {
                 continue;
             };
