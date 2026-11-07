@@ -2267,7 +2267,13 @@ the search itself is `hrafn::grep`).
   (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
   `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
   `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
-  `before`, `after`; positions in characters, `line` from 1) on a match row. The tick state is the editor's.
+  `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
+  over each row. The tick state is the editor's.
+- **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
+  holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
+  by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
+  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what

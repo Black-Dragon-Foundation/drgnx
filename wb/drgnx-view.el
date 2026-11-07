@@ -1724,16 +1724,22 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
 
 (declare-function drgnx-view-nav-class-step "drgnx-view-nav" (view &optional keys))
 
+(defvar drgnx-view-patch-patched-functions nil
+  "Called with (VIEW KEYS) in a hub-fed view's buffer after the rows KEYS were drawn and got their classes: a view's
+own marks over the hub's rows go back on here (the Search view's tick boxes, user state in Sjá).  Added buffer-locally
+by the view that owns the buffer.")
+
 (defun drgnx-view-patch--patched (view keys)
-  "PATCHED of `drgnx-view-rows': the stale shade, then the model's classes on the patched rows KEYS.
-The classes (selected, match, lit, dim) come from Sjá by node id
+  "PATCHED of `drgnx-view-rows': the stale shade, then the model's classes on the patched rows KEYS, then
+`drgnx-view-patch-patched-functions'.  The classes (selected, match, lit, dim) come from Sjá by node id
 (`drgnx-view-nav-class-step'), never from a row patch."
   (with-current-buffer (drgnx-view--buffer view)
     (let ((state drgnx-view-patch))
       (when (drgnx-view-patch-stale-overlay state)
         (move-overlay (drgnx-view-patch-stale-overlay state) (point-min) (point-max)))
       (when (fboundp 'drgnx-view-nav-class-step)
-        (drgnx-view-nav-class-step view keys)))))
+        (drgnx-view-nav-class-step view keys))
+      (run-hook-with-args 'drgnx-view-patch-patched-functions view keys))))
 
 (drgnx-view-define 'drgnx-view-rows :render #'drgnx-view-patch-render :patched #'drgnx-view-patch--patched
                    :sync #'drgnx-view-patch--sync :slice drgnx-view-slice)

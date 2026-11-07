@@ -2058,7 +2058,8 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
   `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
   which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
   again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
-  selection: a removed row takes nothing with it.
+  selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
+  through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
 - **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
   `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
   `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
