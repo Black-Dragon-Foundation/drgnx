@@ -848,13 +848,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-fwd"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "drgnx-px"
 version = "0.1.0"
 dependencies = [
@@ -3409,6 +3402,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-px",
  "forseti",
  "gleipnir",
  "libc",

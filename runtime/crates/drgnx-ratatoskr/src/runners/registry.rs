@@ -227,7 +227,7 @@ pub struct Cfg {
     pub hub_boot_id: String,
     /// The hub's `$XDG_RUNTIME_DIR`, where the generated ssh configs are (`ssh -G` reads one).
     pub runtime_dir: PathBuf,
-    /// The built bundles: `<arch>/sleipnir` (and `drgnx-key`, `drgnx-fwd`), as `drgnx build runner-bundle` leaves them.
+    /// The built bundles: `<arch>/sleipnir` (and `drgnx-key`, `drgnx-px-<arch>-linux-musl`), as `drgnx build runner-bundle` leaves them.
     pub bundles: PathBuf,
     /// The images a new runner pulls, by digest (`name@sha256:...`); the first benches it and runs its canary.
     pub images: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
@@ -621,7 +621,8 @@ impl Registry {
             ))
         })?;
         let bundle = hex(&Sha256::digest(&sleipnir))[..16].to_string();
-        for file in ["sleipnir", "drgnx-key", "drgnx-fwd"] {
+        let px = format!("drgnx-px-{arch}-linux-musl");
+        for file in ["sleipnir", "drgnx-key", px.as_str()] {
             let bytes = if file == "sleipnir" {
                 sleipnir.clone()
             } else {

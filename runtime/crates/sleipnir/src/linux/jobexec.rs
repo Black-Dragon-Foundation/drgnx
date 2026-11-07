@@ -74,6 +74,12 @@ pub struct HelperSpec {
     /// The hub's allow-list file: the job has network through the helper's proxy.
     #[serde(default)]
     pub hub_allow: Option<PathBuf>,
+    /// A networked job's relay sidecar (its container name), which the helper starts before the job.
+    #[serde(default)]
+    pub net: Option<crate::linux::podman::JobNet>,
+    /// The sidecar's `podman` arguments (`linux::podman::sidecar_argv`).
+    #[serde(default)]
+    pub sidecar_argv: Vec<String>,
     /// The job's container, killed when the disk watch stops the job.
     #[serde(default)]
     pub container: Option<String>,

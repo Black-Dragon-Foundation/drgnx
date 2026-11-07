@@ -5,12 +5,14 @@
 //! - the job's keys ([`keys`]): `serve` hands them over `D/helper.sock`, the helper holds them in locked memory (no
 //!   swap, no core dump: the process is not dumpable) and serves them to `drgnx-key` on `D/key.sock`, zeroed at the
 //!   end;
-//! - the job's network ([`net`], with the `runner` feature): Gleipnir's CONNECT proxy on `D/proxy.sock` with the hub's
-//!   allow-list, never a link-local or cloud metadata address;
+//! - the job's network ([`net`], with the `runner` feature): its relay sidecar (`drgnx-px`, started here before the
+//!   job, whose namespace the job joins) and Gleipnir's CONNECT proxy on the relay's streams with the hub's
+//!   allow-list, never a link-local or cloud metadata address; a relay that ends before the job ends it `infra: proxy`;
 //! - the disk watch ([`disk`]): below the runner folder's floor the job that grew most since its start is stopped,
 //!   `infra: disk`.
 //!
-//! It announces itself with one line on stdout (`ready <pid>`) once its sockets listen, and ends when its stdin does:
+//! It announces itself with one line on stdout (`ready <pid>`) once its sockets listen (and the sidecar sent its
+//! `READY`), and ends when its stdin does:
 //! job-exec holds that pipe, so the helper goes with job-exec, and with the job's unit.
 
 pub mod disk;
@@ -24,8 +26,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The proxy socket's name in the attempt's folder.
-pub const PROXY_SOCK: &str = "proxy.sock";
 /// The helper's pid, written once it is ready.
 pub const PID: &str = "helper.pid";
 /// Where the helper's own messages go (never a key's value).
@@ -119,15 +119,19 @@ fn serve(a: &Args) -> Result<(), String> {
         keys::bind(&a.dir, keys::HELPER_SOCK).map_err(|e| format!("{}: {e}", keys::HELPER_SOCK))?;
     let job = keys::bind(&a.dir, keys::KEY_SOCK).map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
     #[cfg(feature = "runner")]
-    let _proxy = match &a.hub_allow {
-        None => None,
-        Some(f) => {
+    let relay = match (&a.hub_allow, &h.net) {
+        (None, _) => None,
+        (Some(_), None) => return Err("a networked job's spec names no sidecar".into()),
+        (Some(f), Some(n)) => {
             let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
             let allow = net::allow_list(&text)?;
-            Some(
-                net::start(&a.dir.join(PROXY_SOCK), allow, None)
-                    .map_err(|e| format!("the proxy: {e}"))?,
-            )
+            Some(net::Relay::start(
+                &a.dir,
+                allow,
+                &h.sidecar_argv,
+                &n.sidecar,
+                h.container.clone(),
+            )?)
         }
     };
     #[cfg(not(feature = "runner"))]
@@ -148,9 +152,13 @@ fn serve(a: &Args) -> Result<(), String> {
             .map_err(|e| format!("the ready line: {e}"))?;
     }
     let _ = io::copy(&mut io::stdin().lock().take(u64::MAX), &mut io::sink());
-    // the end: the keys are zeroed now, whatever thread still holds the store
+    // the end: the job's container, then its sidecar; the keys are zeroed now, whatever thread still holds the store
+    #[cfg(feature = "runner")]
+    if let Some(r) = relay {
+        r.end();
+    }
     store.clear();
-    for s in [keys::HELPER_SOCK, keys::KEY_SOCK, PROXY_SOCK] {
+    for s in [keys::HELPER_SOCK, keys::KEY_SOCK] {
         let _ = std::fs::remove_file(a.dir.join(s));
     }
     Ok(())

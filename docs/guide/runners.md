@@ -88,7 +88,7 @@ If the runner's disk gets low (below 20 GB, or 10 % of the runner folder's disk)
 started is stopped and ends as "disk", not as a failure.
 
 **The runner bundle.** drgnx copies three small programs to a runner: `sleipnir` (the runner itself), `drgnx-key` and
-`drgnx-fwd` (the job's way to the proxy). They are built static, so they start on any Linux and in any image.
+`drgnx-px` (the relay sidecar, the job's way to the proxy). They are built static, so they start on any Linux and in any image.
 `install.sh` builds them for this machine's processor; for a runner of the other kind, run
 `drgnx build runner-bundle --arch aarch64` (or `x86_64`).
 

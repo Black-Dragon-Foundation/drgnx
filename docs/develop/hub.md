@@ -2239,7 +2239,7 @@ seam: `UrdrStore` in the hub, `MemStore` in tests.
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
 config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
-puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-fwd`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
+puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
 one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
 already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)

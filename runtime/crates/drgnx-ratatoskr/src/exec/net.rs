@@ -37,40 +37,7 @@ fn setup(message: impl Into<String>) -> Refusal {
     }
 }
 
-/// What the sidecar's exit CODE means (the plan's exit codes of `drgnx-px`).
-pub fn exit_meaning(code: i32) -> &'static str {
-    match code {
-        0 => "its input ended",
-        2 => "it could not bind its port",
-        3 => "it lost the hub's heartbeat",
-        4 => "the channel broke a rule",
-        5 => "its writes to the hub stalled",
-        6 => "its stream ids ran out",
-        137 => "killed, most likely at its memory limit",
-        _ => "an unexpected exit",
-    }
-}
-
-/// The reason a job ends `infra: proxy` when its relay channel ended (END) before it: how the channel ended, the
-/// sidecar's exit CODE and its meaning (channel review N3), and the last line of its STDERR.
-pub fn end_reason(end: &End, code: Option<i32>, stderr: &str) -> String {
-    let how = match end {
-        End::Eof => "the sidecar exited".to_string(),
-        End::Violation(v) => format!("a channel violation ({v})"),
-        End::Ready(r) => format!("the relay never got ready ({r})"),
-        End::Stalled => "the job's relay stopped reading".to_string(),
-        End::IdsUsedUp => "the job used up its relay's 2³⁰ connections".to_string(),
-    };
-    let code = match code {
-        Some(c) => format!("; the sidecar exited {c}: {}", exit_meaning(c)),
-        None => "; the sidecar did not exit when asked".to_string(),
-    };
-    let last = stderr.lines().rev().find(|l| !l.trim().is_empty());
-    match last {
-        Some(l) => format!("{how}{code} ({})", l.trim()),
-        None => format!("{how}{code}"),
-    }
-}
+pub use drgnx_px::owner::{end_reason, exit_meaning};
 
 /// The job's proxy: the allow-list ALLOW and the pins PINS, and at most twice the relay's streams open at once (S4's
 /// backstop; the sidecar holds the 65th connection until one closes).

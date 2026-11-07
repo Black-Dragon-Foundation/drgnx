@@ -1590,14 +1590,13 @@ The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipn
   the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
   `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
   in to a user session, or `loginctl enable-linger`.
-- **Network through the proxy.** A job the matrix granted a network keeps `--network=none`; there is no podman
-  network. The argv gains the job's own Gleipnir proxy socket (`-v <socket>:/run/drgnx/proxy.sock:ro,Z`), a private
-  copy of the forwarder `drgnx-fwd` (`-v <copy>:/run/drgnx/fwd:ro,Z`), `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
-  `https_proxy` set to `http://127.0.0.1:3128`, and `--entrypoint /run/drgnx/fwd`. The image name is followed by
-  `3128 /run/drgnx/proxy.sock --` and then the command: the forwarder gives the container's own loopback port 3128 in
-  front of the socket, then runs the command in its place. The only route out is the proxy, whose allow-list is the
+- **Network through the proxy.** A job the matrix granted a network joins its relay sidecar's network namespace
+  (`--network=container:<sidecar>`), which has a loopback and nothing else; there is no podman network. The sidecar
+  (`drgnx-px`, [drgnx-px.md](drgnx-px.md)) listens on `127.0.0.1:3128` there and carries each connection over its
+  stdio to the owner's Gleipnir proxy (the hub's, or a runner job's helper). `HTTP_PROXY`, `HTTPS_PROXY`,
+  `http_proxy` and `https_proxy` are `http://127.0.0.1:3128`. The only route out is the proxy, whose allow-list is the
   setting `agents-net-hosts` (by default the package hosts of crates.io, npm and PyPI, port 443). A job granted a
-  network with no proxy or no forwarder is refused.
+  network whose relay can't start is refused.
 - **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
   container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
   no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The

@@ -537,15 +537,15 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-agent-containers-mt1-${{ steps.rv.outputs.v }}-
       - name: Each tracked file at its last commit's time (cargo rebuilds only what changed since the cache)
         run: bash .github/ci/commit-times.sh runtime/target/.drgnx-built-from
-      # + the forwarder a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir) and
-      # beside the hub, where the hub looks for it
+      # + the relay sidecar a job granted network runs, static (as `drgnx runtime build` makes it: its own target dir)
+      # and beside the hub under the name the hub looks for (drgnx_px::image::binary_for)
       - id: build
         run: |
           cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr -p domr --features drgnx-ratatoskr/test-hooks
           rustup target add x86_64-unknown-linux-musl
-          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-fwd --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
-          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-fwd runtime/target/debug/drgnx-fwd
-      # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the forwarder's target dir
+          cargo build --locked --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+          cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
+      # sleipnir in jobq's shape (`linux,sync`: docs/develop/sleipnir.md) builds static too, in the same musl target dir
       - if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path runtime/Cargo.toml -p sleipnir --no-default-features --features linux,sync --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
       # The runner's user has no systemd user session, so rootless podman would fall back to cgroupfs and drop the

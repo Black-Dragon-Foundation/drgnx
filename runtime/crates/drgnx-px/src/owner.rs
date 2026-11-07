@@ -37,6 +37,41 @@ pub const STOP_LIMIT: Duration = Duration::from_secs(10);
 /// The sidecar's stderr kept for refusal texts: its last 4 KiB.
 pub const STDERR_KEEP: usize = 4096;
 
+/// What the sidecar's exit CODE means (the exit codes of `drgnx-px`).
+pub fn exit_meaning(code: i32) -> &'static str {
+    match code {
+        0 => "its input ended",
+        2 => "it could not bind its port",
+        3 => "it lost the hub's heartbeat",
+        4 => "the channel broke a rule",
+        5 => "its writes to the hub stalled",
+        6 => "its stream ids ran out",
+        137 => "killed, most likely at its memory limit",
+        _ => "an unexpected exit",
+    }
+}
+
+/// The reason a job ends `infra: proxy` when its relay channel ended (END) before it: how the channel ended, the
+/// sidecar's exit CODE and its meaning (channel review N3), and the last line of its STDERR.
+pub fn end_reason(end: &End, code: Option<i32>, stderr: &str) -> String {
+    let how = match end {
+        End::Eof => "the sidecar exited".to_string(),
+        End::Violation(v) => format!("a channel violation ({v})"),
+        End::Ready(r) => format!("the relay never got ready ({r})"),
+        End::Stalled => "the job's relay stopped reading".to_string(),
+        End::IdsUsedUp => "the job used up its relay's 2³⁰ connections".to_string(),
+    };
+    let code = match code {
+        Some(c) => format!("; the sidecar exited {c}: {}", exit_meaning(c)),
+        None => "; the sidecar did not exit when asked".to_string(),
+    };
+    let last = stderr.lines().rev().find(|l| !l.trim().is_empty());
+    match last {
+        Some(l) => format!("{how}{code} ({})", l.trim()),
+        None => format!("{how}{code}"),
+    }
+}
+
 /// Why the owner's end of the channel ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum End {

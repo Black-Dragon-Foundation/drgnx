@@ -226,6 +226,33 @@ fn slot_key(spec: &forseti::JobSpec) -> SlotKey {
 /// each read once).
 const KEY_USE_SENT: &str = "key-use.sent";
 /// The hub's allow-list for the attempt's proxy.
+/// How long the sidecar's image check or import may take.
+const PX_IMAGE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A networked job's relay as its `job.json` names it: the sidecar ([`podman::JobNet`]) and the sidecar's `podman`
+/// arguments for the helper, for job ID under RA from the relay image IMAGE.
+fn net_helper(
+    ra: &RunnerArgs,
+    id: &str,
+    image: &str,
+) -> Result<(podman::JobNet, Vec<String>), String> {
+    let names = podman::net_names(ra, id).map_err(|r| r.message)?;
+    let argv = podman::sidecar_argv(&names, ra, image)
+        .map_err(|r| r.message)?
+        .into_iter()
+        .map(|a| {
+            a.into_string()
+                .map_err(|_| "a sidecar argument is not UTF-8".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((
+        podman::JobNet {
+            sidecar: names.sidecar,
+        },
+        argv,
+    ))
+}
+
 const NET_ALLOW: &str = "net-allow";
 
 enum Event {
@@ -857,6 +884,32 @@ impl<W: Write> Serve<W> {
         Ok((src, key.id()))
     }
 
+    /// The relay sidecar's image, imported from the bundle's `drgnx-px-<arch>-linux-musl` beside this binary if it
+    /// isn't there yet (tagged by content: a new bundle is a new image).
+    fn px_image(&self) -> Result<String, String> {
+        let arch = if std::env::consts::ARCH == "aarch64" {
+            "arm64"
+        } else {
+            "amd64"
+        };
+        let dir = self.exe.parent().unwrap_or(Path::new("."));
+        let bin = drgnx_px::image::binary_for(dir, arch);
+        let px = fs::read(&bin).map_err(|e| {
+            format!(
+                "drgnx could not build its proxy image: {}: {e}",
+                bin.display()
+            )
+        })?;
+        let env: Vec<_> = std::env::vars_os().collect();
+        drgnx_px::image::ensure_image(
+            Path::new("podman"),
+            &env,
+            &drgnx_px::image::image_tar(&px),
+            PX_IMAGE_LIMIT,
+        )
+        .map_err(|e| format!("drgnx could not build its proxy image: {e}"))
+    }
+
     /// Starts the attempt's unit on the source SRC: its job slice, its `job.json`, `sleipnir job-exec` in a transient
     /// service. The unit and its main pid.
     #[allow(clippy::too_many_arguments)]
@@ -916,12 +969,12 @@ impl<W: Write> Serve<W> {
         slices::ensure_tree(SLICE_ROOT, self.cfg.profile)?;
         let slice = slices::job_slice(SLICE_ROOT, id)?;
         let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
-        let proxy = match &hub_allow {
+        // a networked job's relay: the sidecar's image from the bundle's binary, its name and its argv for the helper
+        let relay = match &hub_allow {
             None => None,
-            Some(_) => Some(podman::JobNet {
-                sidecar: podman::net_names(&ra, id).map_err(|r| r.message)?.sidecar,
-            }),
+            Some(_) => Some(net_helper(&ra, id, &self.px_image()?)?),
         };
+        let proxy = relay.as_ref().map(|r| r.0.clone());
         let caps = Caps {
             proxy,
             ..job_caps(&meta.grant, image, pins)
@@ -974,6 +1027,8 @@ impl<W: Write> Serve<W> {
                 root: self.cfg.root.clone(),
                 keys: meta.spec.keys.clone(),
                 hub_allow,
+                net: relay.as_ref().map(|r| r.0.clone()),
+                sidecar_argv: relay.map(|r| r.1).unwrap_or_default(),
                 container: Some(container),
             }),
         }
@@ -1700,5 +1755,45 @@ mod caps_tests {
         v.as_object_mut().unwrap().remove("pins");
         let old: Frame = serde_json::from_value(v).unwrap();
         assert!(matches!(old, Frame::Start { pins, .. } if pins.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod net_tests {
+    use super::*;
+
+    /// [D] Under Q8 a networked job's `job.json` names its relay: the sidecar `<prefix>-px-<id>` labelled with the hub
+    /// and the job, and the `podman run` that starts it from the relay image, for the helper; it reads back whole.
+    #[test]
+    fn job_json_names_the_sidecar() {
+        let ra = RunnerArgs::runner("run", "hub1", "drgnx-runner-work-x1a.slice");
+        let (net, argv) = net_helper(&ra, "x1a", "localhost/drgnx-px:0011aabb").unwrap();
+        assert_eq!(net.sidecar, "run-px-x1a");
+        assert_eq!(&argv[..2], ["run", "-i"]);
+        assert!(
+            argv.contains(&"run-px-x1a".to_string())
+                || argv.iter().any(|a| a == "--name=run-px-x1a"),
+            "{argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a.contains("drgnx.runner=hub1")),
+            "{argv:?}"
+        );
+        assert!(argv.iter().any(|a| a.contains("drgnx.job=x1a")), "{argv:?}");
+        assert!(
+            argv.contains(&"localhost/drgnx-px:0011aabb".to_string()),
+            "{argv:?}"
+        );
+        let h = HelperSpec {
+            hub_allow: Some("/r/jobs/x1a/net-allow".into()),
+            net: Some(net.clone()),
+            sidecar_argv: argv.clone(),
+            ..HelperSpec::default()
+        };
+        let back: HelperSpec = serde_json::from_str(&serde_json::to_string(&h).unwrap()).unwrap();
+        assert_eq!(back, h);
+        // a helper spec from before the relay still reads, with none
+        let old: HelperSpec = serde_json::from_str(r#"{"root":"/r","keys":[]}"#).unwrap();
+        assert_eq!((old.net, old.sidecar_argv.len()), (None, 0));
     }
 }

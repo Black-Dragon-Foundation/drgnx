@@ -202,7 +202,12 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   and no other process of the user can read its memory or `/proc` files;
 - serves the job's keys on `D/key.sock` and takes them from `serve` on `D/helper.sock` (both 0600, this user only;
   "Keys" below);
-- with `--hub-allow`, runs Gleipnir's CONNECT proxy on `D/proxy.sock` with the hub's allow-list (`helper::net`). An
+- with `--hub-allow`, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the `job.json`'s
+  `helper.sidecar_argv`, named `helper.net.sidecar`, `<prefix>-px-<id>`), waits for its `READY` before its own `ready`
+  line, and runs Gleipnir's CONNECT proxy on the relay's streams (`Listener::Streams`, `max_conns` 128) with the hub's
+  allow-list. A relay that ends before the job writes `kill_reason` `infra: proxy: <reason>` (the sidecar's exit code
+  and its meaning, its last stderr line), removes the job's container, then stops the sidecar; at the job's end the
+  helper removes the job's container before the sidecar. An
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
   refused, no name is pinned, and the proxy connects only to public addresses, so a listed name that resolves to
   `169.254.x` gets `403` too. (The agent browser's `METADATA_NEVER` replaces this list once both are on one line.)
@@ -238,16 +243,17 @@ A key reaches a job without touching disk (design 6.6):
 5. Podman's argv, its stored config and `podman inspect` show the names only. Neither `podman run --env` nor podman
    secrets are used: both end up in podman's stored config or in files.
 
-`serve` gives every keyed job its own copy of the bundle's `drgnx-key` (and a networked one its own `drgnx-fwd`) in
-its attempt folder, since each container relabels what it mounts (`Z`).
+`serve` gives every keyed job its own copy of the bundle's `drgnx-key` in its attempt folder, since each container
+relabels what it mounts (`Z`). A networked job's sidecar image is imported from the bundle's
+`drgnx-px-<arch>-linux-musl` (tagged by content) when `serve` launches it; under Q8 `serve` creates no network.
 
 ## The runner bundle
 
-`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key`, `drgnx-fwd` and the relay sidecar `drgnx-px` (kept in the bundle as `drgnx-px-<arch>-linux-musl`) static (Rust's
+`bin/drgnx build runner-bundle [--arch x86_64|aarch64]` builds `sleipnir`, `drgnx-key` and the relay sidecar `drgnx-px` (kept in the bundle as `drgnx-px-<arch>-linux-musl`) static (Rust's
 self-contained musl targets, release) into `runtime/target/bundle/<arch>/`, and checks each with `file`. The host's
 architecture is the default; `install.sh` builds that one, and CI's container lane builds both. `tests/bundle_host.rs`
-(`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) runs the bundle's
-forwarder and `drgnx-key` in an image of another libc.
+(`#[ignore = "bundle"]`, with `DRGNX_TEST_BUNDLE` and a musl image in `DRGNX_TEST_FOREIGN_IMAGE`) checks each binary
+is static and runs `drgnx-key` in an image of another libc.
 
 ### `result.json` (`linux::result`)
 
@@ -551,8 +557,8 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 |---|---|
 | `attempt.json` | the hub id, the `JobRef` with its nonce, the spec, priority, grant and expected figures, the bundle its job-exec runs from, its unit |
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
-| `helper.sock`, `key.sock`, `proxy.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
-| `drgnx-key`, `drgnx-fwd`, `net-allow`, `key-use.sent` | the job's own copies of the bundle's binaries, the hub's allow-list, the `key-use` lines sent |
+| `helper.sock`, `key.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
+| `drgnx-key`, `net-allow`, `key-use.sent` | the job's own copy of the bundle's `drgnx-key`, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
 | `tree/` | a synced job that writes its tree: its private copy of the slot |
 | `cancelled`, `collected` | the hub cancelled it; the hub has its result (`done`), so the folder may go |
@@ -592,7 +598,7 @@ unit's main pid, so it outlives `serve`. Then `started`. Every attempt gets its 
 one also its key mounts and `drgnx-key exec` (its spec's key names, each into the variable of that name), and one
 with `net_hosts` its proxy, the hosts written to `net-allow` and checked first ("The job helper", "Keys"). What can't
 start (no image, a parser it doesn't know, an allow-list entry that is never reached, a bundle without `drgnx-key` or
-`drgnx-fwd`, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
+`drgnx-px` for a networked job, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
 run another way. `key` frames go to the helper ("Keys"), and the helper's `key-use` lines come back as `key-use`
 frames. The pins go into the job's caps (`Caps.pins`, as a local container job's come from
 `drgnx-sandbox-proxy-pinned-addresses`); the job helper's proxy doesn't pin by them yet.
