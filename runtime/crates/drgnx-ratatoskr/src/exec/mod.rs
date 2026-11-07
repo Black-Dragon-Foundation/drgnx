@@ -1598,10 +1598,21 @@ impl Inner {
             me.restore(waiting.into_iter().map(|(_, id)| id).collect()),
         );
         self.prune();
-        // a podman client that died with the last hub leaves its container: remove those no running job owns
+        // a podman client that died with the last hub leaves its container (and a networked job its sidecar): remove
+        // those of this hub's label no running job owns, and the relay images of an older binary
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            crate::clock::blocking(move || container::remove_leftovers(&shell, &podman, &running));
+            let px_dir = self.hooks.px_dir.clone();
+            crate::clock::blocking(move || {
+                let current = px_dir.and_then(|d| net::px_image_ref(&d));
+                container::remove_leftovers(
+                    &shell,
+                    &podman,
+                    &container::owner_tag(),
+                    &running,
+                    current.as_deref(),
+                )
+            });
         }
     }
 }

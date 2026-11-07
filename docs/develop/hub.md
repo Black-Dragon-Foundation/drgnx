@@ -1964,7 +1964,10 @@ the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. Every job but the editor's
+command stays the hub's child. `Runner::open` re-attaches every folder without a result, then sweeps: the containers labelled `drgnx.owner=<this hub's
+tag>` whose `drgnx.job` isn't running, job containers before sidecars (`sleipnir::linux::podman::leftovers`, shared with
+the runners), and relay images (`localhost/drgnx-px:<tag>`) other than the current binary's. A sibling hub's
+containers carry its own tag and stay; unlabelled ones (made before the labels) are left. Every job but the editor's
 servers (a user's `no_timebox` job, up for days, started at once) goes through the queue ("Runners: the queue"), whose
 local runner admits it here (`Hooks::admission`). `exec/get`, `exec/log` and
 `exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's

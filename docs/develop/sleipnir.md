@@ -597,7 +597,9 @@ build waits for live resizing.
 **The cleanup**, at start, at every job end and at every `done`, removes only what is this hub's
 (`serve::cleanup::plan`, pure):
 
-- containers named `<prefix>-<id>` labelled `drgnx.runner=<hub id>` whose attempt doesn't run;
+- containers of its prefix labelled `drgnx.runner=<hub id>` whose `drgnx.job` attempt doesn't run, the job's
+  container (`<prefix>-<id>`) before its relay sidecar (`<prefix>-px-<id>`): `linux::podman::leftovers`, the sweep the
+  hub shares, over `podman ps -a --format json` (a running job's sidecar stays);
 - this hub's ended units (named in its own attempt records) still loaded;
 - this hub's job folders, collected or older than 24 h, whose attempt doesn't run;
 - bundles put there before its own that no process runs from and no running attempt (of any hub) started from (a

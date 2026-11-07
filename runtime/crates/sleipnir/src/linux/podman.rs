@@ -647,6 +647,184 @@ pub fn check_limits(
     Ok(info)
 }
 
+/// What a start-up sweep removes (S11): job containers, then sidecars, then networks, each a name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Leftovers {
+    pub jobs: Vec<String>,
+    pub sidecars: Vec<String>,
+    pub networks: Vec<String>,
+}
+
+/// The sweep's removals, shared by the hub and the runners: of `podman ps -a --format json` (PS) and, with an internal
+/// network, `podman network ls --format json` (NETS; `None` under Q8), what carries the label OWNER (`drgnx.owner` and
+/// this hub's tag, or `drgnx.runner` and the hub id) and a `drgnx.job` not in RUNNING.  A container without both labels
+/// is left, whatever its name: a sibling hub's and one made before the labels are never touched.  A sidecar is told
+/// from its job's container by its name (`drgnx-px-<tag>-<job>`, `<prefix>-px-<job>`).
+pub fn leftovers(
+    ps: &serde_json::Value,
+    nets: Option<&serde_json::Value>,
+    owner: (&str, &str),
+    running: &std::collections::HashSet<String>,
+) -> Leftovers {
+    let mut out = Leftovers::default();
+    let dead = |labels: &serde_json::Value| -> Option<String> {
+        if labels.get(owner.0).and_then(|v| v.as_str()) != Some(owner.1) {
+            return None;
+        }
+        let job = labels.get("drgnx.job")?.as_str()?;
+        (!running.contains(job)).then(|| job.to_string())
+    };
+    for c in ps.as_array().into_iter().flatten() {
+        let Some(job) = dead(&c["Labels"]) else {
+            continue;
+        };
+        let name = match &c["Names"] {
+            serde_json::Value::Array(n) => n.first().and_then(|n| n.as_str()),
+            n => n.as_str(),
+        };
+        let Some(name) = name else { continue };
+        let sidecar = name
+            .strip_suffix(&format!("-{job}"))
+            .is_some_and(|rest| rest.ends_with("-px") || rest.starts_with("drgnx-px-"));
+        if sidecar {
+            out.sidecars.push(name.to_string());
+        } else {
+            out.jobs.push(name.to_string());
+        }
+    }
+    for n in nets.and_then(|n| n.as_array()).into_iter().flatten() {
+        if dead(&n["labels"]).is_some()
+            && let Some(name) = n["name"].as_str()
+        {
+            out.networks.push(name.to_string());
+        }
+    }
+    out.jobs.sort();
+    out.sidecars.sort();
+    out.networks.sort();
+    out
+}
+
+/// The sidecar image tags (`localhost/drgnx-px:<hex>`) of `podman images --format json` (IMAGES) other than CURRENT:
+/// an older binary's images, which the sweep removes.
+pub fn old_px_tags(images: &serde_json::Value, current: &str) -> Vec<String> {
+    let mut out: Vec<String> = images
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|i| i["Names"].as_array().cloned().unwrap_or_default())
+        .filter_map(|n| n.as_str().map(str::to_string))
+        .filter(|n| n.starts_with("localhost/drgnx-px:") && n != current)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ctr(name: &str, labels: serde_json::Value) -> serde_json::Value {
+        json!({"Names": [name], "Labels": labels})
+    }
+
+    fn listing() -> serde_json::Value {
+        json!([
+            ctr(
+                "drgnx-job-a1",
+                json!({"drgnx.owner": "aaaa1111", "drgnx.job": "a1"})
+            ),
+            ctr(
+                "drgnx-px-aaaa1111-a1",
+                json!({"drgnx.owner": "aaaa1111", "drgnx.job": "a1"})
+            ),
+            ctr(
+                "drgnx-job-a2",
+                json!({"drgnx.owner": "aaaa1111", "drgnx.job": "a2"})
+            ),
+            ctr(
+                "drgnx-px-aaaa1111-a2",
+                json!({"drgnx.owner": "aaaa1111", "drgnx.job": "a2"})
+            ),
+            ctr(
+                "drgnx-job-b1",
+                json!({"drgnx.owner": "bbbb2222", "drgnx.job": "b1"})
+            ),
+            ctr(
+                "drgnx-px-bbbb2222-b1",
+                json!({"drgnx.owner": "bbbb2222", "drgnx.job": "b1"})
+            ),
+            ctr("run-r1", json!({"drgnx.runner": "hub1", "drgnx.job": "r1"})),
+            ctr("drgnx-job-old", json!({})),
+        ])
+    }
+
+    #[test]
+    fn sweep_takes_only_its_own_label() {
+        let running = ["a1".to_string()].into_iter().collect();
+        let l = leftovers(&listing(), None, ("drgnx.owner", "aaaa1111"), &running);
+        assert_eq!(l.jobs, ["drgnx-job-a2"]);
+        assert_eq!(l.sidecars, ["drgnx-px-aaaa1111-a2"]);
+        assert!(l.networks.is_empty());
+        let r = leftovers(
+            &listing(),
+            None,
+            ("drgnx.runner", "hub1"),
+            &Default::default(),
+        );
+        assert_eq!(r.jobs, ["run-r1"]);
+    }
+
+    #[test]
+    fn a_running_jobs_sidecar_stays() {
+        let running = ["a1".to_string(), "a2".to_string()].into_iter().collect();
+        let l = leftovers(&listing(), None, ("drgnx.owner", "aaaa1111"), &running);
+        assert_eq!(l, Leftovers::default());
+    }
+
+    #[test]
+    fn jobs_go_before_sidecars_before_networks() {
+        let ps = json!([
+            ctr(
+                "run-px-r2",
+                json!({"drgnx.runner": "hub1", "drgnx.job": "r2"})
+            ),
+            ctr("run-r2", json!({"drgnx.runner": "hub1", "drgnx.job": "r2"})),
+        ]);
+        let nets =
+            json!([{"name": "run-net-r2", "labels": {"drgnx.runner": "hub1", "drgnx.job": "r2"}}]);
+        let l = leftovers(
+            &ps,
+            Some(&nets),
+            ("drgnx.runner", "hub1"),
+            &Default::default(),
+        );
+        assert_eq!(
+            (l.jobs, l.sidecars, l.networks),
+            (
+                vec!["run-r2".to_string()],
+                vec!["run-px-r2".to_string()],
+                vec!["run-net-r2".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn old_px_tags_go() {
+        let images = json!([
+            {"Names": ["localhost/drgnx-px:00aa"]},
+            {"Names": ["localhost/drgnx-px:11bb"]},
+            {"Names": ["docker.io/library/busybox:1.36"]}
+        ]);
+        assert_eq!(
+            old_px_tags(&images, "localhost/drgnx-px:11bb"),
+            ["localhost/drgnx-px:00aa"]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

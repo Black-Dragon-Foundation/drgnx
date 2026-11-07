@@ -163,41 +163,49 @@ pub fn check_limits(
     podman::check_limits(podman, &podman_env(shell), limit).map_err(setup)
 }
 
-/// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
-/// hub leaves its container behind).  Only names under [`NAME_PREFIX`] are looked at; answers how many it removed.
+/// At hub start: remove what this hub (OWNER, its tag) left behind (a podman client killed with the hub leaves its
+/// container): the containers labelled `drgnx.owner=<OWNER>` whose `drgnx.job` is not in RUNNING, the jobs' before
+/// the sidecars (S11; `podman::leftovers`, shared with the runners), then the relay images other than PX_CURRENT.  A
+/// sibling hub's containers carry another tag and are never touched; ones made before the labels are left (they are
+/// `--rm`).  Answers how many containers it removed.
 pub fn remove_leftovers(
     shell: &ShellEnv,
     podman: &Path,
+    owner: &str,
     running: &std::collections::HashSet<String>,
+    px_current: Option<&str>,
 ) -> usize {
     let limit = Duration::from_secs(30);
-    let Ok(list) = run_limited(
-        shell,
-        podman,
-        &[
-            "ps",
-            "-a",
-            "--filter",
-            "name=drgnx-job-",
-            "--format",
-            "{{.Names}}",
-        ],
-        limit,
-    ) else {
-        return 0;
+    let label = format!("label=drgnx.owner={owner}");
+    let json = |args: &[&str]| {
+        run_limited(shell, podman, args, limit)
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
     };
     let mut n = 0;
-    for name in String::from_utf8_lossy(&list.stdout).lines() {
-        let name = name.trim();
-        let Some(id) = name.strip_prefix(NAME_PREFIX) else {
-            continue;
-        };
-        if running.contains(id) || name_of(id).is_err() {
-            continue;
+    if let Some(ps) = json(&["ps", "-a", "--filter", &label, "--format", "json"]) {
+        let left = podman::leftovers(&ps, None, ("drgnx.owner", owner), running);
+        for name in left.jobs.iter().chain(&left.sidecars) {
+            if run_limited(shell, podman, &["rm", "-f", name], limit)
+                .is_ok_and(|o| o.status.success())
+            {
+                n += 1;
+            }
         }
-        if run_limited(shell, podman, &["rm", "-f", name], limit).is_ok_and(|o| o.status.success())
-        {
-            n += 1;
+    }
+    if let Some(current) = px_current
+        && let Some(images) = json(&[
+            "images",
+            "--filter",
+            "reference=localhost/drgnx-px",
+            "--format",
+            "json",
+        ])
+    {
+        for tag in podman::old_px_tags(&images, current) {
+            // an image a sibling hub's sidecar still runs from stays: `rmi` without force refuses it
+            let _ = run_limited(shell, podman, &["rmi", &tag], limit);
         }
     }
     n
@@ -410,17 +418,49 @@ mod name_and_pull_tests {
     fn leftovers_removal_touches_only_dead_hub_names() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("log");
+        let ps = r#"[{"Names":["drgnx-job-dead"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"dead"}},
+{"Names":["drgnx-px-aaaa1111-dead"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"dead"}},
+{"Names":["drgnx-job-live"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"live"}},
+{"Names":["drgnx-job-sib"],"Labels":{"drgnx.owner":"bbbb2222","drgnx.job":"sib"}},
+{"Names":["other"],"Labels":{}}]"#;
+        let images =
+            r#"[{"Names":["localhost/drgnx-px:00aa"]},{"Names":["localhost/drgnx-px:11bb"]}]"#;
         let p = script(
             d.path(),
             &format!(
-                "echo \"$@\" >> {}\nif [ \"$1\" = ps ]; then printf 'drgnx-job-dead\\ndrgnx-job-live\\nother\\n'; fi",
+                "echo \"$@\" >> {}\nif [ \"$1\" = ps ]; then echo '{ps}'; fi\nif [ \"$1\" = images ]; then echo '{images}'; fi",
                 log.display()
             ),
         );
         let running = ["live".to_string()].into_iter().collect();
-        assert_eq!(remove_leftovers(&ShellEnv::default(), &p, &running), 1);
+        let n = remove_leftovers(
+            &ShellEnv::default(),
+            &p,
+            "aaaa1111",
+            &running,
+            Some("localhost/drgnx-px:11bb"),
+        );
+        assert_eq!(n, 2);
         let said = std::fs::read_to_string(&log).unwrap();
-        assert!(said.contains("rm -f drgnx-job-dead"), "{said}");
-        assert!(!said.contains("rm -f drgnx-job-live") && !said.contains("rm -f other"));
+        assert!(
+            said.contains("ps -a --filter label=drgnx.owner=aaaa1111"),
+            "{said}"
+        );
+        let (j, s) = (
+            said.find("rm -f drgnx-job-dead")
+                .expect("the dead job goes"),
+            said.find("rm -f drgnx-px-aaaa1111-dead")
+                .expect("its sidecar goes"),
+        );
+        assert!(j < s, "the job's container before its sidecar: {said}");
+        assert!(
+            !said.contains("rm -f drgnx-job-live") && !said.contains("rm -f drgnx-job-sib"),
+            "{said}"
+        );
+        assert!(
+            said.contains("rmi localhost/drgnx-px:00aa")
+                && !said.contains("rmi localhost/drgnx-px:11bb"),
+            "{said}"
+        );
     }
 }

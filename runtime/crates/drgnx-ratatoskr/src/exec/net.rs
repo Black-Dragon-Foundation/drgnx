@@ -117,6 +117,21 @@ pub fn rootless_connection(list: &serde_json::Value) -> Result<String, String> {
     ))
 }
 
+/// This host's podman architecture name.
+fn podman_arch() -> &'static str {
+    if std::env::consts::ARCH == "aarch64" {
+        "arm64"
+    } else {
+        "amd64"
+    }
+}
+
+/// The relay image the binary in PX_DIR makes (its content tag), or none without the binary.
+pub fn px_image_ref(px_dir: &Path) -> Option<String> {
+    let px = std::fs::read(drgnx_px::image::binary_for(px_dir, podman_arch())).ok()?;
+    Some(drgnx_px::image::image_ref(&drgnx_px::image::image_tar(&px)))
+}
+
 /// A networked job's relay while it runs: its proxy, its sidecar and the channel between them.
 pub struct JobNetwork {
     _proxy: gleipnir::net::proxy::ProxyHandle,
@@ -196,12 +211,7 @@ pub async fn prepare_net(
     let ra = container::placement(owner_tag);
     let names = container::net_names(&ra, id).map_err(|r| setup(r.message))?;
     let env = container::podman_env(shell);
-    let arch = if std::env::consts::ARCH == "aarch64" {
-        "arm64"
-    } else {
-        "amd64"
-    };
-    let binary = drgnx_px::image::binary_for(px_dir, arch);
+    let binary = drgnx_px::image::binary_for(px_dir, podman_arch());
     let (p, e) = (podman.to_path_buf(), env.clone());
     let image = crate::clock::blocking(move || {
         let px = std::fs::read(&binary).map_err(|err| {
