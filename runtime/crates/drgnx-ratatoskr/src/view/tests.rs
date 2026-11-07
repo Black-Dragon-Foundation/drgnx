@@ -402,3 +402,32 @@ fn no_env_builds_no_rows() {
         w.out
     );
 }
+
+/// The fixture view's labels (`__test_view_rows`'s `labels`), fitted with the class's fonts: a GUI class by pixels
+/// (the editor's advances here: 10 px a char), a terminal class by columns of its cell.
+#[test]
+fn fixture_labels_are_fitted_per_class() {
+    use drgnx_rows::fit::FontSet;
+    let labels = vec![
+        ("a".to_owned(), "abcdefghij".to_owned(), 60),
+        ("b".to_owned(), "abc".to_owned(), 60),
+    ];
+    let mut set = FontSet::new();
+    set.set_role("ui", None, 10.0);
+    let answers: Vec<(String, char, f32)> = "abcdefghij…"
+        .chars()
+        .map(|c| ("ui".to_owned(), c, 10.0))
+        .collect();
+    set.glyphs(&answers);
+    let gui = super::label_rows(&labels, &env("g", 1, 600), &set);
+    // 60 px less the 10 px slack: four chars and the ellipsis; then the stop's placeholder and the rest
+    assert_eq!(gui[0].text, "abcd… |");
+    assert_eq!(gui[0].stops, vec![(5, 60)]);
+    assert_eq!(gui[1].text, "abc |");
+    let mut tty = env("t", 1, 600);
+    tty.display = Display::Tty;
+    tty.cell = (10, 20);
+    // 60 px of 10 px cells: 6 columns, the ellipsis one of them
+    let t = super::label_rows(&labels, &tty, &FontSet::new());
+    assert_eq!(t[0].text, "abcde… |");
+}

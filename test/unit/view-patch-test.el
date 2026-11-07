@@ -280,3 +280,84 @@ are kept as a list, newest first."
                ((not (eql 2 (plist-get s :epoch-shown))) "the epoch 2 reset was not applied")
                ((cl-some (lambda (p) (/= (plist-get p :env_epoch) (plist-get reset :env_epoch))) since)
                 "rows of two epochs on screen"))))))
+
+;;;; The rule rows: the fixture view `rows-demo', fed by a real hub (test/fixtures/rows-demo-fixture.el)
+
+(load (expand-file-name "test/fixtures/rows-demo-fixture" drgnx-dir) nil t)
+
+(defun drgnx-view-patch-test--rows (prefix n)
+  (let (rows) (dotimes (i n) (push (drgnx-rows-demo-row (format "r%d" i) (format "%s %d" prefix i)) rows)) (nreverse rows)))
+
+(ert-deftest drgnx-view-rows/look-change-mid-stream-ends-on-the-new-epoch ()
+  "A stale window: rows stream while the look changes (a theme or a font: the editor's next epoch).  Patches of the
+old epoch are held and the view dims; the new epoch's reset drops them, and the view ends plain, on the new epoch,
+with the last rows."
+  (drgnx-rows-demo-with
+    (let ((b (drgnx-rows-demo-open "c")))
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "a" 3))
+      (drgnx-rows-demo-settle b)
+      (should (equal "a 0\na 1\na 2\n" (drgnx-rows-demo-text b)))
+      ;; the look changes while the next rows are on their way
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "b" 3))
+      (drgnx-rows-demo-env "c" 2 :palette [["edge" "#000002"]])
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "c" 4))
+      (drgnx-rows-demo-settle b)
+      (let ((s (drgnx-rows-demo-state b)))
+        (should (= 2 (drgnx-view-patch-epoch s)))
+        (should-not (drgnx-view-patch-held s))
+        (should-not (drgnx-view-patch-stale s)))
+      (should (equal "c 0\nc 1\nc 2\nc 3\n" (drgnx-rows-demo-text b))))))
+
+(ert-deftest drgnx-view-rows/two-classes-keep-their-own-rows ()
+  "Two display classes of one view: each buffer gets the rows of its class, and a new epoch in one resets only it."
+  (drgnx-rows-demo-with
+    (let ((one (drgnx-rows-demo-open "one")) (two (drgnx-rows-demo-open "two")))
+      (drgnx-rows-demo-feed (drgnx-view-patch-test--rows "x" 2))
+      (drgnx-rows-demo-settle one)
+      (drgnx-rows-demo-settle two)
+      (should (equal "x 0\nx 1\n" (drgnx-rows-demo-text one)))
+      (should (equal "x 0\nx 1\n" (drgnx-rows-demo-text two)))
+      (let ((v1 (drgnx-view-patch-version (drgnx-rows-demo-state one))))
+        (drgnx-rows-demo-env "two" 2 :cell [2 1])
+        (drgnx-rows-demo-settle two)
+        (should (= v1 (drgnx-view-patch-version (drgnx-rows-demo-state one))))
+        (should (= 2 (drgnx-view-patch-epoch (drgnx-rows-demo-state two))))
+        (should (equal "x 0\nx 1\n" (drgnx-rows-demo-text two)))))))
+
+(ert-deftest drgnx-view-rows/face-override-after-a-patch-applies ()
+  "Rows name faces, never colours: a face remapped in the view's buffer after a patch shows on the patched rows."
+  (drgnx-rows-demo-with
+    (let ((b (drgnx-rows-demo-open "c")))
+      (drgnx-rows-demo-feed (list (drgnx-rows-demo-row "r" "hello" :runs [[0 5 "bold"]])))
+      (drgnx-rows-demo-settle b)
+      (with-current-buffer b (face-remap-add-relative 'bold :underline t))
+      (drgnx-rows-demo-feed (list (drgnx-rows-demo-row "r" "hello again" :runs [[0 5 "bold"]])))
+      (drgnx-rows-demo-settle b)
+      (with-current-buffer b
+        (should (equal "hello again\n" (buffer-string)))
+        (should (eq 'bold (get-text-property (point-min) 'face)))
+        (should (assq 'bold face-remapping-alist))))))
+
+(ert-deftest drgnx-view-rows/dropped-patch-and-missing-image-resync ()
+  "A patch lost on the way (the view's version falls behind) and an image the view lost each send one resync, and
+the hub's reset brings the view back: the rows, and the image."
+  (drgnx-rows-demo-with
+    (let* ((b (drgnx-rows-demo-open "c")) (id "00000000000000ab-1")
+           (svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\"/>")
+           (row (lambda (text) (drgnx-rows-demo-row "r" text :images (vector (vector 0 id "*"))))))
+      (drgnx-rows-demo-feed (list (funcall row " one")) (list (list id svg)))
+      (drgnx-rows-demo-settle b)
+      (let ((s (drgnx-rows-demo-state b)))
+        ;; a patch the view never got
+        (setf (drgnx-view-patch-version s) (1- (drgnx-view-patch-version s)))
+        (drgnx-rows-demo-feed (list (funcall row " two")) (list (list id svg)))
+        (drgnx-rows-demo-settle b "the resync answered")
+        (should (= 1 (drgnx-view-patch-resyncs s)))
+        (should (equal " two\n" (drgnx-rows-demo-text b)))
+        ;; an image the view lost
+        (clrhash (drgnx-view-patch-images s))
+        (drgnx-rows-demo-feed (list (funcall row " three")) (list (list id svg)))
+        (drgnx-rows-demo-settle b "the image brought back")
+        (should (= 2 (drgnx-view-patch-resyncs s)))
+        (should (gethash id (drgnx-view-patch-images s)))
+        (should (equal " three\n" (drgnx-rows-demo-text b)))))))

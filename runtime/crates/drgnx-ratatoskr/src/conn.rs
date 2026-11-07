@@ -662,8 +662,9 @@ mod buffer_views {
     }
 }
 
-/// `__test_view_rows {view, rows, images?}` (test-hooks): this connection's fixture view VIEW shows ROWS (and may name
-/// IMAGES, `[[id, svg]]`) in every display class it has an env for ([`crate::view::Views::fixture`]); answered true.
+/// `__test_view_rows {view, rows, images?, labels?}` (test-hooks): this connection's fixture view VIEW shows ROWS (and
+/// may name IMAGES, `[[id, svg]]`), then LABELS (`[[key, text, px]]`, each fitted to PX by the class's fonts and
+/// followed by a stop) in every display class it has an env for ([`crate::view::Views::fixture`]); answered true.
 #[cfg(feature = "test-hooks")]
 mod view_rows {
     use super::Outbox;
@@ -684,7 +685,12 @@ mod view_rows {
         let rows: Vec<Row> = serde_json::from_value(req.params["rows"].clone()).unwrap_or_default();
         let images: Vec<(ImageId, String)> =
             serde_json::from_value(req.params["images"].clone()).unwrap_or_default();
-        front.core.views.fixture(front, conn, view, rows, images);
+        let labels: Vec<crate::view::Label> =
+            serde_json::from_value(req.params["labels"].clone()).unwrap_or_default();
+        front
+            .core
+            .views
+            .fixture(front, conn, view, (rows, images, labels));
         if let Some(id) = req.id {
             let a = serde_json::to_string(&Answer {
                 id,

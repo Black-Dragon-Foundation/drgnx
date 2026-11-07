@@ -2008,6 +2008,14 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   selected row moves the selection to the next row, else the previous, else none.
 - `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
   pass that compares the two.
+- **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with
+  its new class (`drgnx-view-patch-reclass`) before that class's env goes out; its rows stay on screen until the
+  class's first reset.
+- **The rule rows** run on the fixture view `rows-demo` (`test/fixtures/rows-demo-fixture.el`: a real hub, a
+  test-hooks build, whose `__test_view_rows` gives the rows; `drgnx-rows-demo-with`, `-open`, `-feed`, `-settle`), for
+  later areas to call for their views: a look change mid-stream, two classes, a face override after a patch, a dropped
+  patch and a lost image (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height` and
+  `text-scale` (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
 
 ## Modal core (`drgnx-modal.el`)
 

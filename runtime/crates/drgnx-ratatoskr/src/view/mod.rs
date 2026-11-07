@@ -16,11 +16,12 @@ pub mod fonts;
 #[cfg(test)]
 mod tests;
 
-use drgnx_rows::fit::FontSet;
+use drgnx_rows::fit::{self, FontSet};
+use drgnx_rows::fit_tty;
 use drgnx_rows::image::ImageSet;
-use drgnx_rows::{ImageId, Op, Patch, Row};
+use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
-    ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewResync,
+    Display, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewResync,
 };
 use runstav::wire::Error;
 use serde_json::json;
@@ -178,8 +179,31 @@ fn instance_id() -> u64 {
     u64::from_le_bytes(b) & ((1 << 53) - 1)
 }
 
-/// A fixture view's rows and the images they may name.
-type Fixture = (Vec<Row>, Vec<(ImageId, String)>);
+/// A fixture view's labels: (key, text, px), each a row fitted to PX then a stop.
+pub type Label = (String, String, u32);
+
+/// A fixture view's rows, the images they may name, and its labels.
+pub type Fixture = (Vec<Row>, Vec<(ImageId, String)>, Vec<Label>);
+
+/// The rows of LABELS in ENV's class: each text fitted to its PX (a GUI class by FONTS' advances, a terminal by
+/// columns of the env's cell), then a stop at PX and a `|` after it.
+pub fn label_rows(labels: &[Label], env: &ViewEnv, fonts: &FontSet) -> Vec<Row> {
+    labels
+        .iter()
+        .map(|(key, text, px)| {
+            let fitted = match env.display {
+                Display::Gui => fit::fit(fonts, "ui", text, *px as f32),
+                Display::Tty => {
+                    let cols = (*px / env.cell.0.max(1)) as usize;
+                    fit_tty::fit(text, cols, &env.tty_widths)
+                }
+            };
+            let mut b = RowBuilder::new(key.clone());
+            b.push(&fitted, None).stop(*px).push("|", None);
+            b.finish()
+        })
+        .collect()
+}
 
 /// The fonts each (view, class) measures with, and the files they were read from.
 #[derive(Default)]
@@ -211,12 +235,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Views {
-    /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view.
+    /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
+    /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
-        let Some((rows, images)) = lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
+        let Some((mut rows, images, labels)) =
+            lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
         else {
             return;
         };
+        if !labels.is_empty() {
+            let env = lock(&self.store).env_of(key).cloned();
+            if let Some(env) = env {
+                let fitted = self.with_fonts(key, |set| label_rows(&labels, &env, set));
+                rows.extend(fitted.unwrap_or_default());
+            }
+        }
         let patch = lock(&self.store).publish(key, rows, &images);
         if let Some(p) = patch {
             f.send_to(key.0, "view-patch", json!(p));
@@ -268,20 +301,14 @@ impl Views {
     fn images_of(&self, key: &Key) -> Vec<(ImageId, String)> {
         lock(&self.fixtures)
             .get(&(key.0, key.1.clone()))
-            .map(|(_, i)| i.clone())
+            .map(|(_, i, _)| i.clone())
             .unwrap_or_default()
     }
 
-    /// `__test_view_rows {view, rows, images?}` (test hooks): CONN's fixture view VIEW shows ROWS in every class.
-    pub fn fixture(
-        &self,
-        f: &Front,
-        conn: u64,
-        view: String,
-        rows: Vec<Row>,
-        images: Vec<(ImageId, String)>,
-    ) {
-        lock(&self.fixtures).insert((conn, view.clone()), (rows, images));
+    /// `__test_view_rows {view, rows, images?, labels?}` (test hooks): CONN's fixture view VIEW shows ROWS in every
+    /// class, then LABELS fitted with each class's fonts.
+    pub fn fixture(&self, f: &Front, conn: u64, view: String, fixture: Fixture) {
+        lock(&self.fixtures).insert((conn, view.clone()), fixture);
         let classes = lock(&self.store).classes(conn, &view);
         for class in classes {
             self.build(f, &(conn, view.clone(), class));

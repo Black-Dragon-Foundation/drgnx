@@ -1225,7 +1225,8 @@ font or scale change makes the rows draw again anyway).")
 ;; - an epoch behind this editor's is held and the view dims (no layout change); a reset at the current epoch drops
 ;;   every held patch;
 ;; - a base older than the current version is dropped silently;
-;; - a newer base, or a row naming an image the cache lacks, sends `view/resync', at most one outstanding;
+;; - a newer base, or a row naming an image the cache lacks (not in a reset), sends `view/resync', at most one
+;;   outstanding;
 ;; - on `drgnx-hub-disconnect-functions' every hub-fed view goes stale (dimmed, keys work) and forgets its version and
 ;;   hub.
 ;; Selection, dimming and the stale shade are the view's own state, put back as the last step of every draw.
@@ -1275,7 +1276,7 @@ dropped.")
 older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE: dimmed."
   view class hub version (epoch 0) held resync stale
   (rows (make-hash-table :test #'equal))        ; KEY → its row (a plist as the event has it)
-  (images (make-hash-table :test #'equal))      ; image id → the image spec (or nil on a terminal: the alt shows)
+  (images (make-hash-table :test #'equal))      ; image id → the image spec (`:alt' on a terminal: the alt shows)
   (stops (make-hash-table))                     ; PX → the shared (space :align-to (PX))
   selected                                      ; the selected row's key
   dimmed                                        ; keys shown dimmed (a filter's)
@@ -1308,8 +1309,10 @@ older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE
           ((< (plist-get patch :env_epoch) (drgnx-view-patch-epoch state)) 'hold)
           ((and (not reset) (< (plist-get patch :base) version)) 'drop)
           ((and (not reset) (> (plist-get patch :base) version)) 'resync)
+          ;; (a reset carries every image the hub has: one it lacks shows its alt, as a resync could not bring it)
           ((let ((have (drgnx-view-patch-images state)) (new (plist-get patch :images)))
-             (cl-some (lambda (id) (not (or (gethash id have) (assoc id new)))) (drgnx-view-patch--image-ids patch)))
+             (and (not reset)
+                  (cl-some (lambda (id) (not (or (gethash id have) (assoc id new)))) (drgnx-view-patch--image-ids patch))))
            'resync)
           (t 'apply))))
 
@@ -1380,8 +1383,8 @@ applied patch sets the version.  Returns the decision.  No buffer is touched."
   (mapcar (lambda (r) (plist-get r :key)) rows))
 
 (defun drgnx-view-patch--image (svg)
-  "SVG as an image spec on a graphic display, else nil (the row's alt shows)."
-  (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center)))
+  "SVG as an image spec on a graphic display, else `:alt' (the row's alt shows)."
+  (or (and (display-graphic-p) (image-type-available-p 'svg) (create-image svg 'svg t :ascent 'center)) :alt))
 
 (defun drgnx-view-patch--evict-images (state)
   "Past `drgnx-view-patch-image-max', drop the images no live row names."
@@ -1454,6 +1457,19 @@ Returns what was done: `drop', `hold', `resync', `apply', or nil when no buffer 
       (with-current-buffer buffer
         (setf (drgnx-view-patch-epoch drgnx-view-patch) epoch)))))
 
+(defun drgnx-view-patch-reclass (buffer class)
+  "BUFFER's hub-fed view is shown in the display CLASS now (a `text-scale', a font or a scale change): it is paired
+with that class and starts afresh, its rows kept on screen until the class's first reset.  Nothing when it is
+already."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((s drgnx-view-patch))
+        (when (and s (not (equal class (drgnx-view-patch-class s))))
+          (remhash (cons (drgnx-view-patch-view s) (drgnx-view-patch-class s)) drgnx-view-patch--buffers)
+          (drgnx-view-patch--forget s)
+          (setf (drgnx-view-patch-class s) class (drgnx-view-patch-epoch s) 0)
+          (puthash (cons (drgnx-view-patch-view s) class) buffer drgnx-view-patch--buffers))))))
+
 (defun drgnx-view-patch--disconnected ()
   "The hub went away: every hub-fed view is stale (dimmed, keys work) and forgets its version and hub."
   (maphash (lambda (_ buffer)
@@ -1513,7 +1529,8 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
       (put-text-property (car stop) (1+ (car stop)) 'display (drgnx-view-patch--stop state (cadr stop)) text))
     (dolist (im (plist-get row :images))
       (let ((spec (gethash (nth 1 im) (drgnx-view-patch-images state))))
-        (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (or spec (nth 2 im)) text)))
+        (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (if (or (null spec) (eq spec :alt)) (nth 2 im) spec)
+                           text)))
     (let ((h (plist-get row :height)) (nl (copy-sequence "\n")))
       (when h (put-text-property 0 1 'line-height (* (plist-get h :lines) (default-line-height)) nl))
       (concat text nl))))

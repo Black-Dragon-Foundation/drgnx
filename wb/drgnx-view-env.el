@@ -33,6 +33,7 @@
 (defvar text-scale-mode-step)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-patch-env-sent "drgnx-view")
+(declare-function drgnx-view-patch-reclass "drgnx-view")
 
 (defconst drgnx-view-env-delay 0.1
   "Seconds of idleness after a width change before its env is sent.")
@@ -84,8 +85,10 @@ nil on a terminal or when FACE has no font."
               (name (ignore-errors (face-font face frame)))
               (info (ignore-errors (font-info name frame))))
     (let ((s (lambda (v) (and (numberp v) (* factor v)))))
-      (list (aref info 1) 0 (funcall s (aref info 2)) (funcall s (aref info 4)) (funcall s (aref info 5))
-            (funcall s (aref info 7)) (funcall s (aref info 6)) (aref info 0)))))
+      ;; `font-info': [OPENED-NAME FULL-NAME SIZE HEIGHT BASELINE-OFFSET RELATIVE-COMPOSE DEFAULT-ASCENT MAX-WIDTH
+      ;; ASCENT DESCENT SPACE-WIDTH AVERAGE-WIDTH FILENAME CAPABILITY]
+      (list (aref info 12) 0 (funcall s (aref info 2)) (funcall s (aref info 8)) (funcall s (aref info 9))
+            (funcall s (aref info 11)) (funcall s (aref info 10)) (aref info 0)))))
 
 (defun drgnx-view-env--window-facts (window)
   "The facts of the display class WINDOW shows its buffer in: a plist :display :scale :fonts :cell.  FONTS is a list
@@ -161,7 +164,11 @@ the narrowest window of the class (Call 2: one buffer holds one fit)."
   "METHOD with PARAMS on this Emacs's subscribed connection, the one the view's patches come back on; nil while it is
 down (the reconnect sends again)."
   (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
-    (drgnx-hub--call-on drgnx-hub--events method params #'ignore)
+    ;; lists go out as arrays, and nil as null: an empty list must be an empty array
+    (let ((p (copy-sequence params)))
+      (dolist (k '(:fonts :palette :tty_widths :glyphs))
+        (when (plist-member p k) (setq p (plist-put p k (vconcat (plist-get p k))))))
+      (drgnx-hub--call-on drgnx-hub--events method p #'ignore))
     t))
 
 (defun drgnx-view-env--look (params)
@@ -172,8 +179,11 @@ down (the reconnect sends again)."
   "Send VIEW's env for each class it shows in whose facts changed since the last send (FORCE: every class, as last
 numbered).  A changed look takes the next epoch; a width change alone keeps it.  The classes VIEW no longer shows are
 forgotten."
-  (let ((live nil))
-    (dolist (c (drgnx-view-env--envs view))
+  (let ((live nil) (envs (drgnx-view-env--envs view)))
+    ;; a buffer shown in one class follows it (the inserter re-pairs it) before that class's env goes out
+    (when (and (= 1 (length envs)) (fboundp 'drgnx-view-patch-reclass))
+      (drgnx-view-patch-reclass (car (gethash view drgnx-view-env--views)) (car (car envs))))
+    (dolist (c envs)
       (let* ((key (cons view (car c))) (params (cdr c)) (look (drgnx-view-env--look params))
              (old (gethash key drgnx-view-env--sent))
              (epoch (cond ((null old) 1) ((equal look (nth 1 old)) (nth 0 old)) (t (1+ (nth 0 old))))))
