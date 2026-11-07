@@ -1,7 +1,8 @@
 ;;; history-perf-test.el --- batch tests: the drain tick does not grow with the buffer -*- lexical-binding: t -*-
 ;; The drain runs on the typing path (a 10 Hz timer): a tick may not cost more than a fixed bound however large the
 ;; buffer is.  A large buffer is drained only when Emacs is idle, so the hash of its whole text (the hub's check) never
-;; sits between two keystrokes.  Skips on a Nidhogg built without `--with-nidhogg-history'.
+;; sits between two keystrokes.  Skips on a Nidhogg built without `--with-nidhogg-history'
+;; (fails there under DRGNX_NIDHOGG_STRICT=1).
 ;; test-class: timing
 (require 'ert)
 (require 'cl-lib)
@@ -9,7 +10,7 @@
 
 (ert-deftest drgnx-history/drain-tick-on-a-huge-buffer-is-cheap ()
   :tags '(:timing)
-  (skip-unless (fboundp 'nidhogg-history-track))
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-history-track) "nidhogg-history-track")
   (let ((b (generate-new-buffer "history-huge")) (sent 0))
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-history--send) (lambda (&rest _) (cl-incf sent) t)))

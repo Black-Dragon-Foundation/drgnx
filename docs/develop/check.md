@@ -129,6 +129,10 @@ skips is not a pass nobody sees.
   selects a class alone (`(tag :det)`, `(tag :cond)`, `(tag :timing)`: the pre-flight's runs), a listed test that
   skipped fails the run: `NAME must run on PLATFORM but skipped: REASON`. With any other selector it is ignored (a
   narrow run may not have the tool). `DRGNX_TEST_NO_SKIP=FILE` names another list (the runner's own tests).
+- **`DRGNX_NIDHOGG_STRICT=1`**: a test that needs a Nidhogg primitive calls `(drgnx-test-require-nidhogg PRESENT
+  WHAT)` (`harness/run-ert.el`) instead of `skip-unless`. Without the primitive it skips; under
+  `DRGNX_NIDHOGG_STRICT=1` it fails, `DRGNX_NIDHOGG_STRICT=1: this Emacs has no WHAT`. Set it for runs on Nidhogg's
+  integration line, where a skip would hide a stale build; `bin/drgnx test --container` passes it into the container.
 
 ## A flake is a result (`DRGNX_TEST_RERUN`)
 
