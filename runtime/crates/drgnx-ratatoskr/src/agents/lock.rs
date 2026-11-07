@@ -970,9 +970,27 @@ impl LaunchPlan {
         {
             options.insert("disallowedTools".into(), json!(PAIR_DISALLOWED));
         }
+        // Kimi Code: its Write and Edit tools are denied by a user rule of its config
+        let kimi_config = self.ro_files.iter_mut().find(|(p, b)| {
+            p.ends_with("config.toml")
+                && b.starts_with(b"# drgnx: the hub's config for this session's Kimi")
+        });
+        if let Some((_, bytes)) = kimi_config {
+            for tool in kimi_tools("edit") {
+                bytes.extend_from_slice(
+                    format!(
+                        "\n[[permission.rules]]\ntool = \"{tool}\"\ndecision = \"deny\"\nscope = \"user\"\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
         self
     }
 }
+
+/// What a Codex project chat is told when its apply_patch is refused.
+pub const PAIR_NATIVE_EDIT_HINT: &str = "this chat edits your project through drgnx: use edit_file {path, old, new} or write_file {path, content}";
 
 /// Claude Code's edit tools, off in every chat in a project (pair mode writes through the hub's door instead).
 pub const PAIR_DISALLOWED: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];

@@ -74,6 +74,19 @@ fn asked() -> Vec<String> {
         .collect()
 }
 
+/// Whether `$KIMI_CODE_HOME/config.toml` has a deny rule for tool NAME (a `[[permission.rules]]` with `decision =
+/// "deny"`): the tool is refused without asking.
+pub fn denied(name: &str) -> bool {
+    let Some(text) = std::env::var_os("KIMI_CODE_HOME")
+        .and_then(|h| std::fs::read_to_string(std::path::Path::new(&h).join("config.toml")).ok())
+    else {
+        return false;
+    };
+    text.split("[[permission.rules]]").any(|rule| {
+        rule.contains(&format!("tool = \"{name}\"")) && rule.contains("decision = \"deny\"")
+    })
+}
+
 /// What `session/new` logs for Kimi Code: whether argv has a flag that does not ask, and whether its config is
 /// there.
 pub fn note(argv: &[String]) -> Value {

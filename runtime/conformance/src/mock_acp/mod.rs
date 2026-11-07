@@ -1245,6 +1245,10 @@ impl Agent {
             self.say(sid, turn, &format!("no provider tool {what}\n"));
             return;
         };
+        if self.kind == Kind::Kimi && kimi::denied(name) {
+            self.say(sid, turn, &format!("{name}: denied by the lock\n"));
+            return;
+        }
         if asks {
             let answer = self.permission_for(sid, turn, fields, fold);
             if !answer.starts_with("allow") {

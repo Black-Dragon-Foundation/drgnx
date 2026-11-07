@@ -4259,6 +4259,22 @@ impl Session {
                 reply(resp, pick_reject(&options));
                 return;
             }
+            // Codex's read-only mode asks before an apply_patch; in a project chat an approved patch would run
+            // outside its sandbox, so the edit is refused and the chat is pointed to the drgnx edit tools
+            if s.project_chat()
+                && s.locked_as == Some(crate::settings::profiles::Provider::Codex)
+                && req.pointer("/toolCall/kind").and_then(Value::as_str) == Some("edit")
+            {
+                {
+                    let mut st = lock(&s.state);
+                    let mut rest = Map::new();
+                    rest.insert("text".into(), json!(plock::PAIR_NATIVE_EDIT_HINT));
+                    st.push(EntryType::Error, rest);
+                }
+                s.changed();
+                reply(resp, pick_reject(&options));
+                return;
+            }
             let (action, facts) = classify(req.get("toolCall"));
             match s
                 .seam_hooks(req.get("toolCall"), action, &facts, &options, turn)
