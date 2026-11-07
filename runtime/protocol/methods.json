@@ -29030,7 +29030,7 @@
       "classes": [
         "user"
       ],
-      "doc": "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+      "doc": "a file's bytes (base64) as the agent had it after its newest edit-history record at or before step seq",
       "name": "work/file-at",
       "params": {
         "$defs": {
@@ -29043,7 +29043,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`work/file-at`: a file as a step's snapshot had it.",
+        "description": "`work/file-at`: a file as the edit history had it after a step.",
         "properties": {
           "path": {
             "description": "Relative to the worktree.",
@@ -29051,7 +29051,7 @@
             "type": "string"
           },
           "seq": {
-            "description": "The step; the newest snapshot at or before it answers.",
+            "description": "The step; the newest record of the session at or before it answers.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -29078,7 +29078,7 @@
             "type": "string"
           },
           "seq": {
-            "description": "The step whose snapshot this is.",
+            "description": "The step of the record this is.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"

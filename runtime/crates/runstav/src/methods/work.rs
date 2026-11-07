@@ -492,14 +492,14 @@ pub struct Hunks {
     pub diff: String,
 }
 
-/// `work/file-at`: a file as a step's snapshot had it.
+/// `work/file-at`: a file as the edit history had it after a step.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FileAtParams {
     pub session: Id,
     /// Relative to the worktree.
     pub path: Bounded<String, 4096>,
-    /// The step; the newest snapshot at or before it answers.
+    /// The step; the newest record of the session at or before it answers.
     pub seq: u64,
 }
 
@@ -509,7 +509,7 @@ pub struct FileAtParams {
 pub struct FileAt {
     /// The file's bytes, base64.
     pub bytes: String,
-    /// The step whose snapshot this is.
+    /// The step of the record this is.
     pub seq: u64,
 }
 
@@ -611,7 +611,7 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "work/file-at", WorkFileAt(FileAtParams) -> FileAt,
             classes: [User], writes: false,
-            doc: "a file's bytes (base64) as the newest step snapshot at or before seq had them",
+            doc: "a file's bytes (base64) as the agent had it after its newest edit-history record at or before step seq",
         ),
     ]
 }

@@ -235,9 +235,12 @@ impl History {
     }
 
     /// What changed on BRANCH since record SINCE: per file, the hunks from its text then to its text now, numbered as
-    /// `git diff --unified=0` numbers them.  Files that did not change are left out.
+    /// `git diff --unified=0` numbers them.  Files that did not change are left out.  Record 0 is before every record:
+    /// each document as first stored.
     pub fn hunks(&mut self, branch: BranchId, since: OpId) -> Result<Vec<FileHunks>> {
-        self.op(since)?;
+        if since.0 != 0 {
+            self.op(since)?;
+        }
         let mut st = self
             .conn
             .prepare("select distinct doc from doc_update where branch = ?1 order by doc")?;

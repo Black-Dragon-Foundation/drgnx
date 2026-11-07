@@ -93,6 +93,112 @@ impl Hub {
     }
 }
 
+/// One file an agent's worktree changed against its branch's base, with the lines added and removed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditCount {
+    pub path: String,
+    pub plus: u32,
+    pub minus: u32,
+    /// The file is not in the base commit at all (the agent made it).
+    pub untracked: bool,
+}
+
+impl Hub {
+    /// The files TREE's branch changed against the branch's base and their line counts, with the base commit; none
+    /// while the history holds no such branch.  Text files only: whole-file versions (binary, large, generated, locks)
+    /// are not in the document store.
+    pub fn edits_against_base(
+        &self,
+        tree: &Tree,
+    ) -> verdandi::Result<Option<(String, Vec<EditCount>)>> {
+        let mut g = self.lock();
+        let Some(branch) = g.h.find_branch(&tree.branch_name())? else {
+            return Ok(None);
+        };
+        let base = g.h.base_of(branch)?.or_else(|| tree.base.clone());
+        let files = g.h.hunks(branch, OpId(0))?;
+        let count = |v: i64| u32::try_from(v).unwrap_or(u32::MAX);
+        let out = files
+            .into_iter()
+            .map(|f| EditCount {
+                untracked: base.as_deref().is_none_or(|b| {
+                    super::blob::text_at(&tree.git_dir, &tree.root, b, &f.path).is_none()
+                }),
+                plus: f.hunks.iter().map(|h| count(n(h.new_count))).sum(),
+                minus: f.hunks.iter().map(|h| count(n(h.old_count))).sum(),
+                path: f.path,
+            })
+            .collect();
+        Ok(Some((base.unwrap_or_default(), out)))
+    }
+
+    /// REL's change on TREE's branch against the base as a unified diff (`diff --git a/REL b/REL`); empty when it
+    /// changed nothing.
+    pub fn diff_against_base(&self, tree: &Tree, rel: &str) -> verdandi::Result<String> {
+        let mut g = self.lock();
+        let (Some(branch), Some(doc)) = (g.h.find_branch(&tree.branch_name())?, g.h.find_doc(rel)?)
+        else {
+            return Ok(String::new());
+        };
+        let old = g.h.text_after(doc, branch, OpId(0))?;
+        let new = g.h.text(doc, branch)?;
+        if old == new {
+            return Ok(String::new());
+        }
+        let (a, b) = (format!("a/{rel}"), format!("b/{rel}"));
+        let body = similar::TextDiff::from_lines(&old, &new)
+            .unified_diff()
+            .header(&a, &b)
+            .to_string();
+        Ok(format!("diff --git {a} {b}\n{body}"))
+    }
+
+    /// REL of TREE as SESSION's agent had it after its newest record at or before step SEQ, with that step (0: before
+    /// its first record, the base commit's file).  None when neither the history nor the base holds REL.
+    pub fn file_at_step(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        session: &str,
+        seq: u64,
+    ) -> verdandi::Result<Option<(Vec<u8>, u64)>> {
+        let mut g = self.lock();
+        let branch = g.h.find_branch(&tree.branch_name())?;
+        // the newest record of the session at or before the step (steps only grow within a session)
+        let mut at = None;
+        if let (Some(_), Some(last)) = (branch, g.h.last_op()?) {
+            for id in (1..=last.0).rev() {
+                let cause = g.h.op(OpId(id))?.cause;
+                if cause.session.as_deref() != Some(session) {
+                    continue;
+                }
+                if let Some(step) = cause.step.as_deref().and_then(|s| s.parse::<u64>().ok())
+                    && step <= seq
+                {
+                    at = Some((OpId(id), step));
+                    break;
+                }
+            }
+        }
+        let base = match branch {
+            Some(b) => g.h.base_of(b)?.or_else(|| tree.base.clone()),
+            None => tree.base.clone(),
+        };
+        let from_base = || {
+            base.as_deref()
+                .and_then(|b| super::blob::text_at(&tree.git_dir, &tree.root, b, rel))
+        };
+        let step = at.map_or(0, |a| a.1);
+        if let (Some(branch), Some(doc), Some((op, _))) = (branch, g.h.find_doc(rel)?, at) {
+            let text = g.h.text_after(doc, branch, op)?;
+            // a path the base lacks and the agent had not yet made (or removed): nothing there
+            let there = !text.is_empty() || from_base().is_some();
+            return Ok(there.then(|| (text.into_bytes(), step)));
+        }
+        Ok(from_base().map(|b| (b, step)))
+    }
+}
+
 fn hub_dir(f: &Front) -> Result<PathBuf, Error> {
     f.dirs
         .get()
