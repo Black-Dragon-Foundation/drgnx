@@ -1,0 +1,28 @@
+{"scenario": "wheel/give-sends-only-the-users-diff", "requires": ["v1", "test-hooks"], "doc": "Gated (B). The editor tracks a.txt in a worker's worktree; the agent's change to it reaches the edit history (a batch with its origin) and is still waiting for its record when the user takes the wheel. At held the history settles it and keeps that record as the boundary; the user then types a line (unsaved: the disk never has it). The give's message (wheel:edits) is the history's diff since the boundary: the user's line, and nothing of the agent's change."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work && cd $ROOT/work && git init -q -b main && echo one > a.txt && echo x > b.txt && git add a.txt b.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work", "role": "worker"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/work", "buffer_id": "b1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 3, "inserted": "AGENT-LINE", "origin": "agent:$sid"}], "region_hash": "669621b0e1307438ed274708000464fe9653653867573b8be49d571b8f0773a0"}}}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 11, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "4bcfad7d96ffa9ece7b3961c64b88faf297edc331badcc97bb19bc7c3ca06b21"}}}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
+{"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req", "id": "$sid"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "agents/wheel/saved", "params": {"req": "$req", "unsaved": []}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "result": true}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}, "within_ms": 10000}
+{"do": "poll", "conn": "c", "json": {"id": 10, "method": "agents/get", "params": {"id": "$sid"}}, "expect": {"id": 10, "result": {"session": {"status": "idle"}, "seq": "$number", "entries": {"$contains": [{"type": "user", "key": "wheel:edits"}]}}}, "within_ms": 20000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "t=$STATE/hub/transcripts/$sid.jsonl; grep -q wheel:edits $t && grep -q '+USER-LINE' $t && ! grep -q '+AGENT-LINE' $t && ! grep -q -- '-one' $t"], "expect_code": 0}

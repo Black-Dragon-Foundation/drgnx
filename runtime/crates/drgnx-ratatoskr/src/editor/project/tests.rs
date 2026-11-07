@@ -123,3 +123,70 @@ fn approximate_when_the_users_text_is_disk() {
     }
     assert_eq!(cache.len(), BASE_CACHE);
 }
+
+/// Pattern D. The user changed line 2 in the buffer and has not saved: the disk still has the base. Projected through
+/// the edit history's mirror, the agent's change of line 2 meets the user's and is a conflict, and the frame is exact;
+/// from disk it would be the agent's line, marked approximate.
+#[test]
+fn unsaved_user_edits_are_seen_through_the_mirror() {
+    let base = lines(5);
+    let agent = base.replace("l2\n", "AGENT\n");
+    let unsaved = base.replace("l2\n", "TYPED\n");
+    let disk = base.clone();
+    let (user, source) = user_text(Some(unsaved.clone()), || Some(disk.clone())).unwrap();
+    assert_eq!(
+        (user.as_str(), source),
+        (unsaved.as_str(), UserSource::Mirror)
+    );
+    assert!(!source.approximate());
+    let p = project(&base, &agent, &user, None);
+    assert!(p.agent_ranges.is_empty(), "{p:?}");
+    assert_eq!(p.conflicts, vec![r(2, 2)]);
+    // without a mirror (an untracked buffer): the disk, approximate
+    let (user, source) = user_text(None, || Some(disk.clone())).unwrap();
+    assert_eq!(source, UserSource::Disk);
+    assert!(source.approximate());
+    assert_eq!(
+        project(&base, &agent, &user, None).agent_ranges,
+        vec![r(2, 2)]
+    );
+}
+
+/// Pattern D (golden). A paired agent P wrote line 3 of the user's checkout (through the user's buffer); an agent W in
+/// another worktree changed lines 3 and 5. P's line is the user's side of W's projection (W's change there is a
+/// conflict, never W's line), and it is drawn in P's identity from the history's line authors; W keeps line 5.
+#[test]
+fn a_paired_agents_edits_are_the_users_side_in_its_identity() {
+    use crate::editor::ranges::{AgentRanges, Op, agent_lines};
+    let base = lines(6);
+    let mut checkout = AgentRanges::new(&base);
+    // P replaces "l3" (characters 6..8) through the user's buffer; the user types on line 1
+    assert!(checkout.apply_op(Op {
+        author: "agent:P",
+        start: 6,
+        old_len: 2,
+        inserted: "paired",
+    }));
+    assert!(checkout.apply_op(Op {
+        author: "user",
+        start: 0,
+        old_len: 0,
+        inserted: "u",
+    }));
+    let user = "ul1\nl2\npaired\nl4\nl5\nl6\n";
+    let worktree = base.replace("l3\n", "W3\n").replace("l5\n", "W5\n");
+    let p = project(&base, &worktree, user, None);
+    assert_eq!(
+        (p.agent_ranges, p.user_ranges, p.conflicts),
+        (vec![r(5, 5)], vec![r(1, 1), r(3, 3)], vec![r(3, 3)])
+    );
+    let by: Vec<(String, Vec<LineRange>)> = checkout
+        .authors()
+        .into_iter()
+        .map(|a| {
+            let rs = checkout.ranges(&a);
+            (a, rs)
+        })
+        .collect();
+    assert_eq!(agent_lines(&by), vec![("P".to_string(), r(3, 3))]);
+}

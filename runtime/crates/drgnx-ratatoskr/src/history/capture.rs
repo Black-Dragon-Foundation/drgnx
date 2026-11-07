@@ -249,14 +249,26 @@ impl Inner {
         let branch = self.branch(tree)?;
         let peer = self.peer(branch, key, author)?;
         let doc = self.h.doc_for(rel)?;
-        let mut ad = self
+        let old = self
             .h
-            .activate(doc, branch, || Ok(base_text(tree, rel).unwrap_or_default()))?;
-        let old = ad.text();
+            .activate(doc, branch, || Ok(base_text(tree, rel).unwrap_or_default()))?
+            .text();
+        // the line authors, in step before the operations (each one keeps them in step)
+        let _ = self.kept_ranges(doc, branch);
+        let mut ad = self.h.activate(doc, branch, || Ok(String::new()))?;
         let mut spans = Vec::new();
         // a key in the file is stored as stars (the file keeps it, and the next look at it is no new version)
         for ch in diff(&old, &verdandi::redact::redact(&new)) {
+            let before = ad.frontier();
             spans.extend(ad.apply(peer, &ch)?);
+            super::kept_op(
+                &mut self.kept,
+                (doc, branch),
+                key,
+                &ch,
+                &before,
+                ad.frontier(),
+            );
         }
         Ok(Some(Staged {
             path: rel.to_owned(),

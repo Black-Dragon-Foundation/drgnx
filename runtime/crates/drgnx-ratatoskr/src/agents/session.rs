@@ -4486,16 +4486,18 @@ impl Session {
         Ok(())
     }
 
-    /// The wheel is held (the turn the take stopped has ended, or none ran): the step snapshot first, kept with the
-    /// hold for a restart, then `agent-wheel held`.
+    /// The wheel is held (the turn the take stopped has ended, or none ran): the boundary first (the edit history's,
+    /// and the step snapshot for the files it does not track; [`wheel::HeldAt`]), kept with the hold for a restart,
+    /// then `agent-wheel held`.
     fn wheel_held(self: &Arc<Self>) {
         let me = self.clone();
         crate::clock::spawn("session:wheel-held", async move {
-            let base = match &me.snap {
+            let tree = match &me.snap {
                 Some(s) => s.wheel_held(&me.id, &me.cwd).await,
                 None => None,
             };
-            lock(&me.state).wheel_base = base;
+            let op = me.history_boundary().await;
+            lock(&me.state).wheel_base = wheel::HeldAt { tree, op }.to_store();
             me.persist_wheel();
             me.changed();
             me.editors.broadcast(
@@ -4515,9 +4517,9 @@ impl Session {
         let base = {
             let st = lock(&self.state);
             wheel::can_give(st.wheel).map_err(refuse)?;
-            st.wheel_base.clone()
+            wheel::HeldAt::from_store(st.wheel_base.as_deref())
         };
-        let diff = if wheel::saves_on_give(self.role) {
+        let snapshot = if wheel::saves_on_give(self.role) {
             let cwd = self.cwd.to_string_lossy().into_owned();
             let unsaved = self
                 .editors
@@ -4529,17 +4531,24 @@ impl Session {
                     unsaved.join(", ")
                 )));
             }
-            match (&self.snap, base) {
+            match (&self.snap, &base.tree) {
                 (Some(s), Some(b)) => s
-                    .changes_since(&self.id, &self.cwd, &b)
+                    .changes_since(&self.id, &self.cwd, b)
                     .await
                     .unwrap_or_default(),
                 _ => String::new(),
             }
         } else {
-            // a chat works in the user's checkout: its edits there reach it from the edit history, not from here
+            // a chat works in the user's checkout: its edits there reach it from the edit history only
             String::new()
         };
+        // the files the editor tracks from the edit history (an agent's op before the boundary is not in it); the
+        // snapshot only for the rest
+        let (history, tracked) = match base.op {
+            Some(op) => self.history_changes(op).await,
+            None => (String::new(), Vec::new()),
+        };
+        let diff = format!("{history}{}", wheel::untracked_only(&snapshot, &tracked));
         let stepped = {
             let mut st = lock(&self.state);
             let st = &mut *st;
@@ -4559,6 +4568,38 @@ impl Session {
             }),
         );
         Ok(())
+    }
+
+    /// The edit history's boundary of a hold in this session's worktree ([`crate::history::Hub::boundary`]); none
+    /// when the folder has no history.
+    async fn history_boundary(&self) -> Option<i64> {
+        let (hubs, state) = self.history.as_ref()?;
+        let (hub, _) = hubs.of_tree(state, &self.cwd).ok()?;
+        let now = crate::clock::wall_secs();
+        crate::clock::blocking(move || hub.boundary(now))
+            .await
+            .ok()?
+            .map_err(|e| tracing::info!(sid = self.id, "no history boundary for the hold: {e}"))
+            .ok()
+    }
+
+    /// The user's changes since record OP in the files the editor tracks in this session's worktree, and those files
+    /// ([`crate::history::Hub::changes_since`]).
+    async fn history_changes(&self, op: i64) -> (String, Vec<String>) {
+        let Some((hubs, state)) = &self.history else {
+            return (String::new(), Vec::new());
+        };
+        let Ok((hub, tree)) = hubs.of_tree(state, &self.cwd) else {
+            return (String::new(), Vec::new());
+        };
+        match crate::clock::blocking(move || hub.changes_since(&tree, op)).await {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => {
+                tracing::warn!(sid = self.id, "the changes since the hold not read: {e}");
+                (String::new(), Vec::new())
+            }
+            Err(_) => (String::new(), Vec::new()),
+        }
     }
 
     /// The hold on the wheel, kept for a restart.

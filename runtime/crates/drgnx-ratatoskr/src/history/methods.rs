@@ -103,6 +103,7 @@ impl Hub {
                 doc,
                 branch,
                 raw: None,
+                file: tree.root.join(rel),
             },
         );
         Ok(Registered {
@@ -133,6 +134,9 @@ impl Hub {
                 .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
             (b.doc, b.branch, b.raw.take())
         };
+        g.h.activate(doc, branch, || Ok(String::new()))?;
+        // the line authors, in step before the operations (each one keeps them in step)
+        let _ = g.kept_ranges(doc, branch);
         let mut spans = Vec::new();
         // the editor applying a hunk's revert (`history/revert/hunk`): the user's operations, in one `revert` record
         let mut reverts: Vec<HunkRevert> = Vec::new();
@@ -149,7 +153,8 @@ impl Hub {
                 &c.origin
             });
             let peer = g.peer(branch, &key, &author)?;
-            let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
+            let inner = &mut *g;
+            let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
             // a key in the change never reaches the document; the buffer's own text is kept beside it in memory
             let inserted = redact(&c.inserted);
             if inserted != c.inserted && raw.is_none() {
@@ -163,7 +168,19 @@ impl Hub {
                 old_len: c.old_len,
                 inserted,
             };
-            match (ad.apply(peer, &ch), reverting) {
+            let before = ad.frontier();
+            let applied = ad.apply(peer, &ch);
+            if applied.is_ok() {
+                super::kept_op(
+                    &mut inner.kept,
+                    (doc, branch),
+                    &key,
+                    &ch,
+                    &before,
+                    ad.frontier(),
+                );
+            }
+            match (applied, reverting) {
                 (Ok(s), Some(op)) => match reverts.iter_mut().find(|r| r.0 == op) {
                     Some(r) => r.2.extend(s.into_iter().map(|s| (doc, s))),
                     None => reverts.push((op, peer, s.into_iter().map(|s| (doc, s)).collect())),
@@ -206,12 +223,23 @@ impl Hub {
         };
         let (key, author) = author_of("user");
         let peer = g.peer(branch, &key, &author)?;
-        let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
+        let _ = g.kept_ranges(doc, branch);
+        let inner = &mut *g;
+        let mut ad = inner.h.activate(doc, branch, || Ok(String::new()))?;
         let old = ad.text();
         let mut spans = Vec::new();
         let redacted = redact(text);
         for ch in diff(&old, &redacted) {
+            let before = ad.frontier();
             spans.extend(ad.apply(peer, &ch)?);
+            super::kept_op(
+                &mut inner.kept,
+                (doc, branch),
+                &key,
+                &ch,
+                &before,
+                ad.frontier(),
+            );
         }
         g.settler.change(doc, peer, &spans, now);
         if let Some(b) = g.buffers.get_mut(buffer_id) {

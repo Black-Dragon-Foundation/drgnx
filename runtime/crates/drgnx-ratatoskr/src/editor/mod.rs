@@ -2,6 +2,7 @@
 //!
 //! - [`buffer_view`]: which views get a frame and when (pure).
 //! - [`project`]: another worktree's agent mapped three-way onto the user's text (pure).
+//! - [`ranges`]: who wrote each line, kept from the edit history's operations (pure).
 //! - [`follow`]: the follow feed (docs/develop/hub.md, "The follow feed").
 //!
 //! The shell here keeps the views of every connection ([`Buffers`]), hears the presence model's changes, and builds a
@@ -14,6 +15,7 @@
 pub mod buffer_view;
 pub mod follow;
 pub mod project;
+pub mod ranges;
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -212,8 +214,27 @@ impl Buffers {
                 });
             }
         }
-        // an agent's own worktree: what its latest step snapshot changed against the base
+        // the lines each agent wrote, from the edit history's operations where it holds the file: an agent's own
+        // worktree, and a paired agent's writes in the user's checkout (in its identity: the user's side of every
+        // projection, never a worktree agent's)
+        let (kept, mirror) = history_of(front, file).await;
+        if let Some(by) = &kept {
+            for (sid, r) in ranges::agent_lines(by) {
+                gutter.push(GutterRange {
+                    session: sid.clone(),
+                    kind: GutterKind::Changed,
+                    start: r.start,
+                    end: r.end,
+                    projected: None,
+                    help: format!("{} · changed", handle(&sid)),
+                });
+            }
+        }
+        // an agent's own worktree the history does not hold: what its latest step snapshot changed against the base
         for s in front.core.agents.live_sessions() {
+            if kept.is_some() {
+                break;
+            }
             let wt = s.worktree();
             let Ok(rel) = Path::new(file).strip_prefix(&wt) else {
                 continue;
@@ -232,12 +253,16 @@ impl Buffers {
                 }));
             }
         }
-        let projected = self.projected(front, file, &mut agents, &mut gutter).await;
+        let projected = self
+            .projected(front, file, mirror, &mut agents, &mut gutter)
+            .await;
         let body = Body {
             agents,
             gutter: buffer_view::merge_gutter(gutter),
-            // the user's text is read from disk until the edit history's mirror
-            approximate: (projected && project::UserSource::Disk.approximate()).then_some(true),
+            // the user's text read from disk (no tracked buffer): approximate
+            approximate: projected
+                .is_some_and(project::UserSource::approximate)
+                .then_some(true),
         };
         lock(&self.last).insert(file.to_string(), body.clone());
         body
@@ -245,17 +270,17 @@ impl Buffers {
 
     /// The agents of FILE's repository working in its other worktrees, mapped three-way onto FILE (see
     /// [`project`]): pushed to AGENTS (those with an entry in their copy of the file) and GUTTER (their lines and
-    /// their conflicts with the user's). Whether any agent changed or is in the file.
+    /// their conflicts with the user's). The user's text is MIRROR (the edit history's, of a tracked buffer) or the
+    /// file on disk. Where the user's text came from when any agent changed or is in the file.
     async fn projected(
         &self,
         front: &Front,
         file: &str,
+        mirror: Option<String>,
         agents: &mut Vec<BufferAgent>,
         gutter: &mut Vec<GutterRange>,
-    ) -> bool {
-        let Some((rel, repo)) = front.core.presence.rel_and_repo(file) else {
-            return false;
-        };
+    ) -> Option<project::UserSource> {
+        let (rel, repo) = front.core.presence.rel_and_repo(file)?;
         let ids = &front.core.agents.identities;
         let sessions: Vec<(String, std::path::PathBuf)> = front
             .core
@@ -265,7 +290,7 @@ impl Buffers {
             .map(|s| (s.id.clone(), s.worktree()))
             .collect();
         if sessions.is_empty() {
-            return false;
+            return None;
         }
         // the checkouts, from their `.git` entries: the user's, and each session's when it is another of the repository
         let user_file = file.to_string();
@@ -282,10 +307,11 @@ impl Buffers {
         })
         .await
         else {
-            return false;
+            return None;
         };
-        let mut user: Option<Arc<str>> = None;
-        let mut any = false;
+        let mut mirror = mirror;
+        let mut user: Option<(Arc<str>, project::UserSource)> = None;
+        let mut any = None;
         for (sid, top) in others {
             if Some(&top) == user_top.as_ref() {
                 continue;
@@ -320,14 +346,16 @@ impl Buffers {
                 }
             };
             if user.is_none() {
-                let path = file.to_string();
-                user = crate::clock::blocking(move || read_capped(Path::new(&path)))
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(Arc::from);
+                let (path, m) = (file.to_string(), mirror.take());
+                user = crate::clock::blocking(move || {
+                    project::user_text(m, || read_capped(Path::new(&path)))
+                })
+                .await
+                .ok()
+                .flatten()
+                .map(|(t, s)| (Arc::from(t), s));
             }
-            let Some(user_text) = user.clone() else {
+            let Some((user_text, source)) = user.clone() else {
                 return any;
             };
             let cursor = entry
@@ -346,7 +374,7 @@ impl Buffers {
             else {
                 continue;
             };
-            any = true;
+            any = Some(source);
             let label = top
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -415,6 +443,29 @@ impl Buffers {
     pub fn counts(&self) -> (usize, u64) {
         (lock(&self.views).len(), self.built.load(Ordering::Relaxed))
     }
+}
+
+/// What the edit history holds of FILE, when its project's history is open: the lines each author wrote, and the
+/// text of the editor's tracked buffer of it (the mirror).
+async fn history_of(front: &Front, file: &str) -> (Option<ranges::LinesBy>, Option<String>) {
+    let hubs = front.core.history.clone();
+    let file = file.to_string();
+    crate::clock::blocking(move || {
+        let (top, _) = presence::checkout_of(Path::new(&file))?;
+        let rel = Path::new(&file)
+            .strip_prefix(&top)
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        let (hub, tree) = hubs.open_of(&top)?;
+        let kept = hub.lines_by(&tree, &rel).ok().flatten();
+        let mirror = hub.mirror_text(&tree, &rel).ok().flatten();
+        Some((kept, mirror))
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or((None, None))
 }
 
 /// FILE's text, CRLF and all; none past [`crate::work::detail::EDIT_TEXT_MAX`] bytes, empty when it is not there.
