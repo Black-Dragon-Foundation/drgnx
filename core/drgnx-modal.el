@@ -53,7 +53,7 @@ map nor the panel map is active here, whatever the state.  Whoever sets it calls
 (defvar drgnx-modal-form-modes '(drgnx-replace-mode drgnx-replace-bar-mode)
   "Major modes of forms: fields you type in, so no modal keys.")
 
-(defvar drgnx-modal-input-modes '(eshell-mode comint-mode term-mode eat-mode log-edit-mode)
+(defvar drgnx-modal-input-modes '(eshell-mode comint-mode term-mode drgnx-term-mode log-edit-mode)
   "Major modes that take typed input (shells, message buffers): an engine starts them in insert or emacs state.")
 
 (defun drgnx-modal-panel-p (&optional buffer)

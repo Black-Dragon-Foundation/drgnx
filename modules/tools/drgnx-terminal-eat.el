@@ -85,6 +85,14 @@ child process.  The quit question calls this before it collects the running prog
   (let ((drgnx-terminal-eat--ppids (list nil)))
     (dolist (b (buffer-list)) (drgnx-terminal-eat--refresh b))))
 
+(defvar drgnx-session-running-functions)
+
+(defun drgnx-terminal-eat--refresh-for-quit ()
+  "`drgnx-session-running-functions': bring the terminals' flags up to date before the quit question reads them;
+names nothing (eat's shells are Emacs processes, which the question lists itself)."
+  (drgnx-terminal-eat-refresh-query-flags)
+  nil)
+
 (defun drgnx-terminal-eat--refresh-before-kill ()
   "`kill-buffer-query-functions': refresh this terminal's flag before Emacs reads it; never vetoes."
   (drgnx-terminal-eat--refresh (current-buffer))
@@ -196,6 +204,7 @@ added the keys that reach drgnx).  The options, hooks and advice are recorded."
                      :setup
                      (lambda ()
                        (add-hook 'kill-buffer-query-functions #'drgnx-terminal-eat--refresh-before-kill -90)
+                       (add-hook 'drgnx-session-running-functions #'drgnx-terminal-eat--refresh-for-quit)
                        (advice-add 'eat--pre-prompt :after #'drgnx-terminal-eat--note-integration)
                        (advice-add 'eat--process-output-queue :after #'drgnx-terminal-eat--collect-in-gap)
                        ;; eat's options, and which keys reach drgnx and which the shell: now if eat is loaded, else

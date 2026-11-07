@@ -17,6 +17,8 @@ terminal's buffer only shows the screen it sends. So:
   itself remembers at least 10,000 lines whatever the setting.
 - **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
   type waits (up to 4 kB) and goes when it is back. The terminal then draws afresh.
+- **Quitting drgnx** asks once when a terminal runs a program (a shell at its prompt does not count), and a clean
+  quit ends its terminals; after a crash they keep running and the next drgnx adopts them.
 - **When the shell ends**, its buffer closes. A program drgnx runs for you in a terminal (Export Keys) leaves its buffer
   open, its exit status in the mode line, so you can read what it printed.
 - **Keys**: the terminal gets every key the active profile does not keep for drgnx ([keys](keys.md#in-the-terminal));

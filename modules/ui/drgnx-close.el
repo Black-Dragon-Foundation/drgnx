@@ -22,7 +22,7 @@
 (require 'drgnx-state)
 (require 'drgnx-popup)
 
-(defcustom drgnx-close-input-modes '(comint-mode eshell-mode term-mode vterm-mode eat-mode)
+(defcustom drgnx-close-input-modes '(comint-mode eshell-mode term-mode vterm-mode drgnx-term-mode)
   "Modes (and the modes derived from them) whose buffers you type into: Esc and q are theirs, never close the pane."
   :type '(repeat symbol) :group 'drgnx-face)
 

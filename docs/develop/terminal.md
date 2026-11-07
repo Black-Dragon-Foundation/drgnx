@@ -242,8 +242,15 @@ program runs).
   at most `drgnx-term-queue-max` (4096) bytes, and goes on `drgnx-hub-connected-functions`.
 - **Session:** every hello carries `drgnx-hub-session`; the subscription re-attaches this Emacs's terminals after a
   dropped socket or a hub restart (see [Lifetime](#lifetime)).
-- **End:** `term/exit` kills a shell's buffer, and leaves a command's with its status in `mode-line-process`. Killing
-  the buffer sends `term/close`. Turning the module off kills every terminal buffer.
+- **End:** `term/exit` runs `drgnx-term-exit-functions` in the buffer (Export Keys forgets the typed keys there), then
+  kills a shell's buffer, and leaves a command's with its status in `mode-line-process`. Killing the buffer sends
+  `term/close`. Turning the module off kills every terminal buffer.
+- **Quitting:** `drgnx-term-running` is on core's `drgnx-session-running-functions`: it asks `term/list` (at most
+  `drgnx-term-list-wait`, 0.2 s, through `drgnx-hub-call-sync`) and names the open terminals whose program runs; no
+  answer names them all. `kill-emacs-hook` sends `term/session-end`, so a clean quit ends this session's terminals.
+- **Callers:** Export and Import Keys run `drgnx secrets` through `drgnx-term-start` (else `term`); the key sheet's
+  "In the terminal" section is on core's `drgnx-surfaces-cheatsheet-sections`; `drgnx-term-mode` is an input mode for
+  the modal engines and Close Pane, and the panel's Terminal tab takes its buffers.
 
 **Tests:** `test/unit/term-test.el` (`drgnx-term/`, a gated hub with the real worker: the shell in a worker, echo,
 a flood backfilled, the scrollback setting both ways, undo off, input queued while the hub is away, a theme change
