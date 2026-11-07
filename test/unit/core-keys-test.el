@@ -995,6 +995,7 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-output-search agents-panel-output-open agents-panel-output-more
                               agents-panel-revert-here agents-panel-fork-here
                               agents-panel-chip agents-panel-revoke-always
+                              agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open))   ; part 3: the agent panel
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))

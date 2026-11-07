@@ -178,8 +178,8 @@ own part drawn from SNAP and the steps loaded here."
             (_ nil))))
 
 (defun drgnx-agent-panel-explain--mode-text (_snap)
-  "The part of the mode popup beyond the hub's facts: none yet."
-  nil)
+  "The part of the mode popup beyond the hub's facts: the key that switches."
+  "\no switches the mode, only to the ones listed above\n")
 
 (defun drgnx-agent-panel-explain--show (buffer item facts)
   "Show the popup of ITEM for the panel BUFFER."

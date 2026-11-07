@@ -647,3 +647,66 @@ unanswered, and panel \"s1\" as `buf'."
                              ("agents/send" :id "s1" :text "settle it with a shim"))
                            (seq-filter (lambda (c) (equal (car c) "agents/send")) drgnx-agent-panel-test--calls))))
         (kill-buffer hb)))))
+
+;;;; Task 44: session control
+
+(declare-function drgnx-agent-panel--offer-modes "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-move "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-compact "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel--compact-after-preview "drgnx-agent-panel-composer")
+(declare-function drgnx-agent-panel-start "drgnx-agent-panel-composer")
+
+(ert-deftest drgnx-agent-panel/mode-chip-offers-only-the-allow-list ()
+  (drgnx-agent-panel-test--with
+    (let (coll)
+      (cl-letf (((symbol-function 'completing-read) (lambda (_p c &rest _) (setq coll c) "plan")))
+        (drgnx-agent-panel--offer-modes buf (list (list :name "allowed switches" :value "default, plan")))
+        (should (equal '("default" "plan") coll))
+        (should (equal '("agents/config" :id "s1" :option "mode" :value "plan")
+                       (car drgnx-agent-panel-test--calls))))
+      ;; a lock that allows none refuses, with the hub's reason
+      (setq drgnx-agent-panel-test--calls nil)
+      (let ((err (should-error (drgnx-agent-panel--offer-modes
+                                buf (list (list :name "allowed switches" :value "none")
+                                          (list :name "other modes are refused because" :value "the matrix says so")))
+                               :type 'user-error)))
+        (should (string-match-p "the matrix says so" (cadr err))))
+      (should-not drgnx-agent-panel-test--calls))))
+
+(ert-deftest drgnx-agent-panel/move-to-another-profile ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :profile "Claude"))
+      (let (coll)
+        (cl-letf (((symbol-function 'drgnx-agents-profile-names) (lambda () '("Claude" "Gemini")))
+                  ((symbol-function 'completing-read) (lambda (_p c &rest _) (setq coll c) "Gemini"))
+                  ((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+          (drgnx-agent-panel-move)
+          (should (equal '("Gemini") coll))
+          (should (equal '("agents/move" :id "s1" :profile "Gemini") (car drgnx-agent-panel-test--calls))))))))
+
+(ert-deftest drgnx-agent-panel/compact-shows-the-preview-when-advertised ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+        ;; not advertised: a plain /compact after the question
+        (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle"))
+        (drgnx-agent-panel-compact)
+        (should (equal '("agents/send" :id "s1" :text "/compact") (car drgnx-agent-panel-test--calls)))
+        ;; advertised: the preview is asked first, and /compact goes after the answer
+        (setq drgnx-agent-panel-test--calls nil)
+        (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :panel (list :features (vector "compact-preview"))))
+        (drgnx-agent-panel-compact)
+        (should (equal '(("agents/compact-preview" :id "s1")) drgnx-agent-panel-test--calls))
+        (drgnx-agent-panel--compact-after-preview buf (list :frees 900 :note "kept: the plan"))
+        (should (equal '("agents/send" :id "s1" :text "/compact") (car drgnx-agent-panel-test--calls)))
+        (kill-buffer "*agent compact preview*")))))
+
+(ert-deftest drgnx-agent-panel/start-a-session-in-this-folder ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :cwd "/work/p"))
+      (cl-letf (((symbol-function 'drgnx-agents-profile-names) (lambda () '("Claude" "Gemini")))
+                ((symbol-function 'completing-read) (lambda (&rest _) "Gemini")))
+        (drgnx-agent-panel-start)
+        (should (equal '("agents/start" :profile "Gemini" :cwd "/work/p") (car drgnx-agent-panel-test--calls)))))))

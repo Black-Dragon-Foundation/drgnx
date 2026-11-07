@@ -53,6 +53,15 @@ Opening the thread is joining (`agents-huddle-open` in the palette). Start one f
 agent, `h` meets the two marked ones; `agents-huddle` in the palette does the same by name. While a huddle is open or
 waits for you the status bar says `huddle N`.
 
+## Controlling the session
+
+`x` stops, `p` holds, `u` resumes. `m` moves the session to another profile: it stops after its current tool call and
+the new agent continues in the same worktree (the panel of the new session opens). `c` is `/compact`; an agent that
+can say what a compaction keeps shows that first. `o` switches the mode, offering only the modes the provider's lock
+allows; when it allows none the hub's reason is shown. `S` switches the model (the agent refuses one it does not have,
+and the panel says so). `agents-panel-start` in the palette starts another agent in this folder; `R` and `F` revert and
+fork at a step; `/commands` complete in the composer.
+
 ## Live and paged
 
 A panel asks the hub for the session's entries only while a window shows it, and lets them go when none does. It opens
