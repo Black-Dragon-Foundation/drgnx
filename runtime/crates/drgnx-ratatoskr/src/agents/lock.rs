@@ -959,6 +959,9 @@ impl LaunchPlan {
     }
 }
 
+/// What a Codex project chat is told when its apply_patch is refused.
+pub const PAIR_NATIVE_EDIT_HINT: &str = "this chat edits your project through drgnx: use edit_file {path, old, new} or write_file {path, content}";
+
 /// Claude Code's edit tools, off in every chat in a project (pair mode writes through the hub's door instead).
 pub const PAIR_DISALLOWED: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
