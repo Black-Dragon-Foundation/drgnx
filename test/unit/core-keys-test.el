@@ -993,7 +993,8 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-accept agents-panel-reject agents-panel-allow agents-panel-always
                               agents-panel-pin agents-panel-ledger
                               agents-panel-output-search agents-panel-output-open agents-panel-output-more
-                              agents-panel-revert-here agents-panel-fork-here))   ; part 3: the agent panel
+                              agents-panel-revert-here agents-panel-fork-here
+                              agents-panel-chip agents-panel-revoke-always))   ; part 3: the agent panel
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

@@ -29,6 +29,17 @@ pub struct Inputs {
     pub tokens: u64,
     /// The `mcpCapabilities` the agent advertised.
     pub mcp: Option<serde_json::Value>,
+    /// The MCP servers the hub gave the session at `session/new`, with the tools each serves where the hub knows it.
+    pub mcp_servers: Vec<McpServerFacts>,
+    /// The servers the hub meant to give the session and could not (name, why).
+    pub mcp_failed: Vec<(String, String)>,
+}
+
+/// One MCP server of a session: its name, and how many tools it serves (none known: the hub does not list them).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct McpServerFacts {
+    pub name: String,
+    pub tools: Option<usize>,
 }
 
 fn fact(name: &str, value: impl Into<String>) -> Fact {
@@ -141,10 +152,21 @@ pub fn explain(item: ExplainItem, i: &Inputs) -> Vec<Fact> {
             }
         }
         ExplainItem::Mcp => {
-            f.push(fact(
-                "hub server",
-                "drgnx (the coordination and tracker tools)",
-            ));
+            for m in &i.mcp_servers {
+                f.push(fact(
+                    &format!("server {}", m.name),
+                    m.tools.map_or_else(
+                        || "tool count not known to the hub".to_owned(),
+                        |n| format!("{n} tools"),
+                    ),
+                ));
+            }
+            for (name, why) in &i.mcp_failed {
+                f.push(fact(&format!("failed {name}"), why.clone()));
+            }
+            if i.mcp_failed.is_empty() {
+                f.push(fact("failures", "none known to the hub"));
+            }
             match &i.mcp {
                 Some(m) => f.push(fact("agent supports", m.to_string())),
                 None => f.push(fact("agent supports", "not reported")),
@@ -174,6 +196,33 @@ mod tests {
             .find(|x| x.name == n)
             .unwrap_or_else(|| panic!("no fact {n}: {f:?}"))
             .value
+    }
+
+    #[test]
+    fn mcp_lists_each_server_and_its_failures() {
+        let mut i = inputs();
+        i.mcp_servers = vec![
+            McpServerFacts {
+                name: "drgnx".into(),
+                tools: Some(21),
+            },
+            McpServerFacts {
+                name: "drgnx-plugins".into(),
+                tools: None,
+            },
+        ];
+        let f = explain(ExplainItem::Mcp, &i);
+        assert_eq!(get(&f, "server drgnx"), "21 tools");
+        assert_eq!(
+            get(&f, "server drgnx-plugins"),
+            "tool count not known to the hub"
+        );
+        assert_eq!(get(&f, "failures"), "none known to the hub");
+        i.mcp_servers.clear();
+        i.mcp_failed = vec![("drgnx".into(), "the store is not open".into())];
+        let f = explain(ExplainItem::Mcp, &i);
+        assert_eq!(get(&f, "failed drgnx"), "the store is not open");
+        assert!(f.iter().all(|x| !x.name.starts_with("server ")), "{f:?}");
     }
 
     #[test]

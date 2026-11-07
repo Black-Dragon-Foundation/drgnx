@@ -31,6 +31,19 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   because the hub sends each message's blocks with its history.
 
 
+## Why a step was allowed, and what a chip means
+
+Under a step the panel shows the hooks' verdict lines (refused, changed, failed, or busy) and RET on one opens its
+provenance: who (rule or plugin, version, hash), what, how long. A request you answered with `A` Always leaves a line
+`allowed by your Always`; `V` on that step forgets it in the panel. The agent keeps its own rule until it starts again
+(the hub holds no grant to take back), and the panel says so.
+
+`i` on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
+`[drop]` and `[pin]` only when the agent advertises them and `[What /compact keeps]` when it can say; the dearest
+steps and the cache hits; the mode, its lock and the row of the permissions matrix; what the agent waits for and the
+key that answers it; the MCP servers the hub gave the session with their tool counts. A fact the hub does not know is
+not listed.
+
 ## Live and paged
 
 A panel asks the hub for the session's entries only while a window shows it, and lets them go when none does. It opens

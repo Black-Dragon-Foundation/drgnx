@@ -509,3 +509,88 @@ unanswered, and panel \"s1\" as `buf'."
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here
+
+;;;; Task 42: why each step was allowed, and what each chip means
+
+(declare-function drgnx-agent-panel-explain--popup-text "drgnx-agent-panel-explain")
+(declare-function drgnx-agent-panel-revoke-always "drgnx-agent-panel-explain")
+
+(ert-deftest drgnx-agent-panel/provenance-under-its-step ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps
+       (list (list :seq 3 :hooks (vector (list :point "before-tool" :outcome "deny" :tool "rm"
+                                               :records (vector (list :source "rule:no-rm" :verdict "deny" :ms 1
+                                                                      :reason "never rm")))))
+             (list :seq 4)))
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run rm" "failed" :step 3))
+             (list 1 (drgnx-agent-panel-test--tool "t2" "Read a" "completed" :step 4))))
+      (let* ((text (drgnx-agent-panel-test--text buf))
+             (at (string-search "refused by rule no-rm" text)))
+        (should at)
+        (should (string-match-p "\"never rm\"" text))
+        ;; the line sits under its own step, above the next one
+        (should (< (string-search "Run rm" text) at (string-search "Read a" text))))
+      ;; a click on the line shows the provenance: who, what, how long
+      (goto-char (point-min))
+      (search-forward "refused by")
+      (backward-char 3)
+      (push-button)
+      (with-current-buffer "*agent hook*"
+        (should (string-match-p "Source:   rule no-rm" (buffer-string)))
+        (should (string-match-p "Time:     1 ms" (buffer-string))))
+      (kill-buffer "*agent hook*"))))
+
+(ert-deftest drgnx-agent-panel/revoke-an-always ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot
+       (list :id "s1" :status "waiting"
+             :permissions (list (list :id 7 :title "Run make" :tool (list :id "t1")
+                                      :options (list (list :optionId "allow" :kind "allow_once")
+                                                     (list :optionId "always" :kind "allow_always"))))))
+      (drgnx-agent-panel-test--text buf)
+      (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
+      (drgnx-agent-panel-always)
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "allowed by your Always · V revokes" text)))
+      (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0))))
+        (drgnx-agent-panel-revoke-always))
+      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf)))
+      ;; the line is gone because the panel forgot it; nothing is asked of the hub (the agent keeps its own rule)
+      (should (equal "agents/permission" (car (car drgnx-agent-panel-test--calls)))))))
+
+(ert-deftest drgnx-agent-panel/context-popup-shows-drop-only-when-advertised ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (let* ((ctx (list :used 1200 :size 200000 :compact_frees 300
+                        :parts (vector (list :kind "tool-output" :tokens 1000
+                                             :items (vector (list :id "i1" :label "Bash ls" :tokens 1000))))))
+             (snap (lambda (features) (list :id "s1" :panel (list :features features :context ctx))))
+             (facts (list (list :name "used" :value "1200 of 200000 tokens")))
+             (text (lambda (features)
+                     (substring-no-properties
+                      (drgnx-agent-panel-explain--popup-text 'context facts (funcall snap (vconcat features)))))))
+        (should (string-match-p "Bash ls" (funcall text '("context"))))
+        (should (string-match-p "1200 of 200000 tokens" (funcall text '("context"))))
+        (should-not (string-match-p "\\[drop\\]" (funcall text '("context"))))
+        (should-not (string-match-p "\\[pin\\]" (funcall text '("context"))))
+        (should-not (string-match-p "What /compact keeps" (funcall text '("context"))))
+        (should (string-match-p "\\[drop\\]" (funcall text '("context" "drop"))))
+        (should (string-match-p "\\[pin\\]" (funcall text '("context" "pin"))))
+        (should (string-match-p "What /compact keeps" (funcall text '("context" "compact-preview"))))))))
+
+(ert-deftest drgnx-agent-panel/a-chip-opens-its-facts-from-the-hub ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "idle" :mcp 2 :mode "default"))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (goto-char (point-min))
+        (search-forward "MCP 2")
+        (should (equal 'mcp (get-text-property (1- (point)) 'drgnx-agent-panel-chip)))
+        (should text))
+      (drgnx-agent-panel-chip 'mcp)
+      (should (equal '("agents/explain" :id "s1" :item "mcp") (car drgnx-agent-panel-test--calls))))))

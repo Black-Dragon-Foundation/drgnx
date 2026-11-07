@@ -394,10 +394,11 @@ pub async fn config(f: &Front, _: &Caller, p: ConfigParams) -> Result<bool, Erro
 
 /// `agents/explain`: the facts behind a chip, from the session's state and the adapter's last report.
 pub async fn explain(f: &Front, _: &Caller, p: ExplainParams) -> Result<Explained, Error> {
-    use crate::agents::explain::{Inputs, explain};
+    use crate::agents::explain::{Inputs, McpServerFacts, explain};
     let s = f.core.agents.find(p.id.as_str())?;
     let profile = super::find_profile(f, &s.profile);
     let snap = s.snapshot();
+    let (up, failed) = f.mcp.served(p.id.as_str());
     let inputs = Inputs {
         role: serde_json::to_value(s.role)
             .ok()
@@ -428,6 +429,11 @@ pub async fn explain(f: &Front, _: &Caller, p: ExplainParams) -> Result<Explaine
             .capabilities
             .as_ref()
             .and_then(|c| c.get("mcpCapabilities").cloned()),
+        mcp_servers: up
+            .into_iter()
+            .map(|(name, tools)| McpServerFacts { name, tools })
+            .collect(),
+        mcp_failed: failed,
     };
     Ok(Explained {
         item: p.item,
