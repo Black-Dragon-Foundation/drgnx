@@ -22,6 +22,10 @@
 (load (expand-file-name "test/fixtures/ratatoskr-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/unit/hub-client-test" drgnx-dir) nil t)   ; its Ratatoskr helpers
+;; Only the helpers are wanted: the file's own tests belong to the unit tier (they need the test clock and, for the
+;; binary ones, DRGNX_RATATOSKR_BIN, which this session does not have); left defined they ran here and failed the tier.
+(dolist (test (ert-select-tests "\\`drgnx-hub-client/" t))
+  (ert-delete-test (ert-test-name test)))
 
 (defconst drgnx-agents-smoke--fixture "test/fixtures/recordings/smoke-mock"
   "The repository's recording of the script made from the mocks, relative to the checkout.")
