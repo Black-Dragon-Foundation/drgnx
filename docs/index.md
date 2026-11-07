@@ -51,6 +51,7 @@ Using drgnx.
 ## Reference
 
 - [Config files](reference/config.md): every file drgnx keeps, its folder, format, keys and what they mean (generated from the definitions).
+- [Terminal settings](reference/terminal-settings.md): each of Ghostty's options and its place in drgnx's terminal — a setting, a face, an existing setting, or why none (generated).
 
 Commands, options and the CLI, generated from the command registry — not written yet.
 

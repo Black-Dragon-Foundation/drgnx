@@ -124,8 +124,8 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 
 | Method | Params | Answer |
 |---|---|---|
-| `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?` | `{id, view}`; the view is `term:<id>` and its first patch a reset |
-| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`) | `true` |
+| `term/open` | `dir`, `command?`, `env` (the program's whole environment, `[[name, value]…]`), `cols`, `rows`, `cell_px?`, `class`, `window?`, `config?`, `memory_max?`, `tasks_max?` (the scope's limits) | `{id, view}`; the view is `term:<id>` and its first patch a reset |
+| `term/config` | `id`, `config: [[name, value]…]` (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`, `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, `colours`) | `true` |
 | `term/key` | `id`, `key`, `mods`, `text?`, `unshifted?` | `true` |
 | `term/text`, `term/paste` | `id`, `text` | `true` |
 | `term/focus` | `id`, `in` | `true` |
@@ -152,7 +152,8 @@ its window's position), `term/fetch` answers with the version of the patch it se
 **Tests:** `domr --only 'term/*'` (`test/conformance/term/`: open and echo, resize, fetch, search, text-range, live
 scrollback, list, close, exit), `runstav`'s `term_protocol_uses_no_ids_as_object_keys`, the worker's
 `scroll_by_prompts_rows_and_to_the_bottom` and `search_and_text_range_read_beyond_the_window`, and the systemd row
-`tests/term_scope.rs` (`worker_survives_hub_restart_under_kill_mode_mixed`) in a fake runner:
+`tests/term_scope.rs` (`worker_survives_hub_restart_under_kill_mode_mixed`, `cgroup_memory_limit_reaches_scope`) in a
+fake runner:
 
 ```
 cargo test -p drgnx-ratatoskr --features fleet --test term_scope --no-run && cargo build -p drgnx-term
@@ -203,8 +204,11 @@ program runs).
 `drgnx-term-usable-p`). Lisp inserts rows, places the cursor, sends input and runs commands; the worker computes.
 
 - **Open:** `term/open` goes on the subscribed connection, the one the rows come back on, with the window's size in
-  cells, the program's whole environment (`TERM`, `COLORTERM`, `INSIDE_EMACS`, then `drgnx-terminal-environment`,
-  then this Emacs's) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
+  cells, the program's whole environment (`drgnx-term-env`; `TERM` and `TERMINFO` from `drgnx-term--term-entries`:
+  `xterm-ghostty` only while `<data>/terminfo/x/xterm-ghostty` exists; `COLORTERM`, `INSIDE_EMACS`; the shell
+  integration's `DRGNX_TERMINAL`, `TERM_PROGRAM`, `GHOSTTY_SHELL_FEATURES`, `DRGNX_TERMINAL_SHELL`,
+  `DRGNX_TERMINAL_SSH`, with Ghostty's other variables unset; then `drgnx-terminal-environment`, then this Emacs's;
+  the shell side is `etc/shell/drgnx.*`, docs/guide/shell.md) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
   `term:<id>` in the class `term` (one class for every terminal: the worker builds rows for cells, so a text scale or
   a font change never re-pairs the buffer, and no `view/env` is sent). A reset that came before the answer found no
   buffer, so the answer sends `view/resync` when nothing was applied yet. With no subscription the buffer waits and
@@ -256,3 +260,33 @@ program runs).
 a flood backfilled, the scrollback setting both ways, undo off, input queued while the hub is away, a theme change
 without a reset, a tty frame) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align,
 cursor shapes).
+
+## Settings
+
+Every option of Ghostty's configuration has a row in `drgnx-term-settings-options`
+(`modules/tools/drgnx-term-settings.el`): `live` (a `drgnx-term-<option>` setting that applies to open terminals),
+`spawn` (new terminals), `face`, `mapped` (an existing drgnx or Emacs setting), `later` or `none` (with the reason).
+`test/fixtures/ghostty-options.txt` pins Ghostty's list (204 options, read 2026-11-07); a new upstream option is added
+there and given a row, or `drgnx-term-settings/every-ghostty-option-is-classified` fails.
+`docs/reference/terminal-settings.md` is generated from the table (`drgnx-term-settings-write-reference`; the test
+`reference-is-generated-and-current` prints the command).
+
+- **The worker's live settings** go as one `term/config` (`drgnx-term--worker-config`): at `term/open`, from each
+  setting's `:apply` (`drgnx-term--apply-config`) and on a theme change. `colours` carries the faces' foreground,
+  background and cursor (`drgnx-term-default`, `drgnx-term-cursor`) and, when all 16 resolve, `drgnx-term-color-0`
+  to 15, as `#rrggbb` through `core/drgnx-color.el`; the worker sets them as the engine's defaults, so OSC 10, 11, 12
+  and 4 read the theme back. `cursor-style` sets the default DECSCUSR style and resets the cursor to it.
+- **drgnx's live settings** are read where they act: the copy filter (`filter-buffer-substring-function`: trailing
+  spaces, the codepoint map), `mouse-drag-copy-region` (copy on select) and the word syntax table, set per buffer
+  by `drgnx-term--set-locals` (`:apply` `drgnx-term--apply-local`); paste protection reads the meta's
+  `bracketed_paste`; the mouse filters read `drgnx-term-mouse-reporting` and `-shift-capture`; OSC 133 C and D time a
+  command for notify-on-command-finish; `drgnx-term--confirm-close` is a buffer-local `kill-buffer-query-functions`
+  that asks only inside a command (turning the module off asks nothing).
+- **Spawn settings** shape `term/open`: `drgnx-term-command`, `-env` (over drgnx's entries), `-term`, `-input` (typed
+  once the terminal opens), `-working-directory` (New Terminal), and the scope's `memory_max` / `tasks_max`.
+- **Not built:** `palette-generate`, `palette-harmonious`, `minimum-contrast`, `clipboard-read`,
+  `cursor-click-to-move`, `link`, `link-url` (rows of class `later`).
+
+**Tests:** `test/unit/term-settings-test.el` (`drgnx-term-settings/`), the gated
+`drgnx-term-settings/live-setting-reaches-worker` in `term-test.el`, the worker's `settings_reach_the_engine`, and the
+fleet row `cgroup_memory_limit_reaches_scope`.

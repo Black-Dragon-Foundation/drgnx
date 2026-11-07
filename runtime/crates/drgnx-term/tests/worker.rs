@@ -597,3 +597,44 @@ fn search_and_text_range_read_beyond_the_window() {
     assert_eq!(w.text_range(from.as_deref(), None), "A5\nA6");
     assert_eq!(w.search("A", false).len(), 6);
 }
+
+#[test]
+fn settings_reach_the_engine() {
+    let (mut w, mut m) = (worker(20, 2, 10), Model::default());
+    let cfg = |name: &str, v: serde_json::Value| In::Config {
+        config: vec![(name.to_string(), v)],
+    };
+    // the default cursor: a new terminal shows it at once
+    w.handle(cfg("cursor-style", serde_json::json!("bar")), 0);
+    w.output(b"x", 0);
+    let ps = draw(&mut w, &mut m, 0);
+    let term = ps
+        .iter()
+        .rev()
+        .find_map(|p| p.term.as_ref())
+        .expect("the terminal's state");
+    assert_eq!(term.cursor.2, drgnx_rows::CursorShape::Bar);
+    assert!(!term.bracketed_paste);
+    // ENQ is answered with the setting's text
+    w.take_pty();
+    w.handle(cfg("enquiry-response", serde_json::json!("drgnx")), 1000);
+    w.output(b"\x05", 1000);
+    assert_eq!(w.take_pty(), b"drgnx");
+    // a program reads the editor's background back (OSC 11)
+    w.handle(
+        cfg("colours", serde_json::json!(["#102030", "#405060", ""])),
+        2000,
+    );
+    w.output(b"\x1b]11;?\x07", 2000);
+    let reply = String::from_utf8_lossy(&w.take_pty()).into_owned();
+    assert!(reply.contains("4040/5050/6060"), "{reply:?}");
+    // the editor learns the program wants bracketed paste
+    w.output(b"\x1b[?2004h", 3000);
+    let ps = draw(&mut w, &mut m, 3000);
+    assert!(
+        ps.iter()
+            .rev()
+            .find_map(|p| p.term.as_ref())
+            .is_some_and(|t| t.bracketed_paste)
+    );
+}

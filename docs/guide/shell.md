@@ -35,7 +35,19 @@ terminal's buffer only shows the screen it sends. So:
   title names the buffer, a progress report (OSC 9;4) shows in the mode line, and a notification (OSC 9 / 777) is a
   drgnx notice.
 - Resizing the window resizes the terminal once the window settles.
-- Undo is off in a terminal's buffer; the theme's colours apply at once.
+- Undo is off in a terminal's buffer; the theme's colours apply at once, and a program that asks for the terminal's
+  colours (OSC 10, 11, 4) is told the theme's.
+- **Settings:** every option of Ghostty's configuration has its place, listed in
+  [terminal settings](../reference/terminal-settings.md): the cursor, paste protection (a multi-line paste into a
+  program that did not ask for bracketed paste asks first), copy on select, trailing spaces trimmed on copy, a bell or
+  notice when a long command ends (`drgnx-term-notify-on-command-finish`), the program, environment, TERM and memory
+  limit of new terminals, and more. The colours are the theme's faces (`drgnx-term-color-0` to `15` and the others).
+- **TERM** is `xterm-ghostty`, Ghostty's own entry: `drgnx build` (run by the installer and every update) compiles it
+  with `tic` into `<data>/terminfo` (`drgnx build terminfo` does just that), and the terminal's `TERMINFO` names that
+  folder. Without `tic` (ncurses), or until it has run, the terminal says `xterm-256color`. The shell also sees
+  `COLORTERM=truecolor`, `TERM_PROGRAM=drgnx`, `INSIDE_EMACS=<Emacs version>,drgnx` and `DRGNX_TERMINAL=1`.
+  `drgnx FILE` typed there opens in the drgnx hosting the terminal, never a new window, and loads your AI keys as a
+  `drgnx` from any other terminal does ([opening](opening.md#how-it-works)).
 - Wide characters (CJK) keep the columns after them in place. Not yet: an emoji whose glyph is wider than its two
   cells can show as `…` or push the rest of its line a few pixels, and a joined emoji (👩‍💻) takes four cells.
 
@@ -86,7 +98,9 @@ What the line does:
 - **Tab completion for `drgnx`** (see below). In zsh the directory with `_drgnx` goes on `fpath` (a `compinit` that
   runs later finds it; one that already ran gets `compdef _drgnx drgnx`). In bash it is `complete -F _drgnx drgnx`.
   In fish, `complete -c drgnx` lines.
-- **Inside drgnx's terminal only**, eat's shell integration: eat learns the directory you are in (the terminal's
+- **Inside drgnx's terminal only**, [Ghostty's shell integration](#ghosttys-shell-integration-and-ssh) and an `ssh`
+  that gives the host a TERM it knows (below).
+- **Inside eat only** (module `tools/term` off), eat's shell integration: eat learns the directory you are in (the terminal's
   `default-directory` follows `cd`), where each prompt starts, whether the last command failed (the margin mark), and
   whether a command is running. In zsh and bash the line sources the integration file that comes with eat. Eat
   ships none for fish, so `drgnx.fish` has its own few lines for it. Eat's file also hands Emacs your shell history
@@ -98,8 +112,8 @@ What it never does:
 
 - it prints nothing, and runs no program while your shell starts (no `uname`, no `hostname`, no fork: the files hold
   functions and builtin calls only);
-- it never touches `PS1`, `PROMPT`, `PROMPT_COMMAND`, `fish_prompt`, or your plugin manager (oh-my-zsh, zinit,
-  fisher, ...). Outside eat the only change is completion.
+- outside drgnx's terminal and eat it never touches `PS1`, `PROMPT`, `PROMPT_COMMAND`, `fish_prompt`, or your plugin
+  manager (oh-my-zsh, zinit, fisher, ...): the only change is completion.
 
 **Cost:** measured with `zsh -i -c exit` and `bash -i -c exit` (20 runs each, interleaved, median), the line adds
 less than a millisecond (0.2 ms in zsh 5.9, under 0.15 ms in bash 5.3). The test `drgnx-shell-files/startup-cost`
@@ -125,6 +139,40 @@ runs no program: the only thing read is the `keys/` folder for `--keys`. They ca
 onboarding steps and presets against the ones the code defines. A new command or option in `bin/drgnx` is added to
 those three files in the same change.
 
+## Ghostty's shell integration and ssh
+
+drgnx's terminal runs on Ghostty's engine, and so uses Ghostty's own shell integration, shipped in
+`etc/shell/ghostty/` (unchanged from Ghostty; `etc/shell/ghostty/NOTICE` says where each file comes from and its
+licence). With the line in your rc file, a shell in drgnx's terminal sources it:
+
+- **What it does:** it marks each prompt, where your input ends and the output starts, and the command's exit status
+  (OSC 133); it reports the folder (OSC 7, so the buffer's directory follows `cd`); it sets the title to the folder
+  at the prompt and to the command while it runs (bash and zsh; fish sets its own title); it puts a bar cursor at the
+  prompt; and its `sudo` keeps `TERMINFO`, so programs run with sudo know `xterm-ghostty`.
+- **Which parts:** the setting `drgnx-term-shell-integration-features` (default `cursor`, `title`, `sudo`; Ghostty's
+  names, also `path`) reaches the shell as `GHOSTTY_SHELL_FEATURES`. `drgnx-term-shell-integration` set to `none`
+  turns the integration off; set to `bash`, `zsh` or `fish` it loads in that shell only (`detect`, the default: in
+  whichever shell sources its drgnx file). Both apply to new terminals.
+- **What it leaves out:** Ghostty's ssh features (`ssh-env`, `ssh-terminfo`) need the `ghostty` program, which drgnx
+  does not have, so they are always off; `GHOSTTY_BIN_DIR` is unset, and a Ghostty around drgnx leaves none of its own
+  variables in drgnx's terminal.
+- **Your rc file's `set -u`** (bash) is off while Ghostty's file loads, and back on after.
+- elvish: `etc/shell/ghostty/shell-integration/elvish/lib/ghostty-integration.elv` is there too; drgnx has no elvish
+  file of its own, so use it from your `rc.elv` if you like.
+- **bash 3.2** (macOS's `/bin/bash`): Ghostty's file uses `bash-preexec.sh`, shipped beside it.
+
+**ssh.** A host knows `xterm-ghostty` only once its terminfo entry is installed there. So `ssh` typed in drgnx's
+terminal (a function the line defines there only; `command ssh` skips it) does what `drgnx-term-ssh-terminfo` says:
+
+- `fallback` (the default): ssh runs with `TERM=xterm-256color`, which every host knows.
+- `install`: the first ssh to a host sends the entry to the host's `tic` (`infocmp -x xterm-ghostty | ssh HOST tic -x
+  -`, with your ssh options but not a command you gave, into the remote `~/.terminfo`) and records the outcome in `<state>/terminal-ssh-hosts`, one
+  `USER@HOST:PORT TERM` line per host. Later ssh's to that host use what is recorded: `xterm-ghostty` when it worked,
+  `xterm-256color` when it did not (no `tic` there, say). Delete the host's line to try again. That first ssh
+  connects twice, so you may be asked for a password twice.
+
+The host's name, user and port come from `ssh -G` with your arguments, so `~/.ssh/config` aliases count.
+
 ## The integration is on by default inside the terminal
 
 With the line in your rc file there is nothing more to switch on: inside eat the shell reports its prompts and its
@@ -148,12 +196,12 @@ outside drgnx's terminal:
 
 ```sh
 # bash, zsh
-case "$INSIDE_EMACS" in *eat*) ;; *) export EDITOR=vim ;; esac
+case "$INSIDE_EMACS" in *eat*|*drgnx*) ;; *) export EDITOR=vim ;; esac
 ```
 
 ```fish
 # fish
-string match -q '*eat*' -- "$INSIDE_EMACS"; or set -gx EDITOR vim
+string match -q -r 'eat|drgnx' -- "$INSIDE_EMACS"; or set -gx EDITOR vim
 ```
 
 ## Your PATH in drgnx

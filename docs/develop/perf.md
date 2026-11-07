@@ -47,7 +47,11 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | explorer-evil | the explorer workload with Vim keys: `SPC E`, `j`×10, `<escape>` | input latency |
 | window-switch | `C-x o` ×50 across three editor groups showing one file, with the left dock, the panel and the right dock shown (checked: the selected window changed 50 times) | input latency |
 | terminal-typing | 6 × 20 characters (`echo hello world 123`) typed into drgnx's terminal in the panel running `cat` (no shell, so no shell configuration; the tty echoes every key and the hub's terminal worker draws it; the workload starts its own hub, the worker beside it, and runs `tools/term` on it) | input latency |
-| terminal-output | the same 120 characters typed into the fixture while drgnx's terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal is open, its window is shown and its text changed while typing) | input latency |
+| terminal-output | the same 120 characters typed into the fixture while drgnx's terminal in the panel streams `seq 1 2000` in a loop (checked: the terminal is open, its window is shown and its text changed while typing) | input latency; the terminal's draws (`:slice_ms`, `:draw_kb`) and the session's allocation in MB/s (`:alloc_rate`) while it streams |
+| terminal-output-10mb, terminal-output-100mb | `cat` of a 10 MB (100 MB) file of numbered lines in a new terminal in the panel, then a mark; no keys | `:wall_ms` from the start to the mark on screen, the draws and `:alloc_rate` |
+| terminal-echo | terminal-typing end to end with load: the 120 characters typed into a terminal running `cat` in the editor area while 30 mock agents stream (their Work map shown, the 30-agent fixture's hub) and a second terminal in the panel runs the `seq` loop; one hub carries the agents, both terminals and the keys | input latency (the key read to its echo drawn) |
+| terminal-echo-idle | the same with nothing else running | input latency |
+| terminal-backfill | `seq 1 10000` in a new terminal in the panel, timed until the backfill has brought line 1 into the buffer | the draws while it fills (`:slice_ms`); `:lines`, and `:heap_kb` (the live objects a collection finds against before the terminal opened, plus the buffer's text): the 10k terminal's memory, recorded only |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
@@ -187,7 +191,7 @@ seccomp=unconfined --security-opt label=disable -v CHECKOUT:/src:ro -v OUT:/out 
 between the runs. The checkout is not built there, so the figures are those of code loaded from source; compiled
 code allocates less, so a built checkout stays under them. A workload that could not run in the container has no
 gated rows yet and is named, with the reason, in `drgnx-perf-run-unseeded` (a test checks both ways).
-In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view and the terminal ones, for want of the websocket and eat packages in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. With `DRGNX_USER_ELPA` naming a directory that holds an `eat-VERSION` package, `bin/drgnx test --container --perf` mounts it read-only and the terminal workloads run in the container too; with a `websocket-VERSION` package there the Live view runs too. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
+In a container the lab names the workloads that error there (`drgnx-perf-run-container-skipped`: the Live view, for want of the websocket package in the image) and leaves them out, so the CI perf job does not fail on them; on a host they run. The terminal workloads run in the container (they need `DRGNX_RATATOSKR_BIN`, a test-hooks build with the terminal worker beside it). With `DRGNX_USER_ELPA` naming a directory that holds a `websocket-VERSION` package, `bin/drgnx test --container --perf` mounts it read-only and the Live view runs too. `transcript-replay` (the synthetic day's stream, below) runs in the container too, with no agent or hub.
 
 **Raising a budget** is a change of its own: edit `budgets.eld` in the same commit as the code that needs it, with the
 reason in a comment on the row. A budget is raised for a measured, explained increase, never to make a run pass.
@@ -446,7 +450,32 @@ several runs, range shown):
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
 
-The numbers below were measured with eat; the terminal workloads now drive drgnx's terminal and are report-only until its perf task seeds them on the desktop island.
+The numbers above and below were measured with eat. The terminal workloads now drive drgnx's terminal (on Ghostty's
+engine, a worker per terminal behind the hub); its rows below are judged at the combined gate pass on the desktop island.
+
+## drgnx's terminal (the Ghostty engine), 2026-11-08
+
+The design's targets (§8), in `budgets.eld`: `terminal-echo` input p95 8 ms and max 16 ms with 30 agents streaming and
+a flood in a second terminal; `terminal-output` input max 16 ms (from eat's provisional 50); `cat` of 10 MB and 100 MB
+at ≤ 2 MB/s of Emacs allocation, `draw_kb` p50 ≤ 40 kB, draw slices ≤ 4 ms, and 10 MB on screen in ≤ 250 ms;
+`terminal-backfill` slices ≤ 4 ms. terminal-typing keeps p95 7 and max 13; its allocation per key and the full 10k
+terminal's heap are recorded first, then gated. If `terminal-echo` misses only because the key or the patch queued
+behind other hub traffic, that is recorded: a direct Emacs-to-worker socket is then a follow-up for the user.
+
+One smoke run in the GUI container on the desktop (a busy builder, one repeat; reported, not judged):
+
+| workload | what it showed |
+|---|---|
+| terminal-typing | input p95 0.9 ms, max 0.9 ms |
+| terminal-output | input p95 4.0 ms, max 5.1 ms |
+| terminal-output-10mb | 152 ms to the mark; 1.3 MB/s allocated; draw p50 5.3 kB, slice max 0.1 ms |
+| terminal-output-100mb | 0.4 MB/s; draw p50 5.7 kB, slice max 0.1 ms |
+| terminal-echo | echo p95 1.7 ms, max 4.1 ms (input p90 0.7 ms) |
+| terminal-echo-idle | input max 0.7 ms |
+| terminal-backfill | slice max 2.9 ms (3.4 and 4.2 in two earlier runs) |
+
+A flood draws the screen only (the rows that scrolled past fill in once it pauses), so its slices stay near 0.1 ms.
+`:echo_ms` ends at the draw that shows the echo, before the redisplay that follows it.
 
 Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
 a terminal costs about what typing into a file does.

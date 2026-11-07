@@ -24,6 +24,7 @@ pub enum SettingValue {
     Flag(bool),
     Number(i64),
     Text(String),
+    List(Vec<String>),
 }
 
 impl From<SettingValue> for Value {
@@ -32,6 +33,7 @@ impl From<SettingValue> for Value {
             SettingValue::Flag(b) => Value::Bool(b),
             SettingValue::Number(n) => Value::from(n),
             SettingValue::Text(s) => Value::String(s),
+            SettingValue::List(l) => Value::from(l),
         }
     }
 }
@@ -56,6 +58,12 @@ pub struct TermOpen {
     pub window: Option<u32>,
     #[serde(default)]
     pub config: Vec<(String, SettingValue)>,
+    /// The worker's scope's `MemoryMax` and `TasksMax` under a user systemd: a number, with K, M, G or T for memory
+    /// (`drgnx-term-linux-cgroup-memory-limit`, `-processes-limit`); none: systemd's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks_max: Option<String>,
 }
 
 /// `term/open`'s answer.
@@ -65,7 +73,9 @@ pub struct TermOpened {
     pub view: String,
 }
 
-/// `term/config`: live settings, `[name, value]` each (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`).
+/// `term/config`: live settings, `[name, value]` each: `scrollback-lines`, `scrollback-bytes`, `clipboard-write`,
+/// `cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, and `colours`
+/// (`[fg, bg, cursor, c0 … c15]` as `#rrggbb`, "" for the built-in one: what a program reads back).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TermConfig {
     pub id: String,
@@ -336,6 +346,18 @@ fn check_open(p: &TermOpen) -> Result<(), Error> {
     }
     if !p.dir.starts_with('/') {
         return Err(invalid("dir", "an absolute directory"));
+    }
+    let limit = |v: &Option<String>, units: &[char]| {
+        v.as_deref().is_none_or(|s| {
+            let digits = s.strip_suffix(|c: char| units.contains(&c)).unwrap_or(s);
+            !digits.is_empty() && digits.len() <= 20 && digits.bytes().all(|b| b.is_ascii_digit())
+        })
+    };
+    if !limit(&p.memory_max, &['K', 'M', 'G', 'T']) || !limit(&p.tasks_max, &[]) {
+        return Err(invalid(
+            "memory_max",
+            "a number of bytes (K, M, G or T after it) or of tasks",
+        ));
     }
     Ok(())
 }

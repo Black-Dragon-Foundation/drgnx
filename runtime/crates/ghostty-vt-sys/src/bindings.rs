@@ -271,18 +271,23 @@ pub const GHOSTTY_ROW_DATA_WRAP: i32 = 1;
 pub const GHOSTTY_TERMINAL_OPT_USERDATA: i32 = 1;
 pub const GHOSTTY_TERMINAL_OPT_WRITE_PTY: i32 = 2;
 pub const GHOSTTY_TERMINAL_OPT_BELL: i32 = 3;
+pub const GHOSTTY_TERMINAL_OPT_ENQUIRY: i32 = 4;
 pub const GHOSTTY_TERMINAL_OPT_TITLE_CHANGED: i32 = 6;
 pub const GHOSTTY_TERMINAL_OPT_SIZE: i32 = 7;
 pub const GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND: i32 = 12;
 pub const GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND: i32 = 13;
 pub const GHOSTTY_TERMINAL_OPT_COLOR_CURSOR: i32 = 14;
 pub const GHOSTTY_TERMINAL_OPT_COLOR_PALETTE: i32 = 15;
+pub const GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE: i32 = 23; // GhosttyCursorStyle*
+pub const GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK: i32 = 24; // bool*
 pub const GHOSTTY_TERMINAL_OPT_PWD_CHANGED: i32 = 26;
 pub const GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE: i32 = 27;
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES: i32 = 28;
 pub const GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES: i32 = 29;
 pub const GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION: i32 = 30;
 pub const GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT: i32 = 31;
+pub const GHOSTTY_TERMINAL_OPT_TITLE_REPORT: i32 = 33; // bool*
+pub const GHOSTTY_TERMINAL_OPT_MODE_DEFAULT: i32 = 34; // GhosttyTerminalModeConfig*
 pub const GHOSTTY_TERMINAL_OPT_TERMINFO_NAME: i32 = 38;
 pub const GHOSTTY_TERMINAL_OPT_RENDER_HOLD: i32 = 42;
 pub const GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT: i32 = 43;
@@ -388,6 +393,9 @@ pub type GhosttyTerminalWritePtyFn = unsafe extern "C" fn(
     data: *const u8,
     len: usize,
 );
+/// The answer to ENQ (0x05): borrowed, valid until the next call into the terminal.
+pub type GhosttyTerminalEnquiryFn =
+    unsafe extern "C" fn(terminal: GhosttyTerminal, userdata: *mut c_void) -> GhosttyString;
 pub type GhosttyTerminalBellFn =
     unsafe extern "C" fn(terminal: GhosttyTerminal, userdata: *mut c_void);
 pub type GhosttyTerminalTitleChangedFn =

@@ -367,5 +367,14 @@ hub or its worker."
         (should (equal (drgnx-term--running-names rows (list busy idle)) (list (buffer-name busy))))
         (should (memq 'drgnx-term-running drgnx-session-running-functions))))))
 
+(ert-deftest drgnx-term-settings/live-setting-reaches-worker ()
+  ;; a change of `drgnx-term-cursor-style' reaches the open terminal's worker at once: its cursor is drawn as a bar
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)))
+      (should (eq (buffer-local-value 'cursor-type b) 'box))
+      (let ((drgnx-term-cursor-style "bar")) (drgnx-term--apply-config))
+      (drgnx-term-test--settle (lambda () (equal (buffer-local-value 'cursor-type b) '(bar . 2))) "the bar cursor")
+      (should (equal (buffer-local-value 'cursor-type b) '(bar . 2))))))
+
 (provide 'term-test)
 ;;; term-test.el ends here

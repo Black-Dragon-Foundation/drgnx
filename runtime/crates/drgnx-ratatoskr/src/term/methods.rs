@@ -3,6 +3,7 @@
 
 use super::{Spawn, Terms};
 use drgnx_term::proto::{In, Out};
+use drgnx_term::scope::Limits;
 use runstav::methods::Params;
 use runstav::methods::term::{TermOpened, TermStatus};
 use runstav::wire::{Error, ErrorCode};
@@ -71,7 +72,10 @@ pub async fn serve(t: &Terms, conn: u64, p: Params) -> Result<Value, Error> {
                 cell_px: p.cell_px,
                 window: p.window.map_or(10_000, |w| w as usize),
                 class: p.class,
-                limits: Default::default(),
+                limits: Limits {
+                    memory_max: p.memory_max,
+                    tasks_max: p.tasks_max,
+                },
                 config: p.config.into_iter().map(|(k, v)| (k, v.into())).collect(),
             };
             let rec = t

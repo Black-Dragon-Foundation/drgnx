@@ -179,3 +179,64 @@ async fn worker_survives_hub_restart_under_kill_mode_mixed() {
         (!systemctl(&["is-active", "--quiet", &format!("drgnx-term-{id}.scope")])).then_some(())
     });
 }
+
+/// The `linux-cgroup*` limits a terminal is opened with are its scope's (`systemctl show`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "fleet"]
+async fn cgroup_memory_limit_reaches_scope() {
+    assert!(
+        drgnx_ratatoskr::exec::unit::systemd_user(),
+        "a user systemd (the fake runner's)"
+    );
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let tmp = tempfile::tempdir_in(home).unwrap();
+    let terms = Terms::default();
+    terms
+        .open(tmp.path().join("term"), Arc::new(Nowhere), 1)
+        .await;
+    let env = |k: &str| (k.to_string(), std::env::var(k).unwrap_or_default());
+    let spawn = Spawn {
+        cwd: "/".into(),
+        command: vec!["/bin/sh".into()],
+        env: vec![
+            env("PATH"),
+            env("XDG_RUNTIME_DIR"),
+            env("DBUS_SESSION_BUS_ADDRESS"),
+        ],
+        cols: 40,
+        rows: 5,
+        class: "gui".into(),
+        window: 100,
+        limits: drgnx_term::scope::Limits {
+            memory_max: Some("256M".into()),
+            tasks_max: Some("64".into()),
+        },
+        ..Spawn::default()
+    };
+    let rec = terms
+        .spawn_as(1, Some("s1".into()), spawn, true)
+        .await
+        .expect("the terminal starts");
+    let scope = format!("drgnx-term-{}.scope", rec.id);
+    let shown = skuld::wait_until("the scope's limits", WAIT, || {
+        let out = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                &scope,
+                "-p",
+                "MemoryMax",
+                "-p",
+                "TasksMax",
+            ])
+            .output()
+            .ok()?;
+        let s = String::from_utf8_lossy(&out.stdout).into_owned();
+        s.contains("MemoryMax=268435456").then_some(s)
+    });
+    assert!(shown.contains("TasksMax=64"), "{shown}");
+    terms.send(&rec.id, &In::Close { signal: Some(9) });
+    skuld::wait_until("the terminal's scope gone", WAIT, || {
+        (!systemctl(&["is-active", "--quiet", &scope])).then_some(())
+    });
+}

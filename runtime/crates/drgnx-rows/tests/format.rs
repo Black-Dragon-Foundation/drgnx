@@ -190,6 +190,7 @@ fn styles_serialise_as_arrays() {
             cursor: ("41".into(), 2, CursorShape::Bar, true),
             alt_screen: true,
             mouse_tracking: false,
+            bracketed_paste: false,
             title: "vim".into(),
         }),
         model: None,
@@ -202,7 +203,8 @@ fn styles_serialise_as_arrays() {
     );
     assert_eq!(
         v["term"],
-        json!({"cursor": ["41", 2, "bar", true], "alt_screen": true, "mouse_tracking": false, "title": "vim"})
+        json!({"cursor": ["41", 2, "bar", true], "alt_screen": true, "mouse_tracking": false,
+               "bracketed_paste": false, "title": "vim"})
     );
     assert_eq!(
         v["ops"][0]["insert"]["rows"][0]["runs"],
@@ -241,6 +243,7 @@ fn styles_serialise_as_arrays() {
         "cursor",
         "alt_screen",
         "mouse_tracking",
+        "bracketed_paste",
         "title",
     ]
     .into_iter()

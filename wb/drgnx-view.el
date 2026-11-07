@@ -1340,6 +1340,11 @@ render offload's combined pass compares the two).  Never a user option.")
   "Faint (SGR 2) text of the terminal: under the text's own colour, so it shows on text in the default colour."
   :group 'drgnx)
 
+(defface drgnx-term-bold '((t))
+  "Bold (SGR 1) text of the terminal, under the text's own colour: give it a foreground for a colour of bold text's
+own (Ghostty's `bold-color')."
+  :group 'drgnx)
+
 (defconst drgnx-view-patch-ansi-faces
   (vconcat (mapcar (lambda (n) (intern (format "drgnx-term-color-%d" n))) (number-sequence 0 15)))
   "The face of each `{ansi: N}' colour, by N.")
@@ -1874,7 +1879,8 @@ foreground, before it the style's other attributes as one anonymous face, shared
         (let* ((n (plist-get (plist-get style :fg) :ansi))
                (ansi (and (natnump n) (< n 16) (aref drgnx-view-patch-ansi-faces n)))
                (attrs (drgnx-view-patch--style-attrs style))
-               (face (delq nil (list attrs ansi (and (drgnx-view-patch--on (plist-get style :faint)) 'drgnx-term-faint))))
+               (face (delq nil (list attrs ansi (and (drgnx-view-patch--on (plist-get style :faint)) 'drgnx-term-faint)
+                                     (and (drgnx-view-patch--on (plist-get style :bold)) 'drgnx-term-bold))))
                (face (if (cdr face) face (car face))))
           (when (>= (hash-table-count faces) drgnx-view-patch-style-face-max)
             (drgnx-view-patch--evict-faces faces))

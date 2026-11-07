@@ -213,7 +213,8 @@ Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stand
     (unwind-protect
         (progn
           (make-directory dir t)
-          (dolist (f (directory-files drgnx-shell-files-test--dir t "\\`[^.]")) (copy-file f dir))
+          (dolist (f (directory-files drgnx-shell-files-test--dir t "\\`[^.]"))   ; the files, not ghostty/
+            (when (file-regular-p f) (copy-file f dir)))
           ;; each case: shell, what runs first, the shell's arguments, what runs last and the output that adds.
           ;; bash: the completion function runs too (zsh's, which needs a terminal, is in shell-completion-test.el)
           (dolist (c '((zsh "setopt nounset" nil) (zsh "setopt nounset errexit" nil) (zsh "emulate sh -c 'true'" nil)

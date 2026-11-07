@@ -1,8 +1,9 @@
 # drgnx shell integration for fish.  Add one line to ~/.config/fish/config.fish:
 #   source /path/to/drgnx/etc/shell/drgnx.fish
 # (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and never touches fish_prompt or your
-# plugin manager.  What it does: tab completion for drgnx, and inside drgnx's own terminal (eat) the few lines of
-# eat's integration that fish needs (eat ships none for fish): directory tracking and "is a command running".
+# plugin manager.  What it does: tab completion for drgnx; inside drgnx's own terminal, Ghostty's shell integration
+# (prompt marks, the folder) and an ssh that gives the host a TERM it knows; inside eat, the few lines of eat's
+# integration that fish needs (eat ships none for fish): directory tracking and "is a command running".
 if not set -q _drgnx_sourced
     set -g _drgnx_sourced 1
 
@@ -84,6 +85,7 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l aa -d 'Run every workload against itself first (the default with --ab-env)'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l no-aa -d 'Skip that A/A run'
     complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a runner-bundle -d 'The runner bundle (static)'
+    complete -c drgnx -n '__fish_seen_subcommand_from build' -f -a terminfo -d "The terminal's terminfo entry"
     complete -c drgnx -n '__fish_seen_subcommand_from build; and __fish_seen_subcommand_from runner-bundle' -l arch -x -a 'x86_64 aarch64' -d "The bundle's architecture"
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l soak -d 'The workloads in a loop'
     complete -c drgnx -n '__fish_seen_subcommand_from test' -l day -d 'The synthetic day'
@@ -253,6 +255,101 @@ if not set -q _drgnx_sourced
             printf '\e]51;e;J\e\\\\'
             printf '\e]51;e;A;%s;%s\e\\\\' (printf %s $hostname | base64 | string join '') (printf %s $PWD | base64 | string join '')
             printf '\e]51;e;B\e\\\\'
+        end
+    end
+
+    # Inside drgnx's own terminal (DRGNX_TERMINAL, set by drgnx-term.el).  Ghostty's shell integration, vendored in
+    # ghostty/ next to this file (ghostty/NOTICE): prompt and command marks, a sudo that keeps TERMINFO.  Its features
+    # are the terminal's GHOSTTY_SHELL_FEATURES (drgnx-term-shell-integration-features; unset: the integration is off)
+    # without Ghostty's ssh ones, which need Ghostty's own program: drgnx's ssh is below.  DRGNX_TERMINAL_SHELL, when
+    # set, names the one shell that loads it.  Ghostty's folder report stays quiet when INSIDE_EMACS is set, as it is
+    # here, so drgnx reports the folder itself (OSC 7).
+    if set -q DRGNX_TERMINAL; and set -q GHOSTTY_SHELL_FEATURES; and test "$DRGNX_TERMINAL_SHELL" = fish -o -z "$DRGNX_TERMINAL_SHELL"
+        and test -r $__drgnx_dir/ghostty/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+        set -l features $GHOSTTY_SHELL_FEATURES
+        set -gx GHOSTTY_SHELL_FEATURES ''
+        string split , -- $features | string match -v -- 'ssh-*' | string join , | read -gx GHOSTTY_SHELL_FEATURES
+        set -gx GHOSTTY_RESOURCES_DIR $__drgnx_dir/ghostty
+        set -e GHOSTTY_BIN_DIR
+        source $GHOSTTY_RESOURCES_DIR/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+
+        function __drgnx_term_cwd --on-variable PWD --on-event fish_prompt
+            test "$__drgnx_term_cwd" = "$PWD"; and return
+            set -g __drgnx_term_cwd $PWD
+            string escape --style=url -- $PWD | read -l path
+            printf '\e]7;file://%s%s\a' $hostname $path
+        end
+    end
+
+    # ssh from drgnx's terminal (TERM=xterm-ghostty): a host knows that entry only once it is installed there.
+    # fallback (DRGNX_TERMINAL_SSH, from drgnx-term-ssh-terminfo): ssh says TERM=xterm-256color.  install: the first
+    # ssh to a host sends the entry to its tic (into the remote ~/.terminfo) and records the outcome in
+    # <state>/terminal-ssh-hosts, one "USER@HOST:PORT TERM" line per host (delete a line to try again).
+    if set -q DRGNX_TERMINAL
+        function ssh --wraps ssh --description 'ssh with a TERM the host knows'
+            if test "$TERM" != xterm-ghostty
+                command ssh $argv
+                return
+            end
+            set -g __drgnx_term xterm-256color
+            if test "$DRGNX_TERMINAL_SSH" = install
+                __drgnx_ssh_terminfo $argv
+            end
+            TERM=$__drgnx_term command ssh $argv
+        end
+
+        function __drgnx_ssh_terminfo -d "sets __drgnx_term for this ssh's host"
+            set -l user
+            set -l host
+            set -l port
+            set -l rec $HOME/.local/state/drgnx/terminal-ssh-hosts
+            string match -q -- '/*' "$XDG_STATE_HOME"; and set rec $XDG_STATE_HOME/drgnx/terminal-ssh-hosts
+            command ssh -G $argv 2>/dev/null | while read -l k v
+                switch $k
+                    case user
+                        set user $v
+                    case hostname
+                        set host $v
+                    case port
+                        set port $v
+                end
+            end
+            test -n "$host"; or return 0
+            set -l key $user@$host:$port
+            if test -r $rec
+                while read -l k v
+                    if test "$k" = "$key"
+                        set -g __drgnx_term $v
+                        return 0
+                    end
+                end < $rec
+            end
+            # the options, then the destination: the host's tic runs instead of any command of yours
+            set -l opts
+            set -l dest
+            set -l rest $argv
+            while set -q rest[1]
+                set -l a $rest[1]
+                set -e rest[1]
+                if test "$a" = --
+                    set dest $rest[1]
+                    break
+                else if string match -qr -- '^-[BbcDEeFIiJLlmOoPpQRSWw]$' $a
+                    set -a opts $a $rest[1]
+                    set -q rest[1]; and set -e rest[1]
+                else if string match -q -- '-*' $a
+                    set -a opts $a
+                else
+                    set dest $a
+                    break
+                end
+            end
+            test -n "$dest"; or return 0
+            if command infocmp -x xterm-ghostty 2>/dev/null | TERM=xterm-256color command ssh $opts -- $dest 'tic -x -'
+                set -g __drgnx_term xterm-ghostty
+            end
+            string replace -r '/[^/]*$' '' -- $rec | read -l dir
+            command mkdir -p $dir; and printf '%s %s\n' $key $__drgnx_term >> $rec
         end
     end
 end

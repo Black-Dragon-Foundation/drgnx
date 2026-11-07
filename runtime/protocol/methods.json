@@ -3875,6 +3875,11 @@
                 "default": false,
                 "type": "boolean"
               },
+              "bracketed_paste": {
+                "default": false,
+                "description": "The program asked for bracketed paste (mode 2004).",
+                "type": "boolean"
+              },
               "cursor": {
                 "description": "`[row_key, col, shape, visible]`: COL is a scalar index into the row's text.",
                 "maxItems": 4,
@@ -29462,13 +29467,19 @@
               },
               {
                 "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             ],
             "description": "A setting's value: a number, a flag or a string."
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`term/config`: live settings, `[name, value]` each (`scrollback-lines`, `scrollback-bytes`, `clipboard-write`).",
+        "description": "`term/config`: live settings, `[name, value]` each: `scrollback-lines`, `scrollback-bytes`, `clipboard-write`,\n`cursor-style`, `enquiry-response`, `title-report`, `grapheme-width-method`, and `colours`\n(`[fg, bg, cursor, c0 … c15]` as `#rrggbb`, \"\" for the built-in one: what a program reads back).",
         "properties": {
           "config": {
             "items": {
@@ -29770,6 +29781,12 @@
               },
               {
                 "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               }
             ],
             "description": "A setting's value: a number, a flag or a string."
@@ -29854,11 +29871,24 @@
             },
             "type": "array"
           },
+          "memory_max": {
+            "description": "The worker's scope's `MemoryMax` and `TasksMax` under a user systemd: a number, with K, M, G or T for memory\n(`drgnx-term-linux-cgroup-memory-limit`, `-processes-limit`); none: systemd's default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "rows": {
             "format": "uint16",
             "maximum": 65535,
             "minimum": 0,
             "type": "integer"
+          },
+          "tasks_max": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "window": {
             "description": "The rows above the screen the buffer keeps (`drgnx-term-scrollback-lines`).",

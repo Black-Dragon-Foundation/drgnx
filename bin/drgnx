@@ -55,8 +55,24 @@ cmd_doctor() { # [--json] [--dev] — checks run inside the Emacs drgnx uses (co
   return "$rc"
 }
 
-cmd_build() { # byte-compile core/, wb/, modules/, harness/ in place (core/drgnx-build.el)
+cmd_build() { # byte-compile core/, wb/, modules/, harness/ in place (core/drgnx-build.el), then the terminfo entry
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/core" -l drgnx-build -f drgnx-build-cli
+  local rc=$?
+  build_terminfo
+  return "$rc"
+}
+
+build_terminfo() { # Ghostty's xterm-ghostty entry, compiled into <data>/terminfo for drgnx's terminal (docs/guide/shell.md)
+  # Without tic, or when it fails, the terminal says TERM=xterm-256color instead: a note, never a failure
+  local src="$here/etc/shell/ghostty/terminfo/xterm-ghostty.terminfo" dir
+  dir="$(drgnx_dir data)/terminfo"
+  if ! command -v tic >/dev/null 2>&1; then
+    echo "drgnx build: no tic (ncurses): drgnx's terminal uses TERM=xterm-256color" >&2; return 0
+  fi
+  [[ -f "$dir/x/xterm-ghostty" && ! "$src" -nt "$dir/x/xterm-ghostty" ]] && return 0
+  mkdir -p "$dir" && tic -x -o "$dir" "$src" >/dev/null 2>&1 ||
+    echo "drgnx build: tic could not compile $src: drgnx's terminal uses TERM=xterm-256color" >&2
+  return 0
 }
 
 # --- drgnx runtime: Ratatoskr, built from source (runtime/; docs/develop/runtime.md) ----------------------------------
@@ -1468,10 +1484,11 @@ open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal
       files+=("${dir%/}/$(basename -- "$p")")
     fi
   done
+  if [[ -n "$wait" ]] && { ((${#dirs[@]})) || ! ((${#files[@]})); }; then
+    echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
+  fi
+  client -n -e "(progn (require 'drgnx-ai) (drgnx-ai-load-keys-soon))" >/dev/null 2>&1 || true   # as cmd_open: once per daemon
   if [[ -n "$wait" ]]; then
-    if ((${#dirs[@]})) || ! ((${#files[@]})); then
-      echo "drgnx: open --wait opens files, not folders: it returns when you are done with them (C-x #)" >&2; return 2
-    fi
     client -- "${files[@]}" >/dev/null; return   # until C-x #
   fi
   if ((${#files[@]})); then client -n -- "${files[@]}" >/dev/null || return 1; fi
@@ -1481,8 +1498,11 @@ open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal
 }
 
 cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
-  # In drgnx's terminal (eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new window or frame
-  if [[ "${INSIDE_EMACS:-}" == *eat* && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then open_here "$@"; return; fi
+  # In drgnx's terminal (DRGNX_TERMINAL, or eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new
+  # window or frame
+  if [[ ( -n "${DRGNX_TERMINAL:-}" || "${INSIDE_EMACS:-}" == *eat* ) && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then
+    open_here "$@"; return
+  fi
   if [[ "${1:-}" == --check ]]; then open_check; return; fi
   local wait="" term="" gui=""
   while true; do   # -t: a frame in this terminal; --gui: a window, whatever the terminal; --wait: until C-x #
@@ -2059,6 +2079,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx build runner-bundle [--arch x86_64|aarch64]
                                the static runner bundle (sleipnir, drgnx-key, drgnx-px) in runtime/target/bundle/ARCH
                                (docs/guide/runners.md)
+       drgnx build terminfo    Ghostty's terminfo entry for drgnx's terminal, into <data>/terminfo (drgnx build does it too)
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)
        drgnx update [--quiet]  update this install to GitHub main: fast-forward, then sync and build; the previous
@@ -2201,7 +2222,11 @@ USAGE
 case "${1:-help}" in
   doctor) shift; cmd_doctor "$@" ;;
   build) shift
-        if [[ "${1:-}" == runner-bundle ]]; then shift; rt_bundle "$@"; else cmd_build; fi ;;
+        case "${1:-}" in
+          runner-bundle) shift; rt_bundle "$@" ;;
+          terminfo) build_terminfo ;;
+          *) cmd_build ;;
+        esac ;;
   runtime) shift; cmd_runtime "$@" ;;
   test) shift; lease_self "$(lease_test_class "$@")" test "$@"; cmd_test "$@" ;;
   lease) shift; cmd_lease "$@" ;;
