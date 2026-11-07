@@ -294,6 +294,25 @@ call, no bus flush: the `windows-changed' `now' subscriber."
       (should (string-match-p "b\\.txt" (substring-no-properties (window-parameter w 'tab-line-format))))
       (should (string-match-p "b\\.txt" (format "%S" (window-parameter w 'header-line-format)))))))
 
+(ert-deftest drgnx-chrome/tab-line-memo-hits ()
+  "The tab line is made once for 20 self-inserts and 20 applies, and again when a tab's name or modified flag changes."
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((w (selected-window)) (made 0) (orig (symbol-function 'drgnx-chrome--tab-line-make)))
+      (cl-letf (((symbol-function 'drgnx-chrome--tab-line-make)
+                 (lambda (win) (setq made (1+ made)) (funcall orig win))))
+        (clrhash drgnx-chrome--tab-lines)
+        (set-buffer-modified-p nil)
+        (drgnx-chrome--tab-line w)
+        (should (= made 1))
+        (dotimes (_ 20) (goto-char (point-max)) (self-insert-command 1 ?x) (drgnx-chrome--tab-line w))
+        (should (= made 2))               ; the first insert flips the modified flag; the other 19 change nothing shown
+        (dotimes (_ 20) (drgnx-chrome-apply nil t))
+        (should (= made 2))
+        (rename-buffer "renamed.txt")
+        (should (string-search "renamed.txt" (drgnx-chrome--tab-line w)))
+        (should (= made 3))))))
+
 (ert-deftest drgnx-chrome/the-subscribers-repair-chrome-someone-else-changed ()
   "A window whose chrome was cleared is set again at the next observation; a panel gets its title-only chrome."
   (drgnx-chrome-test--with dir

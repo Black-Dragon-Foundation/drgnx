@@ -904,3 +904,12 @@ run it once, optimized and alone on a pinned host:
 `perf-exclusive.sh env DRGNX_PERF_CPUS=4 cargo test --release -p drgnx-ratatoskr --bench extensions -- --ignored --nocapture --test-threads 1`.
 
 Tests: `test/unit/perf-extensions-test.el` (every row has a budget and a fixture, the comparison measures both sides).
+
+## What typing rebuilds
+
+The status bar is built again when the position or the text changes (every keystroke), but the segments that show
+nothing of the text (branch, problems, language, encoding, `misc` ...: `drgnx-statusbar--steady`) are worked out once
+per window while their key (epochs, notice tick, mode, encoding, narrowing, layout) holds; `position`, `indent` and
+segments of your own run on every build. A window's tab line is kept while its tabs (names, files, modified flags),
+width and drawing settings hold. The Buffers list works out its shown buffers once per render, and the palette ranks its
+candidates from one read of the history (a hash, a sort of the few ranked, no comparison per candidate).
