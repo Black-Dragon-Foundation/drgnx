@@ -2242,8 +2242,10 @@ makes: the hub never grants `Open`) has no network but its sandbox's relay port,
 - **Pinned names.** The proxy resolves the names of `drgnx-sandbox-proxy-pinned-addresses` (a runtime setting,
   `ProxyPins`, from `settings.el` or the editor's `config/settings`; `agents::net::pins`) to their address instead of
   asking DNS; a pinned name may lead to a private address and must still be on the allowlist. A container job's
-  proxy pins the same names (`Caps.pins`, from `settings::containers::caps`; the runner protocol's `start` frame has
-  room for them, [sleipnir.md](sleipnir.md), for the hub's runner client to fill). A `test-hooks` build adds
+  proxy pins the same names (`Caps.pins`, from `settings::containers::caps`). A runner gets none (its `start` frame's
+  `pins` is always empty): a pin names an address on this machine's network, and a runner's proxy reaches only public
+  addresses. So a job whose granted hosts include a pinned name stays on this machine (`exec::pinned_host` sets
+  `local_only`), and a keyed one, which runs only on a runner, is refused at start (`exec::keyed_and_pinned`). A `test-hooks` build adds
   `DRGNX_TEST_PROXY_PINS` (`NAME=ADDR,…`), so a row reaches the mock LLM on loopback under a name.
 
 Rows: `test/conformance/sandbox-net/`. The real launch: `tests/launch_sandboxed.rs`

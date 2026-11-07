@@ -647,8 +647,8 @@ with `net_hosts` its proxy, the hosts written to `net-allow` and checked first (
 start (no image, a parser it doesn't know, an allow-list entry that is never reached, a bundle without `drgnx-key` or
 `drgnx-px` for a networked job, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
 run another way. `key` frames go to the helper ("Keys"), and the helper's `key-use` lines come back as `key-use`
-frames. The pins go into the job's caps (`Caps.pins`, as a local container job's come from
-`drgnx-sandbox-proxy-pinned-addresses`); the job helper's proxy doesn't pin by them yet.
+frames. The hub sends no pins (a pin names an address on the hub machine's network; a job that needs one stays there), and
+the job helper's proxy pins nothing.
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its

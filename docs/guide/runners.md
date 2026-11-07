@@ -192,7 +192,9 @@ settings:
   Your own settings only: a repository's files can never turn it on.
 
 A job marked `local_only`, or started with `machine: local`, never leaves this machine; `machine: NAME` pins it to one
-runner.
+runner. A job allowed to reach a name in `drgnx-sandbox-proxy-pinned-addresses` stays on this machine too: those
+addresses are on this machine's network, and a runner's proxy reaches only public ones. A job with keys runs only on
+a runner, so one that would reach a pinned name is refused when it is started, with that reason.
 
 ## What is sent where
 
