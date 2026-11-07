@@ -997,14 +997,18 @@ impl Inner {
     /// [`SHARED`] file: its summary is labelled, and it never counts for a gate.
     fn outcomes(self: &Arc<Self>, outs: Vec<Outcome>) {
         for o in outs {
-            let (id, verdict, shared, split) = match o {
+            let (id, verdict, shared, split, machine) = match o {
                 Outcome::Done {
-                    id, result, shared, ..
+                    id,
+                    result,
+                    shared,
+                    machine,
+                    ..
                 } => {
                     let split = result["split"].as_str().map(String::from);
-                    (id, queue::verdict_of(&result), shared, split)
+                    (id, queue::verdict_of(&result), shared, split, machine)
                 }
-                Outcome::Lost { id } => (id, None, None, None),
+                Outcome::Lost { id } => (id, None, None, None, None),
                 Outcome::Late { id, attempt, .. } => {
                     tracing::info!(
                         "job {id}: attempt {attempt} finished late; its result is kept, not applied"
@@ -1038,6 +1042,15 @@ impl Inner {
             }
             if let Some(line) = split {
                 write(SPLIT, &line);
+            }
+            // the queue forgets the job now: its row keeps the runner it ran on
+            if let Some(n) = machine
+                && let Some(mut m) = self.meta(&id)
+            {
+                m.machine = Some(n);
+                if let Err(e) = self.save_meta(&m) {
+                    tracing::warn!("job {id}: its machine not kept: {}", e.message);
+                }
             }
             let me = self.clone();
             crate::clock::spawn("exec:remote-end", async move { me.finish(&id).await });

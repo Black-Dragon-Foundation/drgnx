@@ -1102,6 +1102,7 @@ async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
         attempt: 1,
         result: json!({"verdict": "Pass"}),
         shared: shared.map(String::from),
+        machine: Some(shared.unwrap_or("desk").into()),
     };
     r.inner
         .get()
@@ -1126,6 +1127,9 @@ async fn a_shared_runners_result_is_labelled_and_never_counts_for_a_gate() {
     );
     assert!(r.counts_for_gates(&mine));
     assert!(!r.counts_for_gates("xunknown"));
+    // a done row still names the runner it ran on, once the queue has forgotten the job
+    assert_eq!(r.get(&mine).unwrap().machine.as_deref(), Some("desk"));
+    assert_eq!(r.get(&shared).unwrap().machine.as_deref(), Some("uni-box"));
 }
 
 /// [D] (files and a store): a queued job an older hub left as `pending.json` is read into `rq_job` once, its file

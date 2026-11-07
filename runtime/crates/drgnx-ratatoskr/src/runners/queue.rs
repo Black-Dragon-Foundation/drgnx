@@ -280,6 +280,8 @@ pub enum Outcome {
         attempt: u32,
         result: Value,
         shared: Option<String>,
+        /// The runner it ran on, kept in the job's row once the queue has forgotten it.
+        machine: Option<String>,
     },
     /// The job's runner is gone and the job isn't restartable.
     Lost { id: String },
@@ -2898,6 +2900,7 @@ impl Queue {
                         attempt,
                         result,
                         shared,
+                        machine: runner,
                     });
                 }
                 Effect::Requeue { job, reason } => {
@@ -2939,6 +2942,8 @@ impl Queue {
                                     .get(r)
                                     .is_some_and(|x| x.r.trust == RunnerTrust::Shared)
                             });
+                        // requeued, so its row no longer names the runner: the attempt's does
+                        let machine = st.attempts.attempt(&job, n).map(|a| a.runner.clone());
                         st.jobs.remove(&job);
                         st.attempts.forget(&job);
                         self.drop_job(&job);
@@ -2947,6 +2952,7 @@ impl Queue {
                             attempt: n,
                             result,
                             shared,
+                            machine,
                         });
                     }
                 }
@@ -3369,6 +3375,7 @@ mod tests {
                 attempt: 1,
                 result,
                 shared: None,
+                ..
             },
         ] = &out[..]
         else {
