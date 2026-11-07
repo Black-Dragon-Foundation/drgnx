@@ -1,12 +1,14 @@
-//! An agent's edited files, with counts and hunks, from snapshots alone (the interim before the edit history).
+//! An agent's edited files, with counts and hunks, from the edit history.
 //!
-//! Every number here is a diff between two trees of the worktree's shadow repository: the base tree the hub took when
-//! it made the worktree (`worktree_base.base_tree`) and the tree of a step snapshot. The agent's own tree is never
-//! asked: step snapshots are written with `add -A`, so a file the agent created (untracked in git's terms) is in the
-//! tree and counts as new.
+//! `work/files`, `work/hunks` and `work/file-at` read the worktree's branch in the project's `history.db` (its
+//! documents against the branch's base commit, `history::views`). The agent's folder is never asked. Text files only:
+//! whole-file versions (binary, large, generated, locks) are not in the document store, so they are not listed.
+//! The buffer view's gutter and the three-way projection still read the step snapshots ([`changed_lines`],
+//! [`base_of`]).
 
 use crate::dispatch::Caller;
 use crate::front::Front;
+use crate::history::{Hub, Tree};
 use crate::timeline::snapshot::{self, FileCount};
 use norn::read::steps as table;
 use runstav::methods::work::{
@@ -15,14 +17,22 @@ use runstav::methods::work::{
 use runstav::wire::Error;
 use std::path::{Path, PathBuf};
 
-/// The files that differ between BASE_TREE and TREE.
-pub fn changed_files(
-    root: &Path,
-    worktree: &Path,
-    base_tree: &str,
-    tree: &str,
-) -> Result<Vec<FileCount>, String> {
-    snapshot::numstat(root, worktree, base_tree, tree)
+/// TREE's files the edit history says the agent changed against the branch's base, with the base commit; none while
+/// the history holds no branch for the tree.
+pub fn from_history(hub: &Hub, tree: &Tree) -> Result<Option<(String, Vec<FileCount>)>, String> {
+    let found = hub.edits_against_base(tree).map_err(|e| e.to_string())?;
+    Ok(found.map(|(base, files)| {
+        let files = files
+            .into_iter()
+            .map(|c| FileCount {
+                path: c.path,
+                plus: c.plus,
+                minus: c.minus,
+                untracked: c.untracked,
+            })
+            .collect();
+        (base, files)
+    }))
 }
 
 /// PATH's bytes in TREE.
@@ -124,38 +134,44 @@ async fn ground(f: &Front, session: &str) -> Result<Ground, Error> {
     })
 }
 
-/// What the latest step snapshot changed against the base: the base tree, the snapshot's step, and the files. None
-/// before the session's first snapshot.
+/// What the edit history says the session's agent changed against its branch's base: the base commit and the files.
+/// None while the history holds no branch for the session's worktree.
 pub struct Changed {
     pub base: String,
-    pub seq: u64,
     pub files: Vec<FileCount>,
 }
 
-async fn changed_in(g: Ground) -> Result<Option<(Ground, Changed)>, Error> {
-    let Some((seq, tree)) = g.snaps.last().cloned() else {
-        return Ok(None);
-    };
-    let (root, wt, base) = (g.root.clone(), g.worktree.clone(), g.base.clone());
-    let files = crate::clock::blocking(move || changed_files(&root, &wt, &base, &tree))
-        .await
-        .map_err(|e| fail(e.to_string()))?
-        .map_err(fail)?;
-    let base = g.base.clone();
-    Ok(Some((g, Changed { base, seq, files })))
+/// The history of SESSION's project and its worktree's tree.
+fn history_of(f: &Front, session: &str) -> Result<(std::sync::Arc<Hub>, Tree), Error> {
+    let worktree = f
+        .core
+        .agents
+        .worktree(session)
+        .ok_or_else(|| fail(format!("no session {session}")))?;
+    let state = f
+        .dirs
+        .get()
+        .ok_or_else(|| fail("the hub keeps no history here"))?
+        .hub
+        .clone();
+    f.core.history.of_tree(&state, &worktree)
 }
 
 /// The session's changed files now, for the map's `Changed` fact.
 pub async fn changed(f: &Front, session: &str) -> Result<Option<Changed>, Error> {
-    Ok(changed_in(ground(f, session).await?).await?.map(|(_, c)| c))
+    let (hub, tree) = history_of(f, session)?;
+    let found = crate::clock::blocking(move || from_history(&hub, &tree))
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(fail)?;
+    Ok(found.map(|(base, files)| Changed { base, files }))
 }
 
 /// `work/files`.
 pub async fn files(f: &Front, _: &Caller, p: EditedFiles) -> Result<EditedFilesList, Error> {
-    let g = ground(f, p.session.as_str()).await?;
-    let files = changed_in(g)
+    let files = changed(f, p.session.as_str())
         .await?
-        .map(|(_, c)| c.files)
+        .map(|c| c.files)
         .unwrap_or_default()
         .into_iter()
         .map(|c| EditedFile {
@@ -173,18 +189,11 @@ pub async fn files(f: &Front, _: &Caller, p: EditedFiles) -> Result<EditedFilesL
 pub async fn hunks(f: &Front, _: &Caller, p: HunksParams) -> Result<Hunks, Error> {
     let path = p.path.into_inner();
     check_path(&path).map_err(fail)?;
-    let g = ground(f, p.session.as_str()).await?;
-    let Some((_, tree)) = g.snaps.last().cloned() else {
-        return Ok(Hunks {
-            diff: String::new(),
-        });
-    };
-    let diff = crate::clock::blocking(move || {
-        snapshot::patch(&g.root, &g.worktree, &g.base, &tree, &path)
-    })
-    .await
-    .map_err(|e| fail(e.to_string()))?
-    .map_err(fail)?;
+    let (hub, tree) = history_of(f, p.session.as_str())?;
+    let diff = crate::clock::blocking(move || hub.diff_against_base(&tree, &path))
+        .await
+        .map_err(|e| fail(e.to_string()))?
+        .map_err(|e| fail(e.to_string()))?;
     Ok(Hunks { diff })
 }
 
@@ -233,14 +242,13 @@ pub async fn changed_lines(
 pub async fn file_at(f: &Front, _: &Caller, p: FileAtParams) -> Result<FileAt, Error> {
     let path = p.path.into_inner();
     check_path(&path).map_err(fail)?;
-    let g = ground(f, p.session.as_str()).await?;
-    let Some((seq, tree)) = g.snaps.iter().rev().find(|(s, _)| *s <= p.seq).cloned() else {
-        return Err(fail(format!("no snapshot at or before step {}", p.seq)));
-    };
-    let bytes = crate::clock::blocking(move || file_blob(&g.root, &g.worktree, &tree, &path))
+    let (hub, tree) = history_of(f, p.session.as_str())?;
+    let (session, seq) = (p.session.as_str().to_owned(), p.seq);
+    let found = crate::clock::blocking(move || hub.file_at_step(&tree, &path, &session, seq))
         .await
         .map_err(|e| fail(e.to_string()))?
-        .map_err(fail)?;
+        .map_err(|e| fail(e.to_string()))?;
+    let (bytes, seq) = found.ok_or_else(|| fail("no such file at that step"))?;
     Ok(FileAt {
         bytes: base64(&bytes),
         seq,
@@ -259,59 +267,112 @@ mod tests {
         (d, root, wt)
     }
 
-    /// Pattern D: counts are the latest step tree against the recorded base, and a file that did not change is not
-    /// listed.
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    struct Fx {
+        repo: tempfile::TempDir,
+        _hist: tempfile::TempDir,
+        hub: crate::history::Hub,
+        tree: crate::history::Tree,
+    }
+
+    fn fx(files: &[(&str, &str)]) -> Fx {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q", "-b", "main"]);
+        for (p, t) in files {
+            let f = repo.path().join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        }
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-q", "-m", "base"]);
+        let head = git(repo.path(), &["rev-parse", "HEAD"]);
+        let hist = tempfile::tempdir().unwrap();
+        let hub = crate::history::Hub::open(hist.path()).unwrap();
+        let tree = crate::history::Tree::new(repo.path(), &repo.path().join(".git"), Some(&head));
+        Fx {
+            repo,
+            _hist: hist,
+            hub,
+            tree,
+        }
+    }
+
+    /// The agent writes REL: the file on disk and the history's record of it.
+    fn write(f: &Fx, rel: &str, text: &str, step: &str, at: f64) {
+        let p = f.repo.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+        let cause = verdandi::Cause {
+            session: Some("s1".into()),
+            step: Some(step.into()),
+            ..Default::default()
+        };
+        f.hub
+            .on_agent_write(&f.tree, rel, text.as_bytes(), "s1", cause, at)
+            .unwrap();
+    }
+
+    fn counts(f: &Fx) -> Vec<(String, u32, u32, bool)> {
+        from_history(&f.hub, &f.tree)
+            .unwrap()
+            .expect("the branch")
+            .1
+            .into_iter()
+            .map(|c| (c.path, c.plus, c.minus, c.untracked))
+            .collect()
+    }
+
+    /// Pattern D: the history's counts are what git's numstat says of the folder against the base, and a file that
+    /// did not change is not listed.
     #[test]
-    fn counts_against_the_recorded_base() {
-        let (_d, root, wt) = dirs();
-        std::fs::write(wt.join("a.txt"), "one\ntwo\nthree\n").unwrap();
-        std::fs::write(wt.join("same.txt"), "x\n").unwrap();
-        let base = take_base(&root, &wt, "job/1-1").unwrap();
-        std::fs::write(wt.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
-        let t1 = take(&root, &wt, "s1", 1, &[]).unwrap();
-        std::fs::write(wt.join("a.txt"), "one\n2\nthree\nfour\nfive\n").unwrap();
-        let t2 = take(&root, &wt, "s1", 2, &[]).unwrap();
-        let at = |t: &str| changed_files(&root, &wt, &base, t).unwrap();
+    fn from_history_equals_the_interim_on_the_fixture() {
+        let f = fx(&[("a.txt", "one\ntwo\nthree\n"), ("same.txt", "x\n")]);
+        write(&f, "a.txt", "one\n2\nthree\nfour\n", "1", 10.0);
+        write(&f, "a.txt", "one\n2\nthree\nfour\nfive\n", "2", 11.0);
+        assert_eq!(counts(&f), [("a.txt".to_string(), 3, 1, false)]);
+        let num = git(f.repo.path(), &["diff", "--numstat", "HEAD"]);
+        assert_eq!(num, "3\t1\ta.txt");
+        // the diff of one file is its hunk against the base
+        let d = f.hub.diff_against_base(&f.tree, "a.txt").unwrap();
+        assert!(d.contains("-two\n+2\n"), "{d}");
+        assert!(d.contains("+five\n"), "{d}");
+        // a file at a step is the text after that step's record
+        let at = |seq| f.hub.file_at_step(&f.tree, "a.txt", "s1", seq).unwrap();
+        assert_eq!(at(1), Some((b"one\n2\nthree\nfour\n".to_vec(), 1)));
+        assert_eq!(at(1000).map(|a| a.1), Some(2));
+        // a file nothing touched is the base's, at the newest step
+        let kept = f.hub.file_at_step(&f.tree, "same.txt", "s1", 5).unwrap();
+        assert_eq!(kept, Some((b"x\n".to_vec(), 2)));
         assert_eq!(
-            at(&t1)
-                .iter()
-                .map(|f| (f.plus, f.minus))
-                .collect::<Vec<_>>(),
-            [(2, 1)]
-        );
-        let latest = at(&t2);
-        assert_eq!(latest.len(), 1);
-        assert_eq!(
-            (
-                latest[0].path.as_str(),
-                latest[0].plus,
-                latest[0].minus,
-                latest[0].untracked
-            ),
-            ("a.txt", 3, 1, false)
+            f.hub.file_at_step(&f.tree, "none.txt", "s1", 5).unwrap(),
+            None
         );
     }
 
     /// Pattern D: a file the agent created after the base is listed, marked new, and counted by its lines.
     #[test]
-    fn untracked_new_file_counts() {
-        let (_d, root, wt) = dirs();
-        std::fs::write(wt.join("a.txt"), "one\n").unwrap();
-        let base = take_base(&root, &wt, "k").unwrap();
-        std::fs::create_dir_all(wt.join("sub")).unwrap();
-        std::fs::write(wt.join("sub/new.txt"), "a\nb\nc\n").unwrap();
-        let t = take(&root, &wt, "s1", 1, &[]).unwrap();
-        let got = changed_files(&root, &wt, &base, &t).unwrap();
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(
-            (
-                got[0].path.as_str(),
-                got[0].plus,
-                got[0].minus,
-                got[0].untracked
-            ),
-            ("sub/new.txt", 3, 0, true)
-        );
+    fn untracked_counts_from_history() {
+        let f = fx(&[("a.txt", "one\n")]);
+        write(&f, "sub/new.txt", "a\nb\nc\n", "1", 10.0);
+        assert_eq!(counts(&f), [("sub/new.txt".to_string(), 3, 0, true)]);
     }
 
     /// Pattern D: the diff of one file is its hunk against the base, and the worktree is not asked.

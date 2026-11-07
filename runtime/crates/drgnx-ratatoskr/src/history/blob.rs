@@ -95,6 +95,26 @@ pub fn changed_paths(
         .collect())
 }
 
+/// The paths of the work tree that differ from its head: changed, deleted and untracked (not ignored) files.
+pub fn dirty_paths(git_dir: &Path, work_tree: &Path) -> Result<Vec<String>, String> {
+    let mut c = base(git_dir, work_tree);
+    c.current_dir(work_tree).args([
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--no-renames",
+    ]);
+    let out = run(c, None)?;
+    // `-z` with no renames: one "XY path" per record
+    Ok(String::from_utf8_lossy(&out)
+        .split('\0')
+        .filter_map(|r| r.get(3..))
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Whether git ignores REL (`.gitignore` and the like).
 pub fn is_ignored(git_dir: &Path, work_tree: &Path, rel: &str) -> bool {
     let mut c = base(git_dir, work_tree);

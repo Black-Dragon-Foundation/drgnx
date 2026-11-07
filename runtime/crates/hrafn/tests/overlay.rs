@@ -435,7 +435,7 @@ async fn uncertain_blob_writes_the_row() {
     )
     .await;
     // the checkout's index is racy (files as new as it): backdate them and refresh it, so b.txt is stat-clean
-    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let then = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
     for p in ["a.txt", "b.txt"] {
         let file = std::fs::File::options()
             .write(true)

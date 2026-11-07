@@ -429,6 +429,27 @@ pub struct FilesParams {
     pub ignore: Option<GrepIgnore>,
 }
 
+/// `search/symbol-at`: the name of the innermost symbol that FILE (relative to ROOT, read from disk) defines around
+/// LINE, from Hrafn's outline of it; what the editor's agent line shows for a buffer that is saved.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolAtParams {
+    pub root: AbsPath,
+    /// Relative to ROOT, inside it.
+    pub file: String,
+    /// From 1.
+    pub line: u32,
+}
+
+/// `search/symbol-at`'s answer: NAME is absent when no symbol holds the line (or the file is not read: missing, larger
+/// than 2 MB).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolAt {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
 /// `search/files`'s answer: QUERY numbers the query.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -472,6 +493,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/files", SearchFiles(FilesParams) -> FilesStarted,
             classes: [User], writes: false,
             doc: "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
+        ),
+        method!(
+            "search/symbol-at", SearchSymbolAt(SymbolAtParams) -> SymbolAt,
+            classes: [User], writes: false,
+            doc: "the name of the innermost symbol a file (read from disk) defines around a line, from Hrafn's outline; none outside every symbol",
         ),
         method!(
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,

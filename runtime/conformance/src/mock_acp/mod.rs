@@ -7,6 +7,7 @@
 //! | line | what the turn does |
 //! |---|---|
 //! | `tool:read PATH` / `tool:edit PATH` / `tool:exec CMD` | a tool call (pending, then completed) that does it in the session's cwd (edit appends a line) |
+//! | `tool:run CMD` | an execute call announced pending, then CMD runs in the cwd, then completed: the call lasts as long as CMD |
 //! | `provider:read FILE [OFFSET LIMIT]` / `provider:grep PAT` / `provider:web-search Q` / `provider:web-fetch URL` / `provider:write FILE` | a tool call in the personality's own shape (Claude: `_meta.claudeCode.toolName`, `locations`, `rawInput`; Codex: kind and `action`; Gemini: kind and title only); nothing runs |
 //! | `provider:bash CMD` (Claude) | a `Bash` call: pending, then CMD run as Claude Code runs it (through `$CLAUDE_CODE_SHELL_PREFIX` with CMD as its one argument, else `sh -c`), then completed with its output |
 //! | `provider:edit-stream PATH OLD NEW` (Claude) | an `Edit`: the path first, then `rawInput` field by field, then completed with a `Diff` (quote an argument to keep its spaces) |
@@ -1014,6 +1015,22 @@ impl Agent {
             "tool:exec" => {
                 let out = sh(&cwd, rest);
                 self.tool(sid, turn, "execute", rest, json!({"command": rest}), &out);
+            }
+            // a call that runs as long as its command: pending first, then the command, then completed
+            "tool:run" => {
+                let tid = format!("tc-{turn}-{}", self.next_out_id);
+                self.next_out_id += 1;
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call", "toolCallId": tid, "title": rest,
+                    "kind": "execute", "status": "pending", "rawInput": {"command": rest}}),
+                );
+                let out = sh(&cwd, rest);
+                self.update(
+                    sid,
+                    json!({"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": "completed",
+                    "content": [{"type": "content", "content": {"type": "text", "text": out}}]}),
+                );
             }
             "ask:permission" => {
                 let kind = if rest.is_empty() { "execute" } else { rest };

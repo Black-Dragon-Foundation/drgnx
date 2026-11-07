@@ -1000,7 +1000,7 @@ async fn removed_worktree_drops_its_overlay() {
         .into_iter()
         .map(|t| t.key)
         .collect();
-    assert_eq!(held, [b.clone()]);
+    assert_eq!(held, std::slice::from_ref(&b));
     assert!(tree_rows(&p, &a).await.is_empty());
     assert_eq!(tree_rows(&p, &b).await.len(), 1);
 }

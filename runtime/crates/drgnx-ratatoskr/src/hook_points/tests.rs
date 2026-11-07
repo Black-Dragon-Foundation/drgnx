@@ -13,6 +13,7 @@ use norn::write::event::{DATA_MAX, Event, EventKind, event};
 use runstav::registry::Class;
 
 mod after_edit;
+mod commit_review;
 
 fn writer(dir: &std::path::Path) -> Writer {
     Writer {

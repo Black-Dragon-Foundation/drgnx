@@ -178,6 +178,7 @@
   "search/server-start": ["user"],
   "search/server-stop": ["user"],
   "search/status": ["user"],
+  "search/symbol-at": ["user"],
   "search/typing": ["user"],
   "settings/confirm": ["user"],
   "settings/explained": ["user"],

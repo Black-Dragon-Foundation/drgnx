@@ -364,6 +364,51 @@ pub(crate) fn versions(tree: &Tree, staged: Vec<Staged>, op: i64) -> Vec<FileVer
         .collect()
 }
 
+/// A session's tool calls and step claims, as the hold over its tree's watcher events reads them: the session sets
+/// `call` while a tool call runs and counts the steps it closes (`sent`); its claim stage counts the steps it has
+/// claimed.  Busy while a call runs or a closed step is not claimed yet.
+#[derive(Debug, Default)]
+pub struct Flight {
+    pub call: std::sync::atomic::AtomicBool,
+    pub sent: std::sync::atomic::AtomicU64,
+    pub claimed: std::sync::atomic::AtomicU64,
+}
+
+impl Flight {
+    pub fn busy(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.call.load(SeqCst) || self.claimed.load(SeqCst) < self.sent.load(SeqCst)
+    }
+}
+
+/// An agent session working in a tree ([`Hub::attach_agent`]); dropped when the session ends, which ends its hold.
+pub struct Attached {
+    hub: std::sync::Arc<Hub>,
+    tree: String,
+    flight: std::sync::Arc<Flight>,
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        let mut g = self.hub.lock();
+        if let Some(v) = g.flights.get_mut(&self.tree) {
+            v.retain(|f| !std::sync::Arc::ptr_eq(f, &self.flight));
+            if v.is_empty() {
+                g.flights.remove(&self.tree);
+            }
+        }
+    }
+}
+
+impl Inner {
+    /// A session working in TREE has a tool call running or a step not claimed yet.
+    fn busy(&self, tree: &str) -> bool {
+        self.flights
+            .get(tree)
+            .is_some_and(|v| v.iter().any(|f| f.busy()))
+    }
+}
+
 fn user() -> (String, Value) {
     ("user".to_owned(), json!({"kind": "user"}))
 }
@@ -450,9 +495,36 @@ impl Hub {
         Ok(v)
     }
 
-    /// The watcher saw REL change.
+    /// The watcher saw REL change.  While a session working in TREE has a tool call running (or a closed step not
+    /// claimed yet), the event is held for the step to claim ([`Self::claim`]); [`Self::release_held`] records what no
+    /// step claimed once none is busy.
     pub fn on_disk_change(&self, tree: &Tree, rel: &str, now: f64) -> Result<Vec<FileVersion>> {
+        {
+            let mut g = self.lock();
+            if g.busy(&tree.id.0) {
+                let held = g.held.entry(tree.id.0.clone()).or_default();
+                if !held.iter().any(|r| r == rel) {
+                    held.push(rel.to_owned());
+                }
+                return Ok(Vec::new());
+            }
+        }
         self.observe(tree, &[rel.to_owned()], Src::Watch, now)
+    }
+
+    /// The held events of TREE once no session there is busy: outside changes, recorded at NOW.
+    pub fn release_held(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
+        let due = {
+            let mut g = self.lock();
+            if g.busy(&tree.id.0) {
+                return Ok(Vec::new());
+            }
+            g.held.remove(&tree.id.0).unwrap_or_default()
+        };
+        if due.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.observe(tree, &due, Src::Watch, now)
     }
 
     /// A step-boundary rescan of RELS.
@@ -460,9 +532,99 @@ impl Hub {
         self.observe(tree, rels, Src::Rescan, now)
     }
 
-    /// A rescan of every path the hub knows a version of.
+    /// The claim of a step of the agent SESSION that may have written files (CAUSE: the session and the step), as it
+    /// closes: the files it NAMED, the paths of the watcher's events held while it ran, and with DIRTY every path that
+    /// differs from TREE's head (a shell step names none; plain git, so only a tree the hub watches), rescanned.  A new
+    /// version is the agent's, one record of the step; one the history holds already is none.
+    #[allow(clippy::too_many_arguments)]
+    pub fn claim(
+        &self,
+        tree: &Tree,
+        named: &[String],
+        dirty: bool,
+        session: &str,
+        cause: Cause,
+        now: f64,
+    ) -> Result<Vec<FileVersion>> {
+        let mut rels: Vec<String> = named.to_vec();
+        if dirty {
+            for r in blob::dirty_paths(&tree.git_dir, &tree.root).map_err(refused)? {
+                if !rels.contains(&r) {
+                    rels.push(r);
+                }
+            }
+        }
+        let (key, author) = agent(session);
+        let mut g = self.lock();
+        for r in g.held.remove(&tree.id.0).unwrap_or_default() {
+            if !rels.contains(&r) {
+                rels.push(r);
+            }
+        }
+        if rels.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut staged = Vec::new();
+        for rel in &rels {
+            staged.extend(g.stage(tree, rel, read(tree, rel), Src::Rescan, &key, &author)?);
+        }
+        let summary = match staged.as_slice() {
+            [one] => format!("agent's tool wrote {}", one.path),
+            _ => format!("agent's tool wrote {} files", staged.len()),
+        };
+        let v = g.finish(
+            tree,
+            Kind::AgentStep,
+            &key,
+            &author,
+            cause,
+            summary,
+            staged,
+            now,
+        )?;
+        drop(g);
+        self.publish(&v);
+        Ok(v)
+    }
+
+    /// An agent session works in TREE until the guard is dropped: while FLIGHT is busy, the watcher's events there are
+    /// held for its steps to claim.
+    pub fn attach_agent(
+        self: &std::sync::Arc<Self>,
+        tree: &Tree,
+        flight: std::sync::Arc<Flight>,
+    ) -> Attached {
+        self.lock()
+            .flights
+            .entry(tree.id.0.clone())
+            .or_default()
+            .push(flight.clone());
+        Attached {
+            hub: self.clone(),
+            tree: tree.id.0.clone(),
+            flight,
+        }
+    }
+
+    /// A rescan of every path that differs from TREE's head (its uncommitted state when the watcher starts): what the
+    /// history already holds is no new version.  Plain git runs in TREE: never one a sandboxed agent worked in.
+    pub fn rescan_dirty(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
+        let rels = blob::dirty_paths(&tree.git_dir, &tree.root).map_err(refused)?;
+        if rels.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.rescan(tree, &rels, now)
+    }
+
+    /// A rescan of every path the hub knows a version of (a held one waits for its step).
     pub fn rescan_known(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
-        let rels = self.lock().origin.paths(&tree.id.0);
+        let rels = {
+            let g = self.lock();
+            let held = g.held.get(&tree.id.0);
+            let mut rels = g.origin.paths(&tree.id.0);
+            rels.retain(|r| !held.is_some_and(|h| h.contains(r)));
+            rels
+        };
         self.rescan(tree, &rels, now)
     }
 

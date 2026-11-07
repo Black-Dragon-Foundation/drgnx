@@ -950,6 +950,40 @@ fn worker_status(b: Option<&WorkerEmbedder>) -> w::WorkerStatus {
     }
 }
 
+/// The largest file `search/symbol-at` reads.
+const SYMBOL_AT_MAX: u64 = 2_000_000;
+
+/// `search/symbol-at`: FILE read and outlined off the runtime's threads; a file that is missing, too large or outside
+/// ROOT names nothing.
+async fn symbol_at(a: w::SymbolAtParams) -> Result<w::SymbolAt, Error> {
+    let rel = Path::new(&a.file);
+    if a.file.is_empty()
+        || rel.is_absolute()
+        || rel
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err(Error {
+            code: ErrorCode::InvalidParams,
+            message: "a path relative to root, inside it".into(),
+            path: Some("file".into()),
+        });
+    }
+    let path = Path::new(a.root.as_str()).join(rel);
+    let name = crate::clock::blocking(move || {
+        let small = std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= SYMBOL_AT_MAX);
+        let bytes = if small {
+            std::fs::read(&path).ok()?
+        } else {
+            return None;
+        };
+        hrafn::chunk::symbol_at_line(&a.file, &String::from_utf8_lossy(&bytes), a.line)
+    })
+    .await
+    .unwrap_or(None);
+    Ok(w::SymbolAt { name })
+}
+
 /// P served by the search methods, or handed back (not one of theirs).
 pub async fn serve(
     front: &Front,
@@ -983,6 +1017,7 @@ pub async fn serve(
         Params::SearchServerPlan(k) => hub.server_plan(k.kind).await.map(|p| json!(p)),
         Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),
         Params::SearchServerStop(k) => hub.server_stop(k.kind).await.map(|r| json!(r)),
+        Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

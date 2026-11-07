@@ -276,6 +276,15 @@ impl OpenStep {
         self.class == StepClass::Tool
             && matches!(self.tool_kind.as_deref(), Some("edit" | "delete" | "move"))
     }
+
+    /// A tool call that may have written files (any kind but read, search, fetch, think): its edits are claimed.
+    fn may_write(&self) -> bool {
+        self.class == StepClass::Tool
+            && !matches!(
+                self.tool_kind.as_deref(),
+                Some("read" | "search" | "fetch" | "think" | "switch_mode")
+            )
+    }
 }
 
 /// A step that ended, waiting to be written to the `step` table and announced.
@@ -2275,24 +2284,34 @@ fn assemble(
             .get()
             .map(|d| (front.core.history.clone(), d.hub.clone())),
     };
-    tokio::spawn(write_steps(
-        rx,
-        StepSink {
-            writer: front.writer.clone(),
-            editors: front.editors.clone(),
-            bus,
-            snap: crate::timeline::Snap::of(front),
-            scopes: Some(front.core.runs.scopes()),
-            tools: Some(front.tools.clone()),
-            asks: Some(front.core.asks.handle()),
-            stamps: Some(front.core.stamps.clone()),
-            presence: Some(front.core.presence.clone()),
-            map: Some(front.core.map.clone()),
-            traces: Some(front.core.traces.clone()),
-            predict: Some(front.core.predict.clone()),
-        },
-        ctx,
-    ));
+    // the steps are claimed as they close, then written; both are the clock's tasks, so a test's barrier settles a
+    // step's claim, its row and what its writer starts (the conflict prediction) before it goes on
+    let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
+    crate::clock::spawn(
+        "session:claims",
+        claim_steps(rx, claimed, ctx.clone(), Some(front.core.runs.git())),
+    );
+    crate::clock::spawn(
+        "session:steps",
+        write_steps(
+            rx_claimed,
+            StepSink {
+                writer: front.writer.clone(),
+                editors: front.editors.clone(),
+                bus,
+                snap: crate::timeline::Snap::of(front),
+                scopes: Some(front.core.runs.scopes()),
+                tools: Some(front.tools.clone()),
+                asks: Some(front.core.asks.handle()),
+                stamps: Some(front.core.stamps.clone()),
+                presence: Some(front.core.presence.clone()),
+                map: Some(front.core.map.clone()),
+                traces: Some(front.core.traces.clone()),
+                predict: Some(front.core.predict.clone()),
+            },
+            ctx,
+        ),
+    );
     // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
     if let Some(d) = front.dirs.get() {
         crate::clock::spawn(
@@ -2304,6 +2323,13 @@ fn assemble(
                 i.cwd.clone(),
             ),
         );
+    }
+    // the project's one watcher reaches the edit history of the session's folder: what the agent's own tools write
+    if let Some(fa) = front.tool_hub.front() {
+        let cwd = i.cwd.clone();
+        crate::clock::spawn("session:history-watch", async move {
+            crate::history::wire::watch_folder(&fa, &cwd).await;
+        });
     }
     // its identity: the lowest free ordinal of its workspace, and a handle unique there
     let identities = front.core.agents.identities.clone();
@@ -2849,6 +2875,8 @@ pub(crate) async fn resume_closed(
 pub(crate) struct StepFlow {
     sent: AtomicU64,
     written: tokio::sync::watch::Sender<u64>,
+    /// The session's tool call running and its steps claimed, for the hold over its tree's watcher events.
+    flight: Arc<crate::history::Flight>,
 }
 
 impl Default for StepFlow {
@@ -2856,11 +2884,13 @@ impl Default for StepFlow {
         StepFlow {
             sent: AtomicU64::new(0),
             written: tokio::sync::watch::channel(0).0,
+            flight: Arc::default(),
         }
     }
 }
 
 /// What a session's step rows say of it.
+#[derive(Clone)]
 struct StepCtx {
     /// Counts the rows written, for [`StepFlow`].
     flow: Arc<StepFlow>,
@@ -3255,7 +3285,10 @@ async fn anchor(
     let edit = open.is_edit();
     let turn_start = turn_start || before.is_some();
     let history_op = if edit || turn_start {
-        newest_record(ctx, end).await
+        newest_record(ctx, end, None).await
+    } else if open.may_write() {
+        // a shell (or other) call anchors only a record it made itself
+        newest_record(ctx, end, Some(open.key)).await
     } else {
         None
     };
@@ -3319,17 +3352,112 @@ async fn anchor(
     (snapshot, head, history_op)
 }
 
+/// The steps a session closes, claimed in order as they close, then on to the writer task (TX): a tool step that may
+/// have written files (any kind but read, search, fetch, think) claims its edits in the project's edit history
+/// ([`crate::history::Hub::claim`]): the files it named, the watcher's events held while its call ran, and, when GIT
+/// says no sandboxed agent touched the tree, every path that differs from the head (a shell step names none).  The record is the session's,
+/// caused by the step, so the step's `history_op` ([`anchor`]) is its own.  While the session runs, its flight holds
+/// the watcher's events in its tree ([`crate::history::Flight`]).
+async fn claim_steps(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
+    tx: tokio::sync::mpsc::UnboundedSender<ClosedStep>,
+    ctx: StepCtx,
+    git: Option<Arc<dyn crate::runner::RunGit>>,
+) {
+    let flight = ctx.flow.flight.clone();
+    // plain git (the look at what differs from the head) never runs in a tree a sandboxed agent touched
+    let plain_git = match git {
+        Some(g) => !g.is_touched(&ctx.cwd).await.unwrap_or(true),
+        None => false,
+    };
+    let found = match ctx.history.clone() {
+        Some((hubs, state)) => {
+            let cwd = ctx.cwd.clone();
+            crate::clock::blocking(move || hubs.of_tree(&state, &cwd).ok())
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
+    let _attached = found
+        .as_ref()
+        .map(|(hub, tree)| hub.attach_agent(tree, flight.clone()));
+    while let Some(c) = rx.recv().await {
+        if let (true, Some((hub, tree))) = (c.open.may_write(), &found) {
+            let named = named_rels(&ctx.cwd, &c);
+            let cause = verdandi::Cause {
+                session: Some(ctx.session.clone()),
+                step: Some(c.open.key.to_string()),
+                ..Default::default()
+            };
+            let (hub, tree, sid, end) = (hub.clone(), tree.clone(), ctx.session.clone(), c.end);
+            let r = crate::clock::blocking(move || {
+                hub.claim(&tree, &named, plain_git, &sid, cause, end).err()
+            })
+            .await;
+            if let Ok(Some(e)) = r {
+                tracing::info!(sid = ctx.session, "the step's files are not claimed: {e}");
+            }
+        }
+        flight
+            .claimed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if tx.send(c).is_err() {
+            return;
+        }
+    }
+}
+
+/// The files step C named (its detail's path, its diffs' paths), relative to CWD; paths outside it are left out.
+fn named_rels(cwd: &Path, c: &ClosedStep) -> Vec<String> {
+    let named = c
+        .detail
+        .as_ref()
+        .and_then(|d| d.path.as_deref())
+        .into_iter()
+        .chain(c.diffs.iter().map(|d| d.0.as_str()));
+    let mut rels: Vec<String> = Vec::new();
+    let root = resolve(cwd);
+    for p in named {
+        let p = Path::new(p);
+        let rel = if p.is_absolute() {
+            match resolve(p).strip_prefix(&root) {
+                Ok(r) => r.to_path_buf(),
+                Err(_) => continue,
+            }
+        } else {
+            p.to_path_buf()
+        };
+        let inside = rel
+            .components()
+            .all(|k| matches!(k, std::path::Component::Normal(_)));
+        if let (true, Some(r)) = (inside, rel.to_str())
+            && !r.is_empty()
+            && !rels.iter().any(|x| x == r)
+        {
+            rels.push(r.to_owned());
+        }
+    }
+    rels
+}
+
 /// The newest record of the edit history this session caused at or before END: what a revert to the step restores the
-/// text to.  None when the session has no history (a folder that is no git worktree, a test, a history that fails).
-async fn newest_record(ctx: &StepCtx, end: f64) -> Option<i64> {
+/// text to; with STEP, only a record that step caused.  None when the session has no history (a folder that is no git
+/// worktree, a test, a history that fails).
+async fn newest_record(ctx: &StepCtx, end: f64, step: Option<i64>) -> Option<i64> {
     let (hubs, state) = ctx.history.clone()?;
     let (cwd, sid) = (ctx.cwd.clone(), ctx.session.clone());
     crate::clock::blocking(move || {
         let (hub, _) = hubs.of_tree(&state, &cwd).ok()?;
-        hub.with(|h| h.last_caused_by(&sid, end))
-            .ok()
-            .flatten()
-            .map(|op| op.0)
+        hub.with(|h| {
+            let op = h.last_caused_by(&sid, end).ok().flatten()?;
+            let mine = step.is_none_or(|k| {
+                h.op(op)
+                    .is_ok_and(|r| r.cause.step.as_deref() == Some(k.to_string().as_str()))
+            });
+            mine.then_some(op.0)
+        })
     })
     .await
     .ok()
@@ -3509,11 +3637,22 @@ impl Session {
 
     /// The steps that closed go to the writer task, in order.
     fn drain_steps(&self) {
-        let closed = std::mem::take(&mut lock(&self.state).closed);
+        let (closed, call) = {
+            let mut st = lock(&self.state);
+            // a tool step open (or one a wait cut into, coming back after): its call runs
+            let call = [&st.cur, &st.stash]
+                .into_iter()
+                .any(|s| s.as_ref().is_some_and(|o| o.class == StepClass::Tool));
+            (std::mem::take(&mut st.closed), call)
+        };
+        let flight = &self.flow.flight;
         for c in closed {
             self.flow.sent.fetch_add(1, Ordering::SeqCst);
+            // counted before the call is let go, so the hold never lapses between the call's end and the step's claim
+            flight.sent.fetch_add(1, Ordering::SeqCst);
             let _ = self.steps.send(c);
         }
+        flight.call.store(call, Ordering::SeqCst);
     }
 
     /// Returns once every step this session has closed so far is a row of the `step` table.
@@ -6814,6 +6953,125 @@ mod tests {
         assert_eq!(edit.history_op, Some(made[0].op as u64));
         assert!(edit.revertible);
         assert_eq!(read.history_op, None, "a read step anchors no record");
+    }
+
+    // test-pattern: D (the step boundary drives the rescan, never a real watcher's order)
+    #[tokio::test]
+    async fn an_edit_step_rescans_the_files_it_named() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.path().join("state")).unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                    .args(["-c", "commit.gpgsign=false"])
+                    .args(args)
+                    .current_dir(&work)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(work.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        let hubs = Arc::new(crate::history::wire::Hubs::default());
+        let state = dir.path().join("state");
+        let (hub, tree) = hubs.of_tree(&state, &work).unwrap();
+        // the hub's own write of a.txt, then the file on disk
+        let cause = verdandi::Cause {
+            session: Some("a1".into()),
+            ..Default::default()
+        };
+        hub.on_agent_write(&tree, "a.txt", b"one\ntwo\n", "a1", cause, 10.5)
+            .unwrap();
+        std::fs::write(work.join("a.txt"), "one\ntwo\n").unwrap();
+        // the agent's own edit tool wrote note.txt in its process: the hub never saw it
+        std::fs::write(work.join("note.txt"), "new\n").unwrap();
+        let writer = crate::coord::Writer {
+            db: norn::store::CoordDb::spawn(dir.path().join("work.db")),
+            signals: Arc::new(crate::coord::Signals::default()),
+        };
+        let (bus, mut seen) = tokio::sync::broadcast::channel(16);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let ctx = StepCtx {
+            flow: Arc::default(),
+            session: "a1".into(),
+            task: None,
+            agent: "mock".into(),
+            provider: None,
+            cwd: work.clone(),
+            acp: None,
+            history: Some((hubs.clone(), state)),
+        };
+        let sink = StepSink {
+            writer,
+            editors: Arc::new(crate::settings::agents::Editors::default()),
+            bus,
+            snap: None,
+            scopes: None,
+            tools: None,
+            asks: None,
+            stamps: None,
+            presence: None,
+            map: None,
+            traces: None,
+            predict: None,
+        };
+        let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(claim_steps(rx, claimed, ctx.clone(), None));
+        tokio::spawn(write_steps(rx_claimed, sink, ctx));
+        // the step names note.txt as the mock does (relative) and a.txt as Claude does (absolute, in a diff)
+        let abs = work.join("a.txt").to_string_lossy().into_owned();
+        tx.send(ClosedStep {
+            open: OpenStep {
+                class: StepClass::Tool,
+                start: 11.0,
+                tool: Some("Edit note.txt".into()),
+                tool_kind: Some("edit".into()),
+                tool_id: None,
+                message_id: None,
+                key: 0,
+                mcp: false,
+                parent_tool: None,
+            },
+            end: 11.5,
+            turn_id: None,
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            cache_write: 0,
+            cost: None,
+            detail: Some(norn::write::work::StepDetail {
+                path: Some("note.txt".into()),
+                ..Default::default()
+            }),
+            command: None,
+            context: None,
+            before: None,
+            call_end: None,
+            diffs: vec![(abs, Some("one\n".into()), "one\ntwo\n".into())],
+            cell: None,
+        })
+        .unwrap();
+        seen.recv().await.unwrap();
+        let (_, files) = hub.edits_against_base(&tree).unwrap().expect("the branch");
+        let got: Vec<(&str, bool)> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.untracked))
+            .collect();
+        assert!(got.contains(&("note.txt", true)), "{got:?}");
+        assert!(got.contains(&("a.txt", false)), "{got:?}");
+        assert_eq!(
+            hub.with(|h| h.count("op").unwrap()),
+            2,
+            "the hub's write once, the outside file once"
+        );
     }
 
     // test-pattern: D (the step's row cannot be written: its store's folder is a file)
