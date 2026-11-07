@@ -307,7 +307,10 @@ mod tests {
                     if self.running {
                         self.running = false;
                         let cancelled = self.cancel_sent;
+                        // one turn runs at a time: the answer is the current turn's
+                        let turn = self.core.turn();
                         self.feed(TurnEvent::PromptDone {
+                            turn,
                             cancelled,
                             jobs: false,
                         });

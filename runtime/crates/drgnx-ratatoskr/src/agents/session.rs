@@ -6505,6 +6505,8 @@ mod tests {
                 command: None,
                 context: None,
                 before: None,
+                call_end: None,
+                diffs: Vec::new(),
             })
             .unwrap();
         }
