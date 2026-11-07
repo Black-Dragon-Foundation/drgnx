@@ -200,6 +200,31 @@ pub async fn register(f: &Front, _: &Caller, p: w::RegisterParams) -> Result<w::
     })
 }
 
+/// The watcher's events for the git worktree ROOT an agent session works in reach its project's history (the session's
+/// start): an edit the agent's own tool or shell made is recorded.  None for a folder that is no git worktree, or one a
+/// sandboxed agent touched (plain git never runs there; its steps' rescans record it).
+pub(crate) async fn watch_folder(f: &Front, root: &Path) {
+    let Some(dirs) = f.dirs.get() else { return };
+    if git_dirs(root).is_none() || f.core.runs.git().is_touched(root).await.unwrap_or(true) {
+        return;
+    }
+    let (hubs, state, r) = (f.core.history.clone(), dirs.hub.clone(), root.to_path_buf());
+    let now = crate::clock::wall_secs();
+    // what the folder held against its head at the start is the session's too (its work is measured from the head)
+    let Ok(Ok((hub, tree))) = crate::clock::blocking(move || {
+        let (hub, tree) = hubs.of_tree(&state, &r)?;
+        if let Err(e) = hub.rescan_dirty(&tree, now) {
+            tracing::info!("history: {} not rescanned at its start: {e}", r.display());
+        }
+        Ok::<_, Error>((hub, tree))
+    })
+    .await
+    else {
+        return;
+    };
+    start_watch(f, hub, tree, root.to_path_buf()).await;
+}
+
 /// The watcher's events for TREE reach the hub, once per tree: a second reader of the project's one watcher.
 async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
     static WATCHED: Mutex<Vec<String>> = Mutex::new(Vec::new());

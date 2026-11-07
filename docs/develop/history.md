@@ -264,8 +264,14 @@ and answers which version each is: the hub's write, its own watcher event and a 
 change another program made is its own, `Outside`. Tests run every order (`every_order_*`).
 
 **Watcher** (`watch.rs`). One watcher per project: Hrafn's. `Project::tap` gives a second reader of its `WatchEvent`
-stream; `history/register` starts a loop that feeds it to the hub (a changed file is diffed onto its document, a change
-to `HEAD`, the index or a ref rescans every known path). Ignored files are skipped.
+stream; `history/register` and every agent session's start (`wire::watch_folder`, for its folder) start a loop that
+feeds it to the hub, once per tree (a changed file is diffed onto its document, a change to `HEAD`, the index or a ref
+rescans every known path). Ignored files are skipped. A session's start first rescans what its folder holds against
+its head (`rescan_dirty`): a session's work is measured from the head, so the uncommitted state it starts on is in the
+history too. A folder a sandboxed agent worked in gets neither (plain git never runs there). What the agent's own edit tool or shell wrote reaches the history through the loop and through the
+step-boundary rescan: when an edit step ends, `write_steps` rescans the files the step named (its detail's path and its
+diffs' paths, inside the session's folder) before the step's anchor is read. Both are `external:disk` records; a file
+the hub wrote itself is no second version.
 
 **Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers `{doc,
 tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in are

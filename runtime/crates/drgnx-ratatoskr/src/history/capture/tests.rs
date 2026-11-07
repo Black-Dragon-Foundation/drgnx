@@ -193,6 +193,26 @@ fn git_checkout_is_one_external_git_record() {
     assert_eq!(f.hub.with(|h| h.op(OpId(v[0].op)).unwrap().spans.len()), 2);
 }
 
+/// Pattern D. What a tree held against its head when the watcher started (an uncommitted line, a new file) is recorded
+/// once: a second start finds it known, and a file equal to the head's is no version.
+#[test]
+fn a_trees_uncommitted_state_is_rescanned_once() {
+    let f = fixture(&[("a.txt", "one\n"), ("same.txt", "x\n")]);
+    std::fs::write(f.repo.path().join("a.txt"), "one\nfrom-b\n").unwrap();
+    std::fs::write(f.repo.path().join("new.txt"), "n\n").unwrap();
+    let mut got: Vec<String> = f
+        .hub
+        .rescan_dirty(&f.tree, 10.0)
+        .unwrap()
+        .into_iter()
+        .map(|v| v.path)
+        .collect();
+    got.sort();
+    assert_eq!(got, ["a.txt", "new.txt"]);
+    assert!(f.hub.rescan_dirty(&f.tree, 11.0).unwrap().is_empty());
+    assert_eq!(f.hub.with(|h| h.count("op").unwrap()), 1);
+}
+
 #[test]
 fn drgnx_write_is_not_recorded_twice() {
     let f = fixture(&[("a.txt", "one\n")]);

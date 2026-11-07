@@ -460,6 +460,16 @@ impl Hub {
         self.observe(tree, rels, Src::Rescan, now)
     }
 
+    /// A rescan of every path that differs from TREE's head (its uncommitted state when the watcher starts): what the
+    /// history already holds is no new version.  Plain git runs in TREE: never one a sandboxed agent worked in.
+    pub fn rescan_dirty(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
+        let rels = blob::dirty_paths(&tree.git_dir, &tree.root).map_err(refused)?;
+        if rels.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.rescan(tree, &rels, now)
+    }
+
     /// A rescan of every path the hub knows a version of.
     pub fn rescan_known(&self, tree: &Tree, now: f64) -> Result<Vec<FileVersion>> {
         let rels = self.lock().origin.paths(&tree.id.0);
