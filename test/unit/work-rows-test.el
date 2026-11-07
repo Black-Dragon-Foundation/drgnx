@@ -167,6 +167,42 @@
       (should (string-search "cloud-1 1/4" s))
       (should (string-search "cloud $3.10/$50" s)))))
 
+(defun drgnx-work-rows-test--golden-layout-state (name)
+  "A state of vegvisir's golden layout NAME (runtime/crates/vegvisir/tests/golden/NAME.json), an agent item per placed id."
+  (let* ((layout (with-temp-buffer
+                   (insert-file-contents (expand-file-name (format "runtime/crates/vegvisir/tests/golden/%s.json" name)
+                                                           drgnx-dir))
+                   (json-parse-buffer :object-type 'plist :array-type 'list :null-object nil :false-object nil)))
+         (i 0) items)
+    (cl-loop for (k _) on (plist-get layout :at) by #'cddr
+             do (let ((id (substring (symbol-name k) 1)))
+                  (push (list :id id :kind (car (split-string id ":")) :label (format "%s's long label" id) :live t
+                              :order (cl-incf i) :fields (list :state "running" :minutes 3 :model "Opus" :task "a task"))
+                        items)))
+    (drgnx-work-client-init (list :version 1 :items (nreverse items) :edges nil :layout layout :needs_you nil :chips nil))))
+
+(ert-deftest drgnx-work-rows/each-card-once-on-its-own-lines-among-lanes ()
+  ;; the 30-agent golden's row of a rich card and three compact ones, crossed by lanes: each line holds each card at
+  ;; most once, and a compact card only on its two lines (the lanes of one line once carried the cards of the line
+  ;; before, so every line after the first drew them again and pushed the next card right)
+  (let* ((drgnx-work-map-scale 1) (state (drgnx-work-rows-test--golden-layout-state "thirty-1000"))
+         (key '(:row 4 1 1))
+         (lines (split-string (drgnx-work-map-row-text state key) "\n" t))
+         (seen nil))
+    (should (seq-some (lambda (l) (eql (plist-get l :row) 12)) (plist-get (drgnx-work-client-layout state) :lanes)))
+    (should (= 5 (length lines)))
+    (dotimes (n (length lines))
+      (let ((l (nth n lines)) (pos 0) (ids nil))
+        (while (< pos (length l))
+          (let ((id (get-text-property pos 'drgnx-work-id l)))
+            (when id (push id ids))
+            (setq pos (or (next-single-property-change pos 'drgnx-work-id l) (length l)))))
+        (push (cons n (nreverse ids)) seen)))
+    (should (equal (nreverse seen)
+                   '((0 "agent:s14" "agent:s15" "agent:s16" "agent:s17")
+                     (1 "agent:s14" "agent:s15" "agent:s16" "agent:s17")
+                     (2 "agent:s14") (3 "agent:s14") (4 "agent:s14"))))))
+
 (ert-deftest drgnx-work-rows/subagent-under-its-parent ()
   (let* ((drgnx-work-map-scale 1) (state (drgnx-work-rows-test--state)) (keys (drgnx-work-map--layout-keys state)))
     (should (< (cl-position '(:row 4 0 0) keys :test #'equal) (cl-position '(:row 4 0 1) keys :test #'equal)))

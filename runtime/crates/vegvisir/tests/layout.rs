@@ -605,6 +605,12 @@ fn golden_thirty_at_1000() {
     golden("thirty-1000", fixture::thirty(), 226);
 }
 
+/// [D] The same fixture at 1600 px (the harness session's width).
+#[test]
+fn golden_thirty_at_1600() {
+    golden("thirty-1600", fixture::thirty(), 376);
+}
+
 /// [D] The same fixture at 2400 px.
 #[test]
 fn golden_thirty_at_2400() {

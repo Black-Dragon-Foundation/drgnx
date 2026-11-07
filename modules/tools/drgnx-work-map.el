@@ -68,6 +68,9 @@
 (defvar-local drgnx-work-map--filters nil
   "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :finished BOOL).")
 (defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 6).")
+(defvar-local drgnx-work-map--asked nil
+  "Non-nil from a layout the user asked for (`drgnx-work-map--send-filters') until its frame comes: that frame is
+drawn at the next timer pass, not a throttle later (live frames keep the view's throttle).")
 (defvar-local drgnx-work-map--new nil "The ids with a new conclusion, marked until the highlight timer clears them.")
 (defvar-local drgnx-work-map--needs-at 0 "The index of the strip entry `n' selected last.")
 
@@ -131,32 +134,6 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
   (round (* units 4 (drgnx-work-map--scale))))
 
 (defun drgnx-work-map--margin-px () (round (* drgnx-work-map--margin (drgnx-work-map--scale))))
-
-(defun drgnx-work-map--width (s)
-  "The width of S in pixels (in a terminal, 8 per column)."
-  (if (display-graphic-p) (string-pixel-width s) (* 8 (string-width s))))
-
-(defvar drgnx-work-map--fit-memo (make-hash-table :test #'equal)
-  "(TEXT . PIXELS) → TEXT cut to PIXELS, so `string-pixel-width' runs once per label.  Emptied when it holds 4000
-entries (a theme, font or scale change makes the rows draw again anyway).")
-
-(defun drgnx-work-map--fit (text px)
-  "TEXT cut at the end, with an ellipsis, to be at most PX pixels wide.  Memoised by text and width."
-  (let ((key (cons text px)))
-    (or (gethash key drgnx-work-map--fit-memo)
-        (progn
-          (when (> (hash-table-count drgnx-work-map--fit-memo) 4000) (clrhash drgnx-work-map--fit-memo))
-          (puthash key
-                   (if (<= (drgnx-work-map--width text) px)
-                       text
-                     (let ((lo 0) (hi (length text)))
-                       (while (< lo hi)
-                         (let ((mid (/ (+ lo hi 1) 2)))
-                           (if (<= (drgnx-work-map--width (concat (substring text 0 mid) "…")) px)
-                               (setq lo mid)
-                             (setq hi (1- mid)))))
-                       (concat (substring text 0 lo) "…")))
-                   drgnx-work-map--fit-memo)))))
 
 ;;;; The rows of a layout
 
@@ -619,7 +596,7 @@ epoch; default the present), or \"job · NAME · waiting\" while it has no machi
       (let* ((left (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (plist-get rect :x))))
              (right (+ (drgnx-work-map--margin-px) (drgnx-work-map--px (+ (plist-get rect :x) (plist-get rect :w)))))
              (face (drgnx-work-map--card-face n i)) (class (drgnx-work-map--class state id))
-             (text (copy-sequence (drgnx-work-map--fit (nth i lines) (- right left 10)))))
+             (text (copy-sequence (drgnx-view-fit (nth i lines) (- right left 10)))))
         ;; the box face under the text's own faces; the selection's class over both: text properties, not overlays,
         ;; so a row drawn again has them
         (add-face-text-property 0 (length text) face t text)
@@ -673,10 +650,12 @@ row's cards with the lanes that pass through them."
                                                       (drgnx-work-edges-colours)))))
         (dotimes (line n)
           (push (concat (if (and (= line 0) (not (string-empty-p label)))
-                            (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
+                            (propertize (drgnx-view-fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
                           "")
                         (if lanes
-                            ;; the cards and the lanes in order of their columns
+                            ;; the cards and the lanes in order of their columns; a sort that copies: an in-place
+                            ;; one rewrites the conses `append' shares with LANES, and the next line gets this
+                            ;; line's cards with its lanes
                             (mapconcat #'cdr
                                        (sort (append (mapcar (lambda (id)
                                                                (cons (+ (drgnx-work-map--margin-px)
@@ -684,7 +663,7 @@ row's cards with the lanes that pass through them."
                                                                      (drgnx-work-map--segment state id line)))
                                                              ids)
                                                      lanes)
-                                             (lambda (a b) (< (car a) (car b))))
+                                             :key #'car)
                                        "")
                           (mapconcat (lambda (id) (drgnx-work-map--segment state id line)) ids ""))
                         (propertize "\n" 'line-height (list (max 0 (1- px)))))
@@ -880,6 +859,7 @@ label face (`m' `b' `t' switch)."
 asks for moves (`drgnx-work-map--motion-begin')."
   (drgnx-work-map--motion-begin)
   (when drgnx-work-space--view
+    (setq drgnx-work-map--asked t)
     (drgnx-work-client-set drgnx-work-space--view
                            :filters (list :focus (plist-get drgnx-work-map--filters :focus)
                                           :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
@@ -1206,8 +1186,12 @@ and the motion.  The module's teardown and a map buffer's end call it."
                 (drgnx-work-map--outline-p (drgnx-work-map--state)))
             ;; the layout the user asked for moves; any other change, live ones included, never does
             (if (and drgnx-work-map--motion (plist-get marks :layout))
-                (drgnx-work-map--motion-frame)
-              (drgnx-view-touch drgnx-view))
+                (progn (setq drgnx-work-map--asked nil) (drgnx-work-map--motion-frame))
+              (drgnx-view-touch drgnx-view)
+              ;; the frame of a layout the user asked for is drawn at the next pass; a live one waits the throttle
+              (when (and drgnx-work-map--asked (plist-get marks :layout))
+                (setq drgnx-work-map--asked nil)
+                (drgnx-view-hurry drgnx-view)))
           (when (plist-get marks :rows) (drgnx-view-dirty drgnx-view (plist-get marks :rows)))))
       ;; the selected item went (its agent finished, its branch merged): the selection moves to what it came from,
       ;; the panel says it finished, and nothing signals

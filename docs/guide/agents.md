@@ -950,14 +950,15 @@ counts: the share is an estimate.
 ## The supervisor
 
 The hub looks at every session once a second (no model call) and pauses one that is stuck: the agent stops after
-the tool call it is running, the queue is held, and a `supervisor` card offers fixes (restart, raise the time box,
+the tool call it is running (its turn ends there and the session reads idle), the queue is held, and a `supervisor`
+card offers fixes (restart, raise the time box,
 kill the stray process, move to another model) and a `supervisor` event is sent. Each rule fires once until its
 condition clears. A silent session also gets a `stalled` step on the timeline.
 
 | Rule | Holds when | Setting |
 |---|---|---|
 | `silent` | no update for the time of its kind of work (chats are brainstorming) | `drgnx-agents-silent-after` (600 s task, 1800 s brainstorm) |
-| `repeat` | the same tool call this many times in one turn | `drgnx-agents-repeat-limit` (3) |
+| `repeat` | the same tool call (same title and the same input) this many times in one turn; a read of the same file at another offset is another call | `drgnx-agents-repeat-limit` (3; 0 turns the rule off) |
 | `no-progress` | task work only: tokens per changed line over the limit | `drgnx-agents-no-progress-tokens` (20000) |
 | `dead-wait` | the session waits for a job whose row or process is gone | |
 | `lease` | the task's lease is not renewed for two lease intervals | |

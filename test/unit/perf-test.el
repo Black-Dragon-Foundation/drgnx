@@ -30,7 +30,7 @@
   (let ((r (list 'tabs :input (drgnx-perf-stats '(1 2 3 400)))))
     (should-not (drgnx-perf-verdict (list r) '((tabs (:input :p95) 16))))
     (should (equal (drgnx-perf-report (list r) '((tabs (:input :p95) 16) (tabs (:input :p90) 16)))
-                   '("tabs input p95 - (budget 16): reported (wall clock; judge with --perf --ab)"
+                   '("tabs input p95 - (n=4, under 100: not judged) (budget 16): reported (wall clock; judge with --perf --ab)"
                      "tabs input p90 400 (budget 16): reported (wall clock; judge with --perf --ab)")))))
 
 (defvar drgnx-perf-test--rows-a 0)
@@ -337,5 +337,15 @@ is complete when the hook returns.  Pattern D: no turn of the event loop between
                        1.2))
           (should (drgnx-perf--history file)))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-perf/a-tail-of-too-few-samples-is-not-judged ()
+  ;; a workload that drew 50 layouts: its p95 is nil, and the report says why instead of a bare dash or an error
+  (let* ((results '((w :relayout (:n 50 :p50 5.0 :p90 9.0 :p95 nil :p99 nil :max 12.0 :mean 6.0))))
+         (budgets '((w (:relayout :p95) 50))))
+    (should (equal (drgnx-perf-report results budgets)
+                   '("w relayout p95 - (n=50, under 100: not judged) (budget 50): reported (wall clock; judge with --perf --ab)")))
+    (should-not (drgnx-perf-verdict results budgets))
+    (should-not (drgnx-perf-regressions (make-temp-name (expand-file-name "no-history" temporary-file-directory))
+                                        results '((:relayout :p95))))))
 
 ;;; perf-test.el ends here

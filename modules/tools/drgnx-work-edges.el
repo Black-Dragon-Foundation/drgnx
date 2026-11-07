@@ -270,15 +270,19 @@ height."
         (cons (+ ascent descent) (max 1 (min 100 (round (* 100.0 ascent) (+ ascent descent)))))
       (cons (frame-char-height) 80))))
 
+(defun drgnx-work-edges--lane-alt (lane geometry)
+  "LANE's words for a screen reader: \"Edge FROM → TO (KIND)\"."
+  (format "Edge %s → %s (%s)" (drgnx-work-edges--label geometry (plist-get lane :from))
+          (drgnx-work-edges--label geometry (plist-get lane :to))
+          (or (cdr (assoc (plist-get lane :kind) drgnx-work-edges--kind-words)) (plist-get lane :kind))))
+
 (defun drgnx-work-edges-lane (lane geometry colours height ascent)
   "The image of LANE (a plist with :kind :from :to) in a card row: a vertical stroke HEIGHT pixels high with the row's
 ASCENT (percent), as wide as its stroke, 2 px at least."
   (let* ((scale (plist-get geometry :scale)) (look (drgnx-work-edges--look lane geometry colours))
          (width (max 2 (nth 1 look))) (px (round (* width scale))))
     (list 'image :type 'svg :ascent ascent :scale 1
-          :alt (format "Edge %s → %s (%s)" (drgnx-work-edges--label geometry (plist-get lane :from))
-                       (drgnx-work-edges--label geometry (plist-get lane :to))
-                       (or (cdr (assoc (plist-get lane :kind) drgnx-work-edges--kind-words)) (plist-get lane :kind)))
+          :alt (drgnx-work-edges--lane-alt lane geometry)
           :data (concat (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">"
                                 px height px height)
                         (format "<path d=\"M%g 0V%d\"" (/ px 2.0) height)
@@ -287,18 +291,30 @@ ASCENT (percent), as wide as its stroke, 2 px at least."
 
 (defun drgnx-work-edges-lane-parts (row-index lanes geometry colours)
   "The lanes of card row ROW-INDEX among LANES (plists :row :x :from :to :kind), as ((COLUMN . STRING) …): the string
-places the lane's image at its column.  One set for each text line of the row."
-  (let ((metrics (drgnx-work-edges-row-metrics)) parts)
+places the lane's image at its column.  Lanes at one x are one line on screen, so they are one image: the widest
+stroke's (the chain's, when one is on it), its alt naming them all; images side by side in the text would take
+the gap and push the next card right.  One set for each text line of the row."
+  (let ((metrics (drgnx-work-edges-row-metrics)) (by-x nil))
     (dolist (lane lanes)
       (when (eql (plist-get lane :row) row-index)
-        (let* ((image (drgnx-work-edges-lane lane geometry colours (car metrics) (cdr metrics)))
-               (width (round (* (max 2 (nth 1 (drgnx-work-edges--look lane geometry colours))) (plist-get geometry :scale))))
-               (column (- (drgnx-work-edges--px (plist-get lane :x) geometry) (/ width 2))))
-          (push (cons column
+        (let ((c (assoc (plist-get lane :x) by-x)))
+          (if c (setcdr c (cons lane (cdr c))) (push (list (plist-get lane :x) lane) by-x)))))
+    (mapcar (lambda (c)
+              (let* ((at-x (reverse (cdr c)))
+                     (look-width (lambda (l) (nth 1 (drgnx-work-edges--look l geometry colours))))
+                     (lane (seq-reduce (lambda (best l) (if (> (funcall look-width l) (funcall look-width best)) l best))
+                                       (cdr at-x) (car at-x)))
+                     (image (drgnx-work-edges-lane lane geometry colours (car metrics) (cdr metrics)))
+                     (width (round (* (max 2 (funcall look-width lane)) (plist-get geometry :scale))))
+                     (column (- (drgnx-work-edges--px (car c) geometry) (/ width 2))))
+                (when (cdr at-x)
+                  (setq image (append image nil))
+                  (plist-put (cdr image) :alt
+                             (mapconcat (lambda (l) (drgnx-work-edges--lane-alt l geometry)) at-x "; ")))
+                (cons column
                       (concat (propertize " " 'display (list 'space :align-to (list column)))
-                              (propertize " " 'display image)))
-                parts))))
-    (nreverse parts)))
+                              (propertize " " 'display image)))))
+            (nreverse by-x))))
 
 (provide 'drgnx-work-edges)
 ;;; drgnx-work-edges.el ends here

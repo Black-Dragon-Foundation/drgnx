@@ -98,6 +98,21 @@ core/workbench's setup has it (`drgnx-view-test-store-on'): the store has seen t
     (should (equal "a: \n" (drgnx-view-test--text v)))
     (should-not (drgnx-view-pending-p v))))
 
+(ert-deftest drgnx-view-live/the-gap-collection-runs-after-the-draw-not-in-it ()
+  ;; pattern B (the virtual clock gates the timers): a pass that leaves no view with work is a quiet gap, and the gap
+  ;; collection (`drgnx-gc-gap', 36 ms at the 30-agent map's heap) runs in a timer pass of its own, after the draw's,
+  ;; not inside the draw's timer function: a key typed during the draw is read before it, and a draw is only a draw
+  (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render)
+    (let* ((calls nil) (in-draw nil) (orig (symbol-function 'drgnx-view--draw-buffer)))
+      (cl-letf (((symbol-function 'drgnx-gc-gap) (lambda () (push (if in-draw 'in-draw 'after) calls) nil))
+                ((symbol-function 'drgnx-view--draw-buffer)
+                 (lambda (buffer) (setq in-draw t) (unwind-protect (funcall orig buffer) (setq in-draw nil)))))
+        (drgnx-view-append v '(a))
+        (drgnx-test-advance 0.1)
+        (should (equal "a: \n" (drgnx-view-test--text v)))
+        (drgnx-test-advance 0.01)
+        (should (equal calls '(after)))))))
+
 (ert-deftest drgnx-view-live/marks-in-a-burst-draw-once ()
   (drgnx-view-live-test--with (v :render #'drgnx-view-live-test--render :key-test 'eq)
     (dotimes (k 50) (drgnx-view-append v (list k)) (drgnx-view-dirty v '(0)))

@@ -94,7 +94,8 @@ an agent with a conclusion, then a chunk a second."
                         (and (plist-get agent :parent) (list "provider:task look around"))
                         (and (plist-get agent :decide) (list (concat "decide " (plist-get agent :decide))))
                         ;; a chunk, a read (a step, so the map's fields change) and a second of quiet, over and over
-                        ;; the read differs in its offset each time: the hub counts a repeated call
+                        ;; the read differs in its offset each time: the hub's supervisor pauses an agent that makes
+                        ;; the same call three times in a turn (its `repeat' rule), and the turn would end
                         (cl-loop for i from 1 to drgnx-work-thirty-streaming-seconds
                                  append (append (list "say still working on it, a line a second")
                                                 (and edits (list (format "provider:read %s %d 1" (car edits) i)))

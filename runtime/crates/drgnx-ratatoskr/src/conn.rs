@@ -2,7 +2,7 @@
 //! 1 MiB codec to [`Front::line`], and lines out through a writer task
 //! of its own with a queue that drops a client that stopped reading (16 MiB queued, or 10 s without the write making
 //! progress), so one stopped client never stalls another.  With the `test-hooks` feature a line calling
-//! `__test_flood`, `__test_owner_gone`, `__test_advance`, `__test_matrix_ask` or `__test_browser_endpoint` is served
+//! `__test_flood`, `__test_owner_gone`, `__test_advance`, `__test_matrix_ask`, `__test_browser_endpoint` or `__test_view_rows` is served
 //! here, before the dispatcher (none is a method of the registry), and under `serve --test-sequencer` lines are read and
 //! served in the order the `sequencer` gives (`__test_barrier` is its own).
 //!
@@ -443,6 +443,7 @@ async fn serve_conn(stream: UnixStream, front: Arc<Front>, socket: Socket) {
                 || matrix_ask::serve(&front, &out, &l).await
                 || browser_endpoint::serve(&out, &l)
                 || buffer_views::serve(&front, &out, &l)
+                || view_rows::serve(&front, id, &out, &l)
                 || barrier_refused(&out, &l)
             {
                 continue;
@@ -652,6 +653,48 @@ mod buffer_views {
             let a = serde_json::to_string(&Answer {
                 id,
                 result: json!({"views": views, "built": built}),
+                ignored: vec![],
+            })
+            .expect("an answer serializes");
+            out.push(format!("{a}\n").into());
+        }
+        true
+    }
+}
+
+/// `__test_view_rows {view, rows, images?, labels?}` (test-hooks): this connection's fixture view VIEW shows ROWS (and
+/// may name IMAGES, `[[id, svg]]`), then LABELS (`[[key, text, px]]`, each fitted to PX by the class's fonts and
+/// followed by a stop) in every display class it has an env for ([`crate::view::Views::fixture`]); answered true.
+#[cfg(feature = "test-hooks")]
+mod view_rows {
+    use super::Outbox;
+    use crate::front::Front;
+    use drgnx_rows::{ImageId, Row};
+    use runstav::wire::{Answer, Request};
+    use serde_json::json;
+
+    /// Serve LINE when it is a `__test_view_rows` request (true), else leave it to the dispatcher.
+    pub(super) fn serve(front: &Front, conn: u64, out: &Outbox, line: &str) -> bool {
+        let Ok(req) = serde_json::from_str::<Request>(line) else {
+            return false;
+        };
+        if req.method != "__test_view_rows" {
+            return false;
+        }
+        let view = req.params["view"].as_str().unwrap_or_default().to_owned();
+        let rows: Vec<Row> = serde_json::from_value(req.params["rows"].clone()).unwrap_or_default();
+        let images: Vec<(ImageId, String)> =
+            serde_json::from_value(req.params["images"].clone()).unwrap_or_default();
+        let labels: Vec<crate::view::Label> =
+            serde_json::from_value(req.params["labels"].clone()).unwrap_or_default();
+        front
+            .core
+            .views
+            .fixture(front, conn, view, (rows, images, labels));
+        if let Some(id) = req.id {
+            let a = serde_json::to_string(&Answer {
+                id,
+                result: json!(true),
                 ignored: vec![],
             })
             .expect("an answer serializes");
