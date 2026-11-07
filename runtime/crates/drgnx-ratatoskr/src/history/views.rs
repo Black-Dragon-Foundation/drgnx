@@ -132,6 +132,16 @@ impl Hub {
         Ok(Some((base.unwrap_or_default(), out)))
     }
 
+    /// TREE's base commit: its history branch's base, else the commit its head names now; none for neither.
+    pub fn base_commit(&self, tree: &Tree) -> verdandi::Result<Option<String>> {
+        let g = self.lock();
+        let base = match g.h.find_branch(&tree.branch_name())? {
+            Some(b) => g.h.base_of(b)?,
+            None => None,
+        };
+        Ok(base.or_else(|| tree.base.clone()))
+    }
+
     /// REL's change on TREE's branch against the base as a unified diff (`diff --git a/REL b/REL`); empty when it
     /// changed nothing.
     pub fn diff_against_base(&self, tree: &Tree, rel: &str) -> verdandi::Result<String> {

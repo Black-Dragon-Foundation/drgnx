@@ -876,7 +876,8 @@ clears the count after carding. A session whose wheel the user holds ("Take the 
 When an edit step closes on a file P in session A's worktree, the hub checks P against every other live session B
 whose worktree is a different checkout of the same repository (the project id of `presence::checkout_of`), as a hub
 job, at most once per (A, B, P) per 30 s of the hub's clock (`predict::EVERY`). The three texts are the merge base of
-the two trees' base commits (`worktree_base.base_commit`; `git merge-base` and `git show` in the repository's main
+the two trees' base commits (`worktree_base.base_commit`, else the edit history's base of the tree, `Hub::base_commit`:
+the row is written after a session starts, unordered with its agent's first edit; `git merge-base` and `git show` in the repository's main
 checkout, never in an agent's tree) and the two files on disk, read beneath each worktree without following links, so
 uncommitted work counts. A check runs only when both sides changed P from the merge base;
 `predict::check(merge_base, a, b)` is `verdandi::threeway::conflicts` (`git merge-file -p` in a private temporary
