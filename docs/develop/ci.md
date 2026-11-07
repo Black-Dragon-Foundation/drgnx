@@ -207,14 +207,15 @@ Mac the same way. The key handover (Lisp, `test/unit/runners-client-test.el`) ru
 ## The tiers workflow
 
 `.github/workflows/drgnx-tiers.yml` is the one definition of drgnx's Emacs-side jobs (`workflow_call`). drgnx's
-`ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` call it on the pinned release; **Nidhogg's CI calls it too**, at a pinned drgnx
+`ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` call it on Nidhogg's integration line while drgnx's next release is
+unreleased ([Nidhogg's integration line](#nidhoggs-integration-line); the pinned release otherwise); **Nidhogg's CI calls it too**, at a pinned drgnx
 commit, on the tarballs its own run just built, so a Nidhogg change is tested with drgnx's real tiers (the GUI tier
 included) and the steps live in one place. Inputs:
 
 | Input | Values | Meaning |
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
-| `nidhogg` | `release`, `artifact` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos` |
+| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)) |
 | `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
@@ -234,7 +235,9 @@ commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
   them at `/src`, `ratatoskr-mock` beside Ratatoskr) and sets `DRGNX_RATATOSKR_BIN` and `DRGNX_HUGINN_DUMP`.
 - `test-image`: pulls the prebuilt image for its Containerfile ([Prebuilt images](#prebuilt-images-the-cache)); with
   `nidhogg-artifact` it then installs the run's tarball on top — a thin image `FROM` it that runs
-  `test/container/nidhogg.sh fedora-45 TARBALL`, the same install the images make of the release — and names that image
+  `test/container/nidhogg.sh fedora-45 TARBALL` after removing the base's `/opt/nidhogg/*` (an unreleased build still
+  calls itself the last release's version and would unpack over it, mixing old and new files), the same install the
+  images make of the release — and names that image
   in `DRGNX_TEST_IMAGE` / `DRGNX_TEST_GUI_IMAGE`. It fails when the artifact holds no tarball; it never falls back to
   the release. On macOS the `macos` job passes the tarball to `nidhogg.sh macos TARBALL` the same way.
 - `gate`: see [Gates](#gates).
@@ -242,6 +245,35 @@ commit (`github.sha`), never for a `drgnx_ref` another repository's run names:
 Called workflows run in the caller's context: the caller's runners, token and caches (in Nidhogg's run the cargo cache
 is Nidhogg's), and `actions/checkout` without `repository` checks out the caller
 ([GitHub: reusing workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
+
+## Nidhogg's integration line
+
+Between releases each repository is tested against the other's **current integration branch**, never an old release:
+
+- **drgnx's CI** (`nidhogg: line`): the `nidhogg-line` job reads the branch name in `.github/ci/nidhogg-line`
+  (`rel7-next`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
+  successful `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) that still holds
+  the tarballs the asked tiers need (`tarball-fedora-45` for the Linux tiers, `tarball-macos` for `macos`). It
+  downloads them and uploads them into this run under the same names, so every tier job installs them exactly as
+  `nidhogg: artifact` does. Every tier job waits for it (`needs: nidhogg-line`) and is skipped when it failed. No such
+  run (none yet, still running, or its artifacts expired: GitHub keeps them 90 days by default, 1–90 on a public
+  repository) fails the job with one error line; it never falls back to the release.
+- **Nidhogg's CI** tests drgnx's integration branch's head (named in Nidhogg's `nidhogg/ci/drgnx-line`) on every
+  build but a release tag's (Nidhogg's README, "CI and releases").
+
+**The token.** Downloading another repository's artifacts needs authentication even when the repository is public
+(the REST download endpoint answers 401 without it, checked 2026-11-07), and the run's own `GITHUB_TOKEN` is scoped
+to drgnx ([GitHub: GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token): "The token's
+permissions are limited to the repository that contains your workflow"; [actions/download-artifact](https://github.com/actions/download-artifact):
+`github-token` "is required when downloading artifacts from a different repository or from a different workflow
+run", read 2026-11-07). So the job mints a token with `actions/create-github-app-token` from a narrow GitHub App,
+`drgnx-ci-artifacts`: **Actions: Read** only (Metadata: Read is implied), installed on `nidhogg` alone, the token asked
+for `repositories: nidhogg` and `permission-actions: read`. Its secrets `NIDHOGG_LINE_APP_ID` and
+`NIDHOGG_LINE_APP_KEY` live in drgnx; `ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` pass them to the tiers workflow.
+Without them the job fails with that message. A pull request from a fork gets no secrets, so its line run fails.
+
+When a release round starts, the two files move to the next line; after the release, the callers go back to
+`nidhogg: release` on the new pin ([Joint rounds](#joint-rounds) is the by-hand variant for one pair).
 
 ## Joint rounds
 

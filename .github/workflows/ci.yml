@@ -123,8 +123,12 @@ jobs:
       contents: read
       packages: read
     uses: ./.github/workflows/drgnx-tiers.yml
+    secrets:
+      NIDHOGG_LINE_APP_ID: ${{ secrets.NIDHOGG_LINE_APP_ID }}
+      NIDHOGG_LINE_APP_KEY: ${{ secrets.NIDHOGG_LINE_APP_KEY }}
     with:
-      nidhogg: release
+      # Nidhogg's integration line while drgnx's next release is unreleased (drgnx-tiers.yml; release: the pinned one)
+      nidhogg: line
       tiers: ${{ needs.changes.outputs.tiers || 'unit no-lisp-writes hub-chaos' }}
       selector: ${{ inputs.selector }}
 
