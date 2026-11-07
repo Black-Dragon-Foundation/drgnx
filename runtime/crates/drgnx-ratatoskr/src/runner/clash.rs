@@ -1,5 +1,7 @@
 //! Clashes (Task 18; `docs/develop/coordination.md`, "Clashes"): the five rules (contradiction, proposed,
-//! against-decision, stale, overlap) as `clash::scan(run, decisions, diffs) -> Vec<Clash>`, each carded once.
+//! against-decision, stale, overlap) as `clash::scan(run, decisions, diffs) -> Vec<Clash>`, each carded once, and a
+//! sixth, a predicted conflict, from the predictions in `RunState::predictions` ([`crate::runner::predict`]): one card
+//! per pair of sessions whose changes will conflict, and no overlap for a file they are predicted to merge cleanly.
 //!
 //! Pure: no git, no store. The caller (the plan runner) builds [`RunState`] from its tables and [`DiffIndex`] from
 //! `HubGit::diff_hashes`, remembers each returned [`Clash::key`] in `RunState::carded`, and starts a reviewer for
@@ -61,6 +63,9 @@ pub struct RunState {
     pub settled_subjects: BTreeSet<String>,
     /// Tasks with an open clash card (their review waits).
     pub open_clash_tasks: BTreeSet<String>,
+    /// What the conflict predictor found between the sessions ([`crate::runner::predict`]): a predicted conflict is a
+    /// card, a clean merge of a file both tasks change is no overlap.
+    pub predictions: Vec<crate::runner::predict::Prediction>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -71,6 +76,8 @@ pub enum Rule {
     AgainstDecision,
     Stale,
     Overlap,
+    /// Two sessions' changes to a file will conflict when they merge (predicted).
+    Conflict,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -347,6 +354,59 @@ pub fn scan(run: &RunState, decisions: &[Decision], diffs: &DiffIndex) -> Vec<Cl
         c.task = s.task.clone();
         cx.card(c);
     }
+    // a predicted conflict: one card per pair of live sessions, whatever files they conflict in
+    let live_sessions: BTreeMap<&str, &RunSession> = run
+        .sessions
+        .iter()
+        .filter(|s| !s.exited)
+        .map(|s| (s.id.as_str(), s))
+        .collect();
+    let mut pairs: BTreeMap<(&str, &str), BTreeSet<&str>> = BTreeMap::new();
+    for p in run.predictions.iter().filter(|p| p.conflicts > 0) {
+        if live_sessions.contains_key(p.a.as_str()) && live_sessions.contains_key(p.b.as_str()) {
+            pairs.entry(p.pair()).or_default().insert(p.path.as_str());
+        }
+    }
+    for ((a, b), files) in pairs {
+        let files: Vec<String> = files.into_iter().map(str::to_owned).collect();
+        let side = |label: &str, s: &RunSession| Side {
+            label: label.into(),
+            text: format!("the change of session {}", s.id),
+            decision: None,
+            agent: Some(s.id.clone()),
+            task: s.task.clone(),
+            reason: None,
+        };
+        let mut c = blank(
+            format!("conflict:{a}:{b}"),
+            Rule::Conflict,
+            "",
+            format!(
+                "sessions {a} and {b} will conflict in {} when they merge",
+                files.join(", ")
+            ),
+            vec![side("A", live_sessions[a]), side("B", live_sessions[b])],
+        );
+        c.files = files;
+        cx.card(c);
+    }
+    // a file both sessions change that is predicted to merge cleanly (and to no conflict) is no overlap
+    let session_of = |task: &str| {
+        run.sessions
+            .iter()
+            .find(|s| s.task.as_deref() == Some(task))
+            .map(|s| s.id.as_str())
+    };
+    let merges_cleanly = |t: &str, o: &str, file: &str| {
+        let (Some(a), Some(b)) = (session_of(t), session_of(o)) else {
+            return false;
+        };
+        let mut found = run
+            .predictions
+            .iter()
+            .filter(|p| p.path == file && (p.a == a && p.b == b || p.a == b && p.b == a));
+        found.clone().next().is_some() && found.all(|p| p.conflicts == 0)
+    };
     // against-decision and overlap, per task in review
     for t in run.tasks.iter().filter(|t| t.status == "in-review") {
         let empty = BTreeMap::new();
@@ -365,6 +425,7 @@ pub fn scan(run: &RunState, decisions: &[Decision], diffs: &DiffIndex) -> Vec<Cl
             let same: Vec<String> = files
                 .iter()
                 .filter(|f| theirs.is_some_and(|m| m.contains_key(**f)))
+                .filter(|f| !merges_cleanly(&t.id, &o.id, f))
                 .map(|f| (*f).clone())
                 .collect();
             if !same.is_empty() {
@@ -475,11 +536,12 @@ pub trait ReviewerHook {
     fn start(&mut self, clash: &Clash, long: bool);
 }
 
-/// Start a reviewer for each clash (a stale card is a `stalled` card: no reviewer).
+/// Start a reviewer for each clash (a stale card is a `stalled` card, an overlap and a predicted conflict are
+/// advisory: no reviewer).
 pub fn start_reviewers(hook: &mut dyn ReviewerHook, clashes: &[Clash]) {
     for c in clashes
         .iter()
-        .filter(|c| !matches!(c.rule, Rule::Stale | Rule::Overlap))
+        .filter(|c| !matches!(c.rule, Rule::Stale | Rule::Overlap | Rule::Conflict))
     {
         hook.start(c, c.size == Size::Long);
     }

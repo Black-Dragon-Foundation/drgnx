@@ -841,7 +841,8 @@ Fixed rules, in the hub (its tick, and after `coord/notify`); a model's judgment
 | `proposed` | an agent's decision outside its own task (one in a contradiction has that card only) | a `clash` card: record it, or leave it out |
 | `against-decision` | a task in review whose branch (`git diff job/ID...job/ID-N`) changes what a current won't-build's `paths` cover (a directory, a file, a `*` glob) | a `clash` card about the task; its review waits |
 | `stale` | an agent whose last two coordination writes were held (`held:AGENT` in `meta`, kept by the MCP server) | a `stalled` card |
-| `overlap` | a task in review that changes files another open task changes | an `overlap` card, advisory (dismiss): the review goes on |
+| `overlap` | a task in review that changes files another open task changes, unless every such file is predicted to merge cleanly | an `overlap` card, advisory (dismiss): the review goes on |
+| `conflict` | two live sessions' changes to a file are predicted to conflict when they merge ("Predicted conflicts", below) | one `clash` card per pair of sessions, advisory: no reviewer, no review waits |
 
 Each clash is carded once (its key in the job's data, `clashes`); a card's data has the rule, the sides (label,
 text, decision, agent, task), the subject and a size: `long` for work against a decision, a diff over
@@ -867,8 +868,26 @@ user's decision replaces at once (no card). `DiffIndex` is task id → path → 
 `HubGit::diff_hashes`; the against-decision and overlap rules look at tasks `in-review`, overlap at any open task.
 The runner's hooks: `before_review(run, decisions, diffs, task) -> ReviewGate { clashes, wait }` (the review waits
 for a new against-decision clash or an open clash card about the task) and `ReviewerHook::start(clash, long)` via
-`start_reviewers` (not for `stale` and `overlap`). A stale card's key includes the held count, so the runner
-clears the count after carding. A session whose wheel the user holds (next section) is never stale.
+`start_reviewers` (not for `stale`, `overlap` and `conflict`). A stale card's key includes the held count, so the runner
+clears the count after carding. A session whose wheel the user holds ("Take the wheel", below) is never stale.
+
+### Predicted conflicts (`runner/predict.rs`)
+
+When an edit step closes on a file P in session A's worktree, the hub checks P against every other live session B
+whose worktree is a different checkout of the same repository (the project id of `presence::checkout_of`), as a hub
+job, at most once per (A, B, P) per 30 s of the hub's clock (`predict::EVERY`). The three texts are the merge base of
+the two trees' base commits (`worktree_base.base_commit`; `git merge-base` and `git show` in the repository's main
+checkout, never in an agent's tree) and the two files on disk, read beneath each worktree without following links, so
+uncommitted work counts. A check runs only when both sides changed P from the merge base;
+`predict::check(merge_base, a, b)` is `verdandi::threeway::conflicts` (`git merge-file -p` in a private temporary
+folder, no repository, no config), its answer the number of conflicting hunks.
+
+The predictions are data for the pure `clash::scan`, in `RunState::predictions`: a predicted conflict between two live
+sessions is one `conflict` clash per pair (key `conflict:A:B`, the files found so far, the two sessions as its sides),
+and a file two tasks change that is predicted to merge cleanly is no `overlap`. Two sessions of one plan run are
+carded by the run's own clash pass (keys in the job's data); any other two (sessions outside a run, or in two runs)
+through a small `RunState` of the two (`predict::outside_run`): a `clash` card with no job, announced as a `card`
+event, its key remembered by the hub for its lifetime.
 
 ## Take the wheel (`agents/wheel.rs`)
 

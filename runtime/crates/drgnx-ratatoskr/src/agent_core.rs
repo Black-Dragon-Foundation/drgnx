@@ -69,6 +69,8 @@ pub struct Core {
     pub buffers: std::sync::Arc<crate::editor::Buffers>,
     /// The files shell steps opened, from Gleipnir's tracer ([`crate::work::trace`]).
     pub traces: std::sync::Arc<crate::work::trace::Traces>,
+    /// The conflict predictor: two worktrees' changes to one file merged ahead of time ([`crate::runner::predict`]).
+    pub predict: std::sync::Arc<crate::runner::predict::Live>,
     /// The edit history of each open project ([`crate::history`]).
     pub history: std::sync::Arc<crate::history::wire::Hubs>,
     /// The planning sessions of Say it and the channel to their shell ([`crate::say`]).

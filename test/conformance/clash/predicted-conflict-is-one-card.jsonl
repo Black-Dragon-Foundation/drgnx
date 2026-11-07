@@ -1,0 +1,26 @@
+{"scenario": "clash/predicted-conflict-is-one-card", "requires": ["v1", "test-hooks"], "doc": "Gated (B). Two agents outside any run in two worktrees of one repository; B's tree has uncommitted lines at the end of src/a.rs and src/b.rs. A's edits to both files close (each its own conflicting prediction against B), then B's own edit of src/a.rs closes (the same pair seen from B): one clash card, rule conflict, for the pair, naming the first file found. Pattern B: work/files naming the edited files (the step snapshot after the edit) is the gate for each turn's edits, __test_barrier settles the hub's prediction jobs before the count is read."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work/src && cd $ROOT/work && git init -q -b main && echo one > src/a.rs && echo one > src/b.rs && git add src && git -c user.name=t -c user.email=t@t commit -q -m init && git worktree add -q -b b $ROOT/wt-b && echo from-b >> $ROOT/wt-b/src/a.rs && echo from-b >> $ROOT/wt-b/src/b.rs"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\")))))\n"}
+{"do": "start", "hub": "h", "args": ["--test-sequencer"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:a", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-claude", "cwd": "$ROOT/wt-b"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:b", "name": "$string"}}, "within_ms": 30000}
+{"do": "poll", "conn": "c", "json": {"id": 3, "method": "work/files", "params": {"session": "$a"}}, "expect": {"id": 3, "result": {"files": "$any"}}, "within_ms": 15000, "every_ms": 50}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "work/files", "params": {"session": "$b"}}, "expect": {"id": 4, "result": {"files": "$any"}}, "within_ms": 15000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/send", "params": {"id": "$a", "text": "tool:edit src/a.rs\ntool:edit src/b.rs\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 101, "method": "work/files", "params": {"session": "$a"}}, "expect": {"id": 101, "result": {"files": {"$contains": [{"path": "src/a.rs"}, {"path": "src/b.rs"}]}}}, "within_ms": 30000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "agents/send", "params": {"id": "$b", "text": "tool:edit src/a.rs\nsay done"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 102, "method": "work/files", "params": {"session": "$b"}}, "expect": {"id": 102, "result": {"files": {"$contains": [{"path": "src/a.rs"}]}}}, "within_ms": 30000, "every_ms": 50}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "__test_barrier", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"marker": "$number"}}, "within_ms": 15000}
+{"do": "sql_expect", "sql": "select count(*) from card where kind = 'clash' and json_extract(data, '$.rule') = 'conflict'", "rows": [[1]]}
+{"do": "sql_expect", "sql": "select json_extract(data, '$.files[0]') from card where kind = 'clash'", "rows": [["src/a.rs"]]}

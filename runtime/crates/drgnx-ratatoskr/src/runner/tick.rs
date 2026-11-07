@@ -311,6 +311,7 @@ pub(crate) fn run_state(
             .filter(|c| c.kind.as_deref() == Some("clash"))
             .filter_map(|c| c.task.clone())
             .collect(),
+        predictions: Vec::new(),
     }
 }
 
@@ -375,7 +376,12 @@ pub async fn clashes(front: &Arc<Front>, id: &str) -> Result<(), crate::runner::
             diffs.insert(t.row.id.clone(), files);
         }
     }
-    let run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    let mut run = run_state(&l, &data, &sessions, &held, &settled, &diffs);
+    // what the conflict predictor found between the run's sessions
+    run.predictions = front
+        .core
+        .predict
+        .among(&sessions.iter().map(|s| s.id.as_str()).collect());
     let decisions = decisions_of(&l);
     let found = clash::scan(&run, &decisions, &diffs);
     for c in &found {
