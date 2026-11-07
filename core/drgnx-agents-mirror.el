@@ -242,10 +242,30 @@ result has no `patch', so the mirror holds what `agents/get' answers (blocks as 
         (append (cl-loop for (k v) on new by #'cddr unless (memq k '(:patch :blocks)) append (list k v))
                 (list :blocks blocks))))))
 
+(defvar drgnx-view-old-path)
+
 (defun drgnx-agents-mirror--apply-entries (m entries)
-  "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript.  The number of entries
-that end a turn (`drgnx-agents-mirror--ends-turn-p': `stop', or a failed turn's `error') that were not in the
-transcript before."
+  "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript, in place: an entry's
+cell takes the patched entry (`drgnx-agents-mirror--complete-blocks'), a new index extends the list.  The number of
+entries that end a turn (`drgnx-agents-mirror--ends-turn-p': `stop', or a failed turn's `error') that were not in the
+transcript before.  Behind `drgnx-view-old-path' the transcript is copied whole per call, as it was."
+  (if (bound-and-true-p drgnx-view-old-path) (drgnx-agents-mirror--apply-entries-old m entries)
+    (let* ((list (drgnx-agent-session-entries m)) (n (length list)) (stops 0))
+      (mapc (lambda (pair)
+              (when-let* ((read (drgnx-agents-mirror--decode 'drgnx-records-entry (elt pair 1))) (i (elt pair 0)))
+                (when (>= i n)
+                  (setq list (nconc list (make-list (- (1+ i) n) nil)) n (1+ i)))
+                (let ((cell (nthcdr i list)))
+                  (when (and (drgnx-agents-mirror--ends-turn-p (car read))
+                             (not (drgnx-agents-mirror--ends-turn-p (car cell))))
+                    (cl-incf stops))
+                  (setcar cell (drgnx-agents-mirror--complete-blocks (car cell) (car read))))))
+            entries)
+      (setf (drgnx-agent-session-entries m) list)
+      stops)))
+
+(defun drgnx-agents-mirror--apply-entries-old (m entries)
+  "`drgnx-agents-mirror--apply-entries' behind `drgnx-view-old-path': the transcript copied to a vector and back."
   (let ((v (vconcat (drgnx-agent-session-entries m))) (stops 0))
     (mapc (lambda (pair)
             (when-let* ((read (drgnx-agents-mirror--decode 'drgnx-records-entry (elt pair 1))) (i (elt pair 0)))

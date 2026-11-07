@@ -22,6 +22,7 @@
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
 (defvar drgnx-agent-panel--steps)
+(declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--stats-render "drgnx-agent-panel")
@@ -106,7 +107,7 @@ allowed it.  Empty when there is nothing to say."
 agent keeps its own rule until it starts again, so you choose whether to restart it at its latest step as well (a new
 agent from there; asked once, here, never in an answer)."
   (interactive)
-  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+  (let* ((key (drgnx-agent-panel--key-at))
          (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key))))
          (mine (and e (drgnx-agent-panel-explain--always-of e)))
          (session drgnx-agent-panel--session) (buffer (current-buffer)))

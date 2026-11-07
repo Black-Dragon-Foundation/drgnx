@@ -18,6 +18,7 @@
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-sync-windows "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-older "drgnx-agent-panel")
+(defvar drgnx-view-patch)
 (defvar drgnx-agent-panel--entries)
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-agent-panel--loaded)
@@ -107,6 +108,14 @@ session.  The module's own setup is not used: the module fixture moves the confi
   (set-window-buffer (selected-window) buf)
   (drgnx-agent-panel-sync-windows)
   (drgnx-agents-mirror-test--settle (lambda () (buffer-local-value 'drgnx-agent-panel--loaded buf)) "the first page"))
+
+(defun drgnx-agent-panel-hub-test--drawn (buf pred what)
+  "Draw BUF until PRED (called in BUF after a draw) holds: the hub's rows come after the panel's env.  PRED's value."
+  (let (v)
+    (drgnx-agents-mirror-test--settle
+     (lambda () (with-current-buffer buf (drgnx-view-draw-now drgnx-view) (goto-char (point-min)) (setq v (funcall pred))))
+     what)
+    v))
 
 (defun drgnx-agent-panel-hub-test--send (buf text)
   (with-current-buffer buf
@@ -253,9 +262,12 @@ session.  The module's own setup is not used: the module fixture moves the confi
        "the large tool entry in the panel")
       (let* ((idx (car (seq-filter (lambda (i) (plist-get (gethash i (buffer-local-value 'drgnx-agent-panel--entries buf)) :outputBytes))
                                    (hash-table-keys (buffer-local-value 'drgnx-agent-panel--entries buf)))))
+             (at (drgnx-agent-panel-hub-test--drawn
+                  buf (lambda () (if drgnx-view-patch (text-property-any (point-min) (point-max) 'drgnx-agent-panel-entry idx)
+                                   (drgnx-view-row-start drgnx-view (list :e idx))))
+                  "the tool entry's row"))
              (out (with-current-buffer buf
-                    (drgnx-view-draw-now drgnx-view)
-                    (goto-char (drgnx-view-row-start drgnx-view (list :e idx)))
+                    (goto-char at)
                     (save-window-excursion (drgnx-agent-panel-output-open)))))
         (unwind-protect
             (progn
@@ -291,14 +303,15 @@ session.  The module's own setup is not used: the module fixture moves the confi
         (unwind-protect
             (progn
               (drgnx-agent-panel-hub-test--show buf)
+              (drgnx-agent-panel-hub-test--drawn buf (lambda () (search-forward "a loud" nil t)) "the message's row")
               (with-current-buffer buf
-                (drgnx-view-draw-now drgnx-view)
                 (ert-info ((format "%S" (hash-table-values drgnx-agent-panel--entries)))
                   (should (seq-some (lambda (e) (and (equal (plist-get e :type) "agent") (> (length (plist-get e :blocks)) 0)))
                                     (hash-table-values drgnx-agent-panel--entries))))
-                (should-not (string-search "**" (buffer-substring-no-properties (point-min) (point-max))))
+                ;; the message's row is styled; your own line shows what you typed
+                (should-not (string-search "\n  a **loud**" (buffer-substring-no-properties (point-min) (point-max))))
                 (goto-char (point-min))
-                (should (search-forward "loud" nil t))
+                (should (search-forward "a loud" nil t))
                 (should (memq 'drgnx-agent-panel-md-strong (ensure-list (get-text-property (1- (point)) 'face))))))
           (remove-hook 'drgnx-hub-event-functions #'drgnx-agent-panel--event)
           (mapc #'kill-buffer (drgnx-agent-panel-buffers)))))))

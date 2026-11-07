@@ -24,6 +24,9 @@
 (defvar drgnx-agent-panel--open)
 (defvar drgnx-agent-panel-slow-seconds)
 (defvar drgnx-agent-panel-expensive-cost)
+(declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
+(declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--entry "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--blocks "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
@@ -169,7 +172,7 @@ else when the chat's toggle for its type is on."
   (let* ((e (drgnx-agent-panel--entry (cadr key)))
          (now (or (drgnx-agent-panel--thinking-open-p key) (and e (drgnx-agent-panel--detail-open-p key e)))))
     (puthash key (if now 'closed 'open) drgnx-agent-panel--open)
-    (drgnx-view-dirty drgnx-view (list key))))
+    (if (drgnx-agent-panel--rows-p) (drgnx-agent-panel--send-look) (drgnx-view-dirty drgnx-view (list key)))))
 
 (defun drgnx-agent-panel--redraw-steps ()
   "Every step row and the strip are drawn again."
@@ -182,6 +185,7 @@ else when the chat's toggle for its type is on."
   "TYPES are the open step types of this chat; rows you opened or folded by hand are back under the toggles."
   (setq drgnx-agent-panel--disclosure (copy-sequence types))
   (clrhash drgnx-agent-panel--open)
+  (drgnx-agent-panel--send-look)
   (drgnx-agent-panel--redraw-steps))
 
 (defun drgnx-agent-panel-toggle-type (type)
@@ -304,7 +308,7 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
 
 (defun drgnx-agent-panel--tool-at-point ()
   "The tool entry at point, or a user error."
-  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+  (let* ((key (drgnx-agent-panel--key-at))
          (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key)))))
     (unless (and e (eq (drgnx-agent-panel--type e) 'tool) (plist-get e :id)) (user-error "Point is not on a tool step"))
     e))
@@ -416,7 +420,7 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
 
 (defun drgnx-agent-panel--step-at-point ()
   "The timeline row of the step at point, or a user error."
-  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+  (let* ((key (drgnx-agent-panel--key-at))
          (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key))))
          (step (and e (drgnx-agent-panel--step-row e))))
     (unless step (user-error "Point is not on a step"))
