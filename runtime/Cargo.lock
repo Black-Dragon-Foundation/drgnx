@@ -1419,6 +1419,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "drgnx-term"
+version = "0.1.0"
+dependencies = [
+ "drgnx-rows",
+ "ghostty-vt-sys",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
