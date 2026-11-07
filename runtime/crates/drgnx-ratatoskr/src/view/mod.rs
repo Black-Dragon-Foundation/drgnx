@@ -12,11 +12,15 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod fonts;
 #[cfg(test)]
 mod tests;
 
+use drgnx_rows::fit::FontSet;
 use drgnx_rows::{ImageId, Op, Patch, Row};
-use runstav::methods::view::{ViewClose, ViewEnv, ViewGlyphs, ViewMeasured, ViewResync};
+use runstav::methods::view::{
+    ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewResync,
+};
 use runstav::wire::Error;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -184,9 +188,17 @@ fn instance_id() -> u64 {
 /// A fixture view's rows and the images they may name.
 type Fixture = (Vec<Row>, Vec<(ImageId, String)>);
 
-/// The shell: the store, the rows the test fixture view is given (test hooks), and the sending.
+/// The fonts each (view, class) measures with, and the files they were read from.
+#[derive(Default)]
+struct Fonts {
+    files: fonts::Files,
+    sets: BTreeMap<Key, FontSet>,
+}
+
+/// The shell: the store, the fonts, the rows the test fixture view is given (test hooks), and the sending.
 pub struct Views {
     store: Mutex<Store>,
+    fonts: Mutex<Fonts>,
     /// `__test_view_rows`: the rows and images of a fixture view per (connection, view), the same in every class.
     fixtures: Mutex<BTreeMap<(u64, String), Fixture>>,
 }
@@ -195,6 +207,7 @@ impl Default for Views {
     fn default() -> Self {
         Views {
             store: Mutex::new(Store::new(instance_id())),
+            fonts: Mutex::new(Fonts::default()),
             fixtures: Mutex::new(BTreeMap::new()),
         }
     }
@@ -215,6 +228,47 @@ impl Views {
         if let Some(p) = patch {
             f.send_to(key.0, "view-patch", json!(p));
         }
+        self.ask(f, key);
+    }
+
+    /// KEY's font set, for a builder to measure with (none before its `view/env`).
+    pub fn with_fonts<R>(&self, key: &Key, then: impl FnOnce(&FontSet) -> R) -> Option<R> {
+        lock(&self.fonts).sets.get(key).map(then)
+    }
+
+    /// Asks KEY's editor for the advances its builders missed (`view-glyphs`), each (role, char) once.
+    fn ask(&self, f: &Front, key: &Key) {
+        let asks = self.with_fonts(key, FontSet::take_asks).unwrap_or_default();
+        if !asks.is_empty() {
+            let ask: Vec<(String, String)> =
+                asks.into_iter().map(|(r, c)| (r, c.to_string())).collect();
+            let ask = ViewGlyphsAsk {
+                view: key.1.clone(),
+                class: key.2.clone(),
+                ask,
+            };
+            f.send_to(key.0, "view-glyphs", json!(ask));
+        }
+    }
+
+    /// KEY's env arrived: its font set is made again when the fonts it names changed (the editor's answers kept
+    /// otherwise), and the files no env names any more are dropped.
+    fn env_fonts(&self, key: &Key, env: &ViewEnv, old: Option<&ViewEnv>) {
+        let mut fonts = lock(&self.fonts);
+        if old.is_some_and(|o| o.fonts == env.fonts) && fonts.sets.contains_key(key) {
+            return;
+        }
+        let set = fonts.files.font_set(env);
+        fonts.sets.insert(key.clone(), set);
+    }
+
+    /// Forget the font sets of the keys the store no longer holds, and the files no env names.
+    fn prune_fonts(&self) {
+        let store = lock(&self.store);
+        let mut fonts = lock(&self.fonts);
+        fonts.sets.retain(|k, _| store.pairs.contains_key(k));
+        let Fonts { files, .. } = &mut *fonts;
+        files.keep_only(store.pairs.values().map(|p| &p.env));
     }
 
     /// The images a resync's reset may name.
@@ -244,6 +298,7 @@ impl Views {
     pub fn gone(&self, conn: u64) {
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
+        self.prune_fonts();
     }
 }
 
@@ -251,7 +306,10 @@ impl Views {
 pub fn env(f: &Front, c: &Caller, p: ViewEnv) -> Result<bool, Error> {
     let views = &f.core.views;
     let key = (c.conn_id, p.view.clone(), p.class.clone());
+    let old = lock(&views.store).env_of(&key).cloned();
+    views.env_fonts(&key, &p, old.as_ref());
     lock(&views.store).env(c.conn_id, p);
+    views.prune_fonts();
     views.build(f, &key);
     Ok(true)
 }
@@ -268,13 +326,41 @@ pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
     })
 }
 
-/// `view/glyphs`: the editor's advances (the fitter's, which reads them, arrives with it).
-pub fn glyphs(_f: &Front, _c: &Caller, _p: ViewGlyphs) -> Result<bool, Error> {
+/// `view/glyphs`: the editor's advances for the chars the hub asked of it; the (view, class) is built again by them.
+pub fn glyphs(f: &Front, c: &Caller, p: ViewGlyphs) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let key = (c.conn_id, p.view, p.class);
+    let answers: Vec<(String, char, f32)> = p
+        .glyphs
+        .into_iter()
+        .filter_map(|(role, s, px)| {
+            let mut cs = s.chars();
+            match (cs.next(), cs.next()) {
+                (Some(ch), None) => Some((role, ch, px)),
+                _ => None,
+            }
+        })
+        .collect();
+    if views.with_fonts(&key, |set| set.glyphs(&answers)).is_none() {
+        return Ok(false);
+    }
+    views.build(f, &key);
     Ok(true)
 }
 
-/// `view/measured`: the fit guard's measurements (the fitter's, which reads them, arrives with it).
-pub fn measured(_f: &Front, _c: &Caller, _p: ViewMeasured) -> Result<bool, Error> {
+/// `view/measured`: the fit guard's measurements of strings that overflowed; they win over the sums from now on.
+pub fn measured(f: &Front, c: &Caller, p: ViewMeasured) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let key = (c.conn_id, p.view, p.class);
+    let kept = views.with_fonts(&key, |set| {
+        for (role, text, px) in &p.measured {
+            set.measured(role, text, *px);
+        }
+    });
+    if kept.is_none() {
+        return Ok(false);
+    }
+    views.build(f, &key);
     Ok(true)
 }
 
@@ -282,7 +368,9 @@ pub fn measured(_f: &Front, _c: &Caller, _p: ViewMeasured) -> Result<bool, Error
 pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     let views = &f.core.views;
     lock(&views.fixtures).remove(&(c.conn_id, p.view.clone()));
-    Ok(lock(&views.store).close(c.conn_id, &p.view))
+    let closed = lock(&views.store).close(c.conn_id, &p.view);
+    views.prune_fonts();
+    Ok(closed)
 }
 
 /// Whether P is one reset.

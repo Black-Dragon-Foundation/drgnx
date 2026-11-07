@@ -10,6 +10,8 @@
 //! (Android included) and its tests run it in any order.
 
 mod builder;
+pub mod fit;
+pub mod fit_tty;
 mod patch;
 mod row;
 

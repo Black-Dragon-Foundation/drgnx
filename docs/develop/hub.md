@@ -2076,6 +2076,28 @@ All of it is in memory only.
   other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 
+### Fitting: text to a pixel width
+
+A builder fits each label to its segment's width with `drgnx_rows::fit` (the terminal: `fit_tty`, in columns). The
+hub sums the advances of the font file Emacs uses for the role (`view/env`'s `fonts`), read with skrifa, and trims
+with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an estimate: no shaping, kerning or hinting.
+
+- **Measured against Emacs.** `test/ui/rows-fit-gui-test.el` compares the sums (`test/fixtures/rows-fit-sums.eld`,
+  written by `drgnx-rows`' `fit_sums`) with `string-pixel-width` for 40-char Latin, digit and punctuation strings in
+  Inter and JetBrains Mono at 11 to 16 px. The rounding with the smaller largest error is `fit::ROUNDING`: each
+  advance rounded to whole pixels (largest error 4.0 px; the fractional sum's was 16.4 px, as Emacs places glyphs on
+  whole pixels). The error must stay within the slack.
+- **No I/O in the crate.** `drgnx-rows` measures through the `Measure` trait over bytes handed in, so the builders
+  (vegvisir too) stay testable in every order. The hub's `view/fonts.rs` reads each file once when a `view/env`
+  names it (at most 64 files, none over 64 MiB), and drops it when no env names it.
+- **What the font lacks, the editor answers.** A char with no glyph, or a role with no font file (as `font-info`
+  often has on macOS), is asked of the editor once per (role, char) in `view-glyphs`; its `view/glyphs` answers are
+  kept and the rows built again. Caches are bounded: 4096 chars per font and per set, 1024 measured strings.
+- **The editor's measurement wins.** The fit guard reports a line it measured wider than the hub fitted it
+  (`view/measured`); from then on that width is used for that string instead of the sum (least recently used out).
+- **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
+  (`tty_widths`).
+
 ## Sessions and their sockets
 
 Under Ratatoskr the coordination tools (`norn::tools`, served by `mimir`) run in the hub itself, with no server
