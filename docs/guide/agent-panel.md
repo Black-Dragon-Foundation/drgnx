@@ -34,9 +34,11 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
 ## Why a step was allowed, and what a chip means
 
 Under a step the panel shows the hooks' verdict lines (refused, changed, failed, or busy) and RET on one opens its
-provenance: who (rule or plugin, version, hash), what, how long. A request you answered with `A` Always leaves a line
-`allowed by your Always`; `V` on that step forgets it in the panel. The agent keeps its own rule until it starts again
-(the hub holds no grant to take back), and the panel says so.
+provenance: who (rule or plugin, version, hash), what, how long. A request you answered with `A` Always is written down by the hub (`agents/grants`), and the step shows
+`allowed by your Always` from that ledger. `V` on that step takes the grant back through the hub: it asks you again for a
+matching request from then on. The agent keeps its own rule until it starts again, so `V` also offers to restart the
+agent at its latest step (a new agent from there, which has no rule); the message after a revoke says when the rule is
+kept.
 
 `i` on a chip (or anywhere, then pick one) opens its facts from the hub (`agents/explain`): the context breakdown with
 `[drop]` and `[pin]` only when the agent advertises them and `[What /compact keeps]` when it can say; the dearest

@@ -321,7 +321,7 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel-allow)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "allow") (car drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-always)
-      (should (equal '("agents/permission" :id "s1" :request 7 :option "always") (car drgnx-agent-panel-test--calls)))
+      (should (equal '("agents/permission" :id "s1" :request 7 :option "always") (assoc "agents/permission" drgnx-agent-panel-test--calls)))
       (drgnx-agent-panel-reject)
       (should (equal '("agents/permission" :id "s1" :request 7 :option "reject") (car drgnx-agent-panel-test--calls)))
       ;; a permission card is not a diff card
@@ -611,7 +611,13 @@ unanswered, and panel \"s1\" as `buf'."
         (should (string-match-p "Time:     1 ms" (buffer-string))))
       (kill-buffer "*agent hook*"))))
 
-(ert-deftest drgnx-agent-panel/revoke-an-always ()
+(declare-function drgnx-agent-panel-explain-take-grants "drgnx-agent-panel-explain")
+
+(defun drgnx-agent-panel-test--grant (&optional revoked)
+  (list :id "always:s1:read-1" :session "s1" :tool "read" :key "read-1" :title "Run make" :at 1.0
+        :revoked (if revoked t :false)))
+
+(ert-deftest drgnx-agent-panel/an-always-answer-asks-the-hub-for-its-grants ()
   (drgnx-agent-panel-test--with
     (with-current-buffer buf
       (drgnx-agent-panel--take-snapshot
@@ -622,15 +628,50 @@ unanswered, and panel \"s1\" as `buf'."
       (drgnx-agent-panel-test--text buf)
       (goto-char (drgnx-view-row-start drgnx-view '(:perm 7)))
       (drgnx-agent-panel-always)
-      (drgnx-agent-panel--take-snapshot (list :id "s1" :status "busy"))
+      (should (assoc "agents/permission" drgnx-agent-panel-test--calls))
+      (should (equal '(:id "s1") (cdr (assoc "agents/grants" drgnx-agent-panel-test--calls)))))))
+
+(ert-deftest drgnx-agent-panel/the-always-line-reads-the-hubs-grants ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
       (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
-      (let ((text (drgnx-agent-panel-test--text buf)))
-        (should (string-match-p "allowed by your Always · V revokes" text)))
-      (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0))))
-        (drgnx-agent-panel-revoke-always))
       (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf)))
-      ;; the line is gone because the panel forgot it; nothing is asked of the hub (the agent keeps its own rule)
-      (should (equal "agents/permission" (car (car drgnx-agent-panel-test--calls)))))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (should (string-match-p "allowed by your Always · V revokes" (drgnx-agent-panel-test--text buf)))
+      ;; a grant the hub says is revoked is no line
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant t))))
+      (should-not (string-match-p "Always" (drgnx-agent-panel-test--text buf))))))
+
+(ert-deftest drgnx-agent-panel/revoke-an-always ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (drgnx-agent-panel-test--text buf)
+      (let (asked forked)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'completing-read) (lambda (&rest _) (setq asked t) "Take back, keep running"))
+                  ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
+          (drgnx-agent-panel-revoke-always))
+        ;; the hub is asked to take the grant back; the panel does not forget it by itself
+        (should asked)
+        (should (equal '(:id "s1" :grant "always:s1:read-1") (cdr (assoc "agents/grants/revoke" drgnx-agent-panel-test--calls))))
+        (should-not forked)
+        (should (string-match-p "Always" (drgnx-agent-panel-test--text buf)))))))
+
+(ert-deftest drgnx-agent-panel/revoke-and-restart-forks-at-the-latest-step ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps (list (list :seq 4) (list :seq 9)))
+      (drgnx-agent-panel--take-entries (list (list 0 (drgnx-agent-panel-test--tool "t1" "Run make" "completed"))))
+      (drgnx-agent-panel-explain-take-grants (list :grants (list (drgnx-agent-panel-test--grant))))
+      (drgnx-agent-panel-test--text buf)
+      (let (forked)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'completing-read) (lambda (&rest _) "Take back and restart at the latest step"))
+                  ((symbol-function 'drgnx-history-fork-here) (lambda (&rest a) (setq forked a))))
+          (drgnx-agent-panel-revoke-always))
+        (should (equal '("s1" 9) forked))))))
 
 (ert-deftest drgnx-agent-panel/context-popup-shows-drop-only-when-advertised ()
   (drgnx-agent-panel-test--with

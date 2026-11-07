@@ -105,6 +105,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel-explain-setup "drgnx-agent-panel-explain")
 (declare-function drgnx-agent-panel-huddle-setup "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-list-setup "drgnx-agent-panel-list")
+(declare-function drgnx-agent-panel-explain-load-grants "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel-list-buffer-name)
 (declare-function drgnx-agent-panel-huddle-teardown "drgnx-agent-panel-huddle")
 (declare-function drgnx-agent-panel-huddle--event "drgnx-agent-panel-huddle")
@@ -457,7 +458,9 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
     (if (fboundp 'drgnx-pane-show)
         (drgnx-pane-show 'agent-panel :buffer buf :select t)
       (pop-to-buffer buf))
-    (with-current-buffer buf (drgnx-agent-panel-sync-windows))
+    (with-current-buffer buf
+      (drgnx-agent-panel-sync-windows)
+      (drgnx-agent-panel-explain-load-grants))
     buf))
 
 (defun drgnx-agent-panel--read-session ()
