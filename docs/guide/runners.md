@@ -47,7 +47,7 @@ drgnx runner remove desktop --yes                # stops our units and container
 ```
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
-sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, default `~/.drgnx-runner`)
+sits at the machine), `--accept all|heavy`, `--root DIR` (the one folder drgnx keeps there, an absolute path on the runner: no `~`; default `.drgnx-runner` in its home)
 and `--prefix` (what its units and containers are named after, default `drgnx`).
 
 What `add` does, in order, and stops at the first thing that is wrong:
