@@ -55,6 +55,20 @@
         (should (equal (plist-get e :requires) '((fa "1.0")))))
       (should (plist-get (alist-get 'fa (drgnx-pkg-read-lock)) :sha256)))))   ; its dependency: an archive's, hashed
 
+(ert-deftest drgnx-pkg-git/a-git-package-reports-its-download ()
+  (drgnx-pkg-test--with root
+    (let* ((repo (concat root "src/gp/")) (seen nil))
+      (drgnx-pkg-git-test--commit repo "gp" "0.3")
+      (drgnx-pkg-git-test--want-git root `((gp :url ,repo :rev "main")))
+      (cl-letf (((symbol-function 'drgnx-pkg-progress) (lambda (step &rest plist) (push (cons step plist) seen))))
+        (drgnx-pkg-test--sync root :archives nil))
+      (should (member '(download :pkg "gp" :cached nil) seen))
+      ;; the second sync holds the locked commit in its clone: no download step
+      (setq seen nil)
+      (cl-letf (((symbol-function 'drgnx-pkg-progress) (lambda (step &rest plist) (push (cons step plist) seen))))
+        (drgnx-pkg-test--sync root :archives nil))
+      (should-not (assq 'download seen)))))
+
 (ert-deftest drgnx-pkg-git/the-lock-holds-the-commit-until-upgrade ()
   (drgnx-pkg-test--with root
     (let* ((repo (concat root "src/gp/")) (one (drgnx-pkg-git-test--commit repo "gp" "0.3")))
