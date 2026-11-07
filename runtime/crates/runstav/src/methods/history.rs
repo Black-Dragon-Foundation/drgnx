@@ -39,7 +39,7 @@ pub struct BatchChange {
     pub start: u64,
     pub old_len: u64,
     pub inserted: String,
-    /// `user` (the default) or `agent:<session>` for a change merged in from an agent.
+    /// `user` (the default) or `agent:<session>#<step>` for a change merged in from an agent (its step's record).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
 }

@@ -16206,7 +16206,7 @@
                 "type": "integer"
               },
               "origin": {
-                "description": "`user` (the default) or `agent:<session>` for a change merged in from an agent.",
+                "description": "`user` (the default) or `agent:<session>#<step>` for a change merged in from an agent (its step's record).",
                 "type": [
                   "string",
                   "null"
@@ -17311,7 +17311,7 @@
                 "type": "integer"
               },
               "origin": {
-                "description": "`user` (the default) or `agent:<session>` for a change merged in from an agent.",
+                "description": "`user` (the default) or `agent:<session>#<step>` for a change merged in from an agent (its step's record).",
                 "type": [
                   "string",
                   "null"
