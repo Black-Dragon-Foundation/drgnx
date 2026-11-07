@@ -487,13 +487,13 @@ anything else is only proposed, for you (and, with jobs, a reviewer) to decide.
 Messages never interrupt: an agent gets one as a new turn once it is free (not while it works, not while you have
 stopped it), and each goes queued → delivered → read → acted on. A message is only text to the agent that gets it,
 quoted and marked as coming from another agent: it never answers a permission request, never approves anything,
-never changes a setting. Your own answers and messages (a reply to a job's agent, an answer from the Work cockpit)
+never changes a setting. Your own answers and messages (a reply to a job's agent, an answer from the Work space)
 reach it as yours, unquoted: `[message from the user #N — the user's message]`, or `[message from the user #N — the
 user's answer to your question #Q]` and the question's words on a quoted line when drgnx knows which question it
 answers. No agent can send as the user. Two agents writing to each other too fast, or a full queue, holds the rest. Agents of a job
 hear about that job's new decisions (once per change); a plain chat session is never woken for them. A task an
 agent claimed is a lease, kept while the agent runs and while the task waits on you; if the agent is gone for 15
-minutes the task is free again (the Work cockpit's What needs you shows it; messages and escalations to you wait
+minutes the task is free again (the Work space's What needs you shows it; messages and escalations to you wait
 there too). **Jobs** put several agents to work through a plan you approve, each task in its own worktree, reviewed and
 merged into the job's branch: [jobs.md](jobs.md). Developer details: [coordination.md](../develop/coordination.md).
 
@@ -551,7 +551,7 @@ first commit, so renaming its folder changes nothing). An agent started outside 
 names of agents, unless a grant opens a project to it, and writes nothing. Things in other projects are left out of what it reads and only counted ("3 hidden"), never named.
 
 To let agents read another project, give them a grant (an agent can ask for one; the request waits for you in the
-Work cockpit): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
+Work space): for every agent in a project, for one profile, or for one session, until you revoke it or it expires.
 Grants open reading only: agents still write only into their own project. Whatever another agent wrote reaches an
 agent marked as that agent's text, as data rather than instructions. More in
 [security.md](security.md#grants).
@@ -675,7 +675,7 @@ The agent then gets four tools to report with:
 - **ask_user**: a question that waits for you, never a prompt.
 
 It also gets the messages and the decision log, like drgnx's own agents. Its reports are recorded now, and the Work
-cockpit is where they will show. **Coming with the Work cockpit** (later in this milestone): each reporting agent
+Work space is where they will show. **Coming with the Work space** (later in this milestone): each reporting agent
 shown with its name, folder and branch, the files it changed with their diff since it said hello, its test runs and
 its questions. You will answer a question there, and your answer will reach the agent as a message.
 
@@ -692,7 +692,7 @@ What an outside agent cannot do:
   messages are cut to 2,000 characters, and characters that hide or reorder text (controls, BiDi overrides) become
   spaces.
 
-**Coming with the Work cockpit:** an agent that does not report — no drgnx server in its config, or it never says
+**Coming with the Work space:** an agent that does not report — no drgnx server in its config, or it never says
 hello — will still show there when it works in a git worktree, with the worktree's changes and its ledger, marked
 **not reporting**.
 
@@ -972,7 +972,7 @@ condition clears. A silent session also gets a `stalled` step on the timeline.
   delivery are tested by the Rust tests and the conformance rows against a real hub
   ([coordination.md](../develop/coordination.md), [hub.md](../develop/hub.md), [runtime.md](../develop/runtime.md)).
 - `test/unit/hub-client-test.el` — the editor's client of the hub: the connection, its proof, the subscription, the
-  restart notice, the traffic the cockpit and the CLI send.
+  restart notice, the traffic the editor and the CLI send.
 - `test/unit/agents-mirror-test.el`, `agents-mirror-permission-test.el` — the editor's mirror of the hub's sessions.
 - `test/unit/agents-profiles-test.el` — the Kimi and DeepSeek profiles ([above](#kimi-and-deepseek)).
 - `test/unit/agents-adapter-test.el` — which adapter runs, from fake npm prefixes with `package.json` files only (no

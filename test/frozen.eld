@@ -49,26 +49,6 @@
   :keep (drgnx-agents-ui/unsaved-edits-of-the-file-are-never-mixed-in
          drgnx-agents-ui/a-quoted-name-is-refused-and-an-edit-is-copied-and-written-with-no-handler
          drgnx-agents-ui/an-edit-to-an-encrypted-or-compressed-file-is-refused))
- ("test/unit/job-ui-test.el"
-  :by "2026-10-24-agent-system-design:9; 2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-job-ui/note-jobs-sets-cards-and-messages
-          drgnx-job-ui/a-failed-recount-is-unknown-with-a-reason
-          drgnx-job-ui/a-disconnect-is-unknown
-          drgnx-job-ui/the-badge-is-gone
-          drgnx-job-ui/badge-mode-is-an-obsolete-alias
-          drgnx-job-ui/notify-is-an-obsolete-alias
-          drgnx-job-ui/a-new-card-reaches-the-desktop-once
-          drgnx-job-ui/overlap-cards-count-but-never-interrupt
-          drgnx-job-ui/setup-defines-the-source-and-teardown-clears-it
-          drgnx-job-ui/defines-the-jobs-segment
-          drgnx-job-ui/note-jobs-is-quiet-while-the-module-is-off
-          drgnx-job-ui/the-commands-are-registered
-          drgnx-job-ui/turned-off-it-hears-the-hub-no-more
-          drgnx-job-ui/what-waits-on-you-is-open-cards-and-unacted-messages
-          drgnx-job-ui/attention-mode-adds-and-removes-its-hooks
-          drgnx-job-ui/the-recount-timer-has-an-owner
-          drgnx-job-ui/events-recount-once-and-the-module-owns-the-recount)
-  :keep ())
  ("test/unit/mod-review-test.el"
   :by "2026-11-01-agent-system-p4:44" :since "2026-11-04"
   :tests (drgnx-review/parse-findings-and-verdict
@@ -92,38 +72,6 @@
          drgnx-review/visit-refuses-a-symlink-out-of-the-repository
          drgnx-review/a-path-through-a-planted-link-runs-no-file-name-handler
          drgnx-review/a-finding-is-opened-by-the-name-it-was-checked-by))
- ("test/unit/work-ui-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-work-ui/the-tree-shows-each-spec-with-its-plans-and-their-counts
-          drgnx-work-ui/tab-unfolds-a-plan-into-tasks-and-a-task-into-steps-and-commits
-          drgnx-work-ui/ret-opens-a-task-at-its-line-and-a-commit-as-a-diff
-          drgnx-work-ui/the-filter-and-hide-merged-narrow-the-plans
-          drgnx-work-ui/the-graph-lays-out-specs-plans-and-branches-in-columns
-          drgnx-work-ui/plans-on-one-branch-each-link-their-own-branch-box
-          drgnx-work-ui/a-big-graph-is-drawn-in-bands-emacs-can-show
-          drgnx-work-ui/the-graph-on-a-text-frame-says-it-cannot-be-shown
-          drgnx-work-ui/g-draws-the-graph-again-and-wide-graphs-scroll-sideways
-          drgnx-work-ui/the-graph-takes-its-colours-from-the-theme
-          drgnx-work-ui/a-tall-graph-scrolls-line-by-line
-          drgnx-work-ui/the-graph-shows-no-cursor-and-a-press-moves-nothing
-          drgnx-work-ui/a-click-on-a-box-opens-what-it-shows
-          drgnx-work-ui/a-click-opens-from-its-own-window-and-a-double-click-once
-          drgnx-work-ui/refresh-scans-in-another-process-and-redraws
-          drgnx-work-ui/a-failed-scan-says-only-its-own-output-and-never-errors
-          drgnx-work-ui/an-agent-started-on-a-task-works-on-it
-          drgnx-work-ui/every-command-is-registered
-          drgnx-work-ui/doctor-says-whether-the-tracker-can-work
-          drgnx-work-ui/commits-recorded-for-a-todo-or-the-plan-show-and-count
-          drgnx-work-ui/a-scan-that-changes-one-task-redraws-one-row
-          drgnx-work-ui/folding-inserts-and-removes-children
-          drgnx-work-ui/point-stays-on-its-node
-          drgnx-work-ui/a-fold-a-filter-and-hide-merged-draw-before-they-return
-          drgnx-work-ui/the-node-at-point-is-fresh-after-a-scan-that-leaves-its-row-alone)
-  :keep (drgnx-work-ui/a-file-is-opened-by-its-true-name-with-no-file-name-handler))
- ("test/live/drgnx-work-test.el"
-  :by "2026-11-01-agent-system-p4:44; 2026-11-01-agent-system-p5:25" :since "2026-11-04"
-  :tests (drgnx-live/the-work-tab-fills-in-and-opens-what-it-shows)
-  :keep ())
  ("test/unit/ai-gateway-test.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:45" :since "2026-11-04"
   :tests (drgnx-ai-gateway/gptel-backend-points-at-the-gateway

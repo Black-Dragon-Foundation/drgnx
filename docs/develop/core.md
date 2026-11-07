@@ -237,7 +237,6 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - the Work space's Enter on a file, its files picker and who is here (`drgnx-work-code-open-file`), a document of
     the map (`drgnx-work-map--open-item`) and a trail step's read (`drgnx-work-trail-open-step`);
   - the diff's Open File at Line (`drgnx-diff-visit`);
-  - Work's open of a row and of a graph box (`drgnx-work-ui-open`, `drgnx-work-ui--graph-open`).
   The buffer visits the file under that name: a link's target, not the link.
 - **Work, agents and AI links never open a remote name.** A session whose folder is remote has no file the Work
   space opens, searches or locks; its diffs show as text only. An agent's diff is shown in `drgnx-work-hunk-mode`
@@ -268,8 +267,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
   - `drgnx-test-visit` opens a name the way each command above does;
   - a test checks end to end in a fresh `emacs -Q`:
     `drgnx-work-names/visiting-a-link-out-through-a-remote-name-never-loads-tramp` (the visits);
-  - `test/unit/work-names-test.el` holds the Work space's cases: the cockpit's security and data-loss tests, ported
-    when the cockpit went.
+  - `test/unit/work-names-test.el` holds the Work space's cases: the old Work UI's security and data-loss tests, ported
+    when it went.
 
 ## Schema (`drgnx-schema.el`)
 
@@ -623,7 +622,7 @@ The model is loaded at the first catch, not when the guard loads (`drgnx-notice`
 
 ## Notices (`drgnx-notice.el`)
 
-One model for everything drgnx tells the user. Producers post; the chrome (status bar, cockpit, Notices list) and the
+One model for everything drgnx tells the user. Producers post; the chrome (status bar, Notices list) and the
 routes (echo area, desktop, the session file the doctor reads) read it. It is core and requires only `drgnx-guard`,
 `drgnx-modules-record` and `drgnx-timer` (its clock, `drgnx-timer-now`: tests run it on `drgnx-test-with-clock`):
 nothing in `wb/` or `modules/`, and it never calls UI.
@@ -673,7 +672,7 @@ another severity at the key is a new notice (new `:at`) and lifts a dismissal.
 
 **Sets and the union.** A source of things waiting on you sends its *whole* set whenever it learns it, so a lost
 retraction cannot leave a stale item: `(drgnx-notice-set 'jobs (list (list :id (cons 'card 12) :text "j1 — Merge?"
-:command '(drgnx-job-ui-show "j1") :scope "j1")))`. Items are plists with `:id` and `:text`, and optionally `:command
+:command '(drgnx-work-space-open) :scope "j1")))`. Items are plists with `:id` and `:text`, and optionally `:command
 :scope :detail :echo`; a later item with the same ID wins, and an unchanged ID keeps its `:at`. Only a change of
 ids or of what they say ticks: a source may send the same set every second. The model keeps ITEMS to compare the
 next set with, so send fresh plists and do not change them afterwards. The needs-you count is the size of the
@@ -803,7 +802,7 @@ its own (a filter, sentinel, timer or hook: a state file that did not save, a st
 function that signalled) is a notice, with the severity and lifetime of the table above, so it shows in the Notices
 list and, when it matters, once in the echo area. The core sources in use are `config` (state files, the shell
 environment, packages, trust), `keys` (modal engines and key hooks), `agents` (agent sessions, jobs, the AI probe),
-`hub` (the mirror of the agent hub), `render` (the cockpit's views), `guard` and `wb` (the workbench: restore,
+`hub` (the mirror of the agent hub), `render` (the views'), `guard` and `wb` (the workbench: restore,
 monitors, panes, rules). The lint `drgnx-lint/echo-messages-only-fall` (`test/unit/lint-echo-test.el`, see
 [check.md](check.md)) counts `(message "drgnx` in `core/` and `wb/` per file against a table that can only fall: what
 remains is a command's reply, a line of a process with no notice model (the hub, the sandbox plumbing, the MCP
@@ -1259,7 +1258,7 @@ tests you add.
 Modules not converted yet go on `drgnx-teardown--not-yet`, each with the migration batch that converts it; the
 dynamic check and the raw-forms lint skip them, and the test's message counts them. Known top-level registrations
 waiting for their batch go on `drgnx-teardown--load-registrations`; an entry whose registration is gone fails
-too. Since the last batch (M12f: `ui/face`, `tools/cockpit`) both lists are empty: every shipped module is checked. A file under `modules/` that defines no module is listed in
+too. Since the last batch (M12f: `ui/face`) both lists are empty: every shipped module is checked. A file under `modules/` that defines no module is listed in
 `drgnx-teardown--library-files` with the module that uses it.
 
 ## Timers
@@ -1296,12 +1295,12 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   the key `gc-idle`, the job stamp poll `(jobs-stamp . ID)`, the usage write `surfaces-usage`).
   Module repeats are keyed this way: `tools/agents` owns `agents-ui-mirror` (idle, every 30 s; its first look is the
   one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
-  `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
+  `jobs-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
   `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look`, `-away` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal` the per-frame
-  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
+  `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `jobs-recount`, `tools/ai` the `ai-probe` one-shot; the
   ghost-text pause is an idle debounce `(ai-ghost . BUFFER)` owned by the buffer, the Search view's typing pause
   and its pause after a listed file changed are debounces `(replace-pause . BUFFER)` and `(replace-refresh . BUFFER)`
   owned by the view's buffer (its rows are a view: below); a search's output is parsed `drgnx-replace-parse-lines`
@@ -1588,7 +1587,7 @@ names, and on every bar it allocated more than the other segments together. Test
 Each module activates its memo in its `:setup` (`drgnx-memo-activate`), so turning the module off empties it. The Live
 view bumps by hand rather than by `:watch`: its tests and its use do not wait for the module's setup, and the sites are
 all in one file. The segment and the header are read per redisplay; a hit allocates 0 (tests: `mod-sticky-test.el`,
-`job-ui-test.el`, `mod-live-test.el`).
+`mod-live-test.el`).
 
 ### Caches
 
@@ -1841,7 +1840,7 @@ POS-OF)` puts each back at `(+ (funcall POS-OF KEY) OFFSET)`, but no further tha
 drawn shorter keeps the cursor on it, never on the next row); when POS-OF returns nil (the row went), at the start of
 LINE, or of the last line when the rows now end above it. Dead windows are skipped, and the windows move inside
 `drgnx-wb-with-owned-windows`. The macro is save, BODY, restore, and returns BODY's value. The Explorer and the
-Buffers panel keep their places this way (keyed by path and by buffer), as do the Agents list and the cockpit's
+Buffers panel keep their places this way (keyed by path and by buffer), as do the Agents list and the Work space's
 edits pane.
 
 ### Reads
@@ -1917,17 +1916,10 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
   `drgnx-outline-delay`, owned by the Outline's buffer once it exists). Tests: `test/unit/wb-outline-test.el`,
   `test/unit/wb-outline-edge-test.el` (prefix `drgnx-outline`).
 
-- **The Work tree** (`work-tree`, `modules/tools/drgnx-work-ui.el`; DELAY 0): row keys are node ids (a node the tree
-  shows twice, as a commit under two tasks, has its parent's key appended from the second time on). SYNC
-  (`drgnx-work-ui--render`) walks the open tree into the ordered keys and calls `drgnx-view-sync-rows`; a row's
-  signature is the vector `[(sxhash-equal LINE) DEPTH FOLD]` (a database's strings are never `eq`, a fixnum is).
-  Folding, the filter and a scan's sentinel only touch the view; point and window start stay on their row.
-  `drgnx-work-ui-buffer` draws a new buffer at once and only marks an existing one.
-
 - **The Work space's views** (`work-map`, `work-detail`, `work-board`, `work-timeline`, `work-trail`, `work-review`,
   `modules/tools/drgnx-work-*.el`): the map's rows are the layout's, the Board's are cards across columns, the trail's
   follow the tail and take older steps with `drgnx-view-insert`; [work-space.md](work-space.md) has the rest. (The
-  cockpit's Work graph and feed views are gone.)
+  old Work graph and feed views are gone.)
 
 ### The invariant
 

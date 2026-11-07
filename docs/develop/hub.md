@@ -10,7 +10,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs).
   It requires `cl-lib`, `subr-x`, `seq`, `drgnx-paths`, `drgnx-guard`, `drgnx-timer`, `drgnx-file`, `drgnx-notice`,
   `drgnx-agents-matrix` and `drgnx-work-db` (the AI provider list comes from `drgnx-ai`, which the caller has loaded).
-  There is no server half in Emacs: the hub is the Rust binary. The message prompt the cockpit preview uses is
+  There is no server half in Emacs: the hub is the Rust binary. The message prompt the message preview uses is
   `drgnx-coord-message-prompt` (`core/drgnx-coord-read.el`). A `declare-function` of a client function names
   `"drgnx-hub-client"`. The editor's jobs go through `core/drgnx-exec.el`, a cache fed by `exec/list` and the hub's
   `exec-done` events ([Jobs](#jobs-exec)).
@@ -404,7 +404,7 @@ socket waits 20 ms before Emacs tries again, and macOS's local sockets hold 8 KB
 few MB takes seconds there (the hub writes ~400 KB/s to a client on macOS) and must not count as a stopped client. Only
 the innermost write in progress is judged by time (`drgnx-hub--writing`): one beneath it cannot go on meanwhile, so it gets
 back the time each write above it took (only that: a stopped client beneath writes to others is still dropped); its Emacs
-connects again (the Agents module's idle timer, the Work cockpit's What needs you refresh) — meanwhile it shows the hub's sessions as
+connects again (the Agents module's idle timer, the Work space's What needs you refresh) — meanwhile it shows the hub's sessions as
 ended.
 Snapshots and transcript entries travel as **JSON objects** ("Records 2" below). Events: from the gateway `request` (job, task, agent, provider, model, status, input, output, cost), `fallback`
 (agent, from, to, why), `budget` (job, spent, budget); from jobs `card` (id, job, task, kind, title), `job` (id: its status, tasks or open cards changed) and `fallback` (job, task,
@@ -865,7 +865,7 @@ chunks costs its length, not its length times its chunks (HUB-LINES-1, PERF-M3).
 protocol 0, a held hello) are in `test/fixtures/fake-hub.el`. The tests marked "binary" run against Ratatoskr:
 `DRGNX_RATATOSKR_BIN` names it (`bin/drgnx test --container` passes it into the container), they skip without it,
 and `test/no-skip.eld` makes CI fail when they skip. Among them, `editor-traffic-over-ratatoskr` replays what the
-cockpit, the job UI, the agents mirror and `drgnx job` send, with the params their own code builds, over a populated
+agents mirror and `drgnx job` send, with the params their own code builds, over a populated
 store, and fails on any `invalid-params` or `internal`.
 
 ## Events
@@ -1745,7 +1745,7 @@ and name. The session is recorded in `runtime.db` (`asession`, migration 5) and 
   work tracker records a task's commits from `turn-end`.
 
 - **Shapes.** Snapshots and entries are records 2 (`runstav::methods::agents::{Snapshot, Entry}`), unchanged for the
-  mirror and the cockpit. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
+  mirror and the Work space. Message chunks of one message join into one entry (`text`, `length`); a tool call and its
   updates are one `tool` entry; a plan is replaced, not repeated. `agent` and `agent-entries` events come at most
   once per session per 50 ms. `agents/list` for an `agent` or `service` caller is shaped by `shape::result`.
 - **Permissions.** A permission request of the agent waits in the snapshot's `permissions` until the user answers it
@@ -1840,11 +1840,11 @@ again after it.
   or the hub's end, then the exit;
 - a sender, an agent, the event pair's timer, and the hub's end, then the exit (no pair goes out while the hub ends);
 - a user who answers and stops, an agent that asks twice, completes a tool call and answers, a pause after the tool
-  call, and the cockpit settling a card;
+  call, and the Work space settling a card;
 - two senders, an agent that asks in each turn, the matrix deciding late, and the user's kill, the hub's end or a
   crash;
 - a user who sends and stops, an agent that asks the same question twice and answers, the matrix deciding late
-  through the question's open card or a new one, and the cockpit settling the open card (no card stays open that no
+  through the question's open card or a new one, and the Work space settling the open card (no card stays open that no
   request waits on, and none is withdrawn while one does);
 - two senders, the turn's task that sends each prompt in a step of its own, an agent, and the hub's end, then the exit
   (every prompt reached the agent or waits in the queue on disk);

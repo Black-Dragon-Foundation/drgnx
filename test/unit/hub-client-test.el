@@ -113,14 +113,14 @@
   (cl-count method drgnx-hub-client-test--traffic :key #'car :test #'equal))
 
 (ert-deftest drgnx-hub-client/editor-traffic-over-ratatoskr ()
-  ;; binary + the Lisp backend (review I6): the calls the job UI, the agents mirror and `drgnx job' make,
+  ;; binary + the Lisp backend (review I6): the calls the agents mirror and `drgnx job' make,
   ;; with the params their own code builds, over a store with a proposed job and a mock-acp session: none is
   ;; refused for its params, and none fails inside.  :frozen until agent system part 1's Task 16a: the hub serves
   ;; job/* itself and answers "not yet" until 16a ports plan runs from the frozen Lisp (the job UI is frozen Lisp too)
   :tags '(:frozen)
   (let ((load-path (append (list (expand-file-name "modules/tools" drgnx-dir) (expand-file-name "modules/ui" drgnx-dir))
                            load-path)))
-    (dolist (f '(drgnx-job drgnx-job-ui drgnx-agents-ui)) (require f)))
+    (dolist (f '(drgnx-job drgnx-agents-ui)) (require f)))
   (drgnx-hub-client-test--with-ratatoskr
     (drgnx-hub-client-test--mock-profile root)
     (let ((plan (concat root "plan.md")) (drgnx-hub-client-test--traffic nil)
@@ -139,13 +139,6 @@
       (progn
         (unwind-protect
             (progn
-              ;; the job UI: propose (with this Emacs's gate), list, reject
-              (let ((second nil))
-                (cl-letf (((symbol-function 'drgnx-job-ui-show) (lambda (id) (setq second id))))
-                  (drgnx-job-ui-start plan))
-                (drgnx-job-ui-status)
-                (drgnx-job-ui-stop second))
-              (drgnx-hub-client-test--wait (lambda () (>= (drgnx-hub-client-test--answered "job/status") 2)) "the job UI's answers")
               ;; a durable session and its mirror: the agents UI starts it, the mirror drives it
               (cl-letf (((symbol-function 'drgnx-agents-ui--cwd) (lambda () root))) (drgnx-agents-ui-new-durable "mock"))
               (let ((m (drgnx-hub-client-test--wait (lambda () (seq-find #'drgnx-agent-session-remote drgnx-agents--sessions))
@@ -161,7 +154,7 @@
           (drgnx-agents-mirror-stop)
           (drgnx-hub-disconnect)
           (drgnx-timer-cancel-owner :core)))
-      (dolist (m '("job/propose" "job/status" "job/stop" "job/card" "agents/start" "agents/list" "agents/get"
+      (dolist (m '("agents/start" "agents/list" "agents/get"
                    "agents/send" "agents/do" "agents/kill"))
         (should (member m (mapcar #'car drgnx-hub-client-test--traffic))))
       (should-not (seq-filter (lambda (c) (member (plist-get (nth 2 c) :code) '("invalid-params" "internal")))

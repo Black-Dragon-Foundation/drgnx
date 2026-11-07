@@ -110,7 +110,7 @@ opening the page never writes.
 The server carries no token, key or environment value, so nothing secret is written to any file. For another scope
 (a project's `.mcp.json`, say) use Add… with the name `drgnx` and the same command. Pressing the button again with the
 server there removes it (from the scope it is in), after a confirmation. Restart a running agent to pick the change up.
-In the cockpit, an agent that said hello shows as `outside`; a worktree with changes and no agent reporting shows as
+In the Work space, an agent that said hello shows as `outside`; a worktree with changes and no agent reporting shows as
 `silent` ("not reporting — add drgnx on its settings page").
 
 ## Adding and editing

@@ -80,11 +80,11 @@ and each one that does not bind `drgnx-work-db-gate-hub-standin' to t."
     (should-not (drgnx-lint-work-db--problems
                  '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-work-db-gate-hub-standin t)) (should t)))) listed))
     (should-not (drgnx-lint-work-db--problems '((drgnx-work-db-writer-deftest a/macro () (should t))) listed))
-    (should-not (drgnx-lint-work-db--problems '((ert-deftest a/untagged () (should t))) "cockpit-model-test.el"))))
+    (should-not (drgnx-lint-work-db--problems '((ert-deftest a/untagged () (should t))) "agents-ui-test.el"))))
 
 (ert-deftest drgnx-lint/work-db-writer-tag-outside-the-listed-files-fails-the-lint ()
   ;; the tag cannot hide an editor writer or a backend reader: their test files are not on the list
-  (should (drgnx-lint-work-db--problems '((drgnx-work-db-writer-deftest a/macro () (should t))) "cockpit-model-test.el"))
+  (should (drgnx-lint-work-db--problems '((drgnx-work-db-writer-deftest a/macro () (should t))) "agents-ui-test.el"))
   (should (drgnx-lint-work-db--problems
            '((ert-deftest a/writes () :tags '(:work-db-writer) (let ((drgnx-work-db-gate-hub-standin t)) (should t))))
-           "work-ui-test.el")))
+           "mod-diff-test.el")))

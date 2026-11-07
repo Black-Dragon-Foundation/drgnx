@@ -303,8 +303,7 @@ is a workbench (not a window that rebuilds itself); nil when there are only such
 
 (defvar drgnx-persist-restoring nil
   "Non-nil while `drgnx-persist-restore' runs.  A window's function that rebuilds it (`:restore') then takes back
-only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus (a job window saved
-before M12f only filters the Work cockpit to its job).")
+only its state and arranges nothing: the restored workbench keeps its panes, sizes and focus.")
 
 (defun drgnx-persist-restore (&optional file)
   "Bring back the workbench saved in FILE — the selected frame gets the main window's layout (the state

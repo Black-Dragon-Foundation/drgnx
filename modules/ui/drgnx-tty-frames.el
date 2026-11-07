@@ -711,9 +711,7 @@ asked."
     (review :faces (drgnx-review-critical drgnx-review-important drgnx-review-minor)
             :cue word :doc "The severity word that starts a finding's line")
     (tabs :faces (drgnx-chrome-tab drgnx-chrome-tab-current)
-          :cue attribute :doc "The shown tab differs from the others in weight or inverse video")
-    (work :faces (drgnx-work-ui-spec drgnx-work-ui-done drgnx-work-ui-stale drgnx-work-ui-branch)
-          :cue label :doc "The glyph and the words of a node's line (warning sign, merged, the branch in brackets)"))
+          :cue attribute :doc "The shown tab differs from the others in weight or inverse video"))
   "The faces that mark a state, by group, and the cue besides colour that tells the state on an 8-colour terminal:
 `letter', `word' and `label' are in the text on the screen; `attribute' is in the faces themselves.  :attribute-faces
 are the faces of a group that rely on an attribute because their state has no text.")

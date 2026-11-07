@@ -20,7 +20,6 @@
  "test/live/drgnx-popup-test.el"
  "test/live/drgnx-tiling-test.el"
  "test/live/drgnx-workbench-test.el"
- "test/live/drgnx-work-test.el"
  "test/live/mermaid-live-test.el"
  "test/live/observer-test.el"
  "test/live/scenario-runner-test.el"

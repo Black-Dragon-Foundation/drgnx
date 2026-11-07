@@ -244,7 +244,7 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 
 **Jobs.** `◎ 2 jobs` counts the jobs the hub says are running. The Jobs module defines the segment and counts them from the
 same `job/status` answer that feeds the notice model (when a job or a card changes, never on redisplay; nothing while
-there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work cockpit.
+there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work space.
 
 **Waiting on you.** The number in `◐ 2 waiting on you` is the notice model's one count (`drgnx-needs-you-count`): the
 agents' permission requests and edits to review, the cards and messages of jobs, and the questions no job holds, each

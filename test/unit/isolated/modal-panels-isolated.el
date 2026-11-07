@@ -28,7 +28,6 @@
 (declare-function drgnx-diff-mode "drgnx-diff")
 (declare-function drgnx-review-mode "drgnx-review")
 (declare-function drgnx-prs-mode "drgnx-prs")
-(declare-function drgnx-work-mode "drgnx-work-ui")
 (declare-function drgnx-agents-list-mode "drgnx-agents-ui")
 (declare-function drgnx-onboard-mode "drgnx-onboard")
 
@@ -221,8 +220,8 @@
         ;; Modules
         (let ((b (drgnx-modules-list)))
           (unwind-protect (check b) (kill-buffer b)))
-        ;; Work, Diff, Review: special-mode panels
-        (dolist (cell '(("work" . drgnx-work-mode) ("diff" . drgnx-diff-mode) ("review" . drgnx-review-mode)))
+        ;; Diff, Review: special-mode panels
+        (dolist (cell '(("diff" . drgnx-diff-mode) ("review" . drgnx-review-mode)))
           (let ((b (drgnx-modal-panels-test--rows-buffer (car cell) (cdr cell))))
             (unwind-protect (check b) (kill-buffer b))))
         ;; Agents list, PRs, Welcome: tabulated-list panels
