@@ -2016,6 +2016,26 @@ history, and the transcript is not used), else the row stays for the next start.
 read back, and the first queued prompt is delivered. `restart-when-idle` counts the hub's busy sessions: a running
 turn delays the restart, an idle session does not.
 
+## Rows
+
+A hub-fed view gets finished rows from the hub and only inserts them (`wb/drgnx-view.el`'s inserter). The format,
+its builder, the fitter and the SVG writer are in the crate `drgnx-rows` (no I/O, no clock, no platform dependency:
+it builds for Android too).
+
+- **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
+  [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
+  not know and never interns it); a stop aligns the text at POS to PX (`(space :align-to (PX))`); an image takes one
+  placeholder character. Empty lists are left out.
+- **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
+  `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
+- **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
+  keywords. An image id is one string, `HASH-EPOCH`: the content's hash and the env epoch it was drawn for, so a new
+  epoch (a theme change) never reuses an old tile.
+- **A patch** `{view, class, hub, base, version, env_epoch, ops, images: [[id, svg]]}` moves one (view, display
+  class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
+  `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
+  images the rows name that the editor may not hold yet.
+
 ## Sessions and their sockets
 
 Under Ratatoskr the coordination tools (`norn::tools`, served by `mimir`) run in the hub itself, with no server
