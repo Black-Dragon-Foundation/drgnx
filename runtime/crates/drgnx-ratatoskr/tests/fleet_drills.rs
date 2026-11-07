@@ -33,7 +33,9 @@ use drgnx_ratatoskr::runners::ssh_config as generated;
 use drgnx_ratatoskr::runners::transport::{Channels, LinkError, OpensshTransport, Transport};
 use drgnx_ratatoskr::runners::{Remote, RunnerCfg};
 use drgnx_ratatoskr::runtime_db;
-use forseti::{Expect, JobSpec, JobTrust, Kind, Lane, Priority, Range, RunnerTrust, Weight};
+use forseti::{
+    Expect, JobSpec, JobTrust, Kind, Lane, Priority, Range, RunnerTrust, WaitReason, Weight,
+};
 use runstav::methods::runners::AuditKind;
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -251,6 +253,9 @@ struct Drill {
     told: Arc<Mutex<Vec<(String, Value)>>>,
     /// The most sessions seen on one connection to the runner.
     sessions_max: usize,
+    /// A set of jobs (the throughput row) meets the machine full as well as the gap between starts: the queue offers
+    /// the job again, so those refusals are let through.
+    a_set: bool,
     _user: UserConfig,
 }
 
@@ -290,6 +295,7 @@ impl Drill {
             jump: 0,
             told,
             sessions_max: 0,
+            a_set: false,
             _user: user,
         }
     }
@@ -399,11 +405,18 @@ impl Drill {
                     LinkEvent::Lost { runner, why }
                 }
                 // a row's job (`x…`, never a health check's canary) refused is offered again at the next tick, every
-                // poll here: say why at once instead
+                // poll here: say why at once instead. The gap between two starts on a machine is the one refusal a
+                // set of jobs meets by design (and the machine full, in the throughput row): the queue offers the job
+                // again when it is over
                 LinkEvent::Frame {
-                    frame: Frame::Refuse { r, why, .. },
+                    frame: Frame::Refuse { r, why, reason },
                     ..
-                } if r.job.starts_with('x') => panic!("{}: the runner refused it: {why}", r.job),
+                } if r.job.starts_with('x')
+                    && !matches!(reason, Some(WaitReason::Gap { .. }))
+                    && !(self.a_set && matches!(reason, Some(WaitReason::Threads))) =>
+                {
+                    panic!("{}: the runner refused it: {why}", r.job)
+                }
                 e => e,
             };
             let at = self.now();
@@ -1351,7 +1364,9 @@ mod drill {
     }
 
     /// The wall time of SET jobs (each a few seconds of the shell's own work) over RUNNERS, from the first submit to
-    /// the last verdict, read on CLOCK.
+    /// the last verdict, read on CLOCK. Each job asks for all of a runner's cores, so a runner runs one at a time:
+    /// the fake runners share their host's cores, and a job of one core would let one runner run the whole set at
+    /// once, leaving a second runner nothing to add.
     async fn set_wall(
         name: &str,
         runners: &[&str],
@@ -1359,6 +1374,7 @@ mod drill {
         clock: &dyn Fn() -> std::time::Instant,
     ) -> std::time::Duration {
         let mut d = Drill::new(name, runners[0], "dedicated");
+        d.a_set = true;
         d.link().await;
         let mut more = vec![];
         for r in &runners[1..] {
@@ -1392,9 +1408,15 @@ mod drill {
         })
         .await;
         let work = "i=0; while [ $i -lt 300000 ]; do i=$((i+1)); done; echo done";
+        let cores: u32 = sh(runners[0], "nproc").parse().unwrap();
         let start = clock();
         for i in 0..set {
-            d.submit(d.job(&format!("xset{i}"), work, &[]));
+            let mut job = d.job(&format!("xset{i}"), work, &[]);
+            job.spec.cores = Range {
+                min: cores,
+                max: cores,
+            };
+            d.submit(job);
         }
         d.drive("every verdict", |_, o, _| {
             (o.iter()
@@ -1417,14 +1439,18 @@ mod drill {
         wall
     }
 
-    /// A 40-job set spreads over a fleet of two within 0.6 × the same set's wall on one runner of that fleet, in
-    /// the same run (so the bound needs no wall-clock constant).
+    /// A set of jobs spreads over a fleet of two within 0.6 × the same set's wall on one runner of that fleet, in
+    /// the same run (so the bound needs no wall-clock constant). A runner runs one job at a time and the jobs are
+    /// short, so the set is bound by the gap between two starts on a machine ([`forseti::admit::START_GAP_S`]): one
+    /// runner needs (SET − 1) gaps, two about half as many. SET keeps one runner's gaps within half of the row's wait.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "timing: fleet throughput"]
     async fn a_set_spreads_over_two_runners_within_its_bound() {
+        const SET: usize = (WAIT / 2 / forseti::admit::START_GAP_S) as usize + 1;
         let clock = std::time::Instant::now;
-        let one = set_wall("set1", &["r1"], 40, &clock).await;
-        let two = set_wall("set2", &["r1", "r2"], 40, &clock).await;
+        let one = set_wall("set1", &["r1"], SET, &clock).await;
+        let two = set_wall("set2", &["r1", "r2"], SET, &clock).await;
+        println!("the set of {SET}: one runner {one:?}, two {two:?}");
         assert!(
             two.as_secs_f64() <= 0.6 * one.as_secs_f64(),
             "two runners took {two:?}, one took {one:?}"
