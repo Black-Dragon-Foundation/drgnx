@@ -1,6 +1,6 @@
 ;; The three defconsts of drgnx-ai.el and drgnx-agents.el as they were before agents.eld and ai.eld folded into
 ;; settings (Task 15): ((NAME . VALUE)…).  test/unit/settings-defaults-test.el compares them with
-;; settings/runtime-defaults.el.
+;; settings/runtime-defaults.el (the profiles follow it: provider locks added their :env).
 ((drgnx-ai-presets
   (openrouter :name "OpenRouter" :kind openai :url
 	      "https://openrouter.ai/api/v1" :key-env
@@ -45,25 +45,21 @@
 			       (ollama . "qwen2.5-coder:7b"))
 			 (embed (tei)) (agent (openrouter)))
  (drgnx-agents-builtin-profiles
-  ("claude" :command ("claude-agent-acp") :mode queue :job-safe t :doc
-   "Claude through the unmodified agent (subscription or API key)")
-  ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue
-   :job-safe t :ai claude-openrouter :doc
-   "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
-  ("claude (Ollama)" :command ("claude-agent-acp") :mode queue
-   :job-safe t :ai claude-ollama :doc
-   "Claude Code on a local Ollama model")
-  ("claude (Kimi)" :command ("claude-agent-acp") :mode queue :job-safe
-   t :ai claude-moonshot :model "kimi-k3" :doc
-   "Claude Code on Kimi through Moonshot's own API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
-  ("claude (DeepSeek)" :command ("claude-agent-acp") :mode queue
-   :job-safe t :ai claude-deepseek :model "deepseek-v4-pro" :doc
-   "Claude Code on DeepSeek through its own API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
-  ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :mode
-   queue :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
-   :doc
-   "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
-  ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp")
-   :mode queue :job-safe t :ai claude-openrouter :model
-   "deepseek/deepseek-v4-pro" :doc
-   "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")))
+  ("claude" :command ("claude-agent-acp") :mode queue :job-safe t
+    :doc "Claude through the unmodified agent (subscription or API key)")
+   ("claude (OpenRouter)" :command ("claude-agent-acp") :mode queue :job-safe t :ai claude-openrouter
+    :doc "Claude Code on OpenRouter (your OpenRouter key, from the environment or auth-source)")
+   ("claude (Ollama)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue :job-safe t
+    :ai claude-ollama
+    :doc "Claude Code on a local Ollama model")
+   ("kimi" :command ("kimi" "acp") :mode queue :provider kimi :ai kimi-moonshot :model "kimi-k3"
+    :doc "Kimi Code, Moonshot's own agent, on Kimi through Moonshot's API (MOONSHOT_API_KEY or auth-source for api.moonshot.ai; billed per token by Moonshot)")
+   ("deepseek" :command ("dsh" "--profile" "acp") :mode queue :provider deepseek :ai dsh-deepseek
+    :model "deepseek-v4-pro"
+    :doc "DeepSeek Harness, DeepSeek's own agent, on DeepSeek through its API (DEEPSEEK_API_KEY or auth-source for api.deepseek.com; billed per token by DeepSeek)")
+   ("claude (Kimi via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "moonshotai/kimi-k3"
+    :doc "Claude Code on Kimi through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")
+   ("claude (DeepSeek via OpenRouter)" :command ("claude-agent-acp") :env ("ENABLE_TOOL_SEARCH=false") :mode queue
+    :job-safe t :ai claude-openrouter :model "deepseek/deepseek-v4-pro"
+    :doc "Claude Code on DeepSeek through OpenRouter (OPENROUTER_API_KEY or auth-source for openrouter.ai; billed by OpenRouter)")))
