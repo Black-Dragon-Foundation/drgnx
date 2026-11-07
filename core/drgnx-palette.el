@@ -97,13 +97,26 @@
             ((< d 86400) (format "used %d h ago" (/ d 3600)))
             (t (format "used %d d ago" (/ d 86400)))))))
 
-(defun drgnx-palette-sort (labels cands)
-  "LABELS with the recently run commands first, newest first; the rest in their order.  CANDS is (LABEL . ID)."
-  (sort (copy-sequence labels)
-        (lambda (a b)
-          (let ((ra (drgnx-palette-recent-rank (cdr (assoc a cands))))
-                (rb (drgnx-palette-recent-rank (cdr (assoc b cands)))))
-            (cond ((and ra rb) (< ra rb)) (ra t) (t nil))))))
+(defun drgnx-palette-sort (labels cands &optional ids)
+  "LABELS with the recently run commands first, newest first; the rest in their order.  CANDS is (LABEL . ID); IDS,
+when given, is a hash of CANDS (`drgnx-palette--ids', made once per palette, not per key).  The history is read once and
+no comparison runs: the labels with a rank are placed by it and the others follow as they came."
+  (let* ((ids (or ids (drgnx-palette--ids cands)))
+         (rank (make-hash-table :test #'eq)) (i 0)
+         (ranked nil) (rest nil))
+    (dolist (e (drgnx-palette--history))
+      (unless (gethash (car e) rank) (puthash (car e) i rank))
+      (setq i (1+ i)))
+    (dolist (l labels)
+      (if-let* ((r (gethash (gethash l ids) rank))) (push (cons r l) ranked) (push l rest)))
+    (nconc (mapcar #'cdr (sort (nreverse ranked) (lambda (a b) (< (car a) (car b)))))   ; the ranked few, stable
+           (nreverse rest))))
+
+(defun drgnx-palette--ids (cands)
+  "A hash label → id of CANDS (the first of a label that two commands share)."
+  (let ((h (make-hash-table :test #'equal :size (length cands))))
+    (dolist (c cands) (unless (gethash (car c) h) (puthash (car c) (cdr c) h)))
+    h))
 
 (defun drgnx-palette-group (label)
   "The group of the candidate LABEL (\"Category: Title\"): Agents, Files or Commands."
@@ -145,6 +158,7 @@ text starting with `#' is a question; empty does nothing; a partial label that c
 runs it; several is an \"Ambiguous\" error naming up to three; none is \"No command\"."
   (interactive)
   (let* ((cands (drgnx-palette-candidates))
+         (ids (drgnx-palette--ids cands))
          ;; the keys are the ones this terminal can send, asked from the buffer the command would run in
          ;; (the annotations are made with the minibuffer current)
          (origin (current-buffer))
@@ -160,7 +174,7 @@ runs it; several is an \"Ambiguous\" error naming up to three; none is \"No comm
          (table (lambda (string pred action)
                   (if (eq action 'metadata)
                       `(metadata (annotation-function . ,annotate) (category . drgnx-command)
-                                 (display-sort-function . ,(lambda (labels) (drgnx-palette-sort labels cands)))
+                                 (display-sort-function . ,(lambda (labels) (drgnx-palette-sort labels cands ids)))
                                  (group-function . ,(lambda (label transform) (if transform label (drgnx-palette-group label)))))
                     (complete-with-action action cands string pred))))
          (choice (string-trim (completing-read "Command (# for a code question): " table nil nil initial))))

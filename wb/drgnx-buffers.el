@@ -162,8 +162,9 @@ While a button is held in the panel, wait for the release: rows never move under
 
 (defun drgnx-buffers--render ()
   (drgnx-buffers--update-order)
-  (let ((sig (cons drgnx-buffers--filter
-                   (mapcar (lambda (b) (list b (buffer-name b) (buffer-modified-p b))) (drgnx-buffers--shown)))))
+  (let* ((shown (drgnx-buffers--shown))          ; once per render: the rows, the signature and the row index share it
+         (sig (cons drgnx-buffers--filter
+                    (mapcar (lambda (b) (list b (buffer-name b) (buffer-modified-p b))) shown))))
     (unless (equal sig drgnx-buffers--signature)
       (setq drgnx-buffers--signature sig)
       (cl-incf drgnx-buffers--renders)
@@ -174,8 +175,8 @@ While a button is held in the panel, wait for the release: rows never move under
             (erase-buffer)
             (let ((drgnx-buffers--dirs (make-hash-table :test #'equal)))
               ;; One insertion of plain text (faces: jit-lock, for the visible rows only).
-              (insert (mapconcat #'drgnx-buffers--row (drgnx-buffers--shown) "")))
-            (setq drgnx-buffers--rows (vconcat (drgnx-buffers--shown))))
+              (insert (mapconcat #'drgnx-buffers--row shown "")))
+            (setq drgnx-buffers--rows (vconcat shown)))
           (when hl-line-mode (hl-line-highlight))
           (drgnx-buffers--mark-active))))))
 

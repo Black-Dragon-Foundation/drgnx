@@ -77,5 +77,22 @@ off, the buffers have no such entry and the hook is gone."
       (drgnx-look-echo-area-off)
       (kill-buffer mini))))
 
+(ert-deftest drgnx-look-palette/sort-reads-the-history-once ()
+  "Sorting the labels for one key reads the history once, whatever the number of labels, and keeps the order of the
+rest."
+  (drgnx-look-palette-test--with-state
+    (drgnx-test-with-clock ()
+      (drgnx-palette-record 'a)
+      (drgnx-test-advance 60)
+      (drgnx-palette-record 'c)
+      (let* ((cands (mapcar (lambda (i) (cons (format "Cmd: %d" i) (intern (format "k%d" i)))) (number-sequence 1 300)))
+             (cands (append cands '(("X: A" . a) ("Z: C" . c))))
+             (labels (mapcar #'car cands)) (reads 0) (orig (symbol-function 'drgnx-palette--history)))
+        (cl-letf (((symbol-function 'drgnx-palette--history) (lambda () (cl-incf reads) (funcall orig))))
+          (let ((sorted (drgnx-palette-sort labels cands)))
+            (should (= reads 1))
+            (should (equal (seq-take sorted 3) '("Z: C" "X: A" "Cmd: 1")))
+            (should (equal (cddr sorted) (seq-take labels 300)))))))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here
