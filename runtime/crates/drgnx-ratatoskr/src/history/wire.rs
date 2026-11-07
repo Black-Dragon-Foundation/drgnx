@@ -206,17 +206,46 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
         lock(&WATCHED).retain(|i| *i != tree.id.0);
         return;
     };
+    // the tree's key among the project's watcher: main is `MAIN_TREE`, a worktree joins the one watcher under its id
+    let key = {
+        let (t, p) = (tree.clone(), project.clone());
+        crate::clock::blocking(move || {
+            if std::fs::canonicalize(&t.root).is_ok_and(|r| r == p.root()) {
+                return Some(hrafn::MAIN_TREE.to_string());
+            }
+            let key = t.id.0.clone();
+            let spec = hrafn::TreeSpec {
+                key: key.clone(),
+                root: t.root.clone(),
+                gitdir: t.git_dir.clone(),
+            };
+            match p.add_tree(spec) {
+                Ok(()) => Some(key),
+                Err(e) => {
+                    tracing::warn!("history: {} runs unwatched: {e}", t.root.display());
+                    None
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    let Some(key) = key else {
+        lock(&WATCHED).retain(|i| *i != tree.id.0);
+        return;
+    };
     let rx = Arc::new(Mutex::new(project.tap()));
     let weak = Arc::downgrade(&hub);
     drop(hub);
     crate::clock::spawn("history:watch", async move {
         loop {
             let Some(hub) = weak.upgrade() else { return };
-            let (t, r) = (tree.clone(), rx.clone());
+            let (t, r, k) = (tree.clone(), rx.clone(), key.clone());
             let now = crate::clock::wall_secs();
             let _ = crate::clock::blocking(move || {
                 let rx = lock(&r);
-                watch::pump(&hub, &t, &rx, now);
+                watch::pump(&hub, &t, &k, &rx, now);
             })
             .await;
             crate::clock::sleep(std::time::Duration::from_secs(1)).await;

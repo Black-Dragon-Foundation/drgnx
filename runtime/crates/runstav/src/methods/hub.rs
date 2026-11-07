@@ -209,6 +209,31 @@ pub struct HubStatus {
     /// The run this hub records or replays (`DRGNX_RECORD`, `DRGNX_REPLAY`); absent for a hub that does neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording: Option<RecordingStatus>,
+    /// Hrafn's file watches: what is watched and which projects run unwatched (none from a Lisp hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch: Option<WatchStatus>,
+}
+
+/// `status.watch`: the inotify budget and each open project's watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WatchStatus {
+    /// `fs.inotify.max_user_watches` (none off Linux or when unreadable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_user_watches: Option<u64>,
+    pub projects: Vec<ProjectWatch>,
+}
+
+/// One project's file watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectWatch {
+    pub root: String,
+    /// Directories under watch.
+    pub watched: u64,
+    /// Why the project runs unwatched (the watch budget is spent, or the watcher could not start); none: it is watched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Whether a hub records its run or replays one.

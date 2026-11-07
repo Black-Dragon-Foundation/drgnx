@@ -22,14 +22,16 @@ pub use coverage::{CoverageError, coverage};
 pub use door::{Blob, DoorKind, Head, Obj, Status, TreeChange, TreeEntry, TreeGit};
 #[cfg(feature = "host")]
 pub use door::{GixDoor, door};
-#[cfg(feature = "host")]
-pub use files::GitCli;
 pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list};
+#[cfg(feature = "host")]
+pub use files::{GitCli, ignored_dirs, is_ignored_dir};
 pub use index::{Lag, Refresh, collect, lag, missing, put_vectors, refresh, reset};
 pub use query::{Answer, Hit, Query, Scope, search};
+pub use watch::{
+    AddError, MAIN_TREE, ProjectWatch, Router, TreeSpec, Watch, WatchEvent, WatchState,
+};
 #[cfg(feature = "host")]
-pub use watch::NotifyWatch;
-pub use watch::{Watch, WatchEvent};
+pub use watch::{Adder, HostWatch, Walker};
 
 pub use schema::{MIGRATIONS, encode_symbol};
 pub use store::{ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, VecRow, vec_key};

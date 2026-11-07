@@ -2,7 +2,8 @@
 //!
 //! `doctor --json` is
 //! `{binary: {path, commit, test_hooks}, running: {commit, pid}?, gateway: {port, registrations, providers, keys_held,
-//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, socket_dir: {path, mode, ok}, sqlite,
+//! warnings, keys_refused?}?, store: {schema, writer, failed, denied_in}?, watch: {max_user_watches?, projects: [{root, watched, error?}]}?,
+//! socket_dir: {path, mode, ok}, sqlite,
 //! job_agents, sandbox: {backend, version, ok, reason, fix, landlock_abi, in_use, pins_note}, legacy: {moved, left, at,
 //! lisp_processes: [{pid, what}]}}`.  `legacy` is what the Lisp runtime left (`crate::legacy`): what the first start
 //! moved to `<state>/hub/migrated-p7/`, what stays (a command job still running), and the user's processes that are
@@ -53,6 +54,8 @@ pub struct Running {
     pub commit: Option<String>,
     pub gateway: Option<Value>,
     pub store: Option<Value>,
+    /// Its `watch`: Hrafn's file watches.
+    pub watch: Option<Value>,
 }
 
 /// The socket directory's state.
@@ -146,6 +149,9 @@ pub fn report(env: &Env, binary: &Path, running: Option<Running>, sandbox: &Chec
             if let Some(why) = g.get("keys_refused").filter(|w| w.is_string()) {
                 v["gateway"]["keys_refused"] = why.clone();
             }
+        }
+        if let Some(w) = r.watch {
+            v["watch"] = w;
         }
         if let Some(s) = r.store {
             v["store"] = json!({
@@ -634,6 +640,7 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                 commit: s["runtime"]["commit"].as_str().map(str::to_string),
                 gateway: s.get("gateway").cloned(),
                 store: s.get("store").cloned(),
+                watch: s.get("watch").cloned(),
             })
             .or_else(|| {
                 client::ping(&socket, left().max(DOCTOR_PING)).map(|pid| Running {
@@ -641,6 +648,7 @@ pub fn doctor(env: &Env, json_out: bool) -> i32 {
                     commit: None,
                     gateway: None,
                     store: None,
+                    watch: None,
                 })
             });
         let check = check
@@ -691,11 +699,35 @@ fn text(v: &Value, sandbox: &Check) -> String {
     out.push_str(&format!("\njob agents: {}", t(&v["job_agents"])));
     out.push_str(&format!("\n{}", sandbox_line(sandbox)));
     out.push_str(&format!("\nagent browser: {}", t(&v["browser"]["verdict"])));
+    out.push_str(&watch_lines(&v["watch"]));
     out.push_str(&legacy_lines(&v["legacy"]));
     out
 }
 
 /// Lines about what the Lisp runtime left: a command job still running there, and its processes still alive.
+/// `watch`: the inotify budget and the open projects' watches; a project that runs unwatched is named with why.
+fn watch_lines(watch: &Value) -> String {
+    let Some(projects) = watch["projects"].as_array().filter(|p| !p.is_empty()) else {
+        return String::new();
+    };
+    let dirs: u64 = projects.iter().filter_map(|p| p["watched"].as_u64()).sum();
+    let mut out = format!("\nwatch: {dirs} directories in {} projects", projects.len());
+    if let Some(max) = watch["max_user_watches"].as_u64() {
+        out.push_str(&format!(
+            " (inotify budget {max}, fs.inotify.max_user_watches)"
+        ));
+    }
+    for p in projects {
+        if let Some(why) = p["error"].as_str() {
+            out.push_str(&format!(
+                "\nwatch: {} runs unwatched: {why}",
+                p["root"].as_str().unwrap_or("?")
+            ));
+        }
+    }
+    out
+}
+
 fn legacy_lines(legacy: &Value) -> String {
     let list = |k: &str, f: &dyn Fn(&Value) -> String| {
         legacy[k]
@@ -794,9 +826,11 @@ mod tests {
                 ),
                 store: Some(json!({"schema": 6, "writer": "not-ready", "writes": 0,
                     "failed": "the move of work.db to schema 7 failed: x", "denied_in": ["/d/backup/work-pre7-1.db"]})),
+                watch: Some(watch_json()),
             }),
             &working(),
         );
+        assert_eq!(up["watch"], watch_json());
         for (k, want) in [
             ("schema", json!(6)),
             ("writer", json!("not-ready")),
@@ -1181,6 +1215,7 @@ mod tests {
                     json!({"port": 4100, "registrations": 0, "providers": 0, "keys_refused": why}),
                 ),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
@@ -1201,11 +1236,31 @@ mod tests {
                 commit: None,
                 gateway: Some(json!({"port": 4100, "registrations": 0, "providers": 0})),
                 store: None,
+                watch: None,
             }),
             &working(),
         );
         assert!(fine["gateway"].get("keys_refused").is_none());
         assert!(!text(&fine, &working()).contains("keys: refused"));
+    }
+
+    fn watch_json() -> Value {
+        json!({"max_user_watches": 132648, "projects": [
+            {"root": "/p/a", "watched": 410},
+            {"root": "/p/b", "watched": 0,
+             "error": "the inotify watch limit is spent (ENOSPC; raise fs.inotify.max_user_watches): x"}]})
+    }
+
+    #[test]
+    fn the_watch_row_names_an_unwatched_project() {
+        let l = watch_lines(&watch_json());
+        assert!(l.contains("410 directories in 2 projects"), "{l}");
+        assert!(l.contains("132648"), "{l}");
+        assert!(l.contains("/p/b runs unwatched"), "{l}");
+        assert!(l.contains("ENOSPC"), "{l}");
+        assert!(!l.contains("/p/a runs unwatched"), "{l}");
+        // no hub, no row
+        assert_eq!(watch_lines(&Value::Null), "");
     }
 
     #[test]

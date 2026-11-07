@@ -167,7 +167,7 @@ fn parse_history(text: &str) -> Vec<Commit> {
 }
 
 #[cfg(feature = "host")]
-pub use cli::GitCli;
+pub use cli::{GitCli, ignored_dirs, is_ignored_dir};
 
 #[cfg(feature = "host")]
 pub(crate) mod cli {
@@ -224,6 +224,42 @@ pub(crate) mod cli {
             )));
         }
         Ok(out.stdout)
+    }
+
+    /// The directories of ROOT git ignores as a whole (`dir/`, root-relative): what a watcher leaves unwatched.
+    pub fn ignored_dirs(root: &Path) -> io::Result<Vec<String>> {
+        let out = run(
+            root,
+            &[
+                "ls-files",
+                "-z",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+            ],
+            vec![],
+        )?;
+        Ok(nul_list(&out)
+            .into_iter()
+            .filter(|p| p.ends_with('/'))
+            .collect())
+    }
+
+    /// Whether git ignores the directory REL (root-relative) of ROOT.
+    pub fn is_ignored_dir(root: &Path, rel: &Path) -> bool {
+        let mut dir = rel.to_string_lossy().into_owned();
+        dir.push('/');
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["check-ignore", "-q", "--", &dir])
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
     }
 
     pub(crate) fn nul_list(bytes: &[u8]) -> Vec<String> {

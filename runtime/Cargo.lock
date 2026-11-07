@@ -2965,6 +2965,8 @@ version = "0.1.0"
 dependencies = [
  "eitri",
  "gix",
+ "inotify",
+ "libc",
  "notify",
  "rusqlite",
  "serde",

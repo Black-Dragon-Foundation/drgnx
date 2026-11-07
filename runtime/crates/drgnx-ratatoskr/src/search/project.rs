@@ -172,6 +172,8 @@ struct Inner {
     tier1: tokio::sync::Mutex<()>,
     settle: Mutex<Settle>,
     events: Mutex<Option<Receiver<WatchEvent>>>,
+    /// The project's one watcher, which more trees (worktrees) join.
+    watcher: Mutex<Option<Arc<hrafn::ProjectWatch>>>,
     /// Others reading the same events (the edit history): each event is copied to them as `tick` takes it.
     taps: Mutex<Vec<std::sync::mpsc::Sender<WatchEvent>>>,
     opened: tokio::time::Instant,
@@ -233,6 +235,7 @@ impl Project {
                 tier1: tokio::sync::Mutex::new(()),
                 settle: Mutex::new(Settle::new(GIT_QUIET, SAVE_DEBOUNCE)),
                 events: Mutex::new(None),
+                watcher: Mutex::new(None),
                 taps: Mutex::new(Vec::new()),
                 opened: clock::now(),
                 #[cfg(feature = "test-hooks")]
@@ -260,9 +263,22 @@ impl Project {
     }
 
     /// The watcher's events from now on; `tick` feeds them to the settle core.
-    pub fn watch(&self, w: &dyn hrafn::Watch) {
+    pub fn watch(&self, w: Arc<hrafn::ProjectWatch>) {
         if let Ok(mut e) = self.inner.events.lock() {
-            *e = Some(w.events());
+            *e = Some(hrafn::Watch::events(&*w));
+        }
+        if let Ok(mut h) = self.inner.watcher.lock() {
+            *h = Some(w);
+        }
+    }
+
+    /// Another tree of this project (a worktree) joins the project's one watcher; its events are tagged with
+    /// its key. Blocking: it walks the tree and runs git.
+    pub fn add_tree(&self, spec: hrafn::TreeSpec) -> Result<(), hrafn::AddError> {
+        let w = self.inner.watcher.lock().ok().and_then(|h| h.clone());
+        match w {
+            Some(w) => w.add_tree(spec),
+            None => Err(hrafn::AddError::Other("the project has no watcher".into())),
         }
     }
 
@@ -312,11 +328,8 @@ impl Project {
                 .map_err(|_| io::Error::other("settle"))?;
             let mut due = None;
             for e in events {
-                let fed = match e {
-                    WatchEvent::File(p) => Fresh::Save(p),
-                    WatchEvent::Git => Fresh::Git,
-                    WatchEvent::Lock(on) => Fresh::Lock(on),
-                };
+                // only the main checkout's own events arm its tier 1: a save in a worktree wakes nothing here
+                let Some(fed) = e.main_fresh() else { continue };
                 settle.feed(Fresh::At(now));
                 due = due.or(settle.feed(fed));
             }
