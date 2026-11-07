@@ -29,7 +29,6 @@
          drgnx-review/visit-refuses-a-symlink-out-of-the-repository
          drgnx-review/a-path-through-a-planted-link-runs-no-file-name-handler
          drgnx-review/a-finding-is-opened-by-the-name-it-was-checked-by))
-  :keep ())
  ("test/unit/isolated/modal-ai-isolated.el"
   :by "2026-10-24-agent-system-design:8; 2026-11-01-agent-system-p4:44" :since "2026-11-05"
   :tests (drgnx-modal-ai/no-suggestion-outside-insert
