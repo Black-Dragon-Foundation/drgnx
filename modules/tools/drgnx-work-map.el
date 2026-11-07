@@ -32,6 +32,7 @@
 (declare-function drgnx-runners-view-dot-face "drgnx-runners-view")
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
+(declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-work-space--show-detail "drgnx-work-space")
 (declare-function drgnx-face-glyph "drgnx-ui-kit")
 (declare-function drgnx-work-edges-geometry "drgnx-work-edges")
@@ -328,6 +329,18 @@ of which changed are the very images they were."
       (dolist (w (get-buffer-window-list (current-buffer) nil t)) (set-window-point w pos)))))
 
 ;;;; The rows path: keys answer from the map's model in Sjá
+
+(defun drgnx-work-map-rows-p ()
+  "Whether a map opened now goes on the hub's rows: not `drgnx-view-old-path', and this Emacs has Sjá (the keys answer
+from its model).  Off it, the map keeps its frames and draws its rows itself, as before."
+  (and (not drgnx-view-old-path) (fboundp 'nidhogg-view--call)))
+
+(defun drgnx-work-map-rows-attach (view)
+  "Make the current map buffer the hub-fed view VIEW (the map view's id): its rows come as patches for the classes
+whose env this Emacs sends while a window shows it; the selection goes to the hub by the trailing notice."
+  (drgnx-view-patch-attach view "unshown")
+  (require 'drgnx-view-env)
+  (drgnx-view-env-register view (current-buffer)))
 
 (defun drgnx-work-map--sja ()
   "This map's instance in Sjá when its keys answer from the model (hub-built rows, not `drgnx-view-old-path'), or nil."

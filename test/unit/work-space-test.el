@@ -21,6 +21,8 @@
 (defvar drgnx-work-space-command-ids)
 (defvar drgnx-work-map--outline)
 
+(defvar drgnx-view-old-path)
+
 (defmacro drgnx-work-space-test--with (&rest body)
   "BODY with the module `tools/work-space' set up, a gated hub serving the test's dirs (profile \"mock\"), and
 `workspace' the workspace of the test's home folder.  The modules come first so the hub and this Emacs share their
@@ -37,7 +39,8 @@ directories."
          ;; the map's events come back on the subscribed connection: this Emacs has one before a map opens
          (drgnx-hub-connect)
          (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
-         (let ((workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
+         ;; these tests read the frames this Emacs draws: the old path (the hub's rows: work-map-rows-test.el)
+         (let ((drgnx-view-old-path t) (workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
            ,@body)))))
 
 (defun drgnx-work-space-test--start-agent ()

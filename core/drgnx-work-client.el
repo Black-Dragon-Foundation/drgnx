@@ -283,25 +283,39 @@ close, makes it stale).  Without a connection the view waits, keeping what it ha
                                      (lambda (result err) (drgnx-work-client--subscribed id gen result err)))
       (drgnx-work-client--status view 'reconnecting))))
 
+(defun drgnx-work-client--rows-p (view)
+  "Whether VIEW's rows come from the hub (`work/map/subscribe' with `rows'): no frame, no `work-map' event."
+  (and (plist-get (drgnx-work-client--view-params view) :rows) t))
+
+(defun drgnx-work-client-rows-p (id)
+  "Whether view ID's rows come from the hub (`drgnx-work-client-open' with ROWS)."
+  (when-let* ((v (drgnx-work-client--get id))) (drgnx-work-client--rows-p v)))
+
 (defun drgnx-work-client--subscribed (id gen result err)
   (let ((view (drgnx-work-client--get id)))
     (when (and view (= gen (drgnx-work-client--view-gen view)))
-      (if (or err (null result))
-          (drgnx-work-client--status view 'reconnecting)
+      (cond
+       ((or err (null result)) (drgnx-work-client--status view 'reconnecting))
+       ;; the hub's rows: the patches (a reset first) bring the map; this Emacs keeps no frame
+       ((drgnx-work-client--rows-p view)
+        (drgnx-work-client--status view (if (drgnx-work-client--view-shown view) 'live 'hidden)))
+       (t
         (setf (drgnx-work-client--view-state view) (drgnx-work-client-init result))
         (drgnx-work-client--bump view :frames)
         (drgnx-work-client--status view (if (drgnx-work-client--view-shown view) 'live 'hidden))
-        (drgnx-work-client--changed view (list :rows t :layout t :edges t :strip t))))))
+        (drgnx-work-client--changed view (list :rows t :layout t :edges t :strip t)))))))
 
-(cl-defun drgnx-work-client-open (id workspace &key (width 226) density filters collapsed selected)
+(cl-defun drgnx-work-client-open (id workspace &key (width 226) density filters collapsed selected rows)
   "Open the view ID on WORKSPACE (a plist :id :roots) and ask the hub for its frame; returns ID.  WIDTH is the drawing
-width in units of 4 px."
+width in units of 4 px.  ROWS: the hub builds the view's rows and sends them as `view-patch' to the classes this Emacs
+sent a `view/env' for (the env's view is ID); no frame is kept here."
   (let ((view (drgnx-work-client--make-view
                :id id
                :params (append (list :workspace (list :id (plist-get workspace :id) :roots (plist-get workspace :roots))
                                      :width_units width)
                                (and density (list :density density)) (and filters (list :filters filters))
-                               (and collapsed (list :collapsed collapsed)) (and selected (list :selected selected))))))
+                               (and collapsed (list :collapsed collapsed)) (and selected (list :selected selected))
+                               (and rows (list :rows t))))))
     (puthash id view drgnx-work-client--views)
     (condition-case nil (drgnx-work-client--subscribe view)
       (error (drgnx-work-client--status view 'reconnecting)))
