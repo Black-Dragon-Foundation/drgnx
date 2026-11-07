@@ -531,7 +531,7 @@ mod sync_rows {
 
     /// [C] An uncommitted file keeps a public job off the shared runner while the project's
     /// `drgnx-runners-shared-overlay` is off; on, a file that looks like a secret still does, naming it; a clean
-    /// overlay goes, and the job reads it.
+    /// overlay goes, the job reads it, and its result comes back as the shared runner's.
     #[tokio::test]
     #[ignore = "fleet"]
     async fn shared_overlay_off_by_default_and_scanned_when_on() {
@@ -559,6 +559,13 @@ mod sync_rows {
         q.submit(job("xon", "cat note.txt", p.freeze(true), &img), now());
         let r = result(&q, &mut events, &mut outcomes, "xon").await;
         assert_eq!(r["verdict"], "Pass", "{r}");
+        // a shared runner's result comes back named as the shared runner's, so it is labelled and never counts for a
+        // gate
+        let shared = outcomes.iter().find_map(|o| match o {
+            Outcome::Done { id, shared, .. } if id == "xon" => Some(shared.clone()),
+            _ => None,
+        });
+        assert_eq!(shared, Some(Some("r1".to_string())), "{outcomes:?}");
         let log = std::fs::read_to_string(dir.path().join("exec/xon/log")).unwrap_or_default();
         assert!(log.contains("overlay!"), "{log}");
         stays_here(&q, "xoff", "drgnx-runners-shared-overlay");
