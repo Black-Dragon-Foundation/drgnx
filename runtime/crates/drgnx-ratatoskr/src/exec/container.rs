@@ -226,8 +226,13 @@ pub fn ensure_image(
     })
 }
 
-/// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT.
-pub fn check_limits(shell: &ShellEnv, podman: &Path, limit: Duration) -> Result<(), Refusal> {
+/// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT; answers the parsed
+/// `podman info`, for the networked job's checks (`sleipnir::linux::netcheck`).
+pub fn check_limits(
+    shell: &ShellEnv,
+    podman: &Path,
+    limit: Duration,
+) -> Result<serde_json::Value, Refusal> {
     podman::check_limits(podman, &podman_env(shell), limit).map_err(setup)
 }
 

@@ -626,12 +626,13 @@ pub fn limits_enforced(info: &serde_json::Value) -> Result<(), String> {
 }
 
 /// The reason container jobs are refused here unless PODMAN (run with ENV) enforces their caps
-/// ([`limits_enforced`]), asked within LIMIT.
+/// ([`limits_enforced`]), asked within LIMIT. Answers the parsed `podman info`, which a networked job's checks read
+/// too ([`super::netcheck::net_ready`]).
 pub fn check_limits(
     podman: &Path,
     env: &[(OsString, OsString)],
     limit: Duration,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     let refused = |m: String| format!("container jobs are refused here: {m}");
     let out = run_limited(podman, &["info", "--format", "json"], env, limit)?;
     if !out.status.success() {
@@ -642,7 +643,8 @@ pub fn check_limits(
     }
     let info: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| refused(format!("podman info is not JSON: {e}")))?;
-    limits_enforced(&info).map_err(refused)
+    limits_enforced(&info).map_err(refused)?;
+    Ok(info)
 }
 
 #[cfg(test)]

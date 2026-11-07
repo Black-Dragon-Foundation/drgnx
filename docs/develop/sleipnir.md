@@ -123,7 +123,11 @@ The argv names the keys and variables only; a name or variable that isn't plain 
 field to put anything around the command.
 
 `check_limits(podman, env, limit)` asks `podman info` and refuses container jobs unless the caps hold (cgroup v2, the
-systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half.
+systemd manager, `memory pids cpu` delegated); `limits_enforced(info)` is its pure half. It answers the parsed
+`podman info`, which `linux::netcheck::net_ready(info)` reads for a networked job: podman 5.0 or newer and rootless
+(on macOS, the machine's podman; its rootless connection is checked where the hub picks it), each refusal in the
+design's words ("Networked container jobs need podman 5.0 or newer; this host has `4.9.4`.", "drgnx runs containers
+rootless; this podman is rootful."). A job without network never runs it.
 
 ## The executor
 
