@@ -381,42 +381,58 @@ fn reads_through_eitri_only() {
     }
 }
 
-/// While an agent session works in a tree, the watcher's event about a file waits for the step that wrote it: the
-/// step's rescan claims it as the agent's (session and step), and an event no step claims is recorded as an outside
-/// change once it has waited [`super::HOLD`].
+/// While a session's tool call runs, the watcher's events in its tree are held: the step's claim as it closes takes
+/// them as the agent's (session and step), with the files it named and those that differ from the head.  Nothing is
+/// held once no call runs and every closed step is claimed: an event then is an outside change at once.
 #[test]
 fn a_watcher_event_waits_for_the_step_that_claims_it() {
+    use std::sync::atomic::Ordering::SeqCst;
     let Fixture {
         repo,
         hist: _hist,
         hub,
         tree,
-    } = fixture(&[("a.txt", "one\n"), ("b.txt", "one\n")]);
+    } = fixture(&[("a.txt", "one\n"), ("b.txt", "one\n"), ("c.txt", "one\n")]);
     let hub = std::sync::Arc::new(hub);
-    let attached = hub.attach_agent(&tree);
-    // the agent's tool wrote a.txt in its process; the user's other editor wrote b.txt
+    let flight = std::sync::Arc::new(super::Flight::default());
+    let attached = hub.attach_agent(&tree, flight.clone());
+    // a shell call runs: it writes a.txt (the watcher sees it) and b.txt (not seen yet)
+    flight.call.store(true, SeqCst);
     std::fs::write(repo.path().join("a.txt"), "one\ntwo\n").unwrap();
-    std::fs::write(repo.path().join("b.txt"), "one\nmine\n").unwrap();
+    std::fs::write(repo.path().join("b.txt"), "one\ntwo\n").unwrap();
     assert!(hub.on_disk_change(&tree, "a.txt", 10.0).unwrap().is_empty());
-    assert!(hub.on_disk_change(&tree, "b.txt", 10.0).unwrap().is_empty());
     assert!(
-        hub.release_held(&tree, 11.0).unwrap().is_empty(),
-        "within the hold"
+        hub.release_held(&tree, 99.0).unwrap().is_empty(),
+        "the call runs"
     );
-    let v = hub
-        .rescan_by(&tree, &["a.txt".into()], "s1", cause("4"), 11.5)
-        .unwrap();
-    assert_eq!(v.len(), 1);
+    // the call ends: its step is closed, not yet claimed
+    flight.sent.store(1, SeqCst);
+    flight.call.store(false, SeqCst);
+    assert!(
+        hub.release_held(&tree, 99.0).unwrap().is_empty(),
+        "not claimed yet"
+    );
+    let v = hub.claim(&tree, &[], true, "s1", cause("4"), 11.5).unwrap();
+    flight.claimed.store(1, SeqCst);
+    let mut paths: Vec<&str> = v.iter().map(|f| f.path.as_str()).collect();
+    paths.sort_unstable();
+    assert_eq!(paths, ["a.txt", "b.txt"]);
     assert_eq!(kind_of(&hub, v[0].op), Kind::AgentStep);
     assert_eq!(hub.with(|h| h.op(OpId(v[0].op)).unwrap().cause), cause("4"));
-    let out = hub.release_held(&tree, 10.0 + super::HOLD).unwrap();
-    assert_eq!(out.len(), 1, "b.txt only: a.txt was claimed");
-    assert_eq!(out[0].path, "b.txt");
+    assert!(hub.release_held(&tree, 12.0).unwrap().is_empty(), "claimed");
+    // idle: the user's edit in another editor is an outside change at once
+    std::fs::write(repo.path().join("c.txt"), "mine\n").unwrap();
+    let out = hub.on_disk_change(&tree, "c.txt", 13.0).unwrap();
+    assert_eq!(out.len(), 1);
     assert_eq!(kind_of(&hub, out[0].op), Kind::External);
-    // no agent session: an event is recorded at once
+    // a held event no step claims is released once the session ends
+    flight.call.store(true, SeqCst);
+    std::fs::write(repo.path().join("c.txt"), "mine again\n").unwrap();
+    assert!(hub.on_disk_change(&tree, "c.txt", 14.0).unwrap().is_empty());
     drop(attached);
-    std::fs::write(repo.path().join("b.txt"), "one\n").unwrap();
-    assert_eq!(hub.on_disk_change(&tree, "b.txt", 20.0).unwrap().len(), 1);
+    let out = hub.release_held(&tree, 15.0).unwrap();
+    assert_eq!(out.len(), 1);
+    assert_eq!(kind_of(&hub, out[0].op), Kind::External);
 }
 
 fn kind_of(hub: &Hub, op: i64) -> Kind {

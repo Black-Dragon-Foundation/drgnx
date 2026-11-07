@@ -33,7 +33,7 @@ pub mod views;
 pub mod watch;
 pub mod wire;
 
-pub use capture::{Attached, HOLD};
+pub use capture::{Attached, Flight};
 pub use methods::{BATCH_MAX, BatchChange, BatchReply, Registered};
 
 use crate::editor::ranges::{AgentRanges, Op};
@@ -124,10 +124,11 @@ pub(crate) struct Inner {
     pub buffers: HashMap<String, Buffer>,
     /// Who wrote each line of a document on a branch, in step with its operations ([`kept_op`]).
     pub kept: HashMap<(DocId, BranchId), Kept>,
-    /// Per tree, the agent sessions working in it ([`Hub::attach_agent`]).
-    pub agents: HashMap<String, usize>,
-    /// Per tree, the watcher's file events waiting for a step boundary to claim them: path and when it was seen.
-    pub held: HashMap<String, Vec<(String, f64)>>,
+    /// Per tree, the flights of the agent sessions working in it ([`Hub::attach_agent`]).
+    pub flights: HashMap<String, Vec<std::sync::Arc<Flight>>>,
+    /// Per tree, the paths of the watcher's file events held while a session's tool call there runs, for the step
+    /// that closes it to claim ([`Hub::claim`]).
+    pub held: HashMap<String, Vec<String>>,
 }
 
 /// One document's line authors on one branch, at the document's version FRONTIER.
@@ -238,7 +239,7 @@ impl Hub {
                 peers: HashMap::new(),
                 buffers: HashMap::new(),
                 kept: HashMap::new(),
-                agents: HashMap::new(),
+                flights: HashMap::new(),
                 held: HashMap::new(),
             }),
             events: tokio::sync::broadcast::channel(256).0,

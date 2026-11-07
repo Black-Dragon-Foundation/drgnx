@@ -268,16 +268,20 @@ stream; `history/register` and every agent session's start (`wire::watch_folder`
 feeds it to the hub, once per tree (a changed file is diffed onto its document, a change to `HEAD`, the index or a ref
 rescans every known path). Ignored files are skipped. A session's start first rescans what its folder holds against
 its head (`rescan_dirty`): a session's work is measured from the head, so the uncommitted state it starts on is in the
-history too. A folder a sandboxed agent worked in gets neither (plain git never runs there). What the agent's own edit tool or shell wrote reaches the history through the loop and through the
-step-boundary rescan: when an edit step ends, `write_steps` rescans the files the step named (its detail's path and its
-diffs' paths, inside the session's folder) before the step's anchor is read (`rescan_by`). That rescan is the agent's:
-an `agent_step` record by the session's peer, caused by the session and the step, so the step's `history_op` is its own
-record and Revert to here undoes it. Steps are written in batches, so a file a later edit step of the same batch names
-is left to that step (the disk holds its content). While a session runs (`write_steps` holds `Hub::attach_agent`'s guard), the
-watcher's event about a file of its tree waits up to `HOLD` (2 s) for a step to claim it: the agent's tool writes before
-its step ends. A held event no step named is recorded after the hold as `external:disk`, as are all events in a tree no
-session works in; a file the hub wrote itself is no second version. A tool call that keeps running more than the hold
-after its write (a long shell step) leaves that write `external:disk`.
+history too. A folder a sandboxed agent worked in gets neither (plain git never runs there). What the agent's own edit tool or shell wrote is the agent's, claimed by the
+step that wrote it. The session's steps pass a claim stage as they close (`claim_steps`, before `write_steps` reads the
+step's anchor; both are clock tasks, `session:claims` and `session:steps`, so `__test_barrier` settles them): a tool step that may have written (any kind but read, search, fetch, think) claims, with `Hub::claim`,
+the files it named (its detail's path and its diffs' paths, inside the session's folder), the paths of the watcher's
+events held while it ran, and, in a tree no sandboxed agent touched, every path that differs from the head (a shell step
+names none; plain git). The claim reads the disk as the step closes: a write the agent's next call makes before the
+claim has read is claimed by the step before it. A new version is an `agent_step` record by the session's peer, caused by
+the session and the step, so the step's `history_op` is its own record and Revert to here undoes it; a shell step
+anchors only a record it made. The hold follows the step lifecycle, not a clock: the session's `Flight`
+(`Hub::attach_agent`, held by the claim stage while the session runs) is busy while a tool step is open (or cut by a
+wait) and while a closed step waits for its claim; the session counts a closed step before it lets the call go, so the
+hold never lapses between the two. While a flight in the tree is busy, a watcher event is held; once none is, the loop
+records what no step claimed as `external:disk`, and an event is recorded at once. A session that ends drops its
+flight, which ends its hold. A file the hub wrote itself is no second version.
 
 **Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers `{doc,
 tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in are
@@ -398,8 +402,9 @@ recorded in (`history/revert/preview {decision}`). Things the rows fix as they a
   second revert, earlier or later, is decided by the history too; the second's scope may hold the first's record, and
   the span revert then leaves out what the first deleted of the scope's own text.
 - An agent's write outside ACP (its own tools, a shell command) cannot be told from an edit in another program by the
-  watcher alone. Only an edit step's own rescan of the files it named (above, **Watcher**) makes it the agent's; a
-  shell step's writes and anything a step did not name are `external:disk`. Neither inotify nor FSEvents names the writer
+  watcher alone. A step's claim (above, **Watcher**) makes what changed while its call ran the agent's, so the user's
+  save from another editor during an agent's shell step is claimed by that step too; what changes while no call runs is
+  `external:disk`. Neither inotify nor FSEvents names the writer
   (fanotify does, with `CAP_SYS_ADMIN`, which the hub does not have), the agent runs as the user, and the user may save
   a file from another editor while an agent's shell step runs, so no rule on time or process tells them apart either.
   The history's keep mine keeps such a write as if it were the user's; only typing in a drgnx buffer is known to be the
