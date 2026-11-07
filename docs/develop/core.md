@@ -2024,6 +2024,27 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height`,
   `text-scale` and two GUI frames at font sizes 1x and 2x (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
 
+**The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
+"The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
+from. drgnx never parses it: the event's `model` is one string on the framed and the unframed hub path alike.
+- **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
+  closed with the buffer or at teardown; the view's queue (`drgnx-view-model--views`, per view, not per class) goes
+  with its last buffer.
+- **The envelope's rules** (`drgnx-view-model--decide`, pure): a reset (`reset: true`) of a new stream (base 0, or
+  another hub) restarts the view; a reset of the same stream that is not newer, another hub's diff, one before the
+  first reset or an old one is dropped; a gap asks `view/resync {view, model: true}`, one outstanding. Sjá is told the
+  hub as `HUB/GEN`, GEN counting the streams this Emacs began, so a new subscription's version 1 is never old to it.
+- **Applied at the draw:** models queue in arrival order (at most 64; past that, or on Sjá's `resync`, the queue goes
+  and a reset is asked for). A row patch that names `model: N` touches its view; the draw's first slice (the type's
+  SYNC, `drgnx-view-patch--sync`) applies the queued models up to N, then inserts the rows, so a key answers from the
+  model that is drawn. A model no row patch names applies on the view's own timer (`(drgnx-view-model . VIEW)`) one
+  `drgnx-view-delay` later; one a patch named waits for that patch's draw.
+- **The hub goes:** the queues and streams go, `nidhogg-view-hub-lost` marks every view stale (dimmed with the rows),
+  and keys keep moving on what is drawn.
+- Tests: `test/unit/view-model-test.el` (every order of model, rows, timer, key and draw; keys with every door to
+  the hub shut) and `test/unit/view-model-hub-test.el` (the real hub: one string with framing on and off).
+  Without Sjá both skip, and models are ignored.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

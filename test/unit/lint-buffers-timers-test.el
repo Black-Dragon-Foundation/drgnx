@@ -86,10 +86,11 @@ wall-clock timer (`drgnx-lint-bt--timer-start-p')."
   ;; inside the caller); it follows nothing and moves no window by itself.
   ;; Also: a view's draw (`drgnx-view--arm' on a mark, `drgnx-view--draw-buffer' re-arming the rest of a slice)
   ;; follows no window: it moves only windows that show the view's own buffer, as their owner.  The end of a timer
-  ;; pass (`drgnx-view--spend') only clears the frame budget's deadline.
+  ;; pass (`drgnx-view--spend') only clears the frame budget's deadline.  A view's model queue (`drgnx-view-model--arm')
+  ;; hands a model no row patch named to Sjá a throttle later: it changes no buffer and moves no window.
   '(("wb/drgnx-explorer.el" drgnx-explorer--file-event drgnx-explorer--apply-file-events)
     ("wb/drgnx-monitors.el" drgnx-monitors--later)
-    ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer))
+    ("wb/drgnx-view.el" drgnx-view--arm drgnx-view--spend drgnx-view--draw-buffer drgnx-view-model--arm))
   "Workbench definitions allowed to start a timer: (FILE NAME…).  Idle timers are not listed: they
 run after input, never in the middle of a follow.")
 
