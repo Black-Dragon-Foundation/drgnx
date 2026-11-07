@@ -128,7 +128,11 @@ makes about 1,900 entries at once (an answer and a read, 950 times); its second,
 synthetic day's recording (`test/fixtures/day/transcript.eld`) at 20 updates a second, a read every tenth chunk, so the
 transcript ends near 2,000 entries. The panel shows the session and the mirror holds its transcript. Over 400 updates (at most 40 s) it reports
 `:alloc` (objects the update's event handlers made: the mirror's and the panel's), `:draw_kb` (kB each draw of the panel
-made), `:updates`, `:entries` and `:rows` (the panel's lines). Report-only until the render offload's combined pass.
+made), `:updates` (`:patches` of them the panel's row patches), `:entries`, `:rows` (the panel's lines) and
+`:hub_rows` (the hub's rows the panel holds). With the hub's rows an update is either the entries
+event (the mirror and the panel's own state) or the panel's `view-patch` (the rows inserted); `panel-replay-old` runs the
+same on `drgnx-view-old-path` (the panel draws every row, the mirror copies its transcript per update): the paired row.
+Report-only until the render offload's combined pass.
 
 The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
 `pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the

@@ -29,6 +29,7 @@
 (defvar drgnx-panel-replay--allocs nil "Objects each update's events made (newest first), while armed.")
 (defvar drgnx-panel-replay--draws nil "kB each draw of the panel made (newest first), while armed.")
 (defvar drgnx-panel-replay--armed nil "Non-nil while the updates are measured.")
+(defvar drgnx-panel-replay--patches 0 "Row patches of the panel among the updates measured.")
 
 (declare-function drgnx-agents-mirror-start "drgnx-agents-mirror")
 (declare-function drgnx-agents-send "drgnx-agents")
@@ -48,9 +49,12 @@
 (declare-function drgnx-modules-run "drgnx-modules")
 (declare-function drgnx-gc--consed "drgnx-gc")
 (declare-function drgnx-perf-stats "drgnx-perf")
+(declare-function drgnx-view-patch-rows "drgnx-view")
+(defvar drgnx-view-patch)
 (defvar drgnx-agents--sessions)
 (defvar drgnx-agent-panel--loaded)
 (defvar drgnx-agent-panel--entries)
+(defvar drgnx-view-old-path)
 
 (defun drgnx-panel-replay--chunks ()
   "The recording's chunks, as one-line texts."
@@ -80,8 +84,12 @@
 (defun drgnx-panel-replay--entries ()
   (length (drgnx-agent-session-entries drgnx-panel-replay--mirror)))
 
-(defun drgnx-panel-replay-up (bin)
-  "Start a hub of BIN and the mock agent, wait for the prefix, open the panel on the session; the panel's buffer."
+(defun drgnx-panel-replay-up (bin &optional old)
+  "Start a hub of BIN and the mock agent, wait for the prefix, open the panel on the session; the panel's buffer.
+OLD: the panel draws every row itself and the mirror copies its transcript per update (`drgnx-view-old-path', the
+paired `panel-replay-old'); else the panel inserts the rows the hub builds."
+  (require 'drgnx-view)
+  (setq drgnx-view-old-path (and old t))
   (require 'drgnx-agents-mirror)
   (require 'drgnx-hub-client)
   (require 'drgnx-modules)
@@ -152,6 +160,7 @@
   (if (not (and drgnx-panel-replay--armed (eq name 'events) (drgnx-panel-replay--update-p (nth 1 args) (nth 2 args))))
       (apply orig name args)
     (let ((a0 (apply #'+ (memory-use-counts))))
+      (when (equal (nth 1 args) "view-patch") (cl-incf drgnx-panel-replay--patches))
       (prog1 (apply orig name args)
         (push (- (apply #'+ (memory-use-counts)) a0) drgnx-panel-replay--allocs)))))
 
@@ -186,10 +195,11 @@ that failed."
           (replace-regexp-in-string "\n" " | " text))))))
 
 (defun drgnx-panel-replay-measure ()
-  "(:alloc STATS :draw_kb STATS :updates N :entries N :rows N): `drgnx-panel-replay-measured' updates of the stream
-(at most 40 s), each update's events and each draw of the panel."
+  "(:alloc STATS :draw_kb STATS :updates N :patches N :entries N :rows N :hub_rows N): `drgnx-panel-replay-measured'
+updates of the stream (at most 40 s), each update's events and each draw of the panel; PATCHES of the updates were
+the panel's row patches, HUB_ROWS the hub's rows it holds at the end."
   (require 'drgnx-gc)
-  (setq drgnx-panel-replay--allocs nil drgnx-panel-replay--draws nil drgnx-panel-replay--armed t)
+  (setq drgnx-panel-replay--allocs nil drgnx-panel-replay--draws nil drgnx-panel-replay--patches 0 drgnx-panel-replay--armed t)
   (advice-add 'drgnx-hub--run-hook :around #'drgnx-panel-replay--event)
   (advice-add 'drgnx-view--draw-buffer :around #'drgnx-panel-replay--draw)
   ;; the second turn: the recording streams
@@ -206,8 +216,11 @@ that failed."
            (drgnx-panel-replay--hub-facts) (drgnx-panel-replay--log-tail)))
   (list :alloc (drgnx-perf-stats drgnx-panel-replay--allocs)
         :draw_kb (mapcar (lambda (x) (if (floatp x) (/ (round (* 100 x)) 100.0) x)) (drgnx-perf-stats drgnx-panel-replay--draws))
-        :updates (length drgnx-panel-replay--allocs) :entries (drgnx-panel-replay--entries)
-        :rows (with-current-buffer drgnx-panel-replay--panel (count-lines (point-min) (point-max)))))
+        :updates (length drgnx-panel-replay--allocs) :patches drgnx-panel-replay--patches
+        :entries (drgnx-panel-replay--entries)
+        :rows (with-current-buffer drgnx-panel-replay--panel (count-lines (point-min) (point-max)))
+        :hub_rows (with-current-buffer drgnx-panel-replay--panel
+                    (if (bound-and-true-p drgnx-view-patch) (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) 0))))
 
 (defun drgnx-panel-replay-down ()
   "End the agent and the hub; drop the mirror, the panel and the fixture's folder; the module back as it was."
@@ -224,6 +237,7 @@ that failed."
   (setq drgnx-panel-replay--hub nil drgnx-panel-replay--mirror nil drgnx-panel-replay--panel nil
         drgnx-agents--sessions (seq-remove #'drgnx-agent-session-remote drgnx-agents--sessions))
   (drgnx-modules-set-enabled 'tools/agent-panel drgnx-panel-replay--module)
+  (setq drgnx-view-old-path nil)
   (when drgnx-panel-replay--dir
     (ignore-errors (delete-directory drgnx-panel-replay--dir t))
     (setq drgnx-panel-replay--dir nil))

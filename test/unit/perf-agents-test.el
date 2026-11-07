@@ -8,6 +8,7 @@
 (require 'drgnx-perf-run)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/agents-editor-five-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
 
 (defconst perf-agents-test--names '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
 
@@ -66,12 +67,15 @@
                      (drgnx-perf-run--relative-fails (funcall res 4.0 4.0 0.5))))))
 
 (ert-deftest drgnx-perf-agents/panel-replay-streams-the-recording-into-a-long-transcript ()
-  (load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
   (let ((spec (cdr (assq 'panel-replay (drgnx-perf-run--workloads)))))
     (should (string-search "drgnx-panel-replay-up" (plist-get spec :setup)))
     (should (string-search "drgnx-panel-replay-measure" (plist-get spec :measure)))
     (should (string-search "drgnx-panel-replay-down" (plist-get spec :teardown)))
     (should-not (plist-get spec :actions))
+    (should (eql 1 (plist-get spec :repeat))))
+  ;; the paired row: the same stream on the old path
+  (let ((spec (cdr (assq 'panel-replay-old (drgnx-perf-run--workloads)))))
+    (should (string-search "(drgnx-panel-replay-up drgnx-perf--hub-bin t)" (plist-get spec :setup)))
     (should (eql 1 (plist-get spec :repeat))))
   (let* ((lines (split-string (drgnx-panel-replay-program) "\n"))
          (words (mapcan (lambda (l) (split-string l "\\\\n" t)) lines))
