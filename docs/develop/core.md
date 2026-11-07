@@ -1736,7 +1736,8 @@ past the deadline between two checks marks nothing (that would cost a clock read
 a fresh slice. Views are not queued or ranked: each one's timer fires in turn. Each slice draws the **visible rows first** (for each window on a visible frame, the
 entries from the one at `window-start`, `window-body-height` of them), then the rest, each sweep in buffer order.
 `:slices` counts the slices of SLICE types and `:max-slice-rows` the most rows one drew. When a draw leaves no view
-with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded).
+with work (and the view is not stale), the gap is quiet: `drgnx-gc-gap` runs (when `drgnx-gc` is loaded) in a timer pass of its own, after the draw's, so a key
+typed during the draw is read before the collection.
 
 **Visibility: from the workbench state store.** `(drgnx-view-shown-p VIEW)` is non-nil when a window on a visible
 frame shows the buffer. It has one source at a time. While `drgnx-state-mode` is on (core/workbench turns it on),

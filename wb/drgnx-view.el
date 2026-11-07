@@ -921,7 +921,8 @@ no longer attached or whose type was removed.  A RENDER, GROW, SYNC or PATCHED t
   "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
 Hidden: mark it stale, count a `:stale-skips', draw and allocate nothing.  Shown: draw one slice (a type with SLICE)
 or everything; work left re-arms `(drgnx-view-more . BUFFER)' at `drgnx-timer-chain-delay' (0.0, or later while
-input is pending or the chain has run long); when no view has work left, `drgnx-gc-gap'."
+input is pending or the chain has run long); when no view has work left, `drgnx-gc-gap' in a timer pass of its own
+\(`drgnx-view--pass-over'), so a key typed during the draw is read before the collection."
   (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer))))
     (when (drgnx-view-p view)
       (cond ((not (drgnx-view-shown-p view))
@@ -940,7 +941,7 @@ input is pending or the chain has run long); when no view has work left, `drgnx-
                      (drgnx-timer-start (cons 'drgnx-view-more buffer) (drgnx-timer-chain-delay)
                                         #'drgnx-view--draw-buffer
                                         :args (list buffer) :owner buffer))
-                 (drgnx-view--pass-over))))))))
+                 (drgnx-timer-start 'drgnx-view-gap 0.0 #'drgnx-view--pass-over :owner :core))))))))
 
 (defun drgnx-view--pass-over ()
   "When no view that is not stale has work left, call `drgnx-gc-gap' (when loaded): the gap is quiet."
