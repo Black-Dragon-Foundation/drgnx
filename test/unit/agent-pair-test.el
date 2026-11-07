@@ -4,15 +4,18 @@
 ;; The safe slot's gate runs in every order the command loop, the hub's writes and the timer can arrive in
 ;; (`drgnx-test-every-order', pattern A).  The rest is pattern D: a write is queued as the hub's `pair-apply' event
 ;; would queue it, in a real buffer visiting a temp file; what the module asks the hub is recorded instead of sent (a
-;; stand-in connection), and the apply, which refuses every write until the edit history is here, is replaced
-;; where a test needs a write to land.  Expiry runs on the test clock.
+;; stand-in connection), and the apply is replaced where a test needs it to answer a given way.  The shift runs on
+;; real buffers with the edit history's drain standing in (`drgnx-agent-pair-test--shifting': its counter is the
+;; test's, and each change the test types is handed to the log as the drain would).  Expiry runs on the test clock.
 (require 'ert)
+(require 'ert-x)
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/orders-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-pair" drgnx-dir) t t)
+(defvar nidhogg-history-origin)
 
 (defmacro drgnx-agent-pair-test--with (&rest body)
   "BODY with pair's state fresh, `dir' a temp directory, a stand-in subscribed connection that proved itself (a pipe,
@@ -131,10 +134,9 @@ opens, never applied; one still in time is taken by the apply."
         (drgnx-agent-pair--drain)
         (should (equal (plist-get (drgnx-agent-pair-answer-of 7) :result) "dropped"))
         (should (equal (plist-get (drgnx-agent-pair-answer-of 7) :reason) "expired"))
-        (should (equal (plist-get (drgnx-agent-pair-answer-of 8) :result) "refused"))
-        (should (equal (plist-get (drgnx-agent-pair-answer-of 8) :reason) drgnx-agent-pair-needs-history))
+        (should (equal (plist-get (drgnx-agent-pair-answer-of 8) :result) "applied"))
         (should-not (drgnx-agent-pair-test--queue buf))
-        (should (equal (with-current-buffer buf (buffer-string)) "a\n"))))))
+        (should (equal (with-current-buffer buf (buffer-string)) "b\n"))))))
 
 (ert-deftest drgnx-agent-pair/a-started-apply-is-never-dropped ()
   "Once the slot took a write its apply runs to its end: a `pair-drop' and the deadline passing during it drop only
@@ -364,5 +366,382 @@ lines says which."
     (let ((s (drgnx-agent-pair-toggle-state
               (append on (list :waiting (list :file "/p/src/main.rs" :lines '(120 124)))) "allow" t)))
       (should (equal (plist-get s :waiting) "Claude is waiting for lines 120–124 of main.rs")))))
+
+;;;; The shift and the guard zone
+
+(defvar-local drgnx-agent-pair-test--ctr 0
+  "The stand-in drain counter of a test buffer: one more for every change the test logs.")
+
+(defmacro drgnx-agent-pair-test--shifting (&rest body)
+  "BODY with a paired chat \"s1\" in `dir' (inside `drgnx-agent-pair-test--with'), the edit history's drain standing
+in: `drgnx-history-drain-now' answers the buffer's `drgnx-agent-pair-test--ctr'."
+  (declare (indent 0))
+  `(let ((drgnx-agent-pair--paired (make-hash-table :test 'equal)))
+     (puthash "s1" (file-name-as-directory dir) drgnx-agent-pair--paired)
+     (cl-letf (((symbol-function 'drgnx-history-drain-now)
+                (lambda (&optional b) (buffer-local-value 'drgnx-agent-pair-test--ctr (or b (current-buffer))))))
+       ,@body)))
+
+(defun drgnx-agent-pair-test--buffer (dir text)
+  "A buffer holding TEXT whose file name is in DIR (never saved), its counter 1."
+  (let ((b (generate-new-buffer "pair-shift")))
+    (with-current-buffer b
+      (insert text)
+      (setq buffer-file-name (expand-file-name (format "f%d.txt" (random 1000000)) dir))
+      (setq drgnx-agent-pair-test--ctr 1))
+    b))
+
+(defun drgnx-agent-pair-test--change (buf start old-len text)
+  "In BUF, replace OLD-LEN characters at 0-based START with TEXT, as you would type it; the drain logs the change."
+  (with-current-buffer buf
+    (save-excursion
+      (goto-char (1+ start))
+      (delete-region (point) (+ (point) old-len))
+      (insert text))
+    (drgnx-agent-pair--drained buf (cl-incf drgnx-agent-pair-test--ctr)
+                               (list (list :start start :old_len old-len :inserted text)))))
+
+(defun drgnx-agent-pair-test--at (buf line-text)
+  "The 0-based offset of the start of BUF's line LINE-TEXT."
+  (with-current-buffer buf (string-search (concat "\n" line-text "\n") (concat "\n" (buffer-string)))))
+
+(defun drgnx-agent-pair-test--line (text line-text)
+  "The 1-based number of the line LINE-TEXT in TEXT."
+  (1+ (cl-count ?\n (substring text 0 (string-search (concat "\n" line-text "\n") (concat "\n" text))))))
+
+(defconst drgnx-agent-pair-test--ten "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n")
+
+(defun drgnx-agent-pair-test--rebase-step (st ev)
+  "One event EV on ST (:buf :version :read :answer): the agent reads or writes line \"five\", you type above it or
+delete a line below it."
+  (let ((buf (plist-get st :buf)))
+    (pcase (car ev)
+      ('read (with-current-buffer buf
+               (setq st (plist-put st :version (drgnx-agent-pair-version)))
+               (setq st (plist-put st :read (buffer-string)))))
+      ('write
+       (let ((edit (list :kind "lines" :line (drgnx-agent-pair-test--line (plist-get st :read) (nth 1 ev))
+                         :delete 1 :text (nth 2 ev))))
+         (with-current-buffer buf
+           (setq st (plist-put st :answer (drgnx-agent-pair--apply
+                                           (list :edits (list edit) :version (plist-get st :version))))))))
+      ('type (drgnx-agent-pair-test--change buf (drgnx-agent-pair-test--at buf (nth 1 ev)) 0 (nth 2 ev)))
+      ('delete (drgnx-agent-pair-test--change buf (drgnx-agent-pair-test--at buf (nth 1 ev))
+                                              (1+ (length (nth 1 ev))) "")))
+    (cons st nil)))
+
+(ert-deftest drgnx-agent-pair/every-order-a-clean-rebase-applies-at-the-shifted-place ()
+  "Pattern A.  You type a line above the agent's line and delete one below it, before or after its read, in every
+order with its read and its write: the write lands on its own line, shifted past your changes, and the text is the
+same in every order."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (drgnx-test-every-order
+       :kinds '(read write type delete)
+       :sources (list (cons 'agent '((read) (write "five" "FIVE\n")))
+                      (cons 'user '((type "two" "typed\n") (delete "nine") (type "ten" "more\n"))))
+       :init (lambda () (list :buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten)))
+       :step #'drgnx-agent-pair-test--rebase-step
+       :check (lambda (st _order)
+                (let ((text (with-current-buffer (plist-get st :buf) (buffer-string))))
+                  (kill-buffer (plist-get st :buf))
+                  (cond ((not (equal (plist-get (plist-get st :answer) :result) "applied"))
+                         (format "not applied: %S" (plist-get st :answer)))
+                        ((not (equal text "one\ntyped\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nmore\nten\n"))
+                         (format "text %S" text)))))))))
+
+(ert-deftest drgnx-agent-pair/an-edit-over-the-users-changes-is-refused-whole ()
+  "Pattern A (Review Focus 2).  After the agent's read you type on lines 5 and 6, in every order with your typing above
+them; its write of lines 2 and 5–6 is refused whole, naming the lines you are editing, and nothing of it is applied."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (drgnx-test-every-order
+       :kinds '(read write type)
+       :sources (list (cons 'agent '((read) (write)))
+                      (cons 'user '((type "five" "x") (type "six" "y") (type "one" "z"))))
+       :edges '(((agent . 0) . (user . 0)) ((user . 1) . (agent . 1)))
+       :init (lambda () (list :buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten)))
+       :step (lambda (st ev)
+               (if (eq (car ev) 'write)
+                   (with-current-buffer (plist-get st :buf)
+                     (cons (plist-put st :answer
+                                      (drgnx-agent-pair--apply
+                                       (list :version (plist-get st :version)
+                                             :edits (list (list :kind "lines" :line 2 :delete 1 :text "TWO\n")
+                                                          (list :kind "lines" :line 5 :delete 2 :text "FIVE\nSIX\n")))))
+                           nil))
+                 (drgnx-agent-pair-test--rebase-step st ev)))
+       :check (lambda (st _order)
+                (let ((text (with-current-buffer (plist-get st :buf) (buffer-string)))
+                      (answer (plist-get st :answer)))
+                  (kill-buffer (plist-get st :buf))
+                  (cond ((not (equal (plist-get answer :reason) "overlap")) (format "answer %S" answer))
+                        ((string-search "TWO" text) (format "a part was applied: %S" text))
+                        ((not (equal (plist-get answer :lines) [5 6])) (format "lines %S" (plist-get answer :lines))))))))))
+
+(ert-deftest drgnx-agent-pair/a-version-older-than-the-log-is-refused ()
+  "The log keeps its last drains (here 3, the hub's floor older than none): a write based on a version before them is
+refused \"read it with read_file\" (`gap'), whole; one based on a version it still covers applies."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let* ((drgnx-agent-pair-log-size 3) (buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten))
+             (old (with-current-buffer buf (drgnx-agent-pair-version))))
+        (dotimes (_ 4) (drgnx-agent-pair-test--change buf 0 0 "x"))
+        (with-current-buffer buf
+          (let ((edit (list :kind "lines" :line 9 :delete 1 :text "NINE\n")))
+            (should (equal (drgnx-agent-pair--apply (list :version old :edits (list edit)))
+                           (list :result "refused" :reason "gap")))
+            (should-not (string-search "NINE" (buffer-string)))
+            (let ((v (drgnx-agent-pair-version)))
+              (drgnx-agent-pair-test--change buf 0 0 "y")
+              (should (equal (plist-get (drgnx-agent-pair--apply (list :version v :edits (list edit))) :result)
+                             "applied"))
+              (should (string-search "\nNINE\n" (buffer-string))))))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agent-pair/a-whole-write-after-30-s-of-typing-elsewhere-applies-shifted ()
+  "The agent read the file, you typed at its top for 30 s (300 drains, one every 0.1 s), and its whole-file write (two
+hunks) arrives: both hunks land on their own lines, shifted past everything you typed."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let* ((buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten))
+             (v (with-current-buffer buf (drgnx-agent-pair-version))))
+        (dotimes (i 300) (drgnx-agent-pair-test--change buf (if (zerop (% i 50)) 0 (1- (% i 50))) 0
+                                                        (if (zerop (% i 50)) "\n" "k")))
+        (with-current-buffer buf
+          (let ((typed (buffer-substring (point-min) (+ (point-min) (string-search "one" (buffer-string))))))
+            (should (equal (plist-get (drgnx-agent-pair--apply
+                                       (list :version v
+                                             :edits (list (list :kind "lines" :line 3 :delete 1 :text "THREE\n")
+                                                          (list :kind "lines" :line 8 :delete 1 :text "EIGHT\n"))))
+                                      :result)
+                           "applied"))
+            (should (equal (buffer-string)
+                           (concat typed "one\ntwo\nTHREE\nfour\nfive\nsix\nseven\nEIGHT\nnine\nten\n")))))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agent-pair/a-version-before-a-resync-is-refused ()
+  "A drain that returned `resync' (Nidhogg's ring lost changes, or the whole text went) is a gap: a write based on a
+version before it is refused `gap', even with nothing typed since."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let* ((buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten))
+             (v (with-current-buffer buf (drgnx-agent-pair-version))))
+        (with-current-buffer buf
+          (drgnx-agent-pair--drained buf (cl-incf drgnx-agent-pair-test--ctr) 'resync)
+          (should (equal (drgnx-agent-pair--apply
+                          (list :version v :edits (list (list :kind "lines" :line 1 :delete 1 :text "ONE\n"))))
+                         (list :result "refused" :reason "gap")))
+          (should (equal (buffer-string) drgnx-agent-pair-test--ten)))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agent-pair/no-log-is-kept-without-a-paired-chat ()
+  "A buffer keeps no change log while no paired chat works in its folder; a paired chat's snapshot starts it, and
+the snapshot that ends the pairing drops it."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let ((buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten)))
+        (clrhash drgnx-agent-pair--paired)
+        (drgnx-agent-pair-test--change buf 0 0 "a")
+        (drgnx-agent-pair-test--change buf 0 0 "b")
+        (with-current-buffer buf
+          (should-not drgnx-agent-pair--log)
+          (should-not drgnx-agent-pair--from))
+        (drgnx-agent-pair--snapshot "s2" (list :paired t :ordinal 1 :cwd dir))
+        (drgnx-agent-pair-test--change buf 0 0 "c")
+        (drgnx-agent-pair-test--change buf 0 0 "d")
+        (with-current-buffer buf
+          (should drgnx-agent-pair--from)
+          (should (= (length drgnx-agent-pair--log) 1)))
+        (drgnx-agent-pair--snapshot "s2" (list :paired :false :ordinal 1 :cwd dir))
+        (with-current-buffer buf
+          (should-not drgnx-agent-pair--log)
+          (should-not drgnx-agent-pair--from))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agent-pair/the-guard-zone-covers-every-window ()
+  "The guard zone is the line at point ±1 in every window showing the buffer: a write on the line under another
+window's point is refused `guard' with its lines, one away from both applies."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let ((buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten)))
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer buf)
+          (let ((w2 (split-window)))
+            (set-window-buffer w2 buf)
+            (set-window-point (selected-window) (with-current-buffer buf (goto-char (point-min)) (point)))
+            (set-window-point w2 (with-current-buffer buf (save-excursion (goto-char (point-min)) (forward-line 7) (point))))
+            (with-current-buffer buf
+              (should (member '(7 . 9) (drgnx-agent-pair--guard)))
+              (should (member '(1 . 2) (drgnx-agent-pair--guard)))
+              (let ((v (drgnx-agent-pair-version)))
+                (should (equal (drgnx-agent-pair--apply
+                                (list :version v :edits (list (list :kind "lines" :line 9 :delete 1 :text "NINE\n"))))
+                               (list :result "refused" :reason "guard" :lines [9 9])))
+                (should (equal (plist-get (drgnx-agent-pair--apply
+                                           (list :version v :edits (list (list :kind "lines" :line 5 :delete 1
+                                                                               :text "FIVE\n"))))
+                                          :result)
+                               "applied"))))))
+        (kill-buffer buf)))))
+
+(ert-deftest drgnx-agent-pair/the-active-region-is-guarded ()
+  "An active region is guarded whole, shown in a window or not; with the mark inactive the same write applies."
+  (drgnx-agent-pair-test--with
+    (drgnx-agent-pair-test--shifting
+      (let ((buf (drgnx-agent-pair-test--buffer dir drgnx-agent-pair-test--ten))
+            (edit (list :kind "lines" :line 4 :delete 1 :text "FOUR\n")))
+        (with-current-buffer buf
+          (goto-char (point-min)) (forward-line 1)
+          (push-mark (point) t t)
+          (forward-line 5)
+          (let ((v (drgnx-agent-pair-version)))
+            (should (equal (drgnx-agent-pair--apply (list :version v :edits (list edit)))
+                           (list :result "refused" :reason "guard" :lines [4 4])))
+            (deactivate-mark t)
+            (should (equal (plist-get (drgnx-agent-pair--apply (list :version v :edits (list edit))) :result)
+                           "applied"))))
+        (kill-buffer buf)))))
+
+;;;; The apply, undo and attribution
+
+(defun drgnx-agent-pair-test--command (&rest cmd)
+  "Run CMD as the command loop does: `undo-auto--add-boundary' first (keyboard.c), then the command with its hooks,
+`last-command' set from `this-command' after `post-command-hook' (`ert-simulate-command')."
+  (undo-auto--add-boundary)
+  (ert-simulate-command cmd))
+
+(defun drgnx-agent-pair-test--type (char)
+  (let ((last-command-event char)) (drgnx-agent-pair-test--command 'self-insert-command 1 char)))
+
+(defun drgnx-agent-pair-test--replace (id old new)
+  "The hub's `pair-apply' data for write ID of \"s1\": OLD becomes NEW."
+  (list :write id :session "s1" :step 1 :edits (list (list :kind "replace" :old old :new new))))
+
+(defmacro drgnx-agent-pair-test--undoable (text &rest body)
+  "BODY in `buf', a buffer visiting a file holding TEXT with undo on, point at its end, inside the stand-ins."
+  (declare (indent 1))
+  `(drgnx-agent-pair-test--with
+     (drgnx-agent-pair-test--shifting
+       (let ((buf (drgnx-agent-pair-test--visit dir "u.txt" ,text)))
+         (with-current-buffer buf
+           (buffer-enable-undo)
+           (setq buffer-undo-list nil last-command nil)
+           (goto-char (point-max))
+           ,@body)))))
+
+(ert-deftest drgnx-agent-pair/typing-after-an-apply-starts-its-own-undo-group ()
+  "Review Focus 3.  type → apply (the timer's slot) → type → undo: only the last typing goes; the agent's text and the
+first typing stay."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (drgnx-agent-pair-test--type ?x)
+    (should (equal (plist-get (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE")) :result)
+                   "applied"))
+    (should (eq last-command drgnx-pair-apply))
+    (drgnx-agent-pair-test--type ?y)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "ONE\nx"))))
+
+(ert-deftest drgnx-agent-pair/an-undo-continuation-ends-at-an-apply ()
+  "undo → apply → undo: the second undo starts afresh and undoes the agent's group, not your older change."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (drgnx-agent-pair-test--type ?a)
+    (drgnx-agent-pair-test--command 'end-of-line)
+    (drgnx-agent-pair-test--type ?b)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\na"))
+    (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\na"))))
+
+(ert-deftest drgnx-agent-pair/an-apply-from-the-post-command-slot-keeps-its-own-group ()
+  "Review Focus 3.  A write queued while you type is applied from `post-command-hook' after your keystroke; your next
+keystroke and `undo' take only that keystroke away: `this-command' told the loop an apply ran."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (add-hook 'post-command-hook #'drgnx-agent-pair--post-command nil t)
+    (drgnx-agent-pair--arrived (append (drgnx-agent-pair-test--replace 1 "one" "ONE") (list :file buffer-file-name :ttl_ms 2000)))
+    (drgnx-agent-pair-test--type ?x)
+    (should (equal (plist-get (drgnx-agent-pair-answer-of 1) :result) "applied"))
+    (should (eq last-command drgnx-pair-apply))
+    (drgnx-agent-pair-test--type ?y)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "ONE\nx"))
+    (remove-hook 'post-command-hook #'drgnx-agent-pair--post-command t)))
+
+(ert-deftest drgnx-agent-pair/an-agent-group-undoes-alone ()
+  "A write of several hunks is one undo step: one undo takes every hunk away and nothing of yours."
+  (drgnx-agent-pair-test--undoable "one\ntwo\nthree\n"
+    (drgnx-agent-pair-test--type ?z)
+    (drgnx-agent-pair--apply (list :write 1 :session "s1" :step 1
+                                   :edits (list (list :kind "replace" :old "one" :new "ONE")
+                                                (list :kind "replace" :old "three" :new "THREE"))))
+    (should (equal (buffer-string) "ONE\ntwo\nTHREE\nz"))
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\ntwo\nthree\nz"))))
+
+(ert-deftest drgnx-agent-pair/point-and-markers-stay-put ()
+  "Point and a marker outside the edit stay on their text; inside a replaced line they stay where the text is kept."
+  (drgnx-agent-pair-test--undoable "aaa\nbbb ccc\nddd\n"
+    (goto-char (point-min)) (forward-line 2)
+    (let ((m (copy-marker (save-excursion (goto-char (point-min)) (line-end-position)))))
+      (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "bbb ccc" "bbb\nmore\nccc"))
+      (should (looking-at "ddd"))
+      (should (= m (save-excursion (goto-char (point-min)) (line-end-position))))
+      (set-marker m nil))))
+
+(ert-deftest drgnx-agent-pair/a-changed-on-disk-clean-buffer-reverts-first ()
+  "The file changed on disk under a buffer with none of your edits: it is read again first (as the outside world's
+change, asking nothing), then the write applies to it.  Under your unsaved edits the write is refused."
+  (drgnx-agent-pair-test--undoable "a\nb\n"
+    (let ((origin nil))
+      (with-temp-file buffer-file-name (insert "a\nb\nc\n"))
+      (set-visited-file-modtime (time-subtract (current-time) 100))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (should (equal (plist-get (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "c" "C")) :result)
+                     "applied"))
+      (should (equal (buffer-string) "a\nb\nC\n"))
+      (should (member "external:disk" origin))
+      (should (member "agent:s1#1" origin))
+      (insert "mine")
+      (with-temp-file buffer-file-name (insert "a\nb\nC\nd\n"))
+      (set-visited-file-modtime (time-subtract (current-time) 100))
+      (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 2 "a" "A"))
+                     (list :result "refused" :reason "changed-on-disk")))
+      (should (string-prefix-p "a\n" (buffer-string))))))
+
+(ert-deftest drgnx-agent-pair/a-locked-file-refuses ()
+  "A file another Emacs has locked, and a read-only buffer, refuse the write whole."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (cl-letf (((symbol-function 'file-locked-p) (lambda (_f) "someone")))
+      (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                     (list :result "refused" :reason "locked"))))
+    (setq buffer-read-only t)
+    (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                   (list :result "refused" :reason "read-only")))
+    (setq buffer-read-only nil)
+    (should (equal (buffer-string) "one\n"))))
+
+(ert-deftest drgnx-agent-pair/the-ring-is-drained-before-a-resync-can-strip-the-origin ()
+  "The write's changes are made with the agent's origin bound, and the history's ring is drained before the apply
+returns (the answer's version), so a later resync cannot send them as yours."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (let ((seen nil) (origin nil))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (cl-letf (((symbol-function 'drgnx-history-drain-now)
+                 (lambda (&optional _b) (push (buffer-string) seen) 7)))
+        (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                       (list :result "applied" :version 7))))
+      (should (equal (delete-dups origin) '("agent:s1#1")))
+      (should (equal (car seen) "ONE\n")))))
+
+(ert-deftest drgnx-agent-pair/the-origin-carries-the-agents-step ()
+  "A write the hub sent with the agent's step is made with the origin \"agent:SESSION#STEP\", so the edit history
+records it under that step."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (let ((origin nil))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (drgnx-agent-pair--apply (plist-put (drgnx-agent-pair-test--replace 1 "one" "ONE") :step 5))
+      (should (equal (delete-dups origin) '("agent:s1#5"))))))
 
 ;;; agent-pair-test.el ends here

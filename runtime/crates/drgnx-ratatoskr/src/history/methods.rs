@@ -1,6 +1,7 @@
 //! The hub's side of the editor's tracking: `register` a buffer's file, `batch` its changes, `resync` its text,
 //! `unregister` it.  A batch's changes are character offsets in the document's LF text, applied as the batch's origin's
-//! peer: the user's, or `agent:<session>` for a change merged in from an agent.  `revert:<op>` is the user's change
+//! peer: the user's, or `agent:<session>#<step>` for a change an agent made in the buffer (the session's peer; its
+//! record's cause names the session and the step, one record per step).  `revert:<op>` is the user's change
 //! applying a hunk's revert (`history/revert/hunk`): its operations are one `revert` record naming OP.
 
 use super::capture::{diff, is_secret};
@@ -57,15 +58,40 @@ fn splice(text: &mut String, start: usize, old_len: usize, inserted: &str) {
     text.replace_range(from..to, inserted);
 }
 
-fn author_of(origin: &str) -> (String, Value) {
-    match origin.strip_prefix("agent:") {
-        Some(s) => (origin.to_owned(), json!({"kind": "agent", "session": s})),
-        None if origin == "user" => ("user".to_owned(), json!({"kind": "user"})),
+/// ORIGIN's peer key, its author and the cause its records carry: `agent:SESSION#STEP` is SESSION's peer, its records
+/// caused by SESSION at STEP; an agent origin without a step is refused.
+fn author_of(origin: &str) -> Result<(String, Value, verdandi::Cause)> {
+    Ok(match origin.strip_prefix("agent:") {
+        Some(rest) => {
+            let Some((s, step)) = rest.rsplit_once('#').filter(|(s, n)| {
+                !s.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+            }) else {
+                return Err(Error::Refused(format!(
+                    "{origin}: an agent's origin is agent:SESSION#STEP"
+                )));
+            };
+            let cause = verdandi::Cause {
+                session: Some(s.to_owned()),
+                step: Some(step.to_owned()),
+                ..Default::default()
+            };
+            (
+                format!("agent:{s}"),
+                json!({"kind": "agent", "session": s}),
+                cause,
+            )
+        }
+        None if origin == "user" => (
+            "user".to_owned(),
+            json!({"kind": "user"}),
+            Default::default(),
+        ),
         None => (
             format!("origin:{origin}"),
             json!({"kind": "origin", "name": origin}),
+            Default::default(),
         ),
-    }
+    })
 }
 
 impl Hub {
@@ -125,6 +151,10 @@ impl Hub {
         if changes.iter().map(|c| c.inserted.len()).sum::<usize>() > BATCH_MAX {
             return Err(Error::Refused("split-required".into()));
         }
+        // every origin is read before anything is applied: a malformed one refuses the batch whole
+        for c in changes.iter().filter(|c| !c.origin.starts_with("revert:")) {
+            author_of(&c.origin)?;
+        }
         let mut g = self.lock();
         let (doc, branch, mut raw) = {
             let b = g
@@ -143,11 +173,11 @@ impl Hub {
                 .and_then(|n| n.parse().ok())
                 .map(verdandi::OpId)
                 .filter(|op| g.h.op(*op).is_ok());
-            let (key, author) = author_of(if reverting.is_some() {
+            let (key, author, cause) = author_of(if reverting.is_some() {
                 "user"
             } else {
                 &c.origin
-            });
+            })?;
             let peer = g.peer(branch, &key, &author)?;
             let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
             // a key in the change never reaches the document; the buffer's own text is kept beside it in memory
@@ -168,14 +198,14 @@ impl Hub {
                     Some(r) => r.2.extend(s.into_iter().map(|s| (doc, s))),
                     None => reverts.push((op, peer, s.into_iter().map(|s| (doc, s)).collect())),
                 },
-                (Ok(s), None) => spans.extend(s.into_iter().map(|s| (peer, s))),
+                (Ok(s), None) => spans.extend(s.into_iter().map(|s| (peer, s, cause.clone()))),
                 // a change outside the text: the buffer is not the document
                 (Err(Error::Refused(_)), _) => return Ok(BatchReply::Resync),
                 (Err(e), _) => return Err(e),
             }
         }
-        for (peer, s) in spans {
-            g.settler.change(doc, peer, &[s], now);
+        for (peer, s, cause) in spans {
+            g.settler.change_caused(doc, peer, &[s], now, cause);
         }
         for (op, peer, s) in reverts {
             g.h.record_hunk_revert(op, s, peer, now)?;
@@ -204,7 +234,7 @@ impl Hub {
                 .ok_or_else(|| Error::NotFound(format!("buffer {buffer_id}")))?;
             (b.doc, b.branch)
         };
-        let (key, author) = author_of("user");
+        let (key, author, _) = author_of("user")?;
         let peer = g.peer(branch, &key, &author)?;
         let mut ad = g.h.activate(doc, branch, || Ok(String::new()))?;
         let old = ad.text();
@@ -384,7 +414,12 @@ mod tests {
         let f = fx(&[("a.txt", "one\n")]);
         f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
         f.hub
-            .batch("b1", &[change(3, 0, "X", "agent:s9")], &hash("oneX\n"), 5.0)
+            .batch(
+                "b1",
+                &[change(3, 0, "X", "agent:s9#1")],
+                &hash("oneX\n"),
+                5.0,
+            )
             .unwrap();
         f.hub
             .batch("b1", &[change(4, 0, "Y", "user")], &hash("oneXY\n"), 6.0)
@@ -402,6 +437,57 @@ mod tests {
             "{authors:?}"
         );
         assert!(authors.iter().any(|a| a["kind"] == "user"), "{authors:?}");
+    }
+
+    // pattern: D
+    #[test]
+    fn an_agent_origin_carries_its_step_into_the_record() {
+        let f = fx(&[("a.txt", "one\n")]);
+        f.hub.register(&f.tree, "a.txt", "b1", &f.deny).unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(3, 0, "X", "agent:s9#4")],
+                &hash("oneX\n"),
+                5.0,
+            )
+            .unwrap();
+        f.hub
+            .batch(
+                "b1",
+                &[change(4, 0, "Y", "agent:s9#5")],
+                &hash("oneXY\n"),
+                6.0,
+            )
+            .unwrap();
+        f.hub.settle_due(40.0).unwrap();
+        let spans = f.hub.blame(&f.tree, "a.txt", 0..6).unwrap();
+        let agent = Some(json!({"kind": "agent", "session": "s9"}));
+        let x = spans
+            .iter()
+            .find(|s| s.start == 3)
+            .expect("the step's text");
+        assert_eq!(x.author, agent, "{spans:?}");
+        assert_eq!(
+            (x.session.as_deref(), x.step.as_deref()),
+            (Some("s9"), Some("4"))
+        );
+        // the next step's text: the same peer, a record of its own
+        let y = spans
+            .iter()
+            .find(|s| s.start == 4)
+            .expect("the next step's text");
+        assert_eq!(y.author, agent, "{spans:?}");
+        assert_eq!(y.step.as_deref(), Some("5"));
+        assert_ne!(x.record, y.record);
+        // an agent origin without its step is refused, whole
+        let r = f.hub.batch(
+            "b1",
+            &[change(5, 0, "Z", "agent:s9")],
+            &hash("oneXYZ\n"),
+            7.0,
+        );
+        assert!(matches!(r, Err(Error::Refused(_))), "{r:?}");
     }
 
     // pattern: D

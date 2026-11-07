@@ -2383,7 +2383,7 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`pair-apply`: write WRITE of session SESSION to FILE, to the editor that has it open.  `version` is the buffer's\nchange counter the edits are based on (none: `edit_file`, or a new file), `floor` the oldest version the hub\nstill holds for a read of this file (the editor keeps its change log back to it), `ttl_ms` how long the write\nmay wait in the editor's queue, counted from its arrival.",
+        "description": "`pair-apply`: write WRITE of session SESSION to FILE, to the editor that has it open.  `version` is the buffer's\nchange counter the edits are based on (none: `edit_file`, or a new file), `floor` the oldest version the hub\nstill holds for a read of this file (the editor keeps its change log back to it), `ttl_ms` how long the write\nmay wait in the editor's queue, counted from its arrival.  `step` is the session's step the write was made in\n(`step.seq`; 0 before its first): the editor applies it under the origin `agent:SESSION#STEP`, so the edit history\nrecords it as that step's.",
         "properties": {
           "edits": {
             "items": {
@@ -2411,6 +2411,10 @@
           "session": {
             "type": "string"
           },
+          "step": {
+            "format": "int64",
+            "type": "integer"
+          },
           "ttl_ms": {
             "format": "uint64",
             "minimum": 0,
@@ -2433,6 +2437,7 @@
         "required": [
           "write",
           "session",
+          "step",
           "ordinal",
           "file",
           "edits",

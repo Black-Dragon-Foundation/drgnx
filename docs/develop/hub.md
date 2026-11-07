@@ -1628,7 +1628,18 @@ checkout read-only for it.
   at its module's setup and on every connection, replacing what the hub held for it. A write and a hub-served read go
   to the editor that has the file in a normal buffer; a large or remote buffer refuses the write; a file open in an
   editor that went away refuses "the editor is away" until an editor opens it again or sends its set; a file no editor
-  has refuses "not open in the editor" (this version never writes the disk itself), and its read comes from the disk.
+  has is read from the disk and written there (`pair::disk`, next item).
+- **The disk path** (`pair::disk`): a write of a file open nowhere lands only when the file's content hash (of its
+  canonical text: no BOM, LF) equals the last read the hub served that session ("changed since you read it; read it
+  with read_file"; never read: "you have not read it yet"), or, for a whole-file write, when the file does not exist.
+  It is atomic: a temporary file in the same folder, made beneath the checkout without following a link, takes the old
+  file's mode, owner (when the hub may set it), ACLs, extended attributes and SELinux context, keeps its BOM and CRLF
+  line ends, is synced, and is renamed over the file (a hard link is broken on purpose). The gate resolved a link to its
+  target inside the checkout, which is written; a link that names nothing is refused. Missing parent folders are made
+  only after every check passed and removed again if the write fails. Before the rename the write is recorded in the
+  project's edit history as the agent's operations (`Hub::on_agent_write`, the same record an agent's own write gets),
+  so the watcher's event about it is the hub's version, not an outside edit. The written text is the session's read
+  from then on.
 - **The toggle** (`agents/pair {id, on}`, the user's only): on needs `chat.project-edit` not never; off closes the
   door at once: the session's writes not yet sent are refused "pair mode was turned off by the user", each editor
   holding one is sent `pair-drop` (its answers `dropped` are the verdicts), and a note is queued to the agent; nothing
@@ -1654,8 +1665,31 @@ checkout read-only for it.
   keyboard macro, no isearch, the history not resyncing, the re-entrancy lock free. An expired write is answered
   `dropped` (`expired`) before its apply starts; a started one is never dropped. Answers are recorded (the last 256,
   `drgnx-agent-pair-answer-of`) for `pair-reconcile` and sent again on the next connection until acknowledged.
-  `pair-read` is answered with the buffer's text and `buffer-chars-modified-tick` as its version. Until the edit
-  history's shift is here, `drgnx-agent-pair--apply` refuses every write ("pair needs the edit history").
+  `pair-read` is answered with the buffer's text and its version: its drain counter in the edit history after a drain
+  (`drgnx-history-drain-now`; none when the history does not track the buffer, so a whole-file write is refused).
+- **The shift** (`drgnx-agent-pair--shift`): while an `agent` snapshot says a chat is paired in a folder, each buffer
+  there keeps the changes every drain sent (`drgnx-history-drained-functions`) in `drgnx-agent-pair--log`, bounded by
+  4096 drains or back to the hub's `floor` (sent with each `pair-apply`), whichever reaches further; a drain that
+  returned `resync` (and the history's own resync) is a gap. Each version handed out keeps its line starts (the last
+  16). An apply drains first, then moves each `lines` edit's range past the changes since its version: a change before
+  it shifts it, one after leaves it, one inside it (or typed at its start) is a conflict and the whole write is refused
+  `overlap` with the lines it would change now; a version older than the log or before a gap is refused `gap` ("read it
+  with read_file"). An `edit_file` edit must match once in the text. No edit may touch the guard zone (the line at point
+  ±1 in every window on the buffer, and the active region): refused `guard` with its lines. Nothing falls back to an
+  unshifted apply. The applied answer carries the version after the write.
+- **The apply** (`drgnx-agent-pair--apply`): a read-only buffer refuses (`read-only`), a file another Emacs locked
+  refuses (`locked`); a file changed on disk is read again first when the buffer has no unsaved edits
+  (`insert-file-contents … replace` inside `drgnx-with-no-prompts`, origin `external:disk`, never `revert-buffer`),
+  else refused (`changed-on-disk`). The ranges get markers first and are replaced last to first through
+  `replace-region-contents` (with `drgnx-agent-pair-max-secs`, so point and markers stay on their text), inside one
+  change group amalgamated into one undo step, with `undo-boundary` before and after, all inside
+  `drgnx-history-with-origin` bound to `agent:SESSION#STEP` (`pair-apply` carries `step`, the session's current step, 0
+  before its first; a disk write records the same cause); the ring is drained right after (the answer's version), so the
+  change reaches the hub as the agent's before a resync could strip its origin. Then the command loop learns an apply
+  ran: from `post-command-hook` `this-command` is set to `drgnx-pair-apply` (the loop copies it to `last-command` after
+  the hook); from the timer `last-command` itself. So typing after an apply starts its own undo group, an `undo` run
+  ends at an apply, and `C-/` takes the agent's write away as one step. Each apply's milliseconds go to
+  `drgnx-agent-pair-apply-ticks` (the `pair-apply-tick` probe, the last 64).
 
 ## Per-session sockets
 

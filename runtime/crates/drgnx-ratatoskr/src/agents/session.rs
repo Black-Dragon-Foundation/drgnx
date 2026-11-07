@@ -4974,14 +4974,54 @@ impl Session {
             return Err("only a chat in your project edits your checkout through drgnx".into());
         }
         let eff = self.cells_now().await?;
+        // the step the write is made in: the editor's change, and the disk's record, carry it into the history
+        let step = self.current_step().unwrap_or(0);
         let (path, kind) = match w {
             PairWrite::Edit { path, old, new } => (path, WriteKind::Edit { old, new }),
             PairWrite::Whole { path, content } => (path, WriteKind::Whole { content }),
         };
         self.pair
-            .write(&self.id, &self.cwd, &eff, &path, kind)
+            .write_with(
+                &self.id,
+                step,
+                &self.cwd,
+                &eff,
+                &path,
+                kind,
+                self.disk_record(step),
+            )
             .await
             .map_err(|r| r.0)
+    }
+
+    /// The record of a pair write to a file open nowhere, before it lands on disk: the agent's operations in its
+    /// project's history, as [`Self::record_write`] makes them, caused by STEP (best effort: no history, no record).
+    fn disk_record(&self, step: i64) -> Option<crate::pair::disk::Record> {
+        let (hubs, state) = self.history.clone()?;
+        let (cwd, sid) = (self.cwd.clone(), self.id.clone());
+        Some(Box::new(move |real: &Path, bytes: &[u8]| {
+            let Some(rel) = real
+                .strip_prefix(resolve(&cwd))
+                .ok()
+                .and_then(|r| r.to_str())
+                .filter(|r| !r.is_empty())
+            else {
+                return;
+            };
+            let Ok((hub, tree)) = hubs.of_tree(&state, &cwd) else {
+                return;
+            };
+            let cause = verdandi::Cause {
+                session: Some(sid.clone()),
+                step: Some(step.to_string()),
+                ..Default::default()
+            };
+            if let Err(e) =
+                hub.on_agent_write(&tree, rel, bytes, &sid, cause, crate::clock::wall_secs())
+            {
+                tracing::info!(sid, "the agent's write is not in the history: {e}");
+            }
+        }))
     }
 
     /// The user's pair toggle ON for this chat: on needs `chat.project-edit` not never; off closes the door at once

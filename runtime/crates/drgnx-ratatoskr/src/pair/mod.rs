@@ -9,6 +9,7 @@
 //! - [`read_gate`]: `chat.project-read`; a path inside the checkout and never a file the sandbox hides from the agent
 //!   (Gleipnir's hide list and the secrets table), so a hub-served read never hands over what the sandbox hides.
 
+pub mod disk;
 pub mod door;
 pub mod open_set;
 pub mod writes;
