@@ -1955,6 +1955,29 @@ on an entry that matches nothing. In the same way `drgnx-lint/garbage-collect-on
 `garbage-collect` or an addition to `post-gc-hook` anywhere but `core/drgnx-gc.el`, `harness/` and `test/`: one
 owner decides when to collect.
 
+### Hub-fed views: the env (`wb/drgnx-view-env.el`)
+
+A view whose rows the hub builds (docs/develop/hub.md, "Rows") registers its buffer with
+`(drgnx-view-env-register VIEW BUFFER RESUBSCRIBE)`. The module then tells the hub, by `view/env` on the subscribed
+connection, what it needs to fit and colour the rows: per display class the buffer shows in (display kind, scale and
+the buffer's effective fonts, measured in the view's buffer after `text-scale` and face remapping), the fonts per role
+(`ui`, `code`, `card`: file, size, ascent, descent, average and space widths), the cell, `width_px` (the narrowest
+live window of the class: one buffer holds one fit), the palette roles the SVG writer colours from (read from faces,
+through `core/drgnx-color.el`), the terminal's width table, the time zone and reduced motion.
+
+- **The epoch is the editor's:** one counter per (view, class), one more for every env whose look changed. A width
+  change alone keeps it, so the hub answers a resize with `replace`s, never a reset. `drgnx-view-env-epoch` reads it.
+- **One message per kind of change.** A theme change sends each (view, class) one env (`enable-theme-functions`,
+  `disable-theme-functions`); a resize is debounced through `drgnx-timer-debounce` (0.1 s idle: never inside a follow); `text-scale` in the view's
+  buffer makes a new class, and the class it left is forgotten.
+- **Reconnect:** on `drgnx-hub-connected-functions` every live (view, class)'s env is sent again, then the view's
+  RESUBSCRIBE runs: a restarted hub holds no env and builds nothing until then.
+- **Glyph asks:** the hub's `view-glyphs` (chars its font file lacks, or a role with no file) is answered with
+  `view/glyphs`, each (font, char) measured once in the view's buffer and cached (at most 4096, then emptied).
+- **Owners:** the global hooks come with the first registered view and go with the last; a view is forgotten with
+  its buffer (`kill-buffer-hook`) or by `drgnx-view-env-unregister`, and the owning module's teardown calls
+  `drgnx-view-env-teardown`.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.
