@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; What the cockpit and the review UI read of the coordination data in work.db (docs/develop/coordination.md): the
+;; What the review UI reads of the coordination data in work.db (docs/develop/coordination.md): the
 ;; event log, the agent registry, the user's review marks, a job and its messages.  Every function reads through
 ;; `drgnx-work-db-read', the read-only handle: this Emacs never writes coordination data, Ratatoskr does.
 

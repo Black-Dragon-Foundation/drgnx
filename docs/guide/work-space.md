@@ -194,8 +194,8 @@ The colours are the theme's: the map's faces (`drgnx-work-dim`, `drgnx-work-card
 `drgnx-work-chain`, `drgnx-work-overlap`, `drgnx-work-needs-you`, `drgnx-work-edge`, `drgnx-work-edge-strong`,
 `drgnx-work-label`, `drgnx-work-chip`, `drgnx-work-new` and `drgnx-work-agent-1` to `-6`) inherit stock faces and carry
 no colour of their own. The Work tab that used to sit in the right dock (`work-view` as "Show Work") is gone, and so is
-the Work cockpit (its graph of agents, jobs and reviews, the feed, the edits pane and the job parts): the map, the Board,
-the Timeline and the review view replace them. `work-graph` stays as the older drawing of specs, plans and branches.
+the old Work cockpit (its graph of agents, jobs and reviews, the feed, the edits pane and the job parts), and the older
+drawing of specs, plans and branches (`work-graph`): the map, the Board, the Timeline and the review view replace them.
 
 ## Machines
 

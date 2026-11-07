@@ -173,7 +173,6 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
-| `jobs` | `◎ 2 jobs` while jobs run (the Jobs module's: gone when it is off) | What Needs You, every job's |
 | `agents` | `◎ 1 busy` (the Agents module's: gone when it is off) | the Agents tab |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
@@ -215,7 +214,7 @@ The most recently used editor window shows the whole bar; the other editor group
 (position and language). The bar is for the buffers you edit: a buffer that visits a file, an editor made with
 **New Untitled** (in whatever language you give it), or a buffer that is code, text or configuration
 (`drgnx-statusbar-modes`: `prog-mode`, `text-mode`, `conf-mode` and what derives from them). The start page gets a
-quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, jobs, `needs-you`, `drgnx`, `toasts`, tests and `misc`), no line and column,
+quiet bar: only the left side (`drgnx-statusbar-quiet`: `folder` — the Explorer's folder, or `No folder open` — branch, agents, `needs-you`, `drgnx`, `toasts`, tests and `misc`), no line and column,
 for the modes in `drgnx-statusbar-quiet-modes`. Every other buffer (Magit, Dired, help, Info, a shell, compilation,
 drgnx's own panes) keeps its own mode line, and a buffer whose own `mode-line-format` is nil keeps none. In a narrow window the bar never wraps: segments go in the order of
 `drgnx-statusbar-drop-order` (line endings first), and the branch is cut with an ellipsis, never dropped (in a column or
@@ -242,14 +241,10 @@ linter) redraws the bars a moment later: flymake has no hook for it, so the bar 
 `drgnx-statusbar--flymake-reported`, on `flymake--handle-report`, which only asks for a redraw; it comes off when
 `drgnx-statusbar-mode` is turned off.
 
-**Jobs.** `◎ 2 jobs` counts the jobs the hub says are running. The Jobs module defines the segment and counts them from the
-same `job/status` answer that feeds the notice model (when a job or a card changes, never on redisplay; nothing while
-there is no hub, and nothing shown when the count is not known). A click opens What Needs You for every job in the Work cockpit.
-
 **Waiting on you.** The number in `◐ 2 waiting on you` is the notice model's one count (`drgnx-needs-you-count`): the
-agents' permission requests and edits to review, the cards and messages of jobs, and the questions no job holds, each
-counted once however many places hold it. The segment reads that count and nothing else; `jobs` and `agents` no longer
-add their own. A producer of your own sets its items with `drgnx-notice-set` (see [Notices](notices.md)); there is no
+agents' permission requests and edits to review, and the questions no job holds, each
+counted once however many places hold it. The segment reads that count and nothing else; `agents` does not
+add its own. A producer of your own sets its items with `drgnx-notice-set` (see [Notices](notices.md)); there is no
 list of functions to add to. The same count, and the `drgnx` segment's problems, are what the bar redraws on when the
 notices change.
 
@@ -285,16 +280,16 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `drgnx-statusbar-left` | `(branch trust problems tests jobs agents needs-you drgnx toasts modal misc)` | segments on the left, in order |
+| `drgnx-statusbar-left` | `(branch trust problems tests agents needs-you drgnx toasts modal misc)` | segments on the left, in order |
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
-| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
+| `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
 | `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
 | `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
 | `drgnx-statusbar-quiet-modes` | `(drgnx-start-mode)` | the modes that get the quiet bar |
-| `drgnx-statusbar-quiet` | `(folder branch agents jobs needs-you drgnx tests misc)` | the quiet bar's segments, on the left |
+| `drgnx-statusbar-quiet` | `(folder branch agents needs-you drgnx tests misc)` | the quiet bar's segments, on the left |
 | `drgnx-statusbar-misc-exclude` | the Restricted Mode mark and the notice counts' entry | entries of `global-mode-string` that `misc` leaves out |
 | `drgnx-statusbar-misc-info-skip` | `global-mode-string`, which-function's and eglot's entries | entries of `mode-line-misc-info` that `misc` does not format (shown another way) |
 | `drgnx-statusbar-misc-slow-ms` | `1.0` | milliseconds another package's entry may take, on average, per redisplay; a slower one is formatted once a second and named by `drgnx doctor` |
@@ -449,7 +444,7 @@ default font tall (so it grows with the font and the display's scaling), lower w
 cut it off. It carries its own dark background, so a light theme shows it as a dark tile. It is drgnx's
 `etc/images/drgnx-logo.jpg`, made once per size and kept; if the file is missing the page shows without it. A
 terminal, or a build without JPEG support, shows the page without the logo. Its bottom line is the status bar's quiet form (the folder, the branch,
-agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
+agents and tests, nothing about a cursor position), never Emacs's raw mode line.
 
 It shows itself only where nothing is lost: in the editor window you used last, and only when that window shows
 `*scratch*` that you have not typed in — never over a file or your own text, never while the first-run Welcome is

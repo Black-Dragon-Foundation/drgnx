@@ -128,7 +128,7 @@ sends are recorded in `sent' as (TITLE . BODY), oldest first, instead of made."
       (should (= 1 (length said)))
       (should (string-search "No bus" (car said))))))
 
-;;;; The backends (moved from job-ui-test.el)
+;;;; The backends
 
 ;; M9b4-14: the notification goes where the platform has one.
 (ert-deftest drgnx-notice-desktop/the-macos-script-takes-the-text-as-arguments ()

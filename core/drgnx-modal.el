@@ -44,8 +44,8 @@ map nor the panel map is active here, whatever the state.  Whoever sets it calls
   "Emulation entry for the panel map.")
 
 (defvar drgnx-modal-panel-modes
-  '(drgnx-explorer-mode drgnx-buffers-mode drgnx-outline-mode drgnx-work-mode drgnx-agents-list-mode
-                        drgnx-agents-transcript-mode drgnx-job-ui-mode drgnx-diff-mode drgnx-review-mode
+  '(drgnx-explorer-mode drgnx-buffers-mode drgnx-outline-mode drgnx-agents-list-mode
+                        drgnx-agents-transcript-mode drgnx-diff-mode drgnx-review-mode
                         drgnx-prs-mode drgnx-onboard-mode drgnx-modules-list-mode drgnx-shortcuts-mode
                         drgnx-live-mode)
   "Major modes of panels: read-only views that keep drgnx's own keys and get the leader and panel maps.")

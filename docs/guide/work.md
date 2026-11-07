@@ -1,7 +1,6 @@
 # Work tracker
 
-> The right dock's Work tab described below is gone: the Work space's map ([work-space.md](work-space.md)) replaced it.
-> `drgnx work`, the Work graph and the commit recording stay.
+> The Work space's map ([work-space.md](work-space.md)) shows this data. `drgnx work` and the commit recording stay.
 
 Where did this plan come from, how far is it, and which commits did it? The work tracker answers that across
 every project drgnx knows: **spec › plan › task › step / TODO › commit**, with the branch and worktree each plan
@@ -74,58 +73,12 @@ Emacs, which passes it to the scans it starts), each link is also written as a g
 `drgnx task: ID`, once per task) so it travels with the repository; it is off by default because notes are shared
 state.
 
-## The Work tab
-
-**Show Work** (module `tools/work`; VS Code `C-k t`, Vim `SPC a w`, Emacs: the palette) opens the right dock's
-**Work** tab: each spec with the plans that came from it (plans that name no spec are roots of their own), and under
-a plan its tasks, their steps, rulings and commits, and the board's TODOs (with the commits recorded for them).
-A plan whose spec was deleted becomes a root. The bottom panel has a **Work** tab as well, with the same tree, for
-when the right dock holds something else (the Agent layout, [layouts.md](layouts.md)).
-
-```
-▾ ◆ The Spec
-  ▾ ▣ 1/2 Plan Alpha  steps 3/5 · todos 1/2 · 4 commits  [feature]
-    ▾ ☑ Task 1: first
-        ☑ Step 1: write the failing test
-        ● 1a2b3c4 the change that made it pass
-    ▸ ☐ Task 2: second
-▸ ▣ 0/1 Plan Beta  0 commits  merged
-```
-
-A plan line starts with its tasks done of all (a narrow dock cuts the end of long titles), then its steps and
-TODOs (when it has any), the commits linked, its branch and whether it is merged; a task whose recorded commits git
-no longer has (rebased, squashed) is marked ⚠. Keys in the tab: `TAB` folds, `RET` opens the line's file at its
-line (a commit: its diff in the editor), `g` scans again, `f` filters the plans by title or path, `m` hides the
-merged ones (Vim: `R`, `F`, `M`). Opening the tab, and `g`, scan in a separate batch Emacs (`drgnx work scan`): this
-Emacs never waits, and the tab redraws when the scan is done — and after each turn of an agent working on a task.
-The tab is a view (`docs/develop/core.md`, "Views"): a scan, a fold or a filter changes only the rows whose task
-changed (or that came or went), and your place stays on the same task through every one of them. A tab nobody is
-looking at draws nothing; it catches up when you show it.
-
-- **Start Agent on Task…** starts an agent on the task (or TODO, or plan) at point, in the plan's worktree (else
-  its repository, else the plan's folder); its commits are recorded for that task.
-- **Open Plan's Worktree** adds the plan's worktree to the Explorer.
-- **Show Work as Graph** draws the graph described here (the Work space's map, [work-space.md](work-space.md), shows
-  the agents and jobs): the specs, the plans shown (the tab's filter and hide-merged apply; each with its tasks
-  done and commits; merged ones dashed) and their branches, in three columns, with Emacs's own `svg.el` — no other
-  program. Every box is a hot spot: click a spec or plan to open its file, a branch to add its worktree to the
-  Explorer (a double click opens it once; the file opens from the graph's window, even when another was selected);
-  hovering shows the full title and counts. Its colours come from your theme through the faces
-  `drgnx-work-ui-graph-spec`, `-plan`, `-merged`, `-branch` and `-edge` (customise them, or let the theme), so the
-  next graph follows a theme switch (`g` in the graph draws it again). The graph scrolls like text, down and
-  sideways; a big one is drawn as bands of images one below the other (Emacs refuses a single image taller than
-  `max-image-size`), which you do not see. It needs a graphical frame of an Emacs with SVG support (librsvg; every
-  graphical build drgnx installs has it) — in a terminal frame it says so. 300 plans: 0.8 s to draw on screen.
-
-`drgnx doctor` checks `work`: Emacs has SQLite (else the tracker is off), how many plans are tracked, and whether
-this Emacs can show SVG (else there is no graph; the tab shows the same tree).
-
 ## Closing your tasks
 
 Agents may finish tasks you made only if you let them (an `edit-user-tasks` grant, [security.md](security.md#grants));
 without it, an agent's "done" is `in-review` and you close the task. With **only I close my tasks** on (the store
 setting `only_user_closes`, `graph/settings`), even a permitted "done" is a proposal: a **close card** in the Work
-cockpit, and the task stays as it was, so nothing that waits on it starts yet.
+Work space, and the task stays as it was, so nothing that waits on it starts yet.
 
 - **Accept** closes the task as you, if nobody changed it since the agent proposed it. If someone did, drgnx says so
   and the card stays open: look at the task, then accept or reject again.
@@ -209,6 +162,5 @@ a command line it does not understand.
 ## Tests
 
 `test/unit/work-test.el` (the scan: specs, plans, ledgers, branches, merges, renames, the board) and
-`test/unit/work-record-test.el` (recording for agents, jobs and the CLI; git notes; status), `test/unit/work-ui-test.el`
-(the tab: tree, folding, opening, filter, refresh in another process, graph, agents on a task, doctor) — against
-temporary git repositories and the mock agent — and `test/live/drgnx-work-test.el` (the tab in a GUI session).
+`test/unit/work-record-test.el` (recording for agents, jobs and the CLI; git notes; status) — against
+temporary git repositories and the mock agent.

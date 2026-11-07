@@ -23,8 +23,6 @@
 (defvar drgnx-diff--root)
 (declare-function drgnx-review-visit "drgnx-review")
 (declare-function drgnx-diff-visit "drgnx-diff")
-(declare-function drgnx-work-ui-open "drgnx-work-ui")
-(declare-function drgnx-work-ui--graph-open "drgnx-work-ui")
 (defvar drgnx-agents--sessions)
 (declare-function drgnx-agents--make "drgnx-agents")
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
@@ -85,7 +83,7 @@ names in TREE that only look special: `n.gz', `n.gpg', `a.zip/y' (nothing is mad
 
 (defun drgnx-test-visit (how name root)
   "Open NAME (relative to the folder ROOT) the way HOW does: `review' (RET on a finding), `diff' (Open File at Line),
-`work' (Work: open a row), `work-graph' (a box of the Work graph), `work-space' (Enter on a file of the Work map: an
+`work-space' (Enter on a file of the Work map: an
 agent working in ROOT, the hub's presence entry naming NAME there at line 1), `work-trail' (a read step of that agent
 naming NAME).  The buffer visiting the file; the caller kills it."
   (save-window-excursion
@@ -108,13 +106,6 @@ naming NAME).  The buffer visiting the file; the caller kills it."
          (cl-letf (((symbol-function 'drgnx-diff--in-view) #'ignore))
            (drgnx-diff-visit)
            (current-buffer))))
-      ('work
-       (require 'drgnx-work-ui)
-       (cl-letf (((symbol-function 'drgnx-work-ui--node) (lambda () (list :kind 'task :path (concat root name) :line 1))))
-         (drgnx-work-ui-open)))
-      ('work-graph
-       (require 'drgnx-work-ui)
-       (drgnx-work-ui--graph-open (list :kind 'plan :node (list :path (concat root name)))))
       ((or 'work-space 'work-trail)
        (require 'drgnx-agents)
        (require 'drgnx-work-code)

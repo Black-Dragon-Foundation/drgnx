@@ -1254,7 +1254,7 @@ settled one takes its notice away."
   "In an editor: a `matrix' card (the permission matrix asks), an `extension' card (an agent's suggestion:
 `drgnx-hub--note-extension-card') or a `supervisor' pause from a hub that proved itself is a notice.  Nothing asks
 and nothing waits: a card that lists its answers (a browser row's) keeps them here and its notice carries Agents:
-Answer Permission Card with the card's id; the cockpit's cards answer the others.
+Answer Permission Card with the card's id; the agent panel's cards answer the others.
 `agent-step' is not handled here: it matters only to a subscriber that asked for it."
   (when (drgnx-hub--event-proven-p)
     (cond

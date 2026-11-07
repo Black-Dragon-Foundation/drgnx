@@ -549,7 +549,7 @@ the tail's text."
   (should-not (equal (face-attribute 'drgnx-git-ignored :slant nil t) (face-attribute 'default :slant nil t))))
 
 (ert-deftest drgnx-tty-frames/the-state-table-names-each-group-its-faces-and-its-cue ()
-  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs work)))
+  (should (equal (mapcar #'car drgnx-tty-frames-state-faces) '(git review tabs)))
   (pcase-dolist (`(,group . ,spec) drgnx-tty-frames-state-faces)
     (should (symbolp group))
     (should (memq (plist-get spec :cue) '(letter word attribute label)))
@@ -566,8 +566,7 @@ the tail's text."
   (dolist (lib '(drgnx-git drgnx-chrome))
     (require lib))
   ;; modules, not on the load path: loaded by file, as their own tests do
-  (dolist (lib '("modules/tools/drgnx-review" "modules/tools/drgnx-work-ui"))
-    (load (expand-file-name lib drgnx-dir) nil t))
+  (load (expand-file-name "modules/tools/drgnx-review" drgnx-dir) nil t)
   (pcase-dolist (`(,_ . ,spec) drgnx-tty-frames-state-faces)
     (dolist (f (plist-get spec :faces))
       (should (facep f)))))

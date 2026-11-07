@@ -201,18 +201,18 @@ of the params, set in BODY); `calls' holds (METHOD . PARAMS), newest first.  The
       (should-not (drgnx-work-names-test--visited before)))))
 
 (ert-deftest drgnx-work-names/visiting-a-link-out-through-a-remote-name-never-loads-tramp ()
-  ;; the cockpit's end-to-end test, in an Emacs of its own (-Q, Tramp's handlers as shipped; reaching Tramp fails):
+  ;; the end-to-end test, in an Emacs of its own (-Q, Tramp's handlers as shipped; reaching Tramp fails):
   ;; every command that opens an agent's or a model's name opens the linked file, and Tramp, jka-compr and EasyPG stay
   ;; unloaded
   (let* ((root (file-name-as-directory (make-temp-file "drgnx-work-names-child" t))) (wt (concat root "wt/"))
-         (hows '(review diff work work-graph work-space work-trail)))
+         (hows '(review diff work-space work-trail)))
     (unwind-protect
         (let* ((paths (progn (make-directory wt) (drgnx-test-hostile-paths wt)))
                (form `(progn
                         (with-eval-after-load 'tramp
                           (advice-add 'tramp-file-name-handler :override (lambda (&rest _) (error "Tramp was reached"))))
                         (load ,(expand-file-name "test/fixtures/handler-trap" drgnx-dir) nil t)
-                        (require 'drgnx-review) (require 'drgnx-diff) (require 'drgnx-work-ui)
+                        (require 'drgnx-review) (require 'drgnx-diff)
                         (let* ((loaded (lambda () (list (featurep 'tramp) (featurep 'jka-compr) (featurep 'epa-file))))
                                (before (funcall loaded))
                                (opened (mapcar (lambda (how)

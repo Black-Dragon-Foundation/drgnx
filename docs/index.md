@@ -25,7 +25,7 @@ Using drgnx.
 - [Editing](guide/editing.md): language support (tree-sitter grammars), and the editor's amenities.
 - [Large files](guide/large-files.md): above 50 MiB a file opens in chunks, lean or raw — a file you open asks once, `drgnx open` and everything automatic never ask; the header line and the status bar say which, and switch; long lines turn on so-long.
 - [Git and review](guide/git.md): the diff view, inline blame, AI commit messages, Review Branch, Pull Requests.
-- [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work cockpit and the job window.
+- [The Work space](guide/work-space.md): opening the map (`work-view`), its faces, the machines the hub lists, `ratatoskr machines report`; the Board, the Timeline and the research trail, the review view, the second reviewer and the steering keys. It replaces the Work space and the job window.
 - [Work tracker](guide/work.md): specs › plans › tasks › TODOs › commits, branches and worktrees; `drgnx work`.
 - [Search and replace](guide/replace.md): the Search view in the sidebar and the find bar — symbols and text in one interface, tick boxes, one Undo.
 - [Layouts](guide/layouts.md): Agent, Editor, Zen and Browser, and your own; one key cycles them, and switching back restores what you left.
