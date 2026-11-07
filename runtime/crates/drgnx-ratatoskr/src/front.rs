@@ -420,6 +420,8 @@ impl Front {
             .set_overrides(project.as_deref(), list)
             .await?;
         self.apply_settings();
+        // the plugin list is a setting: a running session's snapshot says when the set it started with has moved
+        self.mcp.plugins_refresh();
         self.writer.signals.answers_changed();
         Ok(runstav::methods::config::SettingsApplied { applied })
     }
