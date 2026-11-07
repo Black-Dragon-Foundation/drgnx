@@ -298,10 +298,9 @@ call, no bus flush: the `windows-changed' `now' subscriber."
   "The tab line is made once for 20 self-inserts and 20 applies, and again when a tab's name or modified flag changes."
   (drgnx-chrome-test--with dir
     (drgnx-chrome-test--open dir "a.txt")
-    (let ((w (selected-window)) (made 0) (orig (symbol-function 'drgnx-chrome--tab-line-make)))
-      (cl-letf (((symbol-function 'drgnx-chrome--tab-line-make)
-                 (lambda (win) (setq made (1+ made)) (funcall orig win))))
-        (clrhash drgnx-chrome--tab-lines)
+    (let ((w (selected-window)) (made 0) (orig (symbol-function 'drgnx-chrome--tab)))
+      (cl-letf (((symbol-function 'drgnx-chrome--tab)
+                 (lambda (&rest args) (setq made (1+ made)) (apply orig args))))     ; one tab: one call a build
         (set-buffer-modified-p nil)
         (drgnx-chrome--tab-line w)
         (should (= made 1))
