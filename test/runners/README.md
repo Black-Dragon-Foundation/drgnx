@@ -41,7 +41,8 @@ Found by the spike (rootless podman as the outer engine):
 | `--memory` = `--memory-swap` | runners 3g, harness 2g |
 
 The image also needs `newuidmap` and `newgidmap` made setuid (a rootless image build drops their file capabilities), a
-subuid range for `runner` inside the 65536 ids the outer container maps (`20000:30000`), and the
+subuid and subgid ranges for `runner` inside the 65536 ids the outer container maps (`1:999` and `1001:64535`: every id
+but 0 and its own, so an inner container's uid 65534, the relay sidecar's, is mapped), and the
 `/etc/systemd/system/user@.service.d` drop-in `Delegate=memory pids cpu cpuset io`.
 
 A container started by `podman run` inside a unit lands under `user.slice`, not under the unit's slice, unless it is
