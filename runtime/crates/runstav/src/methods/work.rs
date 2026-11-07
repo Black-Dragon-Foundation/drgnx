@@ -284,6 +284,26 @@ pub struct MapSubscribe {
     /// The selected item: a quiet reflow that would move its chain waits for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no
+    /// `work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows: bool,
+}
+
+/// `work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MapSubscribed {
+    Frame(MapFrame),
+    Rows(MapRows),
+}
+
+/// `work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MapRows {
+    pub hub: u64,
+    pub version: u64,
 }
 
 /// A map view's full frame: `work/map/subscribe`'s answer.
@@ -581,9 +601,9 @@ pub(crate) fn methods() -> Vec<Method> {
             check: check_conclusions,
         ),
         method!(
-            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapFrame,
+            "work/map/subscribe", WorkMapSubscribe(MapSubscribe) -> MapSubscribed,
             classes: [User], writes: false,
-            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+            doc: "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
             check: check_map_subscribe,
         ),
         method!(

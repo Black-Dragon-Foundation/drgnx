@@ -1499,7 +1499,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -2014,6 +2014,16 @@ view only what changed, to the connection that shows it.
   at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
   width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
   `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
+- **Rows** (`work/map/subscribe`'s `rows: true`; "Rows" below). The view's rows are built in the hub
+  (`vegvisir::render`, `docs/develop/work-space.md`, "The rows") and go to each display class the editor sent a
+  `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per class a reset; the answer is
+  `{hub, version}` and no `work-map` event comes for that view (nor a stale mark when it is hidden: its editor hid it).
+  Its width is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an
+  env, and a terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the
+  user's change; any other env, a delta, a full frame or a new `selected` (the chain's edges) draws the classes again,
+  and each gets only what changed (a resize: `replace`s of the rows whose fit changed). The coalescing, the quiet
+  reflow and the held chain are the frames' own. The first row is `strip` (the needs-you strip and the machines'
+  load). Without `rows` the view keeps its frames and `work-map` events, unchanged.
 - **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
   from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
   a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items

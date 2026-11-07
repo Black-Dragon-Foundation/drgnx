@@ -29394,7 +29394,7 @@
       "classes": [
         "user"
       ],
-      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only",
+      "doc": "open (or open again) one map view of this connection: the answer is its full frame, and work-map events follow, to this connection only; with rows, its rows come as view-patch per display class instead",
       "name": "work/map/subscribe",
       "params": {
         "$defs": {
@@ -29477,6 +29477,10 @@
               "overlaps": false
             }
           },
+          "rows": {
+            "description": "Rows: the view's rows come as `view-patch` per display class (`view/env`), the first a reset, and no\n`work-map` event comes; the width is the env's (`width_units` is ignored). The answer is `{hub, version}`.",
+            "type": "boolean"
+          },
           "selected": {
             "description": "The selected item: a quiet reflow that would move its chain waits for the user.",
             "type": [
@@ -29506,50 +29510,84 @@
         "type": "object"
       },
       "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "A map view's full frame: `work/map/subscribe`'s answer.",
-        "properties": {
-          "chips": {
-            "default": [],
-            "description": "The mission chips (the machines' load).",
-            "items": true,
-            "type": "array"
+        "$defs": {
+          "MapFrame": {
+            "additionalProperties": false,
+            "description": "A map view's full frame: `work/map/subscribe`'s answer.",
+            "properties": {
+              "chips": {
+                "default": [],
+                "description": "The mission chips (the machines' load).",
+                "items": true,
+                "type": "array"
+              },
+              "edges": {
+                "default": [],
+                "description": "The edges between them.",
+                "items": true,
+                "type": "array"
+              },
+              "items": {
+                "default": [],
+                "description": "The items the view shows, each with its kind, label, flags and card fields.",
+                "items": true,
+                "type": "array"
+              },
+              "layout": {
+                "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
+              },
+              "needs_you": {
+                "default": [],
+                "description": "The needs-you strip.",
+                "items": true,
+                "type": "array"
+              },
+              "version": {
+                "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "version",
+              "layout"
+            ],
+            "type": "object"
           },
-          "edges": {
-            "default": [],
-            "description": "The edges between them.",
-            "items": true,
-            "type": "array"
-          },
-          "items": {
-            "default": [],
-            "description": "The items the view shows, each with its kind, label, flags and card fields.",
-            "items": true,
-            "type": "array"
-          },
-          "layout": {
-            "description": "Rows, positions and forms, lanes, ports and bands, in units of 4 px."
-          },
-          "needs_you": {
-            "default": [],
-            "description": "The needs-you strip.",
-            "items": true,
-            "type": "array"
-          },
-          "version": {
-            "description": "The frame's version; every `work-map` after it names the version it applies to (`base`).",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+          "MapRows": {
+            "additionalProperties": false,
+            "description": "`work/map/subscribe`'s answer to a rows view: its patches name this hub and start from a reset.",
+            "properties": {
+              "hub": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "version": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "hub",
+              "version"
+            ],
+            "type": "object"
           }
         },
-        "required": [
-          "version",
-          "layout"
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MapFrame"
+          },
+          {
+            "$ref": "#/$defs/MapRows"
+          }
         ],
-        "title": "MapFrame",
-        "type": "object"
+        "description": "`work/map/subscribe`'s answer: the full frame, or (`rows`) the hub's instance id and the view's version.",
+        "title": "MapSubscribed"
       },
       "writes": false
     }

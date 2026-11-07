@@ -241,6 +241,8 @@ impl Views {
         let Some((mut rows, images, labels)) =
             lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
         else {
+            // not a fixture: a Work map rows view of that name, if there is one
+            f.core.map.view_env(f, key);
             return;
         };
         if !labels.is_empty() {
@@ -250,6 +252,47 @@ impl Views {
                 rows.extend(fitted.unwrap_or_default());
             }
         }
+        let patch = lock(&self.store).publish(key, rows, &images);
+        if let Some(p) = patch {
+            f.send_to(key.0, "view-patch", json!(p));
+        }
+        self.ask(f, key);
+    }
+
+    /// The hub's instance id (on every patch).
+    pub fn hub(&self) -> u64 {
+        lock(&self.store).hub()
+    }
+
+    /// The display classes CONN shows VIEW in.
+    pub fn classes(&self, conn: u64, view: &str) -> Vec<String> {
+        lock(&self.store).classes(conn, view)
+    }
+
+    /// The envs CONN sent for VIEW, one per class.
+    pub fn envs(&self, conn: u64, view: &str) -> Vec<ViewEnv> {
+        let store = lock(&self.store);
+        store
+            .classes(conn, view)
+            .into_iter()
+            .filter_map(|class| store.env_of(&(conn, view.to_owned(), class)).cloned())
+            .collect()
+    }
+
+    /// A builder's rows for KEY: BUILD makes them from KEY's env and fonts, the patch from what its editor holds goes
+    /// out (`view-patch`), and the glyphs the build missed are asked for. Nothing before KEY's env.
+    pub fn publish_built(
+        &self,
+        f: &Front,
+        key: &Key,
+        build: impl FnOnce(&ViewEnv, &FontSet) -> (Vec<Row>, Vec<(ImageId, String)>),
+    ) {
+        let Some(env) = lock(&self.store).env_of(key).cloned() else {
+            return;
+        };
+        let Some((rows, images)) = self.with_fonts(key, |set| build(&env, set)) else {
+            return;
+        };
         let patch = lock(&self.store).publish(key, rows, &images);
         if let Some(p) = patch {
             f.send_to(key.0, "view-patch", json!(p));
