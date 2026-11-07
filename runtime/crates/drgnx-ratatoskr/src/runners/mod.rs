@@ -5,6 +5,8 @@
 //!   three sessions, a real round trip for health, redial with backoff, logins classified and never answered.
 //! - [`link`]: a runner's link session over those sessions: frames, pings, a lost link, logs at the hub's offset.
 //! - [`attempts`]: the attempt state machine (nonces, `detached`, grace, reattach, requeue, late results), pure.
+//! - [`sync`]: a job's inputs frozen at submit, its trust from what the public origin has, and how its code reaches
+//!   a runner (origin, bundle or push; the overlay a runner may get).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,6 +20,7 @@ pub mod queue;
 #[cfg(all(unix, not(target_os = "android")))]
 pub mod registry;
 pub mod ssh_config;
+pub mod sync;
 pub mod transport;
 
 /// The longest runner name: it names the runner's folder under `$XDG_RUNTIME_DIR/drgnx-runners/`, which holds the

@@ -319,6 +319,7 @@ fn heavy_job(id: &str, image: Option<&str>) -> Submit {
             ..Placement::default()
         },
         pending: serde_json::Value::Null,
+        inputs: None,
     }
 }
 
@@ -498,6 +499,7 @@ mod queue {
                     spec,
                     place: place(heavy),
                     pending: serde_json::Value::Null,
+                    inputs: None,
                 },
                 now(),
             );

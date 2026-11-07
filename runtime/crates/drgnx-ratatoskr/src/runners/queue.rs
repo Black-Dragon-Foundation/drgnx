@@ -12,6 +12,7 @@ use super::attempts::{self, Effect, Event as AEvent, Listed};
 use super::health::{self, Facts, StrikeCtx, Strikes};
 use super::link::{LinkEvent, Route, Session};
 use super::local::LocalRunner;
+use super::sync::{self, Frozen, SyncPlan};
 use crate::exec::Starter;
 use forseti::{
     Accept, Candidate, Drr, Expect, Expected, Job, JobId, JobSpec, JobState, JobTrust, Kind, Lane,
@@ -19,7 +20,7 @@ use forseti::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sleipnir::proto::{Frame, JobRef, Nonce, PROTO_VERSION};
+use sleipnir::proto::{Frame, JobRef, ManifestEntry, Nonce, PROTO_VERSION, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
@@ -131,6 +132,11 @@ pub struct Placement {
     pub image: Option<String>,
     /// The project's weight in fairness (`drgnx-runners-weight`).
     pub weight: f64,
+    /// The project's visibility (`drgnx-runners-project-visibility`): with the commit on the origin, what makes a job
+    /// public.
+    pub visibility: sync::Visibility,
+    /// The project lets a shared runner have its overlay, once scanned (`drgnx-runners-shared-overlay`).
+    pub shared_overlay: bool,
 }
 
 impl Default for Placement {
@@ -147,7 +153,16 @@ impl Default for Placement {
             machines_cell: true,
             image: None,
             weight: 1.0,
+            visibility: sync::Visibility::Private,
+            shared_overlay: false,
         }
+    }
+}
+
+impl Placement {
+    /// Whether a job placed so could leave this machine at all, so its inputs are frozen for a runner.
+    pub fn may_leave(&self) -> bool {
+        self.machine != Machine::Local && !self.local_only && self.send != SendMode::None
     }
 }
 
@@ -204,6 +219,8 @@ pub struct Submit {
     pub place: Placement,
     /// What the job layer starts it from (its `Pending`), kept with it.
     pub pending: Value,
+    /// Its inputs, frozen at submit: what a runner syncs. None: it can only run here, in its worktree as it is.
+    pub inputs: Option<Frozen>,
 }
 
 /// A runner the queue may place on, as its registry record says (Task 19 fills these in).
@@ -297,6 +314,41 @@ struct QJob {
     waiting: Option<String>,
     attempt: u32,
     machine: Option<String>,
+    /// Why a `shared` runner may not get its overlay (`sync::overlay_for`), scanned once at submit.
+    shared_why: Option<String>,
+}
+
+impl QJob {
+    fn new(s: Submit, submitted: u64, state: QState, attempt: u32) -> QJob {
+        let shared_why = s
+            .inputs
+            .as_ref()
+            .and_then(|f| sync::overlay_for(f, RunnerTrust::Shared).err());
+        let machine = match &state {
+            QState::Remote(r) => Some(r.clone()),
+            QState::Local => Some(LOCAL.into()),
+            QState::Queued => None,
+        };
+        QJob {
+            s,
+            submitted,
+            state,
+            waiting: None,
+            attempt,
+            machine,
+            shared_why,
+        }
+    }
+}
+
+/// How many `sync-need` answers one attempt's sync may take before the hub gives it up.
+const SYNC_ROUNDS: u32 = 6;
+
+/// One attempt's sync under way (design §6.2): the answers so far, and the bundle the hub is sending it.
+#[derive(Default)]
+struct SyncSt {
+    rounds: u32,
+    bundle: Option<sync::BundleFile>,
 }
 
 struct Remote {
@@ -347,6 +399,7 @@ struct St {
     drr: Drr,
     attempts: attempts::Core,
     runners: BTreeMap<String, Remote>,
+    syncs: BTreeMap<(String, u32), SyncSt>,
 }
 
 /// How the queue is made.
@@ -680,6 +733,7 @@ impl Queue {
             "place": j.s.place,
             "pending": j.s.pending,
             "session": j.s.session,
+            "inputs": j.s.inputs,
         })
         .to_string();
         let (own, eff) = (j.s.own.number(), eff.number());
@@ -693,6 +747,7 @@ impl Queue {
             Machine::Runner(n) => Some(n.clone()),
         };
         let project = j.s.spec.project.clone();
+        let input_key = j.s.inputs.as_ref().map(|f| f.input_key.clone());
         let state = match j.state {
             QState::Queued => "queued",
             QState::Local | QState::Remote(_) => "running",
@@ -701,8 +756,37 @@ impl Queue {
         self.persist(Box::new(move |c| {
             c.execute(
                 "insert or replace into rq_job(id, spec, own, effective, trust, pin, project, input_key, state, \
-                 submitted, attempt) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, null, ?8, ?9, ?10)",
-                (id, spec, own, eff, trust, pin, project, state, submitted, attempt),
+                 submitted, attempt) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (
+                    id, spec, own, eff, trust, pin, project, input_key, state, submitted, attempt,
+                ),
+            )?;
+            Ok(())
+        }));
+    }
+
+    /// Writes frozen inputs F to `rq_input` (design §7.4), or marks them used again at NOW.
+    fn put_input(&self, f: &Frozen, now: u64) {
+        let manifest = serde_json::to_vec(&f.manifest).unwrap_or_default();
+        let manifest_hash = {
+            use sha2::Digest;
+            sha2::Sha256::digest(&manifest)
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let extras = serde_json::to_string(&f.extras).unwrap_or_default();
+        let (key, commit, tree, at) = (
+            f.input_key.clone(),
+            f.commit.clone(),
+            f.tree.clone(),
+            now as f64,
+        );
+        self.persist(Box::new(move |c| {
+            c.execute(
+                "insert into rq_input(key, commit_sha, tree, manifest_hash, manifest, extras, created, last_used) \
+                 values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) on conflict(key) do update set last_used = excluded.last_used",
+                (key, commit, tree, manifest_hash, manifest, extras, at),
             )?;
             Ok(())
         }));
@@ -769,16 +853,14 @@ impl Queue {
         }))
     }
 
-    /// A job enters the queue at NOW.
-    pub fn submit(&self, s: Submit, now: u64) {
-        let j = QJob {
-            submitted: now,
-            state: QState::Queued,
-            waiting: None,
-            attempt: 0,
-            machine: None,
-            s,
-        };
+    /// A job enters the queue at NOW. With frozen inputs, its trust is theirs (design §6.6: from what the public
+    /// origin has, and the keys it names), whatever the spec said, and they are kept in `rq_input`.
+    pub fn submit(&self, mut s: Submit, now: u64) {
+        if let Some(f) = &s.inputs {
+            s.spec.trust = f.trust(&s.place.keys);
+            self.put_input(f, now);
+        }
+        let j = QJob::new(s, now, QState::Queued, 0);
         self.put_job(&j, j.s.own);
         self.lock().jobs.insert(j.s.id.clone(), j);
         self.wake.notify_one();
@@ -799,20 +881,9 @@ impl Queue {
                 ("running", None) => continue,
                 _ => QState::Queued,
             };
-            let machine = match &state {
-                QState::Remote(r) => Some(r.clone()),
-                _ => None,
-            };
             st.jobs.insert(
                 s.submit.id.clone(),
-                QJob {
-                    submitted: s.submitted,
-                    state,
-                    waiting: None,
-                    attempt: s.attempt,
-                    machine,
-                    s: s.submit,
-                },
+                QJob::new(s.submit, s.submitted, state, s.attempt),
             );
         }
         let mut jobs_with_attempts = Vec::new();
@@ -859,20 +930,17 @@ impl Queue {
         let mut st = self.lock();
         st.local_running
             .insert(id.to_string(), running(id, own, now, 512, 1));
-        let j = st.jobs.entry(id.to_string()).or_insert_with(|| QJob {
-            s: Submit {
+        let j = st.jobs.entry(id.to_string()).or_insert_with(|| {
+            let s = Submit {
                 id: id.into(),
                 session: None,
                 own,
                 spec: blank_spec(id),
                 place: Placement::default(),
                 pending: Value::Null,
-            },
-            submitted: now,
-            state: QState::Local,
-            waiting: None,
-            attempt: 0,
-            machine: Some(LOCAL.into()),
+                inputs: None,
+            };
+            QJob::new(s, now, QState::Local, 0)
         });
         j.state = QState::Local;
         j.machine = Some(LOCAL.into());
@@ -1062,7 +1130,15 @@ impl Queue {
             history: vec![],
             cloud: None,
         }];
+        // a shared runner the job's overlay may not reach is no candidate; the job says why if nothing else takes it
+        let mut held_off = None;
         for (name, r) in &st.runners {
+            if r.r.trust == RunnerTrust::Shared
+                && let Some(why) = &q.shared_why
+            {
+                held_off.get_or_insert_with(|| why.clone());
+                continue;
+            }
             cands.push(Candidate {
                 name: name.clone(),
                 local: false,
@@ -1087,7 +1163,7 @@ impl Queue {
             gates_allowed: false,
             cloud_after_s: CLOUD_AFTER_S,
             now,
-            commits_not_on_origin: 0,
+            commits_not_on_origin: q.s.inputs.as_ref().map_or(0, Frozen::commits_not_on_origin),
         };
         // the pick, then this machine's own admission: refused here, the job may still go to a runner
         let mut here: Option<WaitReason> = None;
@@ -1125,6 +1201,11 @@ impl Queue {
             }
             Placed::There(name) => self.offer(st, job, eff, &name, now),
             Placed::Wait(r) => {
+                // trust alone keeps it off every runner: the design's "runs here: …" words say why
+                if let Some(why) = forseti::place::why_here(job, &cands, &ctx).or(held_off) {
+                    q.waiting = Some(why);
+                    return;
+                }
                 // a runner's refusal stays shown until something else holds the job
                 let refused = q.waiting.as_deref().is_some_and(|w| w.contains(": "));
                 if !refused || !matches!(r, WaitReason::Mode | WaitReason::NoRunner) {
@@ -1167,7 +1248,12 @@ impl Queue {
                 r: r.clone(),
                 spec: Box::new(job.spec.clone()),
                 priority: eff,
-                input_key: String::new(),
+                input_key: j
+                    .s
+                    .inputs
+                    .as_ref()
+                    .map(|f| f.input_key.clone())
+                    .unwrap_or_default(),
                 grant_hint: None,
                 expected: None,
             });
@@ -1389,22 +1475,11 @@ impl Queue {
             }
             Frame::Admit { r, grant } => {
                 if st.attempts.frame_ok(runner, &r) == Some(false) {
-                    // a health check's canary runs in the runner's own image
-                    let image = if is_canary(&r.job) {
-                        st.runners.get(runner).and_then(|rr| rr.r.image.clone())
-                    } else {
-                        st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
-                    };
-                    if let Some(rr) = st.runners.get(runner) {
-                        rr.session.send(Frame::Start {
-                            r: r.clone(),
-                            image,
-                            env: vec![],
-                            net_hosts: vec![],
-                            // no network reaches a runner job yet (`net_hosts`), so no names to pin either
-                            pins: vec![],
-                            parser: "exit".into(),
-                        });
+                    // a job with frozen inputs syncs them first; its start follows the last `sync-need`
+                    let frozen = st.jobs.get(&r.job).and_then(|j| j.s.inputs.clone());
+                    match frozen {
+                        Some(f) if !is_canary(&r.job) => Self::sync_have(st, runner, &r, &f),
+                        _ => Self::start(st, runner, &r),
                     }
                     let (job, attempt, runner) = (r.job.clone(), r.attempt, runner.to_string());
                     let grant = serde_json::to_string(&grant).unwrap_or_default();
@@ -1442,6 +1517,17 @@ impl Queue {
                 }
                 if current && let Some(j) = st.jobs.get_mut(&job) {
                     j.waiting = Some(format!("{runner}: {why}"));
+                }
+                return;
+            }
+            Frame::SyncNeed {
+                r,
+                blobs,
+                commit,
+                refs,
+            } => {
+                if st.attempts.frame_ok(runner, &r) == Some(false) {
+                    Self::sync_need(st, runner, &r, &blobs, commit, &refs);
                 }
                 return;
             }
@@ -1536,9 +1622,167 @@ impl Queue {
         }
     }
 
+    /// Starts admitted attempt R on RUNNER, in the job's image (a health check's canary in the runner's own).
+    fn start(st: &St, runner: &str, r: &JobRef) {
+        let image = if is_canary(&r.job) {
+            st.runners.get(runner).and_then(|rr| rr.r.image.clone())
+        } else {
+            st.jobs.get(&r.job).and_then(|j| j.s.place.image.clone())
+        };
+        if let Some(rr) = st.runners.get(runner) {
+            rr.session.send(Frame::Start {
+                r: r.clone(),
+                image,
+                env: vec![],
+                net_hosts: vec![],
+                // no network reaches a runner job yet (`net_hosts`), so no names to pin either
+                pins: vec![],
+                parser: "exit".into(),
+            });
+        }
+    }
+
+    /// Tells RUNNER what attempt R's inputs F are, with the part of the overlay its trust may get; it answers with
+    /// what it lacks (`sync-need`).
+    fn sync_have(st: &mut St, runner: &str, r: &JobRef, f: &Frozen) {
+        let Some(rr) = st.runners.get(runner) else {
+            return;
+        };
+        match sync::overlay_for(f, rr.r.trust) {
+            Ok(manifest) => {
+                rr.session.send(Frame::SyncHave {
+                    r: r.clone(),
+                    repo: f.repo.clone(),
+                    input_key: f.input_key.clone(),
+                    commit: f.commit.clone(),
+                    tree: f.tree.clone(),
+                    manifest,
+                });
+                st.syncs.entry((r.job.clone(), r.attempt)).or_default();
+            }
+            Err(why) => Self::give_up(st, runner, r, &why),
+        }
+    }
+
+    /// Attempt R's sync can't go on: RUNNER cancels the attempt (its reservation goes there), and why is logged.
+    fn give_up(st: &mut St, runner: &str, r: &JobRef, why: &str) {
+        tracing::warn!("runners: {}: the sync to {runner} stops: {why}", r.job);
+        st.syncs.remove(&(r.job.clone(), r.attempt));
+        if let Some(rr) = st.runners.get(runner) {
+            rr.session.send(Frame::Cancel { r: r.clone() });
+        }
+    }
+
+    /// RUNNER's answer for attempt R: it lacks the commit (an origin fetch, or a bundle), or these BLOBS of the
+    /// overlay (sent, then asked again), or nothing (the attempt starts). Its mirror holds REFS.
+    fn sync_need(
+        st: &mut St,
+        runner: &str,
+        r: &JobRef,
+        blobs: &[Sha256],
+        commit: bool,
+        refs: &[String],
+    ) {
+        let Some(f) = st.jobs.get(&r.job).and_then(|j| j.s.inputs.clone()) else {
+            return;
+        };
+        let Some(trust) = st.runners.get(runner).map(|rr| rr.r.trust) else {
+            return;
+        };
+        let key = (r.job.clone(), r.attempt);
+        let s = st.syncs.entry(key.clone()).or_default();
+        s.rounds += 1;
+        // a bundle sent before has been taken in, or failed: its file goes, and a new one is made if still needed
+        s.bundle = None;
+        if s.rounds > SYNC_ROUNDS {
+            let why = format!("the runner still lacks the inputs after {SYNC_ROUNDS} rounds");
+            return Self::give_up(st, runner, r, &why);
+        }
+        let Some(rr) = st.runners.get(runner) else {
+            return;
+        };
+        let send = |fr: Frame| rr.session.send(fr);
+        if commit {
+            let missing = match trust {
+                RunnerTrust::Shared => Ok(0),
+                _ => sync::missing_bytes(&f.worktree, &f.commit, refs),
+            };
+            // no deploy key is named yet (`drgnx-runners-origin-key` comes with the keys)
+            let done = missing.and_then(|m| match sync::plan(&f, trust, m, None) {
+                SyncPlan::Origin { url, .. } => {
+                    send(Frame::OriginFetch {
+                        r: r.clone(),
+                        repo: f.repo.clone(),
+                        url,
+                        commit: f.commit.clone(),
+                    });
+                    Ok(None)
+                }
+                // a push goes as a bundle too, until the hub pushes over the runner's master
+                SyncPlan::Bundle { .. } | SyncPlan::Push => {
+                    let b =
+                        sync::make_bundle(&f.worktree, &f.commit, refs, &f.blobs.join("bundles"))?;
+                    let id = format!("{}.{}", r.job, r.attempt);
+                    sync::send_bundle(&send, r, &id, &b, 0)?;
+                    Ok(Some(b))
+                }
+                SyncPlan::Never(why) => Err(why),
+            });
+            match done {
+                Ok(b) => {
+                    if let Some(s) = st.syncs.get_mut(&key) {
+                        s.bundle = b;
+                    }
+                }
+                Err(why) => Self::give_up(st, runner, r, &why),
+            }
+            return;
+        }
+        // only the blobs of this attempt's own overlay, in chunks
+        let ours: Vec<[u8; 32]> = sync::overlay_for(&f, trust)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|e| match e {
+                ManifestEntry::File {
+                    sha256: Sha256(s), ..
+                } => Some(*s),
+                ManifestEntry::Deleted { .. } => None,
+            })
+            .collect();
+        let mut failed = None;
+        for Sha256(sha) in blobs {
+            if !ours.contains(sha) {
+                tracing::warn!(
+                    "runners: {runner} asked {} for a blob not in its overlay",
+                    r.job
+                );
+                continue;
+            }
+            if let Err(e) = sync::send_blob(&send, r, &f, sha) {
+                failed = Some(e);
+                break;
+            }
+        }
+        if let Some(why) = failed {
+            return Self::give_up(st, runner, r, &why);
+        }
+        if !blobs.is_empty() {
+            return Self::sync_have(st, runner, r, &f);
+        }
+        st.syncs.remove(&key);
+        Self::start(st, runner, r);
+    }
+
     /// Carries out the attempt state machine's EFFECTS.
     fn apply(&self, st: &mut St, effects: Vec<Effect>, now: u64, out: &mut Vec<Outcome>) {
         for e in effects {
+            // an attempt that ended, or went back to the queue, syncs no more (its bundle file goes)
+            if let Effect::Verdict { job, .. }
+            | Effect::Requeue { job, .. }
+            | Effect::Lost { job } = &e
+            {
+                st.syncs.retain(|(j, _), _| j != job);
+            }
             match e {
                 Effect::Verdict {
                     job,
@@ -1714,6 +1958,9 @@ pub async fn stored(db: &urdr::Handle) -> (Vec<Stored>, Vec<StoredAttempt>) {
                     spec: serde_json::from_value(v.get("job")?.clone()).ok()?,
                     place: serde_json::from_value(v.get("place")?.clone()).ok()?,
                     pending: v.get("pending").cloned().unwrap_or(Value::Null),
+                    inputs: v
+                        .get("inputs")
+                        .and_then(|i| serde_json::from_value(i.clone()).ok()),
                 },
                 submitted: submitted as u64,
                 state,

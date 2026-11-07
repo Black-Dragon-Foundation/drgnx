@@ -160,6 +160,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
             }
             values.runners_project_visibility = s;
         }
+        "drgnx-runners-shared-overlay" => values.runners_shared_overlay = de(v)?,
         "drgnx-sandbox-proxy-pinned-addresses" => {
             let Alist(pairs) = de::<Alist<std::net::IpAddr>>(v)?;
             values.sandbox_proxy_pins = pairs;
@@ -283,6 +284,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-runners-image" => json!(values.runners_image),
         "drgnx-runners-weight" => json!(values.runners_weight),
         "drgnx-runners-project-visibility" => json!(values.runners_project_visibility),
+        "drgnx-runners-shared-overlay" => json!(values.runners_shared_overlay),
         "drgnx-sandbox-proxy-pinned-addresses" => object(
             values
                 .sandbox_proxy_pins
@@ -330,6 +332,7 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-runners-image",
     "drgnx-runners-weight",
     "drgnx-runners-project-visibility",
+    "drgnx-runners-shared-overlay",
     "drgnx-search-include",
     "drgnx-search-exclude",
     "drgnx-search-off",

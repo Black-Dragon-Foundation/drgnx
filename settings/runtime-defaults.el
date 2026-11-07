@@ -104,6 +104,7 @@
  (drgnx-runners-image nil)
  (drgnx-runners-weight 1.0)
  (drgnx-runners-project-visibility "private")
+ (drgnx-runners-shared-overlay nil)
  (drgnx-search-model-mirror nil)
  (drgnx-search-builtin t)
  (drgnx-search-include nil)

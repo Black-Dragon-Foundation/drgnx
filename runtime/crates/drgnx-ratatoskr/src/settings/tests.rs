@@ -162,8 +162,8 @@ fn only_runtime_names_decode() {
     // what is not a runtime setting has no place to go: RUNTIME is the whole list
     // (8, and agent system part 1's 13: the matrix, the away signal, the job and container limits, the net hosts; and
     // the names a module may add to a session's environment; and part 2's providers whose shell steps are traced; and
-    // the runners' five per-project settings; and the proxies' pinned names; and Hrafn's 5; and the agent browser's 8)
-    assert_eq!(RUNTIME_NAMES.len(), 42);
+    // the runners' six per-project settings; and the proxies' pinned names; and Hrafn's 5; and the agent browser's 8)
+    assert_eq!(RUNTIME_NAMES.len(), 43);
     assert!(RUNTIME_NAMES.iter().all(|n| {
         n.starts_with("drgnx-agents-")
             || n.starts_with("drgnx-ai-")

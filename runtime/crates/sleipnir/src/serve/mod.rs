@@ -8,7 +8,10 @@
 //! installed or enabled, and between connections the runner has only its folder and, with linger, the attempts still
 //! running in their own units. At every `hello` it re-probes linger and the runner contract and lists its attempts
 //! from `<root>/jobs/`. It sends `ready` every 2 s and at every job end. An `offer` is admitted by `forseti` under the
-//! machine's admission lock ([`admit`]); a `start` runs the attempt as a transient unit running `sleipnir job-exec`;
+//! machine's admission lock ([`admit`]); an admitted attempt's inputs come by `sync-have`, answered with what the
+//! runner lacks (`sync-need`: the overlay's blobs, the commit), which comes as blobs, an origin fetch (in a thread of
+//! its own, so pings go on) or a bundle; a `start` checks the attempt's slot out (`crate::sync::slot`) and runs it as a
+//! transient unit running `sleipnir job-exec`;
 //! logs are read from the attempt's log file by offset, never from a pipe; `finished` carries `result.json`. The
 //! cleanup ([`cleanup`]) runs at start and at every job end, and touches only this hub's prefixed and labelled items.
 //!
@@ -28,8 +31,14 @@ use crate::linux::reserve::{self, Reservation};
 use crate::linux::result::{RESULT, ResultJson};
 use crate::linux::{run, slices, unit};
 use crate::proto::{
-    AttemptState, Frame, FrameReader, FrameWriter, JobRef, Key, MAX_CHUNK, PROTO_VERSION,
+    AttemptState, Frame, FrameReader, FrameWriter, JobRef, Key, MAX_CHUNK, ManifestEntry,
+    PROTO_VERSION, Sha256,
 };
+use crate::sync::blobs::Store;
+use crate::sync::bundle::{BundleRef, Receiver};
+use crate::sync::capture::Entry;
+use crate::sync::mirror::{self, Mirror};
+use crate::sync::slot::{self, Overlay, SlotKey};
 use attempts::{CANCELLED, COLLECTED, LOG, Meta};
 use forseti::classify::infra;
 use forseti::safety::Level;
@@ -155,6 +164,12 @@ struct Live {
     pump: Option<u64>,
     /// Keys the hub sent that the job's helper hasn't taken yet (it is still coming up); in memory only.
     keys: Vec<Key>,
+    /// What the hub's `sync-have` said the attempt's inputs are; none: it syncs nothing (an empty source).
+    sync: Option<SyncIn>,
+    /// The bundle being received for it, by its hash.
+    bundle: Option<(Sha256, Receiver)>,
+    /// Its origin fetch runs.
+    fetching: bool,
 }
 
 impl Live {
@@ -164,7 +179,46 @@ impl Live {
             meta,
             pump: None,
             keys: vec![],
+            sync: None,
+            bundle: None,
+            fetching: false,
         }
+    }
+}
+
+/// An attempt's inputs as the hub's `sync-have` names them: the commit of the repository whose mirror is REPO, and
+/// the overlay.
+struct SyncIn {
+    repo: String,
+    commit: String,
+    manifest: Vec<Entry>,
+}
+
+/// A manifest entry as the slot takes it.
+fn entry(e: ManifestEntry) -> Entry {
+    match e {
+        ManifestEntry::File {
+            path,
+            mode,
+            sha256,
+            size,
+        } => Entry::File {
+            path,
+            mode,
+            sha256: sha256.0,
+            size,
+        },
+        ManifestEntry::Deleted { path } => Entry::Deleted { path },
+    }
+}
+
+/// The slot key of a job: its project, the hub's worktree, its trust; one toolchain for now.
+fn slot_key(spec: &forseti::JobSpec) -> SlotKey {
+    SlotKey {
+        project: spec.project.clone(),
+        worktree: spec.tree.display().to_string(),
+        trust: spec.trust,
+        toolchain: String::new(),
     }
 }
 
@@ -178,6 +232,8 @@ enum Event {
     Frame(Frame),
     End,
     Broken(String),
+    /// An attempt's origin fetch ended: done, or why not.
+    Fetched(JobRef, Result<(), String>),
 }
 
 /// What the loop does after a frame.
@@ -208,11 +264,14 @@ pub struct Serve<W: Write> {
     last_ping: Instant,
     last_frame: Instant,
     last_units: Instant,
+    /// Where a thread of this `serve` (an origin fetch) tells the loop it ended; none: such work runs in the loop.
+    events: Option<mpsc::Sender<Event>>,
 }
 
 /// Runs `serve` with CFG on INPUT and OUTPUT until the link ends; the exit status.
 pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W) -> i32 {
     let (tx, rx) = mpsc::channel();
+    let ended = tx.clone();
     std::thread::spawn(move || {
         let mut r = FrameReader::new(BufReader::new(input));
         loop {
@@ -234,12 +293,18 @@ pub fn run<R: Read + Send + 'static, W: Write>(cfg: Config, input: R, output: W)
             return 2;
         }
     };
+    s.events = Some(ended);
     s.cleanup();
     loop {
         match rx.recv_timeout(TICK) {
             Ok(Event::Frame(f)) => {
                 s.last_frame = Instant::now();
                 if s.handle(f) == Next::Stop {
+                    return 0;
+                }
+            }
+            Ok(Event::Fetched(r, result)) => {
+                if s.fetched(&r, result) == Next::Stop {
                     return 0;
                 }
             }
@@ -294,6 +359,7 @@ impl<W: Write> Serve<W> {
             last_ping: now,
             last_frame: now,
             last_units: now,
+            events: None,
         };
         s.load_running();
         Ok(s)
@@ -352,8 +418,32 @@ impl<W: Write> Serve<W> {
                 spec,
                 priority,
                 expected,
+                input_key,
                 ..
-            } => self.offer(r, *spec, priority, expected),
+            } => self.offer(r, *spec, priority, expected, input_key),
+            Frame::SyncHave {
+                r,
+                repo,
+                commit,
+                manifest,
+                ..
+            } => self.sync_have(r, repo, commit, manifest),
+            Frame::Blob {
+                r,
+                sha256,
+                offset,
+                total,
+                bytes,
+            } => self.blob(&r, sha256, offset, total, &bytes),
+            Frame::Bundle {
+                r,
+                offset,
+                total,
+                sha256,
+                bytes,
+                ..
+            } => self.bundle(&r, offset, total, sha256, &bytes),
+            Frame::OriginFetch { r, repo, url, .. } => self.origin_fetch(r, repo, url),
             Frame::Start {
                 r,
                 image,
@@ -571,9 +661,23 @@ impl<W: Write> Serve<W> {
         spec: forseti::JobSpec,
         priority: forseti::Priority,
         expected: Option<forseti::Expected>,
+        input_key: String,
     ) -> Next {
         if r.job.is_empty() || !r.job.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return self.refuse(r, "a job id is letters and digits");
+        }
+        // a slot moves to new inputs only once no running job reads it at others (a writer reads its own copy)
+        let slot = slot_key(&spec).id();
+        let busy = !input_key.is_empty()
+            && self.live.values().any(|l| {
+                l.meta.started.is_some()
+                    && !l.meta.spec.writes_tree
+                    && l.meta.slot.as_deref() == Some(slot.as_str())
+                    && l.meta.input_key != input_key
+                    && !l.dir.join(RESULT).exists()
+            });
+        if busy {
+            return self.refuse(r, "its checkout slot is in use by a job at other inputs");
         }
         let dir = attempts::dir(&self.cfg.root, &r.job, r.attempt);
         if let Ok(meta) = attempts::read_meta(&dir) {
@@ -626,6 +730,8 @@ impl<W: Write> Serve<W> {
                     unit: None,
                     admitted: now_s(),
                     started: None,
+                    input_key,
+                    slot: None,
                 };
                 let made = ["src", "target"]
                     .iter()
@@ -668,21 +774,32 @@ impl<W: Write> Serve<W> {
             eprintln!("sleipnir serve: start for an attempt not admitted here: {r:?}");
             return Next::Go;
         };
-        if l.meta.started.is_some() {
+        if l.meta.started.is_some() || l.fetching {
             return Next::Go;
         }
-        let (dir, meta) = (l.dir.clone(), l.meta.clone());
-        match self.launch(
-            &dir,
-            &meta,
-            image,
-            &env,
-            (net_hosts.as_slice(), pins),
-            parser,
-        ) {
+        let (dir, mut meta) = (l.dir.clone(), l.meta.clone());
+        // synced inputs: the attempt reads its slot (or a private copy of it); none: an empty source
+        let src = match &l.sync {
+            Some(s) => self.checkout(&dir, &meta, s).map(|(src, id)| {
+                meta.slot = Some(id);
+                src
+            }),
+            None => Ok(dir.join("src")),
+        };
+        let launched = src.and_then(|src| {
+            self.launch(
+                &dir,
+                &meta,
+                &src,
+                image,
+                &env,
+                (net_hosts.as_slice(), pins),
+                parser,
+            )
+        });
+        match launched {
             Ok((unit, pid)) => {
                 let at = now_s();
-                let mut meta = meta;
                 meta.unit = Some(unit.clone());
                 meta.started = Some(at);
                 if let Err(e) = attempts::write_meta(&dir, &meta) {
@@ -711,12 +828,43 @@ impl<W: Write> Serve<W> {
         }
     }
 
-    /// Starts the attempt's unit: its job slice, its `job.json`, `sleipnir job-exec` in a transient service. The
-    /// unit and its main pid.
+    /// Moves the attempt's slot to its synced inputs S (the slot's update lock held meanwhile): the source it runs on,
+    /// the slot itself (read-only) or a private copy of it in DIR for a job that writes the tree, and the slot's id.
+    fn checkout(&self, dir: &Path, meta: &Meta, s: &SyncIn) -> Result<(PathBuf, String), String> {
+        let root = &self.cfg.root;
+        let key = slot_key(&meta.spec);
+        let p = slot::paths(root, &key);
+        let sync_err = |e: crate::sync::SyncError| format!("the checkout: {e}");
+        let m = Mirror::ensure(root, &s.repo).map_err(sync_err)?;
+        let store = Store::open(root).map_err(|e| format!("the blob store: {e}"))?;
+        {
+            let locks = slot::Locks::of(&p);
+            let _held = locks.update().map_err(sync_err)?;
+            let overlay = Overlay {
+                entries: &s.manifest,
+                extras: &[],
+                blobs: &store,
+            };
+            slot::update(&p, &m.git_dir, &s.commit, &overlay).map_err(sync_err)?;
+        }
+        let src = if meta.spec.writes_tree {
+            let copy = dir.join("tree");
+            slot::private_copy(&p, &copy).map_err(sync_err)?;
+            copy
+        } else {
+            p.slot
+        };
+        Ok((src, key.id()))
+    }
+
+    /// Starts the attempt's unit on the source SRC: its job slice, its `job.json`, `sleipnir job-exec` in a transient
+    /// service. The unit and its main pid.
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         &self,
         dir: &Path,
         meta: &Meta,
+        src: &Path,
         image: Option<String>,
         env: &[(String, String)],
         (net_hosts, pins): (&[String], Pins),
@@ -782,7 +930,7 @@ impl<W: Write> Serve<W> {
         let req = ContainerReq {
             image: "job".into(),
             argv: meta.spec.command.clone(),
-            worktree: dir.join("src"),
+            worktree: src.to_path_buf(),
             subdir: if meta.spec.cwd == Path::new(".") {
                 PathBuf::new()
             } else {
@@ -1032,6 +1180,248 @@ impl<W: Write> Serve<W> {
                 return Next::Stop;
             }
             let _ = fs::write(dir.join(KEY_USE_SENT), (i + 1).to_string());
+        }
+        Next::Go
+    }
+
+    /// The admitted attempt R that hasn't started yet, by its folder's key, nonce and hub included.
+    fn syncing(&self, r: &JobRef) -> Option<(String, u32)> {
+        let key = (r.job.clone(), r.attempt);
+        self.live
+            .get(&key)
+            .filter(|l| l.meta.r == *r && l.meta.started.is_none() && !l.dir.join(RESULT).exists())
+            .map(|_| key)
+    }
+
+    /// The hub's `sync-have` for attempt R: the repository whose mirror is REPO, COMMIT and the overlay MANIFEST. The
+    /// answer says what the runner lacks.
+    fn sync_have(
+        &mut self,
+        r: JobRef,
+        repo: String,
+        commit: String,
+        manifest: Vec<ManifestEntry>,
+    ) -> Next {
+        let Some(key) = self.syncing(&r) else {
+            eprintln!("sleipnir serve: sync-have for an attempt not waiting here: {r:?}");
+            return Next::Go;
+        };
+        if let Err(e) = mirror::check_id(&repo) {
+            return self.sync_failed(&key, &format!("the repository id: {e}"));
+        }
+        if let Some(l) = self.live.get_mut(&key) {
+            l.sync = Some(SyncIn {
+                repo,
+                commit,
+                manifest: manifest.into_iter().map(entry).collect(),
+            });
+        }
+        self.sync_need(&r)
+    }
+
+    /// Says what attempt R still lacks of its inputs: the overlay's blobs the store hasn't, whether the mirror lacks
+    /// the commit, and the commits the mirror's refs hold.
+    fn sync_need(&mut self, r: &JobRef) -> Next {
+        let Some(key) = self.syncing(r) else {
+            return Next::Go;
+        };
+        let Some(s) = self.live.get(&key).and_then(|l| l.sync.as_ref()) else {
+            return Next::Go;
+        };
+        let root = &self.cfg.root;
+        let need = (|| -> crate::sync::Result<(Vec<Sha256>, bool, Vec<String>)> {
+            let m = Mirror::ensure(root, &s.repo)?;
+            let store = Store::open(root)?;
+            let shas: Vec<[u8; 32]> = s
+                .manifest
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::File { sha256, .. } => Some(*sha256),
+                    Entry::Deleted { .. } => None,
+                })
+                .collect();
+            let blobs = store.missing(&shas).into_iter().map(Sha256).collect();
+            Ok((blobs, !m.has_commit(&s.commit)?, m.ref_tips()?))
+        })();
+        match need {
+            Ok((blobs, commit, refs)) => self.send(&Frame::SyncNeed {
+                r: r.clone(),
+                blobs,
+                commit,
+                refs,
+            }),
+            Err(e) => self.sync_failed(&key, &e.to_string()),
+        }
+    }
+
+    /// One chunk of blob SHA for attempt R, at OFFSET of TOTAL bytes (0: the bytes are the whole blob). A blob is
+    /// kept only whole and when its bytes hash to its name; a chunk that doesn't fit is dropped, and the next
+    /// `sync-need` asks for the blob again.
+    fn blob(&mut self, r: &JobRef, sha: Sha256, offset: u64, total: u64, bytes: &[u8]) -> Next {
+        if self.syncing(r).is_none() {
+            eprintln!("sleipnir serve: a blob for an attempt not waiting here: {r:?}");
+            return Next::Go;
+        }
+        let root = &self.cfg.root;
+        let kept = (|| -> crate::sync::Result<()> {
+            let store = Store::open(root)?;
+            if total == 0 || (offset == 0 && bytes.len() as u64 == total) {
+                return store.put(&sha.0, bytes);
+            }
+            let part = root
+                .join("blobs")
+                .join(format!(".{}.part", crate::sync::hex(&sha.0)));
+            let mut f = if offset == 0 {
+                fs::File::create(&part)?
+            } else {
+                fs::OpenOptions::new().append(true).open(&part)?
+            };
+            let end = offset + bytes.len() as u64;
+            if f.metadata()?.len() != offset || end > total {
+                let _ = fs::remove_file(&part);
+                return Err(crate::sync::refused(
+                    part.as_os_str().as_encoded_bytes(),
+                    "a blob's chunk out of order",
+                ));
+            }
+            f.write_all(bytes)?;
+            if end == total {
+                let whole = fs::read(&part);
+                let _ = fs::remove_file(&part);
+                store.put(&sha.0, &whole?)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = kept {
+            eprintln!("sleipnir serve: {}'s blob: {e}", r.job);
+        }
+        Next::Go
+    }
+
+    /// A chunk of the bundle (by its hash SHA) at OFFSET of TOTAL for attempt R: appended to the partial file, which
+    /// a dropped link leaves to resume from; the whole bundle is checked and fetched into the mirror, then the attempt
+    /// says again what it lacks.
+    fn bundle(
+        &mut self,
+        r: &JobRef,
+        offset: u64,
+        total: u64,
+        sha: Option<Sha256>,
+        bytes: &[u8],
+    ) -> Next {
+        let Some(key) = self.syncing(r) else {
+            eprintln!("sleipnir serve: a bundle for an attempt not waiting here: {r:?}");
+            return Next::Go;
+        };
+        let root = self.cfg.root.clone();
+        let Some(l) = self.live.get_mut(&key) else {
+            return Next::Go;
+        };
+        let (Some(sha), Some(repo)) = (sha, l.sync.as_ref().map(|s| s.repo.clone())) else {
+            eprintln!("sleipnir serve: a bundle chunk without its hash or its inputs: {r:?}");
+            return Next::Go;
+        };
+        if l.bundle.as_ref().is_none_or(|(s, _)| *s != sha) {
+            let want = BundleRef {
+                sha256: sha.0,
+                size: total,
+            };
+            match Receiver::open(&root, &repo, want) {
+                Ok(rx) => l.bundle = Some((sha, rx)),
+                Err(e) => return self.sync_failed(&key, &format!("the bundle: {e}")),
+            }
+        }
+        let Some((_, rx)) = l.bundle.as_mut() else {
+            return Next::Go;
+        };
+        let held = rx.offset();
+        if offset > held {
+            // a gap: this chunk is dropped; the hub sends the bundle again from its start, and what is held is skipped
+            eprintln!("sleipnir serve: a bundle chunk at {offset}, past the {held} bytes held");
+            return Next::Go;
+        }
+        let skip = (held - offset) as usize;
+        if skip < bytes.len()
+            && let Err(e) = rx.append(&bytes[skip..])
+        {
+            l.bundle = None;
+            return self.sync_failed(&key, &format!("the bundle: {e}"));
+        }
+        if rx.offset() < total {
+            return Next::Go;
+        }
+        let Some((_, rx)) = l.bundle.take() else {
+            return Next::Go;
+        };
+        match rx.finish() {
+            Ok(()) => self.sync_need(r),
+            Err(e) => self.sync_failed(&key, &format!("the bundle: {e}")),
+        }
+    }
+
+    /// The hub's `origin-fetch` for attempt R: the mirror REPO fetches from URL in a thread of its own (pings go on
+    /// meanwhile); its end comes back to the loop ([`Serve::fetched`]).
+    fn origin_fetch(&mut self, r: JobRef, repo: String, url: String) -> Next {
+        let Some(key) = self.syncing(&r) else {
+            eprintln!("sleipnir serve: origin-fetch for an attempt not waiting here: {r:?}");
+            return Next::Go;
+        };
+        let Some(l) = self.live.get_mut(&key) else {
+            return Next::Go;
+        };
+        if l.sync.as_ref().is_none_or(|s| s.repo != repo) {
+            return self.sync_failed(&key, "an origin fetch for another repository");
+        }
+        if l.fetching {
+            return Next::Go;
+        }
+        l.fetching = true;
+        let root = self.cfg.root.clone();
+        let fetch = move || {
+            Mirror::ensure(&root, &repo)
+                .and_then(|m| m.fetch_origin(&url, None))
+                .map_err(|e| e.to_string())
+        };
+        match self.events.clone() {
+            Some(tx) => {
+                std::thread::spawn(move || {
+                    let _ = tx.send(Event::Fetched(r, fetch()));
+                });
+                Next::Go
+            }
+            None => {
+                let done = fetch();
+                self.fetched(&r, done)
+            }
+        }
+    }
+
+    /// Attempt R's origin fetch ended: the attempt says again what it lacks, or ends `infra: setup` saying why.
+    fn fetched(&mut self, r: &JobRef, result: Result<(), String>) -> Next {
+        let key = (r.job.clone(), r.attempt);
+        if let Some(l) = self.live.get_mut(&key) {
+            l.fetching = false;
+        }
+        match result {
+            Ok(()) => self.sync_need(r),
+            Err(e) => match self.syncing(r) {
+                Some(key) => self.sync_failed(&key, &format!("the origin fetch: {e}")),
+                None => Next::Go,
+            },
+        }
+    }
+
+    /// The attempt at KEY can't get its inputs: it ends `infra: setup`, with WHY in its log; its result goes to the
+    /// hub as any other.
+    fn sync_failed(&mut self, key: &(String, u32), why: &str) -> Next {
+        let Some(l) = self.live.get(key) else {
+            return Next::Go;
+        };
+        let (dir, meta) = (l.dir.clone(), l.meta.clone());
+        self.setup_failed(&dir, &meta, &format!("its inputs: {why}"));
+        if let Some(l) = self.live.get_mut(key) {
+            l.pump = Some(0);
+            l.bundle = None;
         }
         Next::Go
     }
