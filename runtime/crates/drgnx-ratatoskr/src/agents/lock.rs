@@ -67,6 +67,21 @@ pub const CODEX_MANAGED: &str = "/etc/codex/config.toml";
 /// silently, so the lock holds only when the adapter reports this mode ([`codex_mode_confirmed`]).
 pub const CODEX_MODE: &str = "read-only";
 
+/// The mode `verify` puts Claude, Gemini and Kimi Code in (its three `set_mode(sid, "default")` calls).
+pub const DEFAULT_MODE: &str = "default";
+
+/// The modes the user may switch a session of PROVIDER to: only ones the lock still holds in (`agents/config`).
+/// Claude: `default` and `plan` (plan only reads).  Gemini and Kimi Code: `default` alone (Kimi Code's plan mode is
+/// refused by [`kimi_mode_refused`]).  Codex: none, since its lock pins [`CODEX_MODE`] and every other preset is off
+/// the lock.  DeepSeek Harness: none, since it has no modes and its lock is not proven yet.
+pub fn allowed_modes(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::Claude => &[DEFAULT_MODE, "plan"],
+        Provider::Gemini | Provider::Kimi => &[DEFAULT_MODE],
+        Provider::Codex | Provider::DeepSeek => &[],
+    }
+}
+
 /// The MCP servers a session can get, whose tools Codex asks about before it runs them.
 const CODEX_MCP_SERVERS: [&str; 3] = ["drgnx", "drgnx-search", "drgnx-plugins"];
 

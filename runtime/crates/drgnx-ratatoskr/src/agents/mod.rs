@@ -15,6 +15,7 @@
 //! - [`wheel`]: the user takes an agent's wheel and gives it back with what they changed.
 
 pub mod before_tool_tool;
+pub mod config;
 pub mod deliver;
 pub mod handoff;
 pub mod identity;
