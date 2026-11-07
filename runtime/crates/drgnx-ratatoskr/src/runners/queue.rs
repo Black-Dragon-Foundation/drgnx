@@ -1084,6 +1084,17 @@ impl Queue {
         }
     }
 
+    /// Whether runner NAME has no link and wants one: it is out of reach, or benched with its link gone (a benched
+    /// runner returns by a health check, which needs a link). One that waits on a login or on its user does not.
+    pub fn needs_redial(&self, name: &str) -> bool {
+        self.lock().runners.get(name).is_some_and(|r| {
+            matches!(
+                r.state,
+                RunnerState::Unreachable { .. } | RunnerState::Benched(_) | RunnerState::Ready
+            ) && r.session.ended()
+        })
+    }
+
     /// How many runners are known.
     pub fn runners(&self) -> usize {
         self.lock().runners.len()

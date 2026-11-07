@@ -825,6 +825,34 @@ impl Registry {
         }
     }
 
+    /// Every runner whose link is lost dialled again on the backoff of [`super::transport::Redial`], for as long as
+    /// the hub runs; a login or a host key it needs stays the user's to do (those runners are not `unreachable`).
+    pub async fn redial_lost(self: Arc<Self>) {
+        let mut clocks: std::collections::HashMap<String, super::transport::RedialClock> =
+            Default::default();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let Ok(recs) = self.cfg.store.list().await else {
+                continue;
+            };
+            clocks.retain(|n, _| recs.iter().any(|r| &r.name == n));
+            for rec in recs {
+                let out = self.cfg.queue.needs_redial(&rec.name);
+                if !clocks.entry(rec.name.clone()).or_default().tick(out, now) {
+                    continue;
+                }
+                let _g = self.busy.lock().await;
+                match self.connect(&rec).await {
+                    Ok(()) => tracing::info!("runners: {} is dialled again", rec.name),
+                    Err(e) => tracing::info!("runners: {} is still out of reach: {e}", rec.name),
+                }
+            }
+        }
+    }
+
     async fn record(&self, name: &str) -> Result<Record, RegError> {
         self.cfg
             .store
