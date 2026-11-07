@@ -1060,6 +1060,31 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 
 `coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
 
+### The git door per tree
+
+Each checkout Hrafn indexes reaches git through a `TreeGit` door (`hrafn::door`): `head` (the commit and the branch
+HEAD names), `tree_diff(a, b)` (no rename detection: a rename is a deletion and an addition), `stat_status` (tracked
+paths that may differ from HEAD, and untracked files under the standard excludes), `ls_tree(commit)`, `blobs(paths)`
+and `filtered(paths)` (the paths whose `.gitattributes` or `core.autocrlf` name a conversion: `filter`, `text`, `eol`,
+`ident`, `working-tree-encoding`). Gitlinks (submodule entries) are never reported. `as_git` gives the same door as
+the file list's `Git`, so the full listing runs on it too.
+
+`DoorKind::for_tree(touched)` picks the door, and `door(kind)` builds it; the kind is stored with the tree (`cli`,
+`gix`).
+
+- **`GitCli`** (user trees) runs the `git` executable. Its blobs come from `hash-object` with the repository's
+  filters, as the base's do, so they are never uncertain.
+- **`GixDoor`** (trees a sandboxed agent has worked in) is in-process and read-only, on `gix` (pinned exactly, with
+  only the `sha1`, `index` and `dirwalk` features). It opens the repository isolated (its own config only: no
+  environment, no global or system config, never the git binary), reads refs, the index, trees and attributes, and
+  hashes the raw bytes (equal to `git hash-object --no-filters`; a link's blob is its target). It runs no filter
+  driver, hook or fsmonitor, never opens a submodule and writes nothing, not even the index. Its status is stat-only:
+  an index entry whose stat differs from `lstat`, or is racy, is reported as possibly dirty and costs one read later.
+  A blob whose path `filtered` names is marked `uncertain`, so the overlay writes its row rather than trusting a raw
+  hash against a filtered one. Files are read beneath the tree's root with no link followed (`eitri`). `history` and
+  `show` (the eval's) are not served. A user-wide `core.excludesFile` or `core.attributesFile` is not read; the
+  errors that leaves are false differences (an extra untracked file, an extra row), never missed ones.
+
 ### Chunks and symbols
 
 `chunk::chunk_file(path, lang, generated, text, budget)` returns the file's chunks and symbols. A file's chunks put

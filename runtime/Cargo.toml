@@ -38,6 +38,9 @@ tree-sitter-rust = "0.24"
 tree-sitter-c = "0.24"
 tree-sitter-bash = "0.25"
 notify = "8"
+# Hrafn's read-only door of agent-touched trees: pinned exactly, read-only features only; no filter,
+# hook or fsmonitor is ever run, and submodules are never opened. MIT OR Apache-2.0, MSRV 1.88
+gix = { version = "=0.90.0", default-features = false, features = ["sha1", "index", "dirwalk"] }
 # verdandi's documents (the edit history; agent system part 4's spike chose it): public API only, pinned, moved on purpose
 loro = { version = "=1.17.1", default-features = false }
 rustix = { version = "1.1", features = ["fs", "process", "net", "thread"] }
