@@ -990,7 +990,12 @@ The relay (`gleipnir::net::relay`) is the process that makes those ports: for ea
 An isolated sandbox has no network, only its own loopback. Its programs reach the outside through `HTTPS_PROXY`,
 which the relay forwards to a CONNECT proxy outside the sandbox (`net::proxy`). One proxy serves one job: the caller
 starts it with `proxy::start(config, resolver, events)` and hands it each session's listener with
-`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS). Every listener shares one
+`listen(listener, tag)` (a Unix socket on Linux, a `127.0.0.1:0` TCP listener on macOS, or `Listener::Streams`: the
+streams a container's relay channel hands over, each a `Relayed` with its bytes, a `DuplexStream`, and `gone`, a
+`oneshot::Receiver` that resolves when the channel's owner drops its sender). A relayed stream is judged like a socket
+client and counts against the same `max_conns`. When its `gone` resolves (the stream closed, or the channel ended),
+its connection ends at once, wherever it was (reading the head, resolving, connecting, copying), and its place is free
+again. A closed channel ends its listener and every connection on it, as `close(tag)` does. Every listener shares one
 policy, `ProxyConfig::policy`:
 - `Policy::Allowlist`, the default and the provider proxy's: exact targets, changed at run time with `allow(target)`
   and `deny(&target)`, CONNECT only. A caller that builds `ProxyConfig { allow, pinned, ..Default::default() }` gets
@@ -1000,6 +1005,11 @@ policy, `ProxyConfig::policy`:
   `set_web(bool)`, `set_grants(Vec<PrivateGrant>)` and `set_deny_hosts(Vec<String>)`; `WebState::new(host_addrs,
   never)` takes the host's addresses and the hub's endpoints as `Arc<RwLock<…>>`s the hub shares and keeps live. Each
   request reads the state as it is then.
+- `Policy::Job(Arc<WebState>)`, a container job's proxy (the hub's, on its relay's streams): every target is the
+  allow-list's (`allow`, `pinned`, CONNECT only) except `host.drgnx.internal:PORT`, which goes through the web
+  policy's `pre_resolve`/`judge` on the state: open only by a `browser.private` grant of that `host:port` and never
+  to a port in the never-set; `browser.web` stays off and the state has no web hosts or deny list. Absolute-form only
+  to that name (a listed target's absolute GET is a 400); `localhost` and `127.0.0.1` are the allow-list's, so refused.
 
 `close(tag)` drops a session's listener and every connection it accepted; `shutdown()` (or dropping the handle) ends
 them all. `start_for_tests` (feature `test-hooks`, or `escape-fixture`, which exposes nothing else and changes no
@@ -1019,7 +1029,7 @@ it looks only at the request line, never at `Host:`:
 | another method, a malformed line or target, a head over `max_head` (8192) or slower than `head_timeout` (10 s) | 400 | `Refused { BadRequest }` |
 | a first byte of `0x04` or `0x05` (a SOCKS greeting) | closed, no answer | — |
 | a connection over `max_conns` (64, across all listeners) | 403 | — |
-| listed, but it does not resolve or no address connects | 502 | — |
+| listed, but it does not resolve or no address connects (each attempt within `connect_timeout`, 10 s; a slower one counts as that address failing) | 502 | — |
 
 Each event is sent once per target per tag, before the client is answered; the tag tells the caller which session
 asked. Only `Denied` may become a question to the user: a private address, a wildcard or a malformed request is never
@@ -1585,15 +1595,27 @@ The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipn
   the user's systemd through `DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`, so a hub whose
   `XDG_RUNTIME_DIR` is not the session's (the conformance runner's) needs the former. Fix for a refused host: log
   in to a user session, or `loginctl enable-linger`.
-- **Network through the proxy.** A job the matrix granted a network keeps `--network=none`; there is no podman
-  network. The argv gains the job's own Gleipnir proxy socket (`-v <socket>:/run/drgnx/proxy.sock:ro,Z`), a private
-  copy of the forwarder `drgnx-fwd` (`-v <copy>:/run/drgnx/fwd:ro,Z`), `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy` and
-  `https_proxy` set to `http://127.0.0.1:3128`, and `--entrypoint /run/drgnx/fwd`. The image name is followed by
-  `3128 /run/drgnx/proxy.sock --` and then the command: the forwarder gives the container's own loopback port 3128 in
-  front of the socket, then runs the command in its place. The only route out is the proxy, whose allow-list is the
+- **Network through the proxy.** A job the matrix granted a network joins its relay sidecar's network namespace
+  (`--network=container:<sidecar>`), which has a loopback and nothing else; there is no podman network. The sidecar
+  (`drgnx-px`, [drgnx-px.md](drgnx-px.md)) listens on `127.0.0.1:3128` there and carries each connection over its
+  stdio to the owner's Gleipnir proxy (the hub's, or a runner job's helper). `HTTP_PROXY`, `HTTPS_PROXY`,
+  `http_proxy` and `https_proxy` are `http://127.0.0.1:3128`. The only route out is the proxy, whose allow-list is the
   setting `agents-net-hosts` (by default the package hosts of crates.io, npm and PyPI, port 443). A job granted a
-  network with no proxy or no forwarder is refused.
-- **Escape rows.** `test/conformance/container-escape/*.jsonl` (15 rows, `requires: podman`) each run a probe inside the
-  container: extra mounts, `-v` in argv, a privileged or cap-add field, devices, host network, no network (only `lo`),
-  no podman socket, no home, a symlink out of the worktree, the memory cap, the process cap, the git common dir. The
+  network whose relay can't start is refused.
+- **The shape built (Q8).** The sidecar runs `--network=none --user 65534:65534` in podman's default rootless user
+  namespace, so that namespace owns the network namespace the job joins (`--userns=keep-id`): `lo` only, no route,
+  no `--dns`, `--sysctl` or `--add-host`; root in the job's user namespace can't change it. The barrier between jobs is
+  the namespace: each job joins its own sidecar's, so a job sees no other job's loopback or relay. The sidecar takes
+  `127.0.0.1:3128` without `SO_REUSEPORT` as another user, so the job can't bind it. Every peer of the relay is
+  `127.0.0.1` (`--job-ip 127.0.0.1`). The channel's frames, rules and ends are [drgnx-px.md](drgnx-px.md)'s.
+- **The job's proxy** runs under `Policy::Job` (above): the allow-list for every target, CONNECT only, except
+  `host.drgnx.internal:PORT`, judged by the web rules with the session's `browser.private` grants and the hub's
+  never-set (a hub job's card loop, [hub.md](hub.md)); a runner job's helper keeps `Policy::Allowlist`.
+- **Escape rows.** `test/conformance/container-escape/*.jsonl` (21 rows, `requires: podman`; the networked ones also
+  `rootless`) each run a probe inside the container: extra mounts, `-v` in argv, a privileged or cap-add field,
+  devices, host network, no network (only `lo`), no podman socket, no home, a symlink out of the worktree, the memory
+  cap, the process cap, the git common dir; and for a granted network (design §11 under Q8): only the relay is reached
+  (`lo` only, no route, the namespace the sidecar's), another job is unreachable, one granted host port and no other,
+  the never-set under any grant, a killed sidecar ends the job, the job can't take the relay port. The mutations in
+  `test/mutations/container-net/` (`test/mutations/run.sh --list`) each turn one of them, or a channel test, red. The
   fuzz target `container_req` feeds arbitrary requests to the builder and checks the fixed flags.

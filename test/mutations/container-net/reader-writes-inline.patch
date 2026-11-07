@@ -1,0 +1,22 @@
+Target: test drgnx-px both_directions_saturated_through_small_pipes_finish
+The relay shell's reader waits for the channel's output before it reads on: everything waiting for the writer (the
+CREDITs its frames led to among it) must be written first, as if the reader wrote its CREDIT with an awaited write
+(the relay review's first shape). Reading then depends on the other end reading, and through conmon's one thread,
+which blocks on a full direction, both ends stop. Both small-pipe tests (runtime/crates/drgnx-px/tests/small_pipes.rs)
+time out under it.
+
+diff --git a/runtime/crates/drgnx-px/src/shell.rs b/runtime/crates/drgnx-px/src/shell.rs
+--- a/runtime/crates/drgnx-px/src/shell.rs
++++ b/runtime/crates/drgnx-px/src/shell.rs
+@@ -419,6 +419,11 @@ impl<C: Consumer> Shell<C> {
+         let mut dec = Decoder::new();
+         let mut buf = vec![0u8; 64 * 1024];
+         loop {
++            // mutation: the reader waits for the writer to write everything waiting (its CREDITs among it) before
++            // reading on, as if it wrote them itself with an awaited write
++            while !self.lock().pending.is_empty() {
++                tokio::task::yield_now().await;
++            }
+             let n = match input.read(&mut buf).await {
+                 Ok(0) => {
+                     if dec.buffered() > 0 {

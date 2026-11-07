@@ -66,7 +66,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 12] = [
+pub const TAGS: [&str; 13] = [
     "v1",
     "sudo",
     "test-hooks",
@@ -79,6 +79,7 @@ pub const TAGS: [&str; 12] = [
     "chromium",
     "playwright-mcp",
     "internet",
+    "rootless",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -213,6 +214,8 @@ pub struct Host {
     pub perf: bool,
     /// `podman` is on the PATH.
     pub podman: bool,
+    /// Why the `rootless` rows cannot run here (podman is not rootless, or `podman info` fails); `None`: rootless.
+    pub no_rootless: Option<String>,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
     /// Why a `real-sandbox` row cannot run here (the hub has test hooks, so its sessions start unsandboxed, or its
@@ -260,6 +263,11 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     }
     if has("podman") && !h.podman {
         return skip("needs podman on the PATH", true);
+    }
+    if has("rootless")
+        && let Some(why) = &h.no_rootless
+    {
+        return skip(why, true);
     }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
@@ -336,6 +344,22 @@ pub fn probe_sudo(cmd: &str) -> bool {
 pub fn podman_available() -> bool {
     std::env::var_os("PATH")
         .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("podman").is_file()))
+}
+
+/// Why podman here is not rootless (`podman info`'s `host.security.rootless`), or `None` when it is.
+pub fn no_rootless() -> Option<String> {
+    let out = std::process::Command::new("podman")
+        .args(["info", "--format", "{{.Host.Security.Rootless}}"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match out {
+        Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true" => None,
+        Ok(o) if o.status.success() => {
+            Some("needs rootless podman (this podman runs as root)".into())
+        }
+        _ => Some("needs rootless podman (`podman info` failed)".into()),
+    }
 }
 
 /// May another uid be used?  Root can; otherwise passwordless sudo (the command is $SUDO, default `sudo`).
@@ -559,6 +583,30 @@ mod tests {
         );
         let with = Host {
             linux: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_rootless_row_is_skipped_with_its_reason_where_podman_is_not_rootless() {
+        let s = row("\"podman\", \"rootless\"");
+        let without = Host {
+            linux: true,
+            podman: true,
+            no_rootless: Some("needs rootless podman (this podman runs as root)".into()),
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &without),
+            Gate::Skip {
+                reason: "needs rootless podman (this podman runs as root)".into(),
+                excused: true
+            }
+        );
+        let with = Host {
+            linux: true,
+            podman: true,
             ..Host::default()
         };
         assert_eq!(gate(&s, &with), Gate::Run);

@@ -189,6 +189,10 @@ const WEB_BODY: &str = "The agent's browser and its own tools could then reach a
                         agent gives them";
 const PRIVATE_BODY: &str =
     "Any page the agent opens could then send requests to it, including ones that change things";
+/// A container job's host-port card: the grant is the session's, and a revoke stops only new connections.
+pub(crate) const JOB_PORT_BODY: &str = "Allowing it opens the port for this session: its browser and its other jobs \
+                                        too. Revoking it refuses the next connection. Connections already open stay \
+                                        until they end; end the job to cut them.";
 
 /// How a private address's class (the web policy's name) reads on a card.
 fn class_label(class: &str) -> &str {
@@ -273,10 +277,11 @@ pub(crate) fn browser_choices(a: Action, ctx: &ActionCtx, once: u64) -> Vec<Card
     out
 }
 
-/// What the user should know before answering a browser row's card.
-pub(crate) fn card_body(a: Action) -> Option<&'static str> {
+/// What the user should know before answering a browser row's card (a container job's port: [`JOB_PORT_BODY`]).
+pub(crate) fn card_body(a: Action, f: &Facts) -> Option<&'static str> {
     match a {
         Action::BrowserWeb => Some(WEB_BODY),
+        Action::BrowserPrivate if f.job.is_some() => Some(JOB_PORT_BODY),
         Action::BrowserPrivate => Some(PRIVATE_BODY),
         _ => None,
     }
@@ -298,6 +303,17 @@ fn card_title(a: Action, who: &Who, ctx: &ActionCtx) -> String {
                 Some(h) => format!("{} wants to open web sites (first: {})", name(), h.as_str()),
                 None => format!("{} wants to open web sites", name()),
             };
+        }
+        Action::BrowserPrivate if f.job.is_some() => {
+            let job = f.job.as_ref().map_or("", |j| j.as_str());
+            let target = f
+                .target
+                .as_ref()
+                .and_then(|t| t.get("host_port"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let port = target.rsplit_once(':').map_or("", |(_, p)| p);
+            return format!("Job {job} wants your port {port} (`{target}`)");
         }
         Action::BrowserPrivate => {
             let target = f
@@ -488,7 +504,7 @@ impl MatrixGate {
                     let once = self.once_window();
                     data["choices"] = json!(browser_choices(a, ctx, once));
                     data["once_window"] = json!(once);
-                    if let Some(b) = card_body(a) {
+                    if let Some(b) = card_body(a, &ctx.facts) {
                         data["body"] = json!(b);
                     }
                 }
@@ -708,7 +724,7 @@ impl MatrixGate {
         let mut event = json!({"job": null, "task": null, "kind": "matrix", "title": title});
         if is_browser(a) {
             event["choices"] = json!(browser_choices(a, &ctx, self.once_window()));
-            if let Some(b) = card_body(a) {
+            if let Some(b) = card_body(a, &ctx.facts) {
                 event["body"] = json!(b);
             }
         }

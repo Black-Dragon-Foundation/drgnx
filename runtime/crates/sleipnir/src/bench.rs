@@ -111,6 +111,8 @@ pub fn argv(image: &str, src: &Path, target: &Path) -> Result<Vec<String>, Strin
         cgroup_parent: Some(slices::job_slice(crate::serve::SLICE_ROOT, ID)?),
         label: None,
         name_prefix: PREFIX.into(),
+        owner: String::new(),
+        job_labels: false,
     };
     podman::argv(&req, &caps, &ra)
         .map_err(|r| r.message)?

@@ -65,6 +65,7 @@ runstav = { path = "../runstav", version = "0.1.0" }
 drgnx-rows = { path = "../drgnx-rows", version = "0.1.0" }
 getrandom.workspace = true   # the hub's instance id on view patches (view)
 draugr = { path = "../draugr", version = "0.1.0" }
+drgnx-px = { path = "../drgnx-px", version = "0.1.0" }  # the networked container job's relay sidecar
 urdr = { path = "../urdr", version = "0.1.0" }
 saga = { path = "../saga", version = "0.1.0" }
 gleipnir = { path = "../gleipnir", version = "0.1.0" }

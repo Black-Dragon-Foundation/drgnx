@@ -19,6 +19,7 @@ pub fn wake_text(d: &ExecDone) -> String {
         (ExecStatus::Done, None) => "exit unknown".to_string(),
         (ExecStatus::Stopped, _) => "stopped".to_string(),
         (ExecStatus::TimedOut, _) => "timed out".to_string(),
+        (ExecStatus::Infra, _) => "ended by the hub (infra), see the last line".to_string(),
         _ => "lost".to_string(),
     };
     let mut text = format!("[job {} finished — {how}]", d.id);

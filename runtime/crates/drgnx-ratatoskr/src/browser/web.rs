@@ -529,7 +529,7 @@ fn web_state(cell: Verdict, web: &[grants::Grant]) -> (bool, Vec<(Target, Option
 }
 
 /// The proxy's private grants under the cell CELL (none when it is Never): each grant's target in its wire form.
-fn private_state(cell: Verdict, private: &[grants::Grant]) -> Vec<PrivateGrant> {
+pub(crate) fn private_state(cell: Verdict, private: &[grants::Grant]) -> Vec<PrivateGrant> {
     if cell == Verdict::Never {
         return Vec::new();
     }
@@ -586,7 +586,7 @@ fn refusals(c: &urdr::Connection, sid: &str) -> Result<(bool, BTreeSet<String>),
 }
 
 /// The hub's facts V (never an agent's words) as the card's; facts that do not fit are none.
-fn facts(v: Value) -> Facts {
+pub(crate) fn facts(v: Value) -> Facts {
     serde_json::from_value(v).unwrap_or_default()
 }
 

@@ -223,6 +223,9 @@ fn main() -> ExitCode {
         test_hooks: hooks_needed && test_hooks(&args.hub_bin),
         perf: args.perf.is_some(),
         podman: scenario::podman_available(),
+        no_rootless: selected_need("rootless")
+            .then(scenario::no_rootless)
+            .flatten(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
         no_real_sandbox: selected_need("real-sandbox")
             .then(|| no_real_sandbox(&args.hub_bin))

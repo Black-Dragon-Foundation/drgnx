@@ -45,6 +45,10 @@ pub struct Meta {
     /// Its priority, 1 to 5, as the hub set it.
     #[serde(default)]
     pub priority: Option<u8>,
+    /// A networked job's sidecar (its container name), written before the job starts: a restarted hub ends such a job
+    /// rather than adopting it (it can't keep its relay).
+    #[serde(default)]
+    pub relay: Option<String>,
 }
 
 /// The shell that wraps the command: `sh -c SCRIPT sh DIR PROGRAM ARGS…`.

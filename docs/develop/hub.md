@@ -2381,6 +2381,17 @@ own.
     `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
     `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
     `browser.private` is capped at Ask, so every new target asks.
+  - **A container job's host port** (`exec/hostgrants.rs`): a session's networked job's proxy runs under
+    `Policy::Job` with a web state of its own and sends its `Private` events to the job's loop, which asks
+    `decide(browser.private)` with the facts `{target, job}` (`target` `{"host_port": "host.drgnx.internal:PORT"}`;
+    other targets are the allow-list's and ask nothing). The card's title is "Job ID wants your port PORT
+    (`host.drgnx.internal:PORT`)", its body says the grant opens the port for the whole session (its browser and its
+    other jobs) and that a revoke leaves open connections until they end; its choices are the browser's scopes, never
+    a CIDR or "all private". One card per port per job, whatever the answer; none once the job ended, none for a
+    user's job. An MCP session's job asks with the default (no role) columns, as the hub holds no `Who` for it. On every change to an answer the loop reads the session's
+    `browser.private` grants again and sets the job's proxy's grants to their `host.drgnx.internal` ports
+    (`WebState::set_grants`): a grant opens the next request, a revoke refuses it; open streams stay (no
+    `CloseStreams`). The pure core is `Core::step(Ev) -> Vec<Effect>`; the loop ends with the relay.
   - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
     event, once per host per session: kind `status`, the session as `agent`, data
     `{"browser-host": true, "session": SID, "host": HOST}`.
@@ -2401,7 +2412,10 @@ own.
   - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
     listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
     (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
-    HOME; the line with the key is never read).
+    HOME; the line with the key is never read). On a Mac also podman machine's control ports (B4): its SSH port and
+    its hypervisor's REST port (`machine_ports` over `podman machine inspect` and the machine's config file,
+    `AppleHypervisor.Vfkit.Endpoint` or `LibKrunHypervisor.KRun.Endpoint`), read on the same 30 s tick and before
+    each networked container job; a restart that moves a port swaps the held pair (`set_machine_ports`).
 - **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
   whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
   broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the
@@ -2695,11 +2709,18 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
 not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
-(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+(`stopped`, `timed-out` or `infra: proxy: <reason>`, written before the hub kills the group; the infra reason is also
+the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. Every job but the editor's
+command stays the hub's child. `Runner::open` re-attaches every folder without a result, except a networked container
+job's (its meta names a `relay`): its relay died with the old hub, so the job's container is removed and the job
+recorded `infra` ("the hub restarted, and a networked job can't keep its relay"); a graceful stop ends the running
+ones the same way first (`Runner::end_networked`, "the hub stopped"). Then it sweeps: the containers labelled `drgnx.owner=<this hub's
+tag>` whose `drgnx.job` isn't running, job containers before sidecars (`sleipnir::linux::podman::leftovers`, shared with
+the runners), and relay images (`localhost/drgnx-px:<tag>`) other than the current binary's. A sibling hub's
+containers carry its own tag and stay; unlabelled ones (made before the labels) are left. Every job but the editor's
 servers (a user's `no_timebox` job, up for days, started at once) goes through the queue ("Runners: the queue"), whose
 local runner admits it here (`Hooks::admission`). `exec/get`, `exec/log` and
 `exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's
@@ -3270,12 +3291,12 @@ or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `u
 The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
 benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
 **The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
-a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, k1's `key_socket`, the free disk), a canary attempt
 offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
 `RemoteRunner.image`, priority 1, no grace;
 offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
 (`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
-answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+answered with nothing missing and no `check_limits` or `key_socket` failure, 20 GB free (and 10 % where the size is known), the canary
 `Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
 or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
 failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
@@ -3297,10 +3318,10 @@ seam: `UrdrStore` in the hub, `MemStore` in tests.
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
 config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
-puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-fwd`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
+puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
 one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
-already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)
+already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items, `check_limits` and `key_socket`)
 is refused with all of it, each with its fix. Then `podman pull --policy=missing` of each image in
 `drgnx-runners-image` (it must be pinned by digest), `sleipnir bench` in the first, the record, and the link:
 `Session::start` over the queue's route and events, `Queue::add_runner`. A root must be absolute, plain, and never the

@@ -11,6 +11,8 @@
 //! running; the hub's monitor (or, after a restart, the re-attached one) writes the result once.
 
 pub mod container;
+pub(crate) mod hostgrants;
+pub mod net;
 pub mod packages;
 pub mod summary;
 pub mod unit;
@@ -30,7 +32,6 @@ use runstav::methods::exec::{
     ById, ExecDone, ExecKind, ExecRow, ExecStatus, ExecSummary, Jobs, ListParams, LogParams,
     LogSlice, StartParams, Started,
 };
-use runstav::paths::Env;
 use runstav::wire::{Error, ErrorCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -193,8 +194,9 @@ pub struct Hooks {
     pub systemd: bool,
     /// `podman`, found on the PATH when the hub started; none: container jobs are refused.
     pub podman: Option<PathBuf>,
-    /// `drgnx-fwd` (next to the hub, else on the PATH): the forwarder a container job granted network runs.
-    pub forwarder: Option<PathBuf>,
+    /// The folder of the relay's binaries (`drgnx-px-<arch>-linux-musl`, next to the hub): the sidecar a container job
+    /// granted network runs is imported from there ([`net::prepare_net`]).
+    pub px_dir: Option<PathBuf>,
     /// How this machine admits the queue's jobs (`runners::local`): live on Linux, else by count.  The user's servers
     /// (no time box) never queue.
     pub admission: Admission,
@@ -202,6 +204,12 @@ pub struct Hooks {
     pub runtime: Option<urdr::Handle>,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// The hub's host addresses and never-set (the browser's watches), which a networked job's proxy judges
+    /// `host.drgnx.internal` by; none: fresh empty sets (tests).
+    pub nevers: Option<crate::browser::nevers::Nevers>,
+    /// What a session's networked job asks the user through (a host port on a card, [`hostgrants`]); none: its
+    /// proxy's refusals ask nothing.
+    pub cards: Option<hostgrants::Hub>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
@@ -217,11 +225,9 @@ impl Default for Hooks {
             memory: "4G".into(),
             systemd: unit::systemd_user(),
             podman: unit::find_on_path("podman"),
-            forwarder: std::env::current_exe()
+            px_dir: std::env::current_exe()
                 .ok()
-                .and_then(|e| e.parent().map(|d| d.join("drgnx-fwd")))
-                .filter(|f| f.is_file())
-                .or_else(|| unit::find_on_path("drgnx-fwd")),
+                .and_then(|e| e.parent().map(Path::to_path_buf)),
             // tests and the conformance lane admit by count, never by the machine they happen to run on
             admission: if cfg!(any(test, feature = "test-hooks")) {
                 Admission::Fixed(crate::runners::local::FIXED_SLOTS)
@@ -230,6 +236,8 @@ impl Default for Hooks {
             },
             runtime: None,
             shell_env: crate::shell_env::ShellEnv::default(),
+            nevers: None,
+            cards: None,
             key_envs: Arc::new(Vec::new),
             #[cfg(test)]
             plain_sessions: false,
@@ -255,6 +263,47 @@ struct Inner {
     events: tokio::sync::broadcast::Sender<JobEvent>,
     /// Every machine's queue (`runners::queue`): this machine's admission and the runners'.
     queue: Arc<Queue>,
+    /// The running networked jobs' stop doors: a graceful hub stop ends each `infra: proxy` ([`Runner::end_networked`]).
+    nets: Mutex<std::collections::HashMap<String, NetStop>>,
+}
+
+/// What ends a networked job from outside its watch: the reason, and who to tell once its end is recorded.
+type NetStop = tokio::sync::oneshot::Sender<(&'static str, tokio::sync::oneshot::Sender<()>)>;
+
+/// A networked job's relay as its watch holds it.
+struct Net {
+    net: net::JobNetwork,
+    stop: tokio::sync::oneshot::Receiver<(&'static str, tokio::sync::oneshot::Sender<()>)>,
+}
+
+/// Why a networked job's relay arm fired.
+enum RelayEnd {
+    Channel(drgnx_px::owner::End),
+    Stop(&'static str, tokio::sync::oneshot::Sender<()>),
+}
+
+impl Net {
+    async fn ended(&mut self) -> RelayEnd {
+        tokio::select! {
+            e = self.net.ended() => RelayEnd::Channel(e),
+            Ok((why, ack)) = &mut self.stop => RelayEnd::Stop(why, ack),
+        }
+    }
+}
+
+/// Ends job DIR `infra: proxy` for REASON: the reason line goes to its log, and `why` says so (before the job's
+/// process is ended, so its result reads it).
+fn write_infra(dir: &Path, reason: &str) {
+    use std::io::Write;
+    let line = format!("{}: {reason}", net::INFRA);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("log"))
+    {
+        let _ = writeln!(f, "drgnx: {line}");
+    }
+    let _ = std::fs::write(dir.join("why"), line);
 }
 
 /// What a queued job is started from, kept with it in the queue (`rq_job.spec`; an older hub wrote it as
@@ -425,6 +474,7 @@ impl Runner {
                 seq: AtomicU64::new(0),
                 queue,
                 finishing: Mutex::new(HashSet::new()),
+                nets: Mutex::default(),
                 live: self.live.clone(),
                 events: self.events.clone(),
             });
@@ -495,6 +545,24 @@ impl Runner {
         }
         i.pump();
         i.row(id)
+    }
+
+    /// A graceful hub stop (channel review S9): end every running networked job `infra: proxy` ("the hub stopped"),
+    /// its container before its sidecar, and wait until each end is recorded.  Jobs without network are left as they
+    /// are (the next hub adopts them).
+    pub async fn end_networked(&self) {
+        let Some(i) = self.inner.get() else { return };
+        let stops: Vec<NetStop> = i.nets.lock().unwrap().drain().map(|(_, s)| s).collect();
+        let mut acks = Vec::new();
+        for s in stops {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            if s.send((net::HUB_STOPPED, tx)).is_ok() {
+                acks.push(rx);
+            }
+        }
+        for a in acks {
+            let _ = a.await;
+        }
     }
 
     /// How job ID ended, as the event that announced it said; none while it runs (or when it is unknown).
@@ -775,6 +843,7 @@ impl Inner {
             queued: true,
             machine: None,
             priority: Some(spec.priority().number()),
+            relay: None,
         })?;
         self.live.add(id, session);
         self.queue.submit(self.submit_of(id, spec), started as u64);
@@ -1017,7 +1086,7 @@ impl Inner {
         id: &str,
         dir: &Path,
         spec: &ExecSpec,
-    ) -> Result<(draugr::Spec, Option<container::JobProxy>), Refusal> {
+    ) -> Result<(draugr::Spec, Option<net::JobNetwork>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
         let podman = self
             .hooks
@@ -1025,29 +1094,7 @@ impl Inner {
             .clone()
             .ok_or_else(container::podman_missing)?;
         let mut caps = job.caps.clone();
-        // A granted network is this job's own proxy: a socket on a short path under the runtime dir and a copy of the
-        // forwarder in the job's folder, both mounted read-only.  One that cannot be given refuses the job.
-        let mut proxy = None;
-        if let Some(n) = job.net {
-            let forwarder = self.hooks.forwarder.clone().ok_or_else(|| {
-                setup("this job was granted network access, but drgnx-fwd (the forwarder) is not installed beside the hub")
-            })?;
-            let run_dir = runstav::paths::socket_path(&Env::process())
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(
-                id,
-                dir,
-                &run_dir,
-                &forwarder,
-                n,
-                &caps.net_hosts,
-                &caps.pins,
-            )?;
-            caps.proxy = Some(jp.mounts.clone());
-            proxy = Some(jp);
-        }
+        let owner = container::owner_tag();
         // the mount is the session's worktree, never a folder the request names; the command runs in its CWD inside
         let worktree = spec.worktree.clone().unwrap_or_else(|| spec.cwd.clone());
         let subdir = spec
@@ -1064,19 +1111,62 @@ impl Inner {
             net: job.net.is_some(),
             runner: None,
         };
-        let args = container::argv(&req, &caps)?;
         let (p, reference) = (
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),
         );
-        // caps podman cannot enforce refuse the job: a container without its limits is never run
         let shell = self.hooks.shell_env.clone();
-        crate::clock::blocking(move || {
-            container::check_limits(&shell, &p, Duration::from_secs(30))?;
-            container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
-        })
-        .await
-        .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        // A granted network is this job's relay: its sidecar (joined with the host checks and the image pull) and its
+        // proxy, started before the job.  One that cannot be given refuses the job.
+        let mut relay = None;
+        if let Some(n) = job.net {
+            let px_dir = self
+                .hooks
+                .px_dir
+                .clone()
+                .ok_or_else(|| setup("the relay's binaries were not found next to the hub"))?;
+            let (mut jn, job_net) = net::prepare_net(
+                id,
+                &shell,
+                &podman,
+                &px_dir,
+                &owner,
+                n,
+                &caps.net_hosts,
+                &caps.pins,
+                &reference,
+                &dir.join("log"),
+                net::job_web(self.hooks.nevers.as_ref()),
+            )
+            .await?;
+            caps.proxy = Some(job_net);
+            // a session's job asks for a host port on a card; the session's grants apply live
+            if let (Starter::Session(sid), Some(cards), Some(events)) =
+                (&spec.starter, &self.hooks.cards, jn.take_events())
+            {
+                let (task, _) =
+                    hostgrants::start(cards.clone(), id, sid, jn.web().clone(), events).await;
+                jn.set_asker(task);
+            }
+            relay = Some(jn);
+        } else {
+            // caps podman cannot enforce refuse the job: a container without its limits is never run
+            crate::clock::blocking(move || {
+                container::check_limits(&shell, &p, Duration::from_secs(30))?;
+                container::ensure_image(&shell, &p, &reference, container::PULL_TIMEOUT)
+            })
+            .await
+            .map_err(|e| setup(format!("pulling the image: {e}")))??;
+        }
+        let args = match container::argv(&req, &caps, &owner) {
+            Ok(a) => a,
+            Err(e) => {
+                if let Some(r) = relay {
+                    r.end().await;
+                }
+                return Err(e);
+            }
+        };
         Ok((
             draugr::Spec {
                 program: podman,
@@ -1087,7 +1177,7 @@ impl Inner {
                 pass_fds: vec![],
                 new_session: false,
             },
-            proxy,
+            relay,
         ))
     }
 
@@ -1101,11 +1191,11 @@ impl Inner {
         // a suite whose rows a runner may split runs here whole
         spec.argv = local_argv(&spec.argv, spec.place.suite.as_ref());
         let name = self.hooks.systemd.then(|| unit::unit_name(id));
-        let mut proxy = None;
+        let mut relay = None;
         let (inner, status) = match &spec.starter {
             _ if spec.container.is_some() => {
-                let (s, p) = self.container_spec(id, dir, &spec).await?;
-                proxy = p;
+                let (s, r) = self.container_spec(id, dir, &spec).await?;
+                relay = r;
                 (s, None)
             }
             // the conformance lane has no sandbox for a job: its jobs run as the user's do
@@ -1170,9 +1260,15 @@ impl Inner {
             spec.user.nice,
             &self.hooks.shell_env,
         );
-        let child = draugr::spawn_pinned(wrapped)
-            .await
-            .map_err(|e| setup(format!("starting the job: {e}")))?;
+        let child = match draugr::spawn_pinned(wrapped).await {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(r) = relay {
+                    r.end().await;
+                }
+                return Err(setup(format!("starting the job: {e}")));
+            }
+        };
         let pid = child.id();
         // The sandbox helper reports on a pipe; a launch whose status is not read hangs (Task 10).
         if let Some(fd) = status {
@@ -1218,6 +1314,7 @@ impl Inner {
             queued: false,
             machine: Some(queue::LOCAL.into()),
             priority: Some(spec.priority().number()),
+            relay: relay.as_ref().map(|r| r.sidecar_name().to_string()),
         };
         self.save_meta(&meta)?;
         meta.entity = self.record_start(&meta).await;
@@ -1226,12 +1323,16 @@ impl Inner {
         let id = id.to_string();
         // counted as running before the starter hears of its id
         self.live.add(&id, meta.session.clone());
+        // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
+        let relay = relay.map(|net| {
+            let (tx, stop) = tokio::sync::oneshot::channel();
+            self.nets.lock().unwrap().insert(id.clone(), tx);
+            Net { net, stop }
+        });
         crate::clock::spawn("exec:watch", async move {
-            // a container job's proxy answers for as long as the job runs
-            let _proxy = proxy;
             // a real wait (the child's end): a test's barrier waits for a job that ends, and names one that does not;
             // an advance does not wait for it (the job's time box may be what ends it)
-            crate::clock::real_long(me.clone().watch(&id, Some(child))).await;
+            crate::clock::real_long(me.clone().watch(&id, Some(child), relay)).await;
             drop(permit);
             me.pump();
         });
@@ -1265,9 +1366,12 @@ impl Inner {
         }
     }
 
-    /// Wait for the job to end (or its time box), then record the end.  CHILD is the process this hub started; none:
-    /// a job re-attached after a restart, watched by polling.
-    async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>) {
+    /// Wait for the job to end (or its time box, or its relay), then record the end.  CHILD is the process this hub
+    /// started; none: a job re-attached after a restart, watched by polling.  RELAY is a networked job's: when its
+    /// channel ends first (or a graceful hub stop asks), the job ends `infra: proxy`.
+    async fn watch(self: Arc<Self>, id: &str, child: Option<draugr::Child>, relay: Option<Net>) {
+        let mut relay = relay;
+        let mut acks = Vec::new();
         let Some(meta) = self.meta(id) else { return };
         let dir = self.dir(id);
         // a job without a time box has no timer arm: it ends only by itself or by a stop
@@ -1279,8 +1383,33 @@ impl Inner {
         };
         match child {
             Some(mut c) => {
+                let relay_end = async {
+                    match relay.as_mut() {
+                        Some(r) => r.ended().await,
+                        None => std::future::pending().await,
+                    }
+                };
                 tokio::select! {
                     _ = c.wait() => {}
+                    end = relay_end => {
+                        let r = relay.take().expect("the relay arm fired");
+                        // the sidecar's stderr is read before it is stopped; the job container goes before the sidecar
+                        let stderr = r.net.stderr();
+                        let code = r.net.end().await;
+                        let reason = match end {
+                            RelayEnd::Channel(e) => net::end_reason(&e, code, &stderr),
+                            RelayEnd::Stop(why, ack) => {
+                                acks.push(ack);
+                                why.to_string()
+                            }
+                        };
+                        write_infra(&dir, &reason);
+                        crate::clock::real(async {
+                            let _ = draugr::kill_group(c.id(), Duration::from_secs(2), &draugr::RealSignaller).await;
+                            let _ = c.wait().await;
+                        })
+                        .await;
+                    }
                     () = time_up => {
                         let _ = std::fs::write(dir.join("why"), "timed-out");
                         // the kill ends by itself, within its grace: an advance past the time box waits for it
@@ -1314,7 +1443,14 @@ impl Inner {
                 }
             }
         }
+        if let Some(r) = relay {
+            r.net.end().await;
+        }
+        self.nets.lock().unwrap().remove(id);
         self.finish(id).await;
+        for ack in acks {
+            let _ = ack.send(());
+        }
     }
 
     /// Write the job's result once: status from `why` and the exit file, the summary from the log; record it in the
@@ -1329,6 +1465,7 @@ impl Inner {
         let status = match std::fs::read_to_string(dir.join("why")).as_deref() {
             Ok("stopped") => ExecStatus::Stopped,
             Ok("timed-out") => ExecStatus::TimedOut,
+            Ok(w) if w.starts_with(net::INFRA) => ExecStatus::Infra,
             _ if exit.is_some() => ExecStatus::Done,
             _ => ExecStatus::Lost,
         };
@@ -1366,6 +1503,7 @@ impl Inner {
                 ExecStatus::Done => "done",
                 ExecStatus::Stopped => "stopped",
                 ExecStatus::TimedOut => "timed-out",
+                ExecStatus::Infra => "infra",
                 _ => "lost",
             };
             let e = norn::write::exec::ExecEnd {
@@ -1520,6 +1658,30 @@ impl Inner {
                     waiting.push((m.started, id));
                     continue;
                 }
+                // a networked job lost its relay with the last hub: it is ended, not adopted (B3), and left out of
+                // `running`, so the sweep below takes its sidecar
+                if m.relay.is_some() {
+                    let me = self.clone();
+                    crate::clock::spawn("exec:end-relayed", async move {
+                        if let (Some(podman), Ok(name)) =
+                            (me.hooks.podman.clone(), container::name_of(&id))
+                        {
+                            let shell = me.hooks.shell_env.clone();
+                            let _ = crate::clock::blocking(move || {
+                                sleipnir::linux::podman::run_limited(
+                                    &podman,
+                                    &["rm", "-f", "-t", "0", &name],
+                                    &container::podman_env(&shell),
+                                    Duration::from_secs(30),
+                                )
+                            })
+                            .await;
+                        }
+                        write_infra(&me.dir(&id), net::HUB_RESTARTED);
+                        me.finish(&id).await;
+                    });
+                    continue;
+                }
                 running.insert(id.clone());
                 // it still takes its room here
                 if m.timebox_s.is_some() {
@@ -1528,7 +1690,7 @@ impl Inner {
                 }
                 let me = self.clone();
                 crate::clock::spawn("exec:watch", async move {
-                    crate::clock::real_long(me.watch(&id, None)).await;
+                    crate::clock::real_long(me.watch(&id, None, None)).await;
                 });
             }
         }
@@ -1540,10 +1702,21 @@ impl Inner {
             me.restore(waiting.into_iter().map(|(_, id)| id).collect()),
         );
         self.prune();
-        // a podman client that died with the last hub leaves its container: remove those no running job owns
+        // a podman client that died with the last hub leaves its container (and a networked job its sidecar): remove
+        // those of this hub's label no running job owns, and the relay images of an older binary
         if let Some(podman) = self.hooks.podman.clone() {
             let shell = self.hooks.shell_env.clone();
-            crate::clock::blocking(move || container::remove_leftovers(&shell, &podman, &running));
+            let px_dir = self.hooks.px_dir.clone();
+            crate::clock::blocking(move || {
+                let current = px_dir.and_then(|d| net::px_image_ref(&d));
+                container::remove_leftovers(
+                    &shell,
+                    &podman,
+                    &container::owner_tag(),
+                    &running,
+                    current.as_deref(),
+                )
+            });
         }
     }
 }
@@ -1691,6 +1864,25 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
+            nevers: Some(f.browser_nevers.clone()),
+            cards: Some(hostgrants::Hub {
+                settings: f.settings.clone(),
+                writer: f.writer.clone(),
+                gate: f.core.matrix.clone(),
+                // read when the job starts, through the front the tools hold (it outlives the runner's hooks)
+                session: {
+                    let tools = f.tool_hub.clone();
+                    Arc::new(move |sid: &str| {
+                        let f = tools.front.get()?.upgrade()?;
+                        // an MCP session's columns are not held: the default (no role); browser.private asks anyway
+                        let who = f.core.agents.who(sid).unwrap_or_default();
+                        Some((
+                            who,
+                            crate::matrix_gate::ActionCtx::of_session(&f.core.runs.scopes(), sid),
+                        ))
+                    })
+                },
+            }),
             // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
             key_envs: Arc::new(move || {
                 crate::settings::providers::effective(

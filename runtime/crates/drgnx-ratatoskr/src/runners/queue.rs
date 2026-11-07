@@ -2388,12 +2388,14 @@ impl Queue {
                 facts,
                 missing,
                 limits,
+                key_socket,
                 ..
             } => {
                 if let Some(c) = st.runners.get_mut(runner).and_then(|r| r.check.as_mut()) {
                     c.facts.probed = true;
                     c.facts.missing = missing.iter().map(|m| m.what.clone()).collect();
                     c.facts.limits = limits;
+                    c.facts.key_socket = key_socket;
                     // the probe's facts carry the free space only: the floor is its 20 GB part
                     if let Some(f) = facts {
                         c.facts.disk_free_gb = f.disk_free_gb;

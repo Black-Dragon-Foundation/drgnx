@@ -28,7 +28,8 @@ http = "1"
 norn = { path = "../crates/norn" }
 brokkr = { path = "../crates/brokkr" }
 urdr = { path = "../crates/urdr", features = ["test-hooks"] }
-tokio = { version = "1.54", features = ["rt", "io-util", "time"] }
+drgnx-px = { path = "../crates/drgnx-px" }
+tokio = { version = "1.54", features = ["rt", "io-util", "time", "sync"] }
 
 [workspace]
 
@@ -236,6 +237,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "px_frames"
+path = "fuzz_targets/px_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "plugin_manifest"
 path = "fuzz_targets/plugin_manifest.rs"
 test = false
@@ -243,8 +251,22 @@ doc = false
 bench = false
 
 [[bin]]
+name = "px_owner"
+path = "fuzz_targets/px_owner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "hook_rules"
 path = "fuzz_targets/hook_rules.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "px_mux"
+path = "fuzz_targets/px_mux.rs"
 test = false
 doc = false
 bench = false

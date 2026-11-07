@@ -1976,6 +1976,11 @@
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
                 "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
+                "type": "string"
               }
             ]
           },
@@ -10712,6 +10717,11 @@
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
                 "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
+                "type": "string"
               }
             ]
           },
@@ -10958,6 +10968,11 @@
               {
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
                 "type": "string"
               }
             ]
@@ -11348,6 +11363,11 @@
               {
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
                 "type": "string"
               }
             ]
@@ -11863,6 +11883,11 @@
               {
                 "const": "lost",
                 "description": "Its unit or process was gone at a hub start and left no exit.",
+                "type": "string"
+              },
+              {
+                "const": "infra",
+                "description": "Ended by the hub's own infrastructure, not by the job (`infra: proxy`: a networked job's relay ended, or the hub\nstopped or restarted under it); the reason is the last line of its log.",
                 "type": "string"
               }
             ]

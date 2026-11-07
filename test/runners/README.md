@@ -41,7 +41,8 @@ Found by the spike (rootless podman as the outer engine):
 | `--memory` = `--memory-swap` | runners 3g, harness 2g |
 
 The image also needs `newuidmap` and `newgidmap` made setuid (a rootless image build drops their file capabilities), a
-subuid range for `runner` inside the 65536 ids the outer container maps (`20000:30000`), and the
+subuid and subgid ranges for `runner` inside the 65536 ids the outer container maps (`1:999` and `1001:64535`: every id
+but 0 and its own, so an inner container's uid 65534, the relay sidecar's, is mapped), and the
 `/etc/systemd/system/user@.service.d` drop-in `Delegate=memory pids cpu cpuset io`.
 
 A container started by `podman run` inside a unit lands under `user.slice`, not under the unit's slice, unless it is
@@ -115,12 +116,14 @@ minutes, the hub restarted with and without the editor, a changed host key, ling
 let the runner's own guards stop a job (disk below the floor, the memory ladder), and four jobs over one link's three
 sessions. Each proves its outcome from state: the job's attempts in the hub's `runtime.db`, the queue's rows, the
 runner's own log and attempt record, no key bytes on the runner, the job's proxy's answers. `drills.sh` runs every row
-5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot (`test` shares `drgnx-fwd` too, for
-the networked job):
+5 times on a fleet of 2 runners with `--max-sessions 3`, through the heavy slot (`test` shares the relay sidecar
+`drgnx-px-<arch>-linux-musl` too, for the networked job):
 
 ```
 cargo test -p drgnx-ratatoskr --features fleet,test-hooks --test fleet_drills --no-run   # in the dev container
-cargo build -p sleipnir -p drgnx-fwd --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key --bin drgnx-fwd
+cargo build -p sleipnir --features sleipnir/test-hooks --bin sleipnir --bin drgnx-key
+cargo build -p drgnx-px --bin drgnx-px --target x86_64-unknown-linux-musl --target-dir runtime/target/fwd
+cp runtime/target/fwd/x86_64-unknown-linux-musl/debug/drgnx-px runtime/target/debug/drgnx-px-x86_64-linux-musl
 DRGNX_FLEET_TEST_BIN=<the binary> $HEAVY test/runners/drills.sh --container [--times N] [--timing] [FILTER]
 ```
 
@@ -128,6 +131,11 @@ It prints one line per run and `ROW PASSED/N` per row, keeps each run's log unde
 only when every run passed. The rows play the hub with its own parts (the transport, the link session, the queue on a
 `runtime.db`); the time a cut or a suspend lasts is the queue's clock moved on, never a wait. `--timing` adds the
 fleet throughput row (a 40-job set on 2 runners within 0.6 × its wall on 1), a timing row the timing lane only names.
+
+The same file's `net::` rows are a networked runner job's: it reaches only the hosts its grant lists through its relay
+sidecar and the helper's proxy (an unlisted host 403, the loopback only, a direct address unreachable), its container
+and sidecar are gone once it ended, and the reserved `host.drgnx.internal` is refused on a runner whatever the port.
+They run as the drills do, with `fleet.sh test net::` on one runner.
 
 ## Cloud machines
 
