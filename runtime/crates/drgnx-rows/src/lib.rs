@@ -14,5 +14,5 @@ mod patch;
 mod row;
 
 pub use builder::RowBuilder;
-pub use patch::{Op, Patch};
+pub use patch::{Op, Patch, diff};
 pub use row::{ImageId, Row, RowHeight};

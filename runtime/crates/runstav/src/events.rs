@@ -348,6 +348,16 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "view-patch",
+            crate::methods::view::Patch,
+            "what changed in one (view, display class) of a hub-fed view, to its connection only: a reset first and after every new env epoch, then ops against the version base; every patch names the hub's instance id and the editor's epoch"
+        ),
+        event!(
+            "view-glyphs",
+            crate::methods::view::ViewGlyphsAsk,
+            "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
+        ),
+        event!(
             "agent-follow",
             crate::methods::editor::AgentFollow,
             "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
@@ -433,6 +443,9 @@ mod tests {
                     "pair-reconcile",
                     // agent system part 3: the follow feed
                     "agent-follow",
+                    // hub-built rows (the render offload)
+                    "view-patch",
+                    "view-glyphs",
                 ]
                 .contains(&n.as_str())
             })
@@ -447,7 +460,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 37);
+        assert_eq!(events().len(), 39);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

@@ -43,6 +43,7 @@ impl<'de> Deserialize<'de> for ImageId {
 
 /// A row's height: LINES lines of UNIT px each (Lisp turns it into `line-height` from its own font metrics).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RowHeight {
     pub lines: u32,
     pub unit: u32,
@@ -51,6 +52,7 @@ pub struct RowHeight {
 /// One row: its key (unique in the view), its text and what lies on it. Every position is a scalar index into
 /// `text`; ranges are `[start, end)`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Row {
     pub key: String,
     pub text: String,
@@ -68,4 +70,16 @@ pub struct Row {
     pub images: Vec<(u32, ImageId, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<RowHeight>,
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ImageId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ImageId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "string", "pattern": "^[0-9a-f]{16}-[0-9]+$",
+                                "description": "an image's content hash and env epoch"})
+    }
 }

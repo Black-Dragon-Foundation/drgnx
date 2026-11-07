@@ -1486,6 +1486,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `tasks/ready` | user | `{labels?: [string], limit?: natnum, project?: string}` | `{cursor?: natnum, tasks?: [any]}` | no |
 | `tasks/write` | user | `{acceptance?: Text, add?: [string], body?: Text, cwd?: AbsPath, dst?: string, id?: string, kind?: string, labels?: [string], lease?: integer, mode?: "children" \| "replace", note?: Text, op: "create" \| "update" \| "claim" \| "heartbeat" \| "release" \| "handoff" \| "reassign" \| "split" \| "complete" \| "link" \| "unlink" \| "label" \| "tools", parent?: string, parts?: [Text], priority?: integer, project?: string, remove?: [string], src?: string, status?: Status, title?: Text, to?: string, tracker?: boolean, ver?: integer}` | `any` | yes |
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
+| `view/close` | user | `{view: string}` | `boolean` | no |
+| `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
+| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
@@ -2035,6 +2040,41 @@ it builds for Android too).
   class) from version `base` to `version`. `ops` apply in order: `{reset: [row]}` (the view is exactly these rows),
   `{insert: {after: key | null, rows}}`, `{replace: [row]}` (each by its key), `{remove: [key]}`. `images` carries the
   images the rows name that the editor may not hold yet.
+
+### The wire: envs, patches, resyncs (`view`)
+
+The hub keeps, per (connection, view, display class), the env the editor sent, the version and rows it last sent,
+and the images that editor holds (`view::Store`, pure, tested in every order of envs, rows, resyncs and restarts).
+All of it is in memory only.
+
+- **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
+  `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
+  {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
+  view; a connection's views end with it.
+- **The event** `view-patch` (a patch, above) goes by `Front::send_to` to the view's connection only.
+
+**The rules** (one owner each). The switch tasks and the inserter (`wb/drgnx-view.el`) follow them:
+
+- **The epoch is the editor's.** It numbers each (view, class)'s env, one more for every change of its look (fonts,
+  scale, palette, display, widths, zone, motion); a width change alone keeps it. The hub echoes it as `env_epoch` on
+  every patch and owns no epoch counter.
+- **The hub owns `version`.** A patch's `base` is the version it applies to; `version` is one more.
+- **The hub's instance id `hub`** is drawn at its start (a random number below 2^53) and is on every patch. The editor
+  drops a patch whose `hub` is not its last reset's, and anything for a (view, class) before that pair's first reset.
+- **The first patch per (view, class)** after a `view/env` with a new epoch (or the first env) is a `reset`; a
+  `view/env` with the same epoch is answered by what changed (a resize: `replace`s of the rows whose fit changed).
+- **No env, no rows:** a hub with no env for a (view, class) builds nothing for it. A restarted hub holds none until
+  the editor sends its envs again (`drgnx-hub-connected-functions`), so its first patch is a reset with a new `hub`.
+- **Held and stale patches** (the editor's side). A patch with an epoch behind the editor's is held and the view dims;
+  a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
+  `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
+  outstanding per (view, class).
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
+  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 
 ## Sessions and their sockets
 

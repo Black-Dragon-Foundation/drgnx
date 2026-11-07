@@ -29,6 +29,7 @@ pub mod search;
 pub mod settings;
 pub mod tasks;
 pub mod timeline;
+pub mod view;
 pub mod work;
 
 use crate::registry::Method;
@@ -256,6 +257,11 @@ params! {
     WorkFiles(work::EditedFiles),
     WorkHunks(work::HunksParams),
     WorkFileAt(work::FileAtParams),
+    ViewEnv(view::ViewEnv),
+    ViewResync(view::ViewResync),
+    ViewGlyphs(view::ViewGlyphs),
+    ViewMeasured(view::ViewMeasured),
+    ViewClose(view::ViewClose),
     SearchQuery(search::QueryParams),
     SearchStatus(search::RootParams),
     SearchIndex(search::IndexParams),
@@ -328,6 +334,7 @@ pub(crate) fn all() -> Vec<Method> {
     v.extend(say::methods());
     v.extend(records::methods());
     v.extend(work::methods());
+    v.extend(view::methods());
     v.extend(editor::methods());
     v.extend(search::methods());
     v.extend(runners::methods());

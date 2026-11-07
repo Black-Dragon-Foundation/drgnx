@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// One operation of a patch, applied in order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Op {
     /// The view is exactly these rows.
@@ -22,6 +23,7 @@ pub enum Op {
 
 /// What changed in one (view, class).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Patch {
     pub view: String,
     pub class: String,
@@ -36,4 +38,61 @@ pub struct Patch {
     /// `[id, svg]`: images the rows name and Lisp may not hold yet (a reset: every image its rows name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<(ImageId, String)>,
+}
+
+/// The ops that turn OLD into NEW, rows matched by key: removes, then replaces of changed rows, then inserts of new
+/// ones after the row before them. A reset when the rows kept changed their order (a move is not an op). Empty when
+/// nothing changed.
+pub fn diff(old: &[Row], new: &[Row]) -> Vec<Op> {
+    use std::collections::HashMap;
+    let was: HashMap<&str, &Row> = old.iter().map(|r| (r.key.as_str(), r)).collect();
+    let now: HashMap<&str, ()> = new.iter().map(|r| (r.key.as_str(), ())).collect();
+    let kept_old: Vec<&str> = old
+        .iter()
+        .map(|r| r.key.as_str())
+        .filter(|k| now.contains_key(k))
+        .collect();
+    let kept_new: Vec<&str> = new
+        .iter()
+        .map(|r| r.key.as_str())
+        .filter(|k| was.contains_key(k))
+        .collect();
+    if kept_old != kept_new {
+        return vec![Op::Reset(new.to_vec())];
+    }
+    let mut ops = Vec::new();
+    let gone: Vec<String> = old
+        .iter()
+        .filter(|r| !now.contains_key(r.key.as_str()))
+        .map(|r| r.key.clone())
+        .collect();
+    if !gone.is_empty() {
+        ops.push(Op::Remove(gone));
+    }
+    let changed: Vec<Row> = new
+        .iter()
+        .filter(|r| was.get(r.key.as_str()).is_some_and(|o| *o != *r))
+        .cloned()
+        .collect();
+    if !changed.is_empty() {
+        ops.push(Op::Replace(changed));
+    }
+    // each run of new rows goes after the row before it (none: the top)
+    let mut i = 0;
+    while i < new.len() {
+        if was.contains_key(new[i].key.as_str()) {
+            i += 1;
+            continue;
+        }
+        let after = i.checked_sub(1).map(|j| new[j].key.clone());
+        let start = i;
+        while i < new.len() && !was.contains_key(new[i].key.as_str()) {
+            i += 1;
+        }
+        ops.push(Op::Insert {
+            after,
+            rows: new[start..i].to_vec(),
+        });
+    }
+    ops
 }

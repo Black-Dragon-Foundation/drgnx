@@ -3097,6 +3097,347 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "description": "`view-glyphs`: the hub asks the editor for advances it cannot read from the font, `[role, char]` each.",
+        "properties": {
+          "ask": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "class": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "ask"
+        ],
+        "title": "ViewGlyphsAsk",
+        "type": "object"
+      },
+      "doc": "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs",
+      "name": "view-glyphs"
+    },
+    {
+      "data": {
+        "$defs": {
+          "ImageId": {
+            "description": "an image's content hash and env epoch",
+            "pattern": "^[0-9a-f]{16}-[0-9]+$",
+            "type": "string"
+          },
+          "Op": {
+            "description": "One operation of a patch, applied in order.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "The view is exactly these rows.",
+                "properties": {
+                  "reset": {
+                    "items": {
+                      "$ref": "#/$defs/Row"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "reset"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "ROWS go after the row keyed AFTER (none: at the top).",
+                "properties": {
+                  "insert": {
+                    "properties": {
+                      "after": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "rows": {
+                        "items": {
+                          "$ref": "#/$defs/Row"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "rows"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "insert"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Each row replaces the row of its key.",
+                "properties": {
+                  "replace": {
+                    "items": {
+                      "$ref": "#/$defs/Row"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "replace"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "The rows of these keys go.",
+                "properties": {
+                  "remove": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "remove"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "Row": {
+            "description": "One row: its key (unique in the view), its text and what lies on it. Every position is a scalar index into\n`text`; ranges are `[start, end)`.",
+            "properties": {
+              "height": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RowHeight"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "images": {
+                "description": "`[pos, id, alt]`: the image ID is shown at POS (ALT on a terminal).",
+                "items": {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "$ref": "#/$defs/ImageId"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "key": {
+                "type": "string"
+              },
+              "props": {
+                "description": "`[start, end, name, value]`: a text property, such as `drgnx-work-id`.",
+                "items": {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    true
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "runs": {
+                "description": "`[start, end, face]`: a registered drgnx face name (Lisp drops one it doesn't know, never interns it).",
+                "items": {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "stops": {
+                "description": "`[pos, px]`: the text at POS is aligned to PX (`(space :align-to (PX))`).",
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "text"
+            ],
+            "type": "object"
+          },
+          "RowHeight": {
+            "description": "A row's height: LINES lines of UNIT px each (Lisp turns it into `line-height` from its own font metrics).",
+            "properties": {
+              "lines": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unit": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "lines",
+              "unit"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "What changed in one (view, class).",
+        "properties": {
+          "base": {
+            "description": "The version this patch applies to (0 on a reset).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "type": "string"
+          },
+          "env_epoch": {
+            "description": "The env epoch the rows were built for (Lisp's number, echoed).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hub": {
+            "description": "The hub's instance id, drawn at its start: Lisp drops a patch whose `hub` is not its last reset's.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "images": {
+            "description": "`[id, svg]`: images the rows name and Lisp may not hold yet (a reset: every image its rows name).",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/ImageId"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "ops": {
+            "items": {
+              "$ref": "#/$defs/Op"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "hub",
+          "base",
+          "version",
+          "env_epoch",
+          "ops"
+        ],
+        "title": "Patch",
+        "type": "object"
+      },
+      "doc": "what changed in one (view, display class) of a hub-fed view, to its connection only: a reset first and after every new env epoch, then ops against the version base; every patch names the hub's instance id and the editor's epoch",
+      "name": "view-patch"
+    },
+    {
+      "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
         "description": "The `view-proposal` event: a hand edit became (or replaced) a proposal.",
         "properties": {
           "by": {
@@ -27769,6 +28110,355 @@
         },
         "title": "Timeline",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor shows a view no more: its envs and rows are forgotten (a connection's views end with it)",
+      "name": "view/close",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/close`: the editor shows VIEW no more; the hub forgets its envs and rows.",
+        "properties": {
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "title": "ViewClose",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "how one view looks in one display class (fonts, scale, width, palette), with the editor's epoch: a new epoch makes the next view-patch a reset",
+      "name": "view/env",
+      "params": {
+        "$defs": {
+          "Display": {
+            "description": "A display's kind.",
+            "enum": [
+              "gui",
+              "tty"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for\nthis env (the hub echoes it on every patch); a new epoch makes the next patch a reset.",
+        "properties": {
+          "cell": {
+            "description": "The frame's character cell, `[width, height]` px.",
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ],
+            "type": "array"
+          },
+          "class": {
+            "type": "string"
+          },
+          "display": {
+            "$ref": "#/$defs/Display"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fonts": {
+            "default": [],
+            "items": {
+              "maxItems": 8,
+              "minItems": 8,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "palette": {
+            "default": [],
+            "description": "`[role, colour]`: the SVG writer's colours, from the theme.",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "reduced_motion": {
+            "default": false,
+            "type": "boolean"
+          },
+          "scale": {
+            "format": "float",
+            "type": "number"
+          },
+          "tty_widths": {
+            "default": [],
+            "description": "`[from, to, width]`: the terminal's character widths that differ from Unicode's.",
+            "items": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "tz": {
+            "default": "",
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "width_px": {
+            "description": "The narrowest live window of the class showing the view, body px.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "epoch",
+          "display",
+          "scale",
+          "cell",
+          "width_px"
+        ],
+        "title": "ViewEnv",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's advances for the glyphs a view-glyphs asked for, [role, char, px] each",
+      "name": "view/glyphs",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each.",
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "glyphs": {
+            "items": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "glyphs"
+        ],
+        "title": "ViewGlyphs",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the fit guard's measurements of strings that overflowed, [role, string, px] each: the hub fits by them",
+      "name": "view/measured",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/measured`: the fit guard measured these strings wider than the hub fitted them, `[role, string, px]` each.",
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "measured": {
+            "items": {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "format": "float",
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "measured"
+        ],
+        "title": "ViewMeasured",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
+      "name": "view/resync",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`.",
+        "properties": {
+          "class": {
+            "type": "string"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "class",
+          "version"
+        ],
+        "title": "ViewResync",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

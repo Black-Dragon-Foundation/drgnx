@@ -1300,9 +1300,11 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-rows",
  "eitri",
  "fastwebsockets",
  "forseti",
+ "getrandom 0.4.3",
  "gleipnir",
  "heimdall",
  "hermod",
@@ -1356,6 +1358,7 @@ dependencies = [
 name = "drgnx-rows"
 version = "0.1.0"
 dependencies = [
+ "schemars 1.2.3",
  "serde",
  "serde_json",
 ]
@@ -4125,6 +4128,7 @@ dependencies = [
 name = "runstav"
 version = "0.1.0"
 dependencies = [
+ "drgnx-rows",
  "getrandom 0.4.3",
  "hmac",
  "proptest",
