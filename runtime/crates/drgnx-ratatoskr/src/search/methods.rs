@@ -369,6 +369,12 @@ impl Hub {
         cfg
     }
 
+    /// The open project whose id is ID, without opening one (a reader of its watcher, `search/files`). None when it is
+    /// not open, or while another call holds the list.
+    pub fn opened(&self, id: &str) -> Option<Arc<Project>> {
+        Some(self.projects.try_lock().ok()?.get(id)?.project.clone())
+    }
+
     /// The project of ROOT, opened if it is not (and opened again when its embedders changed).
     pub async fn project(&self, front: &Front, root: &Path) -> Result<Arc<Project>, Error> {
         let dirs = self.dirs()?;

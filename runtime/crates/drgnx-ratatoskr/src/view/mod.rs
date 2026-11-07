@@ -12,6 +12,7 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod grep;
@@ -224,6 +225,8 @@ pub struct Views {
     greps: grep::Greps,
     /// The git letters streaming rows (`git/letters`).
     letters: git::Letters,
+    /// The ranked file queries (`search/files`) and the names they rank.
+    files: files::Files,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
     front: OnceLock<Weak<Front>>,
 }
@@ -236,6 +239,7 @@ impl Default for Views {
             fixtures: Mutex::new(BTreeMap::new()),
             greps: grep::Greps::default(),
             letters: git::Letters::default(),
+            files: files::Files::default(),
             front: OnceLock::new(),
         }
     }
@@ -249,7 +253,7 @@ impl Views {
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
     /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
-        if self.grep_build(f, key) || self.git_build(f, key) {
+        if self.grep_build(f, key) || self.git_build(f, key) || self.files_build(f, key) {
             return;
         }
         let Some((mut rows, images, labels)) =
@@ -381,6 +385,7 @@ impl Views {
     pub fn gone(&self, conn: u64) {
         self.greps.gone(conn);
         self.letters.gone(conn);
+        self.files.gone(conn);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
@@ -455,6 +460,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     lock(&views.fixtures).remove(&(c.conn_id, p.view.clone()));
     views.greps.stop(c.conn_id, &p.view);
     views.letters.stop(c.conn_id, &p.view);
+    views.files.stop(c.conn_id, &p.view);
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
     Ok(closed)

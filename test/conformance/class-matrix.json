@@ -168,6 +168,7 @@
   "say/revise": ["user"],
   "say/start": ["user"],
   "search/embedders": ["user"],
+  "search/files": ["user"],
   "search/grep": ["user"],
   "search/grep-replace": ["user"],
   "search/index": ["user"],

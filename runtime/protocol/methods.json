@@ -26024,6 +26024,99 @@
       "classes": [
         "user"
       ],
+      "doc": "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
+      "name": "search/files",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row\nper file, keyed by its path relative to ROOT, the query's words marked. A repository's names are what git lists\n(nothing is read), elsewhere a walk that follows no link and applies `.gitignore` files; binary, large and linked\nfiles are listed. A newer query of the same view stops this one, and its rows are never sent.",
+        "properties": {
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
+          },
+          "n": {
+            "description": "How many rows, 1 to 1000; default 100.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Words, each of which a path must hold (case-insensitive); empty: every file.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "query"
+        ],
+        "title": "FilesParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/files`'s answer: QUERY numbers the query.",
+        "properties": {
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "FilesStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
       "name": "search/grep",
       "params": {
@@ -26035,7 +26128,7 @@
             "type": "string"
           },
           "GrepIgnore": {
-            "description": "Which files a text search looks in (the `search.ignore-rules` setting).",
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
             "oneOf": [
               {
                 "const": "index",
@@ -26090,7 +26183,7 @@
                 "type": "null"
               }
             ],
-            "description": "Default `index`."
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
           },
           "include": {
             "description": "Globs; each string may hold several, comma-separated.",

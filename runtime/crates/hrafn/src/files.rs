@@ -417,6 +417,11 @@ fn glob_tokens(glob: &str) -> Vec<Tok> {
     } else {
         format!("**/{glob}")
     };
+    tokens(&glob)
+}
+
+/// GLOB's tokens as written: no depth rule and no trailing-slash rule.
+fn tokens(glob: &str) -> Vec<Tok> {
     let cs: Vec<char> = glob.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
@@ -468,6 +473,25 @@ fn tok_match(toks: &[Tok], text: &[char]) -> bool {
                     .enumerate()
                     .any(|(i, c)| *c == '/' && tok_match(rest, &text[i + 1..]))
         }
+    }
+}
+
+/// A compiled glob: a configuration glob (the depth rules above) or one taken as written (a `.gitignore` pattern,
+/// placed by its reader).
+pub(crate) struct Glob(Vec<Tok>);
+
+impl Glob {
+    pub(crate) fn config(glob: &str) -> Glob {
+        Glob(glob_tokens(glob))
+    }
+
+    pub(crate) fn exact(glob: &str) -> Glob {
+        Glob(tokens(glob))
+    }
+
+    pub(crate) fn matches(&self, path: &str) -> bool {
+        let text: Vec<char> = path.chars().collect();
+        tok_match(&self.0, &text)
     }
 }
 

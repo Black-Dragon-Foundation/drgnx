@@ -277,6 +277,7 @@ params! {
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
     SearchGrep(search::GrepParams),
+    SearchFiles(search::FilesParams),
     SearchGrepReplace(search::GrepReplaceParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),

@@ -337,7 +337,7 @@ pub struct ServerStopped {
     pub stopped: bool,
 }
 
-/// Which files a text search looks in (the `search.ignore-rules` setting).
+/// Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum GrepIgnore {
@@ -373,7 +373,7 @@ pub struct GrepParams {
     pub include: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<Vec<String>>,
-    /// Default `index`.
+    /// Default: the setting `drgnx-search-ignore-rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignore: Option<GrepIgnore>,
     /// The replacement the rows preview (old struck out, new beside it); a regexp search's `\1` are the groups.
@@ -409,6 +409,33 @@ pub struct GrepDone {
     pub error: Option<String>,
 }
 
+/// `search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row
+/// per file, keyed by its path relative to ROOT, the query's words marked. A repository's names are what git lists
+/// (nothing is read), elsewhere a walk that follows no link and applies `.gitignore` files; binary, large and linked
+/// files are listed. A newer query of the same view stops this one, and its rows are never sent.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilesParams {
+    /// The hub-fed view that shows the rows (`view/env`).
+    pub view: String,
+    pub root: AbsPath,
+    /// Words, each of which a path must hold (case-insensitive); empty: every file.
+    pub query: String,
+    /// How many rows, 1 to 1000; default 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
+    /// Default: the setting `drgnx-search-ignore-rules`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<GrepIgnore>,
+}
+
+/// `search/files`'s answer: QUERY numbers the query.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilesStarted {
+    pub query: u64,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -440,6 +467,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep", SearchGrep(GrepParams) -> GrepStarted,
             classes: [User], writes: false,
             doc: "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+        ),
+        method!(
+            "search/files", SearchFiles(FilesParams) -> FilesStarted,
+            classes: [User], writes: false,
+            doc: "rank a folder's file names for a query and send a hub-fed view the best as rows (view-patch); git's list in a repository, a walk that follows no link elsewhere; a newer query of the view stops the old one",
         ),
         method!(
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,

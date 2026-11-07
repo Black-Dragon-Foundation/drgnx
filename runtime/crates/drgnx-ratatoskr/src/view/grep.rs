@@ -8,8 +8,8 @@ use super::{Key, Store, Views, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
-use hrafn::grep::{self, Ignore, Match, Query};
-use runstav::methods::search::{GrepDone, GrepIgnore, GrepParams, GrepReplaceParams, GrepStarted};
+use hrafn::grep::{self, Match, Query};
+use runstav::methods::search::{GrepDone, GrepParams, GrepReplaceParams, GrepStarted};
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -330,10 +330,7 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
         regexp: p.regexp.unwrap_or(false),
         include: p.include.unwrap_or_default(),
         exclude: p.exclude.unwrap_or_default(),
-        ignore: match p.ignore {
-            Some(GrepIgnore::Real) => Ignore::Real,
-            _ => Ignore::Index,
-        },
+        ignore: super::files::ignore_for(f, p.ignore),
     };
     if !query.root.is_dir() {
         return Err(invalid("root", "an existing folder"));
