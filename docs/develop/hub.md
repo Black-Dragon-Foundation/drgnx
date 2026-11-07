@@ -1677,6 +1677,18 @@ checkout read-only for it.
   with read_file"). An `edit_file` edit must match once in the text. No edit may touch the guard zone (the line at point
   ±1 in every window on the buffer, and the active region): refused `guard` with its lines. Nothing falls back to an
   unshifted apply. The applied answer carries the version after the write.
+- **The apply** (`drgnx-agent-pair--apply`): a read-only buffer refuses (`read-only`), a file another Emacs locked
+  refuses (`locked`); a file changed on disk is read again first when the buffer has no unsaved edits
+  (`insert-file-contents … replace` inside `drgnx-with-no-prompts`, origin `external:disk`, never `revert-buffer`),
+  else refused (`changed-on-disk`). The ranges get markers first and are replaced last to first through
+  `replace-region-contents` (with `drgnx-agent-pair-max-secs`, so point and markers stay on their text), inside one
+  change group amalgamated into one undo step, with `undo-boundary` before and after, all inside
+  `drgnx-history-with-origin` bound to `agent:SESSION`; the ring is drained right after (the answer's version), so the
+  change reaches the hub as the agent's before a resync could strip its origin. Then the command loop learns an apply
+  ran: from `post-command-hook` `this-command` is set to `drgnx-pair-apply` (the loop copies it to `last-command` after
+  the hook); from the timer `last-command` itself. So typing after an apply starts its own undo group, an `undo` run
+  ends at an apply, and `C-/` takes the agent's write away as one step. Each apply's milliseconds go to
+  `drgnx-agent-pair-apply-ticks` (the `pair-apply-tick` probe, the last 64).
 
 ## Per-session sockets
 

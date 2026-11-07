@@ -42,6 +42,11 @@ The module `tools/agent-pair` is pair mode's side in Emacs:
   in every window showing the buffer) or your active region, and when the chat's read is too old to shift from ("read
   it with read_file"). Shifting needs the edit history (Nidhogg .6 with Glitnir); without it a whole-file write is
   refused, and nothing is ever applied unshifted.
+- **A chat's write is one undo step of its own.** `C-/` right after it takes the whole write away (every hunk) and
+  nothing of yours; typing after it is a separate step, so undoing your typing never takes the chat's change with
+  it. Point and your marks stay on their text. The edit history records the write as the chat's, not yours.
+- **A read-only buffer, or a file another Emacs has locked, refuses the write.** If the file changed on disk and the
+  buffer has none of your edits, it is quietly read again first; with your unsaved edits the write is refused.
 - **Saving never asks.** A write to a buffer with no unsaved edits is saved right after it is applied, so the chat's
   builds and tests see it; a buffer with your unsaved edits stays unsaved, and the chat is told the file on disk has
   neither yet. Your `before-save-hook` (a formatter) runs as usual; one that would ask a question stops the save.

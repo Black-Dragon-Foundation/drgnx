@@ -8,12 +8,14 @@
 ;; real buffers with the edit history's drain standing in (`drgnx-agent-pair-test--shifting': its counter is the
 ;; test's, and each change the test types is handed to the log as the drain would).  Expiry runs on the test clock.
 (require 'ert)
+(require 'ert-x)
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/fixtures/clock-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/orders-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-agent-pair" drgnx-dir) t t)
+(defvar nidhogg-history-origin)
 
 (defmacro drgnx-agent-pair-test--with (&rest body)
   "BODY with pair's state fresh, `dir' a temp directory, a stand-in subscribed connection that proved itself (a pipe,
@@ -601,5 +603,136 @@ window's point is refused `guard' with its lines, one away from both applies."
             (should (equal (plist-get (drgnx-agent-pair--apply (list :version v :edits (list edit))) :result)
                            "applied"))))
         (kill-buffer buf)))))
+
+;;;; The apply, undo and attribution
+
+(defun drgnx-agent-pair-test--command (&rest cmd)
+  "Run CMD as the command loop does: `undo-auto--add-boundary' first (keyboard.c), then the command with its hooks,
+`last-command' set from `this-command' after `post-command-hook' (`ert-simulate-command')."
+  (undo-auto--add-boundary)
+  (ert-simulate-command cmd))
+
+(defun drgnx-agent-pair-test--type (char)
+  (let ((last-command-event char)) (drgnx-agent-pair-test--command 'self-insert-command 1 char)))
+
+(defun drgnx-agent-pair-test--replace (id old new)
+  "The hub's `pair-apply' data for write ID of \"s1\": OLD becomes NEW."
+  (list :write id :session "s1" :edits (list (list :kind "replace" :old old :new new))))
+
+(defmacro drgnx-agent-pair-test--undoable (text &rest body)
+  "BODY in `buf', a buffer visiting a file holding TEXT with undo on, point at its end, inside the stand-ins."
+  (declare (indent 1))
+  `(drgnx-agent-pair-test--with
+     (drgnx-agent-pair-test--shifting
+       (let ((buf (drgnx-agent-pair-test--visit dir "u.txt" ,text)))
+         (with-current-buffer buf
+           (buffer-enable-undo)
+           (setq buffer-undo-list nil last-command nil)
+           (goto-char (point-max))
+           ,@body)))))
+
+(ert-deftest drgnx-agent-pair/typing-after-an-apply-starts-its-own-undo-group ()
+  "Review Focus 3.  type → apply (the timer's slot) → type → undo: only the last typing goes; the agent's text and the
+first typing stay."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (drgnx-agent-pair-test--type ?x)
+    (should (equal (plist-get (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE")) :result)
+                   "applied"))
+    (should (eq last-command drgnx-pair-apply))
+    (drgnx-agent-pair-test--type ?y)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "ONE\nx"))))
+
+(ert-deftest drgnx-agent-pair/an-undo-continuation-ends-at-an-apply ()
+  "undo → apply → undo: the second undo starts afresh and undoes the agent's group, not your older change."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (drgnx-agent-pair-test--type ?a)
+    (drgnx-agent-pair-test--command 'end-of-line)
+    (drgnx-agent-pair-test--type ?b)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\na"))
+    (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\na"))))
+
+(ert-deftest drgnx-agent-pair/an-apply-from-the-post-command-slot-keeps-its-own-group ()
+  "Review Focus 3.  A write queued while you type is applied from `post-command-hook' after your keystroke; your next
+keystroke and `undo' take only that keystroke away: `this-command' told the loop an apply ran."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (add-hook 'post-command-hook #'drgnx-agent-pair--post-command nil t)
+    (drgnx-agent-pair--arrived (append (drgnx-agent-pair-test--replace 1 "one" "ONE") (list :file buffer-file-name :ttl_ms 2000)))
+    (drgnx-agent-pair-test--type ?x)
+    (should (equal (plist-get (drgnx-agent-pair-answer-of 1) :result) "applied"))
+    (should (eq last-command drgnx-pair-apply))
+    (drgnx-agent-pair-test--type ?y)
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "ONE\nx"))
+    (remove-hook 'post-command-hook #'drgnx-agent-pair--post-command t)))
+
+(ert-deftest drgnx-agent-pair/an-agent-group-undoes-alone ()
+  "A write of several hunks is one undo step: one undo takes every hunk away and nothing of yours."
+  (drgnx-agent-pair-test--undoable "one\ntwo\nthree\n"
+    (drgnx-agent-pair-test--type ?z)
+    (drgnx-agent-pair--apply (list :write 1 :session "s1"
+                                   :edits (list (list :kind "replace" :old "one" :new "ONE")
+                                                (list :kind "replace" :old "three" :new "THREE"))))
+    (should (equal (buffer-string) "ONE\ntwo\nTHREE\nz"))
+    (drgnx-agent-pair-test--command 'undo)
+    (should (equal (buffer-string) "one\ntwo\nthree\nz"))))
+
+(ert-deftest drgnx-agent-pair/point-and-markers-stay-put ()
+  "Point and a marker outside the edit stay on their text; inside a replaced line they stay where the text is kept."
+  (drgnx-agent-pair-test--undoable "aaa\nbbb ccc\nddd\n"
+    (goto-char (point-min)) (forward-line 2)
+    (let ((m (copy-marker (save-excursion (goto-char (point-min)) (line-end-position)))))
+      (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "bbb ccc" "bbb\nmore\nccc"))
+      (should (looking-at "ddd"))
+      (should (= m (save-excursion (goto-char (point-min)) (line-end-position))))
+      (set-marker m nil))))
+
+(ert-deftest drgnx-agent-pair/a-changed-on-disk-clean-buffer-reverts-first ()
+  "The file changed on disk under a buffer with none of your edits: it is read again first (as the outside world's
+change, asking nothing), then the write applies to it.  Under your unsaved edits the write is refused."
+  (drgnx-agent-pair-test--undoable "a\nb\n"
+    (let ((origin nil))
+      (with-temp-file buffer-file-name (insert "a\nb\nc\n"))
+      (set-visited-file-modtime (time-subtract (current-time) 100))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (should (equal (plist-get (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "c" "C")) :result)
+                     "applied"))
+      (should (equal (buffer-string) "a\nb\nC\n"))
+      (should (member "external:disk" origin))
+      (should (member "agent:s1" origin))
+      (insert "mine")
+      (with-temp-file buffer-file-name (insert "a\nb\nC\nd\n"))
+      (set-visited-file-modtime (time-subtract (current-time) 100))
+      (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 2 "a" "A"))
+                     (list :result "refused" :reason "changed-on-disk")))
+      (should (string-prefix-p "a\n" (buffer-string))))))
+
+(ert-deftest drgnx-agent-pair/a-locked-file-refuses ()
+  "A file another Emacs has locked, and a read-only buffer, refuse the write whole."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (cl-letf (((symbol-function 'file-locked-p) (lambda (_f) "someone")))
+      (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                     (list :result "refused" :reason "locked"))))
+    (setq buffer-read-only t)
+    (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                   (list :result "refused" :reason "read-only")))
+    (setq buffer-read-only nil)
+    (should (equal (buffer-string) "one\n"))))
+
+(ert-deftest drgnx-agent-pair/the-ring-is-drained-before-a-resync-can-strip-the-origin ()
+  "The write's changes are made with the agent's origin bound, and the history's ring is drained before the apply
+returns (the answer's version), so a later resync cannot send them as yours."
+  (drgnx-agent-pair-test--undoable "one\n"
+    (let ((seen nil) (origin nil))
+      (add-hook 'before-change-functions (lambda (&rest _) (push (bound-and-true-p nidhogg-history-origin) origin)) nil t)
+      (cl-letf (((symbol-function 'drgnx-history-drain-now)
+                 (lambda (&optional _b) (push (buffer-string) seen) 7)))
+        (should (equal (drgnx-agent-pair--apply (drgnx-agent-pair-test--replace 1 "one" "ONE"))
+                       (list :result "applied" :version 7))))
+      (should (equal (delete-dups origin) '("agent:s1")))
+      (should (equal (car seen) "ONE\n")))))
 
 ;;; agent-pair-test.el ends here

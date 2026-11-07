@@ -35,6 +35,8 @@
 (require 'drgnx-registry)
 (require 'drgnx-history)
 
+(defvar nidhogg-history-origin)
+
 (defvar drgnx-agent-pair-log-size 4096
   "How many drains of a buffer its change log keeps at least; more while the hub still holds a read older than them.")
 
@@ -87,6 +89,9 @@ keeps a change log only inside one of these folders.")
 
 (defvar drgnx-agent-pair--commands 0
   "How many commands run now, as the command hooks count them (`drgnx-agent-pair-command-step').")
+
+(defvar drgnx-agent-pair--in-post-command nil
+  "Non-nil while the safe slot runs from `post-command-hook' (the command loop copies `this-command' after it).")
 
 (defvar drgnx-agent-pair--lock nil
   "Non-nil while the safe slot applies and saves: a drain entered again from inside (a filter, a save hook) waits.")
@@ -171,7 +176,8 @@ depth 0, no `:macro', no `:isearch', the history not `:resyncing' and the lock n
   "`post-command-hook': a command ended; when a queue holds writes, the safe slot (`drgnx-agent-pair--drain')."
   (setq drgnx-agent-pair--commands
         (drgnx-agent-pair-command-step drgnx-agent-pair--commands 'post (recursion-depth) executing-kbd-macro))
-  (when drgnx-agent-pair--pending (drgnx-agent-pair--drain)))
+  (when drgnx-agent-pair--pending
+    (let ((drgnx-agent-pair--in-post-command t)) (drgnx-agent-pair--drain))))
 
 (defun drgnx-agent-pair--soon ()
   "The slot's timer: at once, outside any command.  A wall timer, not an idle one: an idle timer started while Emacs is
@@ -227,20 +233,80 @@ stops the save, any other error of it is a message, as Emacs has it."
             ((buffer-modified-p) (list :saved :false :not_saved "the save did not write the file"))
             (t (list :saved t))))))
 
+(defconst drgnx-pair-apply 'drgnx-pair-apply
+  "The command an apply leaves in `last-command': your next command is never the continuation of one before it (an
+`undo' run, typing amalgamated into one undo group), so the agent's write stays an undo step of its own.")
+
+(defvar drgnx-agent-pair-max-secs 0.05
+  "Most seconds `replace-region-contents' spends finding the least change of one edit (it then replaces it whole).")
+
+(defvar drgnx-agent-pair-apply-ticks nil
+  "The `pair-apply-tick' probe: the milliseconds of the last applies that changed a buffer, newest first (the last
+64).  The perf workloads read it; nothing else does.")
+
 (defun drgnx-agent-pair--apply (write)
   "Apply WRITE to the current buffer, whole or not at all: its answer (`pair/answer' params without the id).
+A read-only buffer and a file another Emacs locked refuse.  A file changed on disk is read again first when the
+buffer has none of your edits (quietly, as the outside world's change: `drgnx-agent-pair--revert'), else refused.
 The edits are shifted past your changes since the agent's read (`drgnx-agent-pair--shift'), an `edit_file' edit
-found once in the text; then none may touch the guard zone (`drgnx-agent-pair--guarded').  Applied, the answer
-carries the buffer's version after the write."
-  (let ((ranges (drgnx-agent-pair--place (plist-get write :edits) (plist-get write :version))))
-    (if (eq (car-safe ranges) :refused)
-        (cdr ranges)
-      (dolist (r (sort ranges (lambda (a b) (> (car a) (car b)))))
-        (save-excursion
-          (goto-char (nth 0 r))
-          (delete-region (nth 0 r) (nth 1 r))
-          (insert (nth 2 r))))
-      (drgnx-agent-pair--applied))))
+found once in the text, none may touch the guard zone (`drgnx-agent-pair--guarded'); then they replace their
+ranges as one undo group of the agent's own (`drgnx-agent-pair--replace').  Applied, the answer carries the buffer's
+version after the write."
+  (cond
+   (buffer-read-only (list :result "refused" :reason "read-only"))
+   ((and buffer-file-name (stringp (file-locked-p buffer-file-name))) (list :result "refused" :reason "locked"))
+   ((and (not (verify-visited-file-modtime)) (or (buffer-modified-p) (not (drgnx-agent-pair--revert))))
+    (list :result "refused" :reason "changed-on-disk"))
+   (t
+    (let ((ranges (drgnx-agent-pair--place (plist-get write :edits) (plist-get write :version))))
+      (if (eq (car-safe ranges) :refused)
+          (cdr ranges)
+        (drgnx-agent-pair--replace ranges (plist-get write :session))
+        (drgnx-agent-pair--applied))))))
+
+(defun drgnx-agent-pair--revert ()
+  "Read the visited file again into this buffer, which has none of your edits: `insert-file-contents' replacing the
+text (markers and point kept where the text is), never `revert-buffer' (its hooks and questions), as the outside
+world's change (origin `external:disk'), asking nothing.  Non-nil when it was read."
+  (and (null (condition-case err
+                 (drgnx-with-no-prompts
+                   (drgnx-history-with-origin "external:disk"
+                     (save-restriction
+                       (widen)
+                       ;; the disk's time first: reading it is no supersession threat to ask about
+                       (set-visited-file-modtime)
+                       (insert-file-contents buffer-file-name nil nil nil 'replace))))
+               (error (error-message-string err))))
+       (progn (set-visited-file-modtime) (set-buffer-modified-p nil) t)))
+
+(defun drgnx-agent-pair--replace (ranges session)
+  "RANGES ((START END TEXT) ...) replaced by their texts, as SESSION's change (origin \"agent:SESSION\" in the edit
+history): markers first, then each range from the last to the first through `replace-region-contents' (point and
+your markers stay where their text is), all one change group amalgamated into one undo step with boundaries before
+and after; the history's ring drained right after (the answer's version), so the origin is sent before a resync could
+lose it.  Then the command loop is told an apply ran (`drgnx-pair-apply'): from `post-command-hook' through
+`this-command', which the loop copies to `last-command' after the hook; from the timer, `last-command' itself."
+  (let ((start (float-time))
+        (marks (mapcar (lambda (r) (list (copy-marker (nth 0 r)) (copy-marker (nth 1 r) t) (nth 2 r))) ranges))
+        (group nil) (done nil))
+    (undo-boundary)
+    (setq group (prepare-change-group))
+    (unwind-protect
+        (progn
+          (activate-change-group group)
+          (drgnx-history-with-origin (concat "agent:" (or session "?"))
+            (dolist (m (sort marks (lambda (a b) (> (car a) (car b)))))
+              (replace-region-contents (nth 0 m) (nth 1 m) (nth 2 m) drgnx-agent-pair-max-secs)))
+          (undo-amalgamate-change-group group)
+          (setq done t))
+      (if done (accept-change-group group) (cancel-change-group group))
+      (dolist (m marks) (set-marker (nth 0 m) nil) (set-marker (nth 1 m) nil)))
+    (undo-boundary)
+    (if drgnx-agent-pair--in-post-command
+        (setq this-command drgnx-pair-apply)
+      (setq last-command drgnx-pair-apply))
+    (push (* 1000 (- (float-time) start)) drgnx-agent-pair-apply-ticks)
+    (let ((tail (nthcdr 63 drgnx-agent-pair-apply-ticks))) (when tail (setcdr tail nil)))))
 
 (defun drgnx-agent-pair--applied ()
   "The answer of an applied write: the buffer's version now, its line starts kept (the hub takes a whole write's text
