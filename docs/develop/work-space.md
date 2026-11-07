@@ -487,7 +487,10 @@ fixture's bands carry real curves, so the screenshot set shows them.
   replaces are flushed (`image-flush`), the unchanged tiles are not touched.
 - **Lanes.** An edge that skips a card row is a 2 px wide image at the lane's x in each text line of that row, as high as
   the text, with the row's ascent in percent (`drgnx-work-edges-row-metrics`: the font's ascent over ascent plus
-  descent), so the row keeps its height.
+  descent), so the row keeps its height. Edges that share a lane (a trunk) are one image at that x: the widest stroke
+  (the chain's, when one of them is on it), its alt naming every edge there. Images are text, so lanes drawn one per
+  edge would sit side by side, fill the gap and push the next card right. A row's line is its cards and lanes sorted
+  by column into a new list each time: the lanes are shared by every line of the row.
 - **Ports.** Edges bundled for want of lanes end in a chip "↑ N" on the bottom edge of the band above their target,
   drawn into the tile that holds its column.
 
@@ -534,7 +537,10 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
 ### Motion: the capture protocol
 
 A layout the user asks for moves in the compositor, through Glitnir's layout leg (Nidhogg; Work space design §12.4).
-The map's side is in `drgnx-work-map.el` ("Motion"); nothing runs in redisplay.
+The map's side is in `drgnx-work-map.el` ("Motion"); nothing runs in redisplay. Where the map cannot move, the frame
+of a layout the user asked for (`drgnx-work-map--asked`, set by `drgnx-work-map--send-filters`) is drawn at the next
+timer pass (`drgnx-view-hurry`), not after the view's 0.1 s throttle: that throttle was most of the relayout time
+(command to frame about 11 ms at p95, frame to drawn 100 ms). Live frames keep the throttle.
 
 1. **Capture.** `drgnx-work-map--send-filters` calls `drgnx-work-map--motion-begin` before it sends. Each window
    showing the map gets a new value of the window parameter `glitnir-layout-capture` (a fresh list, so not `eq` to the
@@ -606,7 +612,8 @@ works on a card when its `task` field names the card's id.
 `drgnx-work-trail-kind` takes its kind from its class and `detail.kind` (never its prose), `drgnx-work-trail-title` its
 title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `display` space, `(- right 14)`).
 
-- **The trail** is a `work-trail` view (`:follow-tail`): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
+- **The trail** is a `work-trail` view (`:follow-tail`, DELAY 0: the first page and each new step are drawn at the next
+  timer pass; the default 0.1 s throttle was the whole of its first-rows and append times): row keys `(:step ID)`, `(:conc N)` (a conclusion card, after
   the step the hub stamped it on, else at the end) and `(:note N)` ("paused by you", "resumed by you", added when the
   command ran). It opens with `timeline/get {limit drgnx-work-trail-first-page}`, asks `work/conclusions`, and a
   `post-command-hook` function asks `{before SEQ, limit drgnx-work-trail-page}` when point is within about 30 rows of

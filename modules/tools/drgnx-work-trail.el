@@ -196,7 +196,9 @@ time and duration.  LIT: the ids of the steps lit (their pills fill and the row 
     (:note (concat (propertize (format "↺ %s" (cdr (assq (cadr key) drgnx-work-trail--notes))) 'face 'drgnx-work-label) "\n"))
     (_ "\n")))
 
-(drgnx-view-define 'work-trail :render #'drgnx-work-trail--render :follow-tail t :slice drgnx-view-slice)
+;; DELAY 0: the first page and each step that arrives are drawn at the next timer pass, not a throttle later (a trail
+;; streams one session's steps: a step is one row, and the slice bounds a page)
+(drgnx-view-define 'work-trail :render #'drgnx-work-trail--render :follow-tail t :slice drgnx-view-slice :delay 0)
 
 (defun drgnx-work-trail--conc-keys-after (step-id)
   "The row keys of the conclusions stamped on step STEP-ID."

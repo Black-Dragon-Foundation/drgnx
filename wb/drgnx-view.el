@@ -268,18 +268,20 @@ from the selected one (that terminal's) and their window trees.  Allocates nothi
 
 ;;;; Marks: a hash put or a queue push, then `drgnx-view--arm'
 
-(defun drgnx-view--arm (view)
+(defun drgnx-view--arm (view &optional now)
   "Arm VIEW's draw: the timer `(drgnx-view . BUFFER)', DELAY after the first mark of a burst, at most once per DELAY
-\(a DELAY of 0: at the next timer pass).  Nothing while VIEW's SYNC runs (that draw takes the marks), while a
-slice chain's continuation `(drgnx-view-more . BUFFER)' is pending (its next slice takes them), for a view no longer
-attached, or for a stale view that is still hidden: showing it arms the draw."
+\(a DELAY of 0: at the next timer pass).  NOW: at the next timer pass whatever the DELAY, replacing a draw armed
+for later (`drgnx-view-hurry').  Nothing while VIEW's SYNC runs (that draw takes the marks), while a slice chain's
+continuation `(drgnx-view-more . BUFFER)' is pending (its next slice takes them), for a view no longer attached, or
+for a stale view that is still hidden: showing it arms the draw."
   (let ((buffer (drgnx-view--buffer view)))
     (when (and (not (eq view drgnx-view--syncing))
                (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
                (not (drgnx-timer-active-p (cons 'drgnx-view-more buffer)))
                (or (not (drgnx-view--stale view)) (drgnx-view-shown-p view)))
       (setf (drgnx-view--stale view) nil)
-      (let ((delay (or (drgnx-view-type-delay (drgnx-view--type view)) drgnx-view-delay)))
+      (when now (drgnx-timer-cancel (cons 'drgnx-view buffer)))
+      (let ((delay (if now 0 (or (drgnx-view-type-delay (drgnx-view--type view)) drgnx-view-delay))))
         (if (> delay 0)
             (drgnx-timer-soon (cons 'drgnx-view buffer) delay #'drgnx-view--draw-buffer
                               :args (list buffer) :min-interval delay :owner buffer)
@@ -326,6 +328,12 @@ An AFTER that is neither appends KEYS.  A key already shown or pending is left w
   "Mark that VIEW's model changed: its type's SYNC runs at the next draw."
   (setf (drgnx-view--touched view) t)
   (drgnx-view--arm view))
+
+(defun drgnx-view-hurry (view)
+  "Draw VIEW's marks at the next timer pass instead of its type's DELAY after the first of them: for a change the
+user asked for and waits to see.  The draw is the view's own, sliced as ever.  Nothing while a slice chain's
+continuation is pending (its next slice, at the next pass, takes the marks), or for a view no longer attached."
+  (drgnx-view--arm view t))
 
 ;;;; The plan: the pending changes, worked out at draw time
 
@@ -913,7 +921,8 @@ no longer attached or whose type was removed.  A RENDER, GROW, SYNC or PATCHED t
   "The timer function of BUFFER's view (keys `(drgnx-view . BUFFER)' and `(drgnx-view-more . BUFFER)').
 Hidden: mark it stale, count a `:stale-skips', draw and allocate nothing.  Shown: draw one slice (a type with SLICE)
 or everything; work left re-arms `(drgnx-view-more . BUFFER)' at `drgnx-timer-chain-delay' (0.0, or later while
-input is pending or the chain has run long); when no view has work left, `drgnx-gc-gap'."
+input is pending or the chain has run long); when no view has work left, `drgnx-gc-gap' in a timer pass of its own
+\(`drgnx-view--pass-over'), so a key typed during the draw is read before the collection."
   (let ((view (and (buffer-live-p buffer) (buffer-local-value 'drgnx-view buffer))))
     (when (drgnx-view-p view)
       (cond ((not (drgnx-view-shown-p view))
@@ -932,7 +941,7 @@ input is pending or the chain has run long); when no view has work left, `drgnx-
                      (drgnx-timer-start (cons 'drgnx-view-more buffer) (drgnx-timer-chain-delay)
                                         #'drgnx-view--draw-buffer
                                         :args (list buffer) :owner buffer))
-                 (drgnx-view--pass-over))))))))
+                 (drgnx-timer-start 'drgnx-view-gap 0.0 #'drgnx-view--pass-over :owner :core))))))))
 
 (defun drgnx-view--pass-over ()
   "When no view that is not stale has work left, call `drgnx-gc-gap' (when loaded): the gap is quiet."

@@ -68,6 +68,9 @@
 (defvar-local drgnx-work-map--filters nil
   "The filters sent to the hub: a plist (:focus ITEM-ID :overlaps BOOL :finished BOOL).")
 (defvar-local drgnx-work-map--collapsed nil "The collapsed layers (1 to 6).")
+(defvar-local drgnx-work-map--asked nil
+  "Non-nil from a layout the user asked for (`drgnx-work-map--send-filters') until its frame comes: that frame is
+drawn at the next timer pass, not a throttle later (live frames keep the view's throttle).")
 (defvar-local drgnx-work-map--new nil "The ids with a new conclusion, marked until the highlight timer clears them.")
 (defvar-local drgnx-work-map--needs-at 0 "The index of the strip entry `n' selected last.")
 
@@ -676,7 +679,9 @@ row's cards with the lanes that pass through them."
                             (propertize (drgnx-work-map--fit label (- (drgnx-work-map--margin-px) 8)) 'face 'drgnx-work-label)
                           "")
                         (if lanes
-                            ;; the cards and the lanes in order of their columns
+                            ;; the cards and the lanes in order of their columns; a sort that copies: an in-place
+                            ;; one rewrites the conses `append' shares with LANES, and the next line gets this
+                            ;; line's cards with its lanes
                             (mapconcat #'cdr
                                        (sort (append (mapcar (lambda (id)
                                                                (cons (+ (drgnx-work-map--margin-px)
@@ -684,7 +689,7 @@ row's cards with the lanes that pass through them."
                                                                      (drgnx-work-map--segment state id line)))
                                                              ids)
                                                      lanes)
-                                             (lambda (a b) (< (car a) (car b))))
+                                             :key #'car)
                                        "")
                           (mapconcat (lambda (id) (drgnx-work-map--segment state id line)) ids ""))
                         (propertize "\n" 'line-height (list (max 0 (1- px)))))
@@ -880,6 +885,7 @@ label face (`m' `b' `t' switch)."
 asks for moves (`drgnx-work-map--motion-begin')."
   (drgnx-work-map--motion-begin)
   (when drgnx-work-space--view
+    (setq drgnx-work-map--asked t)
     (drgnx-work-client-set drgnx-work-space--view
                            :filters (list :focus (plist-get drgnx-work-map--filters :focus)
                                           :overlaps (if (plist-get drgnx-work-map--filters :overlaps) t :false)
@@ -1206,8 +1212,12 @@ and the motion.  The module's teardown and a map buffer's end call it."
                 (drgnx-work-map--outline-p (drgnx-work-map--state)))
             ;; the layout the user asked for moves; any other change, live ones included, never does
             (if (and drgnx-work-map--motion (plist-get marks :layout))
-                (drgnx-work-map--motion-frame)
-              (drgnx-view-touch drgnx-view))
+                (progn (setq drgnx-work-map--asked nil) (drgnx-work-map--motion-frame))
+              (drgnx-view-touch drgnx-view)
+              ;; the frame of a layout the user asked for is drawn at the next pass; a live one waits the throttle
+              (when (and drgnx-work-map--asked (plist-get marks :layout))
+                (setq drgnx-work-map--asked nil)
+                (drgnx-view-hurry drgnx-view)))
           (when (plist-get marks :rows) (drgnx-view-dirty drgnx-view (plist-get marks :rows)))))
       ;; the selected item went (its agent finished, its branch merged): the selection moves to what it came from,
       ;; the panel says it finished, and nothing signals
