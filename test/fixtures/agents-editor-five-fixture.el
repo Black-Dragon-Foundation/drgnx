@@ -55,13 +55,20 @@
 
 (defun drgnx-agents-five--program (i pair)
   "Agent I's turn as the mock reads it: one line, `\\n' between the words.  The paired chat (PAIR, the fifth) edits the
-user's file through the drgnx tool; the others edit their own worktree's copy."
+user's file through the drgnx tool (and writes it whole from a stale read every 5 s); the others edit their own
+worktree's copy."
   (let ((words
          (if (and pair (= i 5))
+             ;; an edit every 2.5 s through the drgnx tool, and every second one (so every 5 s) a stale whole-file write
+             ;; from a read the hub never served: the hub refuses it whole (U1), so it never reaches the editor's count
              (cl-loop for n from 1 to (/ drgnx-agents-five-seconds 2)
-                      append (list (format "call:edit_file {\"path\": %S, \"old\": \"five-var-%d=%d\", \"new\": \"five-var-%d=%d\"}"
-                                           drgnx-agents-five--file (* n 7) (* n 7) (* n 7) (1+ (* n 7)))
-                                   "silent 2"))
+                      append (append
+                              (list (format "call:edit_file {\"path\": %S, \"old\": \"five-var-%d=%d\", \"new\": \"five-var-%d=%d\"}"
+                                            drgnx-agents-five--file (* n 7) (* n 7) (* n 7) (1+ (* n 7))))
+                              (and (zerop (% n 2))
+                                   (list (format "call:write_file {\"path\": %S, \"content\": \"stale %d\\n\"}"
+                                                 drgnx-agents-five--file n)))
+                              (list "silent 2.5")))
            ;; exactly the shape of the thirty-agent fixture's turns (proven there): one edit of the file in the agent's own
            ;; worktree (`tool:edit' appends a line), then a chunk, a read of another offset (a step that moves the agent's
            ;; cursor; the hub pauses an agent that repeats a call, so no two reads are the same) and a second of quiet

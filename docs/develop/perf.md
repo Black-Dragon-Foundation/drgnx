@@ -118,8 +118,9 @@ Budgets (`test/perf/budgets.eld`): input p95 16 ms and `(:stalls) 0` on each. Tw
 (`drgnx-perf-run--relative-fails`): `agents-typing` at most 1 ms over `agents-typing-none` in one run, and at least 0.80
 of `pair-typing`'s writes applied. Allocation, CPU and rows follow the first runs on the desktop island. The keys of a
 workload go to the editor window, never to a follow window: its keys stop the follow and take the wheel, and a stray `x`
-or `q` there ended the followed agent's turn (the premise's timeline showed exactly that agent going idle). The stale
-whole-file write every 5 s that the plan names for `pair-typing` is not scripted yet.
+or `q` there ended the followed agent's turn (the premise's timeline showed exactly that agent going idle). The paired
+chat of `pair-typing` also writes the whole file from a read the hub never served every 5 s; the hub refuses it whole
+(the plan's U1), so it is no applied write.
 
 The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
 `pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the
