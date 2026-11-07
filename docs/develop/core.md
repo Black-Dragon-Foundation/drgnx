@@ -2006,9 +2006,8 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   reported by `view/measured`, after which the hub fits that string by the editor's width.
 - **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
   at 4000). The Work map, the Board and the timeline's lane labels use it too.
-- **Selection, dimming and the stale shade** are the view's own state, put back by PATCHED after every draw over the
-  rows by key; `drgnx-view-patch-select` draws the selection at once, so it wins over a queued patch. A removed
-  selected row moves the selection to the next row, else the previous, else none.
+- **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,
+  lit, dim) come from the model, on each node's span ("Keys through the model" below).
 - `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
   pass that compares the two.
 - **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
@@ -2044,6 +2043,26 @@ from. drgnx never parses it: the event's `model` is one string on the framed and
 - Tests: `test/unit/view-model-test.el` (every order of model, rows, timer, key and draw; keys with every door to
   the hub shut) and `test/unit/view-model-hub-test.el` (the real hub: one string with framing on and off).
   Without Sjá both skip, and models are ignored.
+
+**Keys through the model (`wb/drgnx-view-nav.el`).** A hub-fed view's command is one line, answered in-process with
+no hub call: `(drgnx-view-nav 'follow "up")`, `(drgnx-view-nav 'walk "team" 1)`, `'walk-to LIST N`, `'select ID`
+(nil: none). It moves the buffer's instance in Sjá, puts point on the selection's span in every window, runs the
+class step, and when the selection moved arms the trailing notice and runs `drgnx-view-selected-functions` (BUFFER
+ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` read the model.
+- **Classes on the card:** Sjá answers the nodes whose class changed; each class is a face by the descriptor's class
+  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
+  `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
+  `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
+  which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
+  again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  selection: a removed row takes nothing with it.
+- **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
+  `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
+  `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
+- **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts one notice
+  (`drgnx-notify`) that its keys stopped; `drgnx doctor` says more.
+- Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
+  a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
 
 ## Modal core (`drgnx-modal.el`)
 
