@@ -34,6 +34,10 @@
 (declare-function drgnx-work-review-parse-hunks "drgnx-work-review")
 (declare-function drgnx-work-review--accept "drgnx-work-review")
 (declare-function drgnx-work-review--reject "drgnx-work-review")
+(declare-function drgnx-history--hash "drgnx-history")
+(declare-function drgnx-history--st-id "drgnx-history")
+(defvar drgnx-history--buffers)
+(defvar nidhogg-history-origin)
 
 (defface drgnx-agent-panel-ring '((t :inherit drgnx-status-attention :box (:line-width 2)))
   "The ring round a card that waits on you." :group 'drgnx-agent-panel)
@@ -41,6 +45,13 @@
 (defconst drgnx-agent-panel-cards-max-files 20 "How many edited files get diff cards at most.")
 
 (defvar-local drgnx-agent-panel--diffs nil "Alist: path → that file's unified diff (`work/hunks').")
+(defvar-local drgnx-agent-panel--op-hunks nil
+  "A paired chat's hunks, the user's history filtered to its session (`history/op/hunks'): plists with :op :path
+:index :start_line :end_line :state :undone_by.")
+
+(defun drgnx-agent-panel-cards--paired-p ()
+  "Whether this chat edits the user's checkout (it has no worktree base or step snapshots, so no `work/hunks')."
+  (let ((p (plist-get drgnx-agent-panel--snap :paired))) (and p (not (eq p :json-false)))))
 
 ;;;; Which cards there are
 
@@ -130,10 +141,47 @@
                           (append (list :id drgnx-agent-panel--session :request (plist-get request :id))
                                   (and option (list :option option)))))
 
+(defun drgnx-agent-panel-cards--apply-in-buffer (op result)
+  "The hub handed the revert of OP's hunk to the editor: RESULT's edits apply to the buffer it names as the revert's
+own change, when the buffer's text is still the one the hub meant; otherwise nothing changes."
+  (let ((buf (seq-find (lambda (b) (let ((st (gethash b drgnx-history--buffers)))
+                                     (and st (equal (drgnx-history--st-id st) (plist-get result :buffer_id)))))
+                       (hash-table-keys drgnx-history--buffers))))
+    (cond ((null buf) (message "Reject: the buffer is gone; try again"))
+          ((not (equal (drgnx-history--hash buf) (plist-get result :version)))
+           (message "Reject: the file changed meanwhile; try again"))
+          (t (with-current-buffer buf
+               (let ((nidhogg-history-origin (format "revert:%s" op)))
+                 (save-excursion
+                   (dolist (e (append (plist-get result :edits) nil))
+                     (goto-char (1+ (plist-get e :start)))
+                     (delete-region (point) (+ (point) (plist-get e :old_len)))
+                     (insert (plist-get e :inserted)))))
+               (message "Rejected"))))))
+
+(defun drgnx-agent-panel-cards--reject-paired (h)
+  "Reject H, a paired chat's hunk (OP PATH INDEX): part 4's revert of that one hunk, the user's later typing kept."
+  (let ((buffer (current-buffer)) (op (nth 0 h)))
+    (drgnx-agent-panel--ask
+     "history/revert/hunk" (list :worktree (plist-get drgnx-agent-panel--snap :cwd) :op op :path (nth 1 h) :hunk (nth 2 h))
+     (lambda (r err)
+       (if err (message "Reject refused: %s" err)
+         (pcase (plist-get r :state)
+           ("in-buffer" (drgnx-agent-panel-cards--apply-in-buffer op r))
+           ("applied" (message "Rejected"))
+           ("undone" (message "Already undone"))
+           ("conflict" (message "Reject: your later edits are in the way; nothing changed"))
+           (_ (message "Reject: %s" (plist-get r :state))))
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (drgnx-agent-panel-cards--load-paired buffer))))))))
+
 (defun drgnx-agent-panel-reject ()
-  "On a diff card: reject the hunk, queue \"take it back\" to the agent.  On a permission card: deny it."
+  "On a diff card: reject the hunk, queue \"take it back\" to the agent.  On a permission card: deny it.
+On a paired chat's ledger line: take that hunk back through the edit history, keeping your later typing."
   (interactive)
-  (cond ((drgnx-agent-panel-cards--hunk-here)
+  (cond ((get-text-property (point) 'drgnx-agent-panel-op-hunk)
+         (drgnx-agent-panel-cards--reject-paired (get-text-property (point) 'drgnx-agent-panel-op-hunk)))
+        ((drgnx-agent-panel-cards--hunk-here)
          (let ((h (drgnx-agent-panel-cards--hunk-here)))
            (drgnx-agent-panel-cards--with-review (lambda () (drgnx-work-review--reject (car h) (cdr h))))))
         ((drgnx-agent-panel-cards--perm-here)
@@ -161,27 +209,42 @@
   "Ask the hub for the files the session edited and each one's diff; the cards follow."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let ((sid drgnx-agent-panel--session))
-        (drgnx-agent-panel--ask
-         "work/files" (list :session sid)
-         (lambda (r err)
-           (when (and (not err) (buffer-live-p buffer))
-             (with-current-buffer buffer
-               (setq drgnx-agent-panel--files (append (plist-get r :files) nil))
-               (drgnx-agent-panel--reconcile)
-               (drgnx-agent-panel-cards-plan-or-edits-changed))
-             (dolist (f (seq-take (append (plist-get r :files) nil) drgnx-agent-panel-cards-max-files))
-               (let ((path (plist-get f :path)))
-                 (drgnx-agent-panel--ask
-                  "work/hunks" (list :session sid :path path)
-                  (lambda (r2 err2)
-                    (when (and (not err2) (buffer-live-p buffer))
-                      (with-current-buffer buffer
-                        (setf (alist-get path drgnx-agent-panel--diffs nil nil #'equal) (or (plist-get r2 :diff) ""))
-                        (drgnx-agent-panel--reconcile)
-                        (when (drgnx-view-p drgnx-view)
-                          (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (and (eq (car-safe k) :diff) (equal (cadr k) path)))
-                                                                   (hash-table-keys drgnx-agent-panel--shown-keys)))))))))))))))))
+      (if (drgnx-agent-panel-cards--paired-p)
+          (drgnx-agent-panel-cards--load-paired buffer)
+        (let ((sid drgnx-agent-panel--session))
+          (drgnx-agent-panel--ask
+           "work/files" (list :session sid)
+           (lambda (r err)
+             (when (and (not err) (buffer-live-p buffer))
+               (with-current-buffer buffer
+                 (setq drgnx-agent-panel--files (append (plist-get r :files) nil))
+                 (drgnx-agent-panel--reconcile)
+                 (drgnx-agent-panel-cards-plan-or-edits-changed))
+               (dolist (f (seq-take (append (plist-get r :files) nil) drgnx-agent-panel-cards-max-files))
+                 (let ((path (plist-get f :path)))
+                   (drgnx-agent-panel--ask
+                    "work/hunks" (list :session sid :path path)
+                    (lambda (r2 err2)
+                      (when (and (not err2) (buffer-live-p buffer))
+                        (with-current-buffer buffer
+                          (setf (alist-get path drgnx-agent-panel--diffs nil nil #'equal) (or (plist-get r2 :diff) ""))
+                          (drgnx-agent-panel--reconcile)
+                          (when (drgnx-view-p drgnx-view)
+                            (drgnx-view-dirty drgnx-view (seq-filter (lambda (k) (and (eq (car-safe k) :diff) (equal (cadr k) path)))
+                                                                     (hash-table-keys drgnx-agent-panel--shown-keys))))))))))))))))))
+
+(defun drgnx-agent-panel-cards--load-paired (buffer)
+  "Ask the user's history for the hunks of this paired chat's session in its checkout; the ledger follows."
+  (with-current-buffer buffer
+    (when-let* ((cwd (plist-get drgnx-agent-panel--snap :cwd)))
+      (drgnx-agent-panel--ask
+       "history/op/hunks" (list :worktree cwd :session drgnx-agent-panel--session)
+       (lambda (r err)
+         (when (and (not err) (buffer-live-p buffer))
+           (with-current-buffer buffer
+             (setq drgnx-agent-panel--op-hunks (append (plist-get r :hunks) nil))
+             (drgnx-agent-panel--reconcile)
+             (drgnx-agent-panel-cards-plan-or-edits-changed))))))))
 
 (defun drgnx-agent-panel-cards-note-entries (buffer touched from-slice)
   "Entries TOUCHED arrived in BUFFER: the to-do list and the ledger are drawn again, and when a live one is an edit
@@ -230,7 +293,7 @@ that finished, the diffs are asked for again soon.  FROM-SLICE: they came from a
   "The rows under the chips: pinned cards, the to-do list, the ledger."
   (append (cl-loop for _ in drgnx-agent-panel--pins for n from 0 collect (list :pin n))
           (and (drgnx-agent-panel-cards--plan) (list (list :todo)))
-          (and (or drgnx-agent-panel--files (drgnx-agent-panel-cards--edit-indexes)) (list (list :ledger)))))
+          (and (or drgnx-agent-panel--files drgnx-agent-panel--op-hunks (drgnx-agent-panel-cards--edit-indexes)) (list (list :ledger)))))
 
 (defun drgnx-agent-panel-cards--pin-row (n)
   (drgnx-agent-panel-cards--box
@@ -250,17 +313,35 @@ that finished, the diffs are asked for again soon.  FROM-SLICE: they came from a
                    items))
      nil)))
 
+(defun drgnx-agent-panel-cards--undone-note (h)
+  "What became of paired hunk H: \"\", \"undone by you\" (a user operation reverted it) or \"undone\" by someone else."
+  (let ((state (plist-get h :state)) (by (append (plist-get h :undone_by) nil)))
+    (cond ((equal state "live") "")
+          ((seq-some (lambda (u) (let ((a (plist-get u :author))) (or (null a) (equal (plist-get a :kind) "user")))) by)
+           (format "  · %s by you" (if (equal state "undone") "undone" "partly undone")))
+          (t (format "  · %s" (if (equal state "undone") "undone" "partly undone"))))))
+
+(defun drgnx-agent-panel-cards--paired-line (h)
+  "One ledger line for paired hunk H, which Reject (\"D\") on it takes back."
+  (propertize (format "%s  %s–%s%s" (drgnx-agent-panel--one-line (plist-get h :path) 50)
+                      (plist-get h :start_line) (plist-get h :end_line) (drgnx-agent-panel-cards--undone-note h))
+              'drgnx-agent-panel-op-hunk (list (plist-get h :op) (plist-get h :path) (plist-get h :index))))
+
 (defun drgnx-agent-panel-cards--ledger-row ()
-  (let ((new (drgnx-agent-panel-cards--new-edits)) (files drgnx-agent-panel--files))
+  (let ((new (drgnx-agent-panel-cards--new-edits))
+        (files (or drgnx-agent-panel--files (seq-uniq (mapcar (lambda (h) (list :path (plist-get h :path))) drgnx-agent-panel--op-hunks)
+                                                      (lambda (a b) (equal (plist-get a :path) (plist-get b :path)))))))
     (drgnx-agent-panel-cards--box
      (cons (cons (format "Edits · %d file%s%s   (L %s)" (length files) (if (= 1 (length files)) "" "s")
                          (if (> new 0) (format " · %d new since you looked" new) "")
                          (if drgnx-agent-panel--ledger-open "fold" "list"))
                  (if (> new 0) 'drgnx-status-attention 'bold))
-           (and drgnx-agent-panel--ledger-open
-                (mapcar (lambda (f) (format "%s  +%s −%s" (drgnx-agent-panel--one-line (plist-get f :path) 60)
-                                            (or (plist-get f :plus) 0) (or (plist-get f :minus) 0)))
-                        files)))
+           (if (and drgnx-agent-panel--ledger-open drgnx-agent-panel--op-hunks)
+               (mapcar #'drgnx-agent-panel-cards--paired-line drgnx-agent-panel--op-hunks)
+             (and drgnx-agent-panel--ledger-open
+                  (mapcar (lambda (f) (format "%s  +%s −%s" (drgnx-agent-panel--one-line (plist-get f :path) 60)
+                                              (or (plist-get f :plus) 0) (or (plist-get f :minus) 0)))
+                          files))))
      nil)))
 
 (defun drgnx-agent-panel-cards-plan-or-edits-changed ()
