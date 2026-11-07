@@ -151,6 +151,25 @@ mod registry {
         // the bundle is on the runner, in a folder named by its hash, and the image is there
         assert!(ok("r1", &format!("test -x {root}/bin/*/sleipnir")));
         assert!(ok("r1", &format!("podman image exists {img}")));
+        // and tagged under the runner's prefix, so a `podman image prune` (an image pulled by digest alone is
+        // dangling) never takes it from under the runner
+        let digest = img.rsplit("@sha256:").next().unwrap();
+        let tag = format!("localhost/drgnx-runner:{}", &digest[..12]);
+        assert!(
+            ok("r1", &format!("podman image exists {tag}")),
+            "{tag} is not among r1's images:\n{}",
+            sh(
+                "r1",
+                "podman images --format '{{.Repository}}:{{.Tag}} {{.ID}} {{.Digest}}'"
+            )
+        );
+        assert_eq!(
+            sh(
+                "r1",
+                &format!("podman image inspect --format '{{{{.Digest}}}}' {tag}")
+            ),
+            format!("sha256:{digest}")
+        );
         assert_eq!(h.store.list().await.unwrap().len(), 1);
         // linked: the queue's row is `ready` once hello-ok has been taken in
         let q = h.queue.clone();
@@ -163,6 +182,12 @@ mod registry {
         })
         .await;
         h.reg.remove("rone").await.expect("remove");
+        // `remove` takes our tag back; the image stays while another tag (here the fleet's base) holds it
+        assert!(
+            !ok("r1", &format!("podman image exists {tag}")),
+            "our tag is gone"
+        );
+        assert!(ok("r1", &format!("podman image exists {img}")));
     }
 
     /// [C] A host that lacks something of the contract is refused with every missing item and its fix, and nothing is

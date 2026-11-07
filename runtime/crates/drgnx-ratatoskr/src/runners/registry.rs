@@ -267,6 +267,19 @@ fn parse_out(text: &str) -> Option<(String, i32)> {
     ))
 }
 
+/// The tag a runner with PREFIX gives the image IMG it pulled by digest: `localhost/<prefix>-runner:<12 digits>`.
+/// Pulled by digest alone an image is dangling, and any `podman image prune` takes it from under the runner;
+/// `remove` takes the tag back (and so the image, unless something else holds it). IMG `@sha256:` gives the tag's
+/// leading part, which every such tag starts with.
+fn image_tag(prefix: &str, img: &str) -> String {
+    let digest = img.rsplit("@sha256:").next().unwrap_or("");
+    format!(
+        "localhost/{}-runner:{}",
+        prefix.to_ascii_lowercase(),
+        digest.get(..12).unwrap_or(digest)
+    )
+}
+
 /// The name a host gets when the user gives none: its first label, in the characters a name may have.
 pub fn default_name(host: &str) -> String {
     let h = host.rsplit('@').next().unwrap_or(host);
@@ -760,8 +773,9 @@ impl Registry {
             self.sh_ok(
                 &cfg,
                 &format!(
-                    "podman image exists {img} || podman pull --quiet {img}",
-                    img = quote(img)
+                    "{{ podman image exists {img} || podman pull --quiet {img}; }} && podman tag {img} {tag}",
+                    img = quote(img),
+                    tag = quote(&image_tag(&rec.prefix, img)),
                 ),
                 &[],
                 LONG,
@@ -1003,9 +1017,11 @@ impl Registry {
              systemctl --user list-units --all --plain --no-legend '{prefix}*' | awk '{{print $1}}' | xargs -r systemctl --user stop; \
              systemctl --user list-units --all --plain --no-legend 'drgnx-runner*.slice' | awk '{{print $1}}' | xargs -r systemctl --user stop; \
              systemctl --user reset-failed 2>/dev/null; \
+             podman images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep -F {tags} | xargs -r podman rmi >/dev/null 2>&1; \
              rm -r -- {root}",
             hub = self.cfg.hub_id,
             prefix = rec.prefix,
+            tags = quote(&image_tag(&rec.prefix, "@sha256:")),
             root = quote(&rec.root),
         );
         let gone = self.sh_ok(&cfg, &script, &[], LONG).await;

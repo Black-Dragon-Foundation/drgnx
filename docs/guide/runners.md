@@ -43,7 +43,7 @@ drgnx runner add desktop --trust mine            # a host as your ssh knows it
 drgnx runner list                                # every runner, in 60 columns; one out of rotation says why
 drgnx runner check desktop | bench desktop | unbench desktop
 drgnx runner trust desktop shared                # mine, my-cloud or shared
-drgnx runner remove desktop --yes                # stops our units and containers there, deletes its folder
+drgnx runner remove desktop --yes                # stops our units and containers there, untags its image, deletes its folder
 ```
 
 `add` options: `--name` (default: the host's first label), `--profile dedicated|workstation` (default dedicated: nobody
@@ -61,8 +61,8 @@ What `add` does, in order, and stops at the first thing that is wrong:
    SELinux host, a policy that lets a keyed job's key socket be created as a container's (`container_t`; the stock
    container-selinux allows it). The refusal
    lists **everything** that is missing, each with what to run there to fix it.
-4. Pulls the image in `drgnx-runners-image` (pinned by digest) and times a reference workload in it under the runner's
-   caps.
+4. Pulls the image in `drgnx-runners-image` (pinned by digest), tags it `localhost/<prefix>-runner:<digest start>` so a
+   `podman image prune` there never removes it, and times a reference workload in it under the runner's caps.
 5. Records the runner and connects it.
 
 The runner list is yours alone: an agent can't add, bench, change or remove a machine. A runner that can't be reached
