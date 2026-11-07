@@ -4,7 +4,6 @@
 (require 'drgnx-paths)
 (load (expand-file-name "test/support/work-db-gate" drgnx-dir) nil t)   ; the tests below write work.db as the hub's stand-in
 (require 'cl-lib)
-(require 'drgnx-coord-read)
 (load (expand-file-name "test/fixtures/work-fixture" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/coord-seed-fixture" drgnx-dir) nil t)   ; a job and its events, as the hub writes them
 
@@ -43,7 +42,7 @@
     (let* ((file (concat dir "work.db")) (wal (concat file "-wal"))
            (main (drgnx-work-db-read-test--hash file)) (wal-size (drgnx-work-db-read-test--size wal)))
       (should (equal (plist-get (drgnx-work-node "plan:p") :title) "P"))
-      (should (consp (drgnx-coord-events)))
+      (should (consp (sqlite-select (drgnx-work-db-read) "select id from event")))
       (should (= (drgnx-work-db-version) 9))
       (should-error (sqlite-execute (drgnx-work-db-read) "insert or replace into meta values ('x', 'y')"))
       (drgnx-work-db-close-all)
@@ -129,7 +128,7 @@
 ;;; The static walk: no read goes through the writer handle
 
 (defconst drgnx-work-db-read-test--files
-  '("core/drgnx-work-db.el" "core/drgnx-coord-read.el" "core/drgnx-work.el"))
+  '("core/drgnx-work-db.el" "core/drgnx-work.el"))
 
 (defun drgnx-work-db-read-test--writer-call-p (x)
   (equal x '(drgnx-work-db)))

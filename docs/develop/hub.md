@@ -10,8 +10,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
   `drgnx-hub-restart-now` and the write queue (`drgnx hub start|stop|status` is `bin/drgnx` calling the binary: no Emacs).
   It requires `cl-lib`, `subr-x`, `seq`, `drgnx-paths`, `drgnx-guard`, `drgnx-timer`, `drgnx-file`, `drgnx-notice`,
   `drgnx-agents-matrix` and `drgnx-work-db` (the AI provider list comes from `drgnx-ai`, which the caller has loaded).
-  There is no server half in Emacs: the hub is the Rust binary. The message prompt the message preview uses is
-  `drgnx-coord-message-prompt` (`core/drgnx-coord-read.el`). A `declare-function` of a client function names
+  There is no server half in Emacs: the hub is the Rust binary. A `declare-function` of a client function names
   `"drgnx-hub-client"`. The editor's jobs go through `core/drgnx-exec.el`, a cache fed by `exec/list` and the hub's
   `exec-done` events ([Jobs](#jobs-exec)).
 - **The hub's environment.** One hub runs per drgnx data directory, started as

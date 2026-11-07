@@ -910,5 +910,5 @@ tests of the read layer that stand in for the hub (`drgnx-work-db-writer-deftest
 - **Readers' conformance:** `drgnx-work-db/every-reader-reads-schema-7` (`test/unit/work-db-readers-test.el`) loads
   `test/fixtures/work-db-7.sql` (a database the hub made: `test/fixtures/work-db-7-gen.el` migrates a small synthetic
   schema-6 database with `ratatoskr store migrate-check` and dumps it) and calls every reader of `drgnx-work-db.el`,
-  and `drgnx-coord-read.el` through the compatibility views, with Nidhogg's linked SQLite (the
+  through the compatibility views, with Nidhogg's linked SQLite (the
   oldest reader, 3.51.3 or later). When the container has a `sqlite3` binary, `sqlite3 -readonly` reads the views too.
