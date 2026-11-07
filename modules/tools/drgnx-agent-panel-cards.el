@@ -18,6 +18,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 
+(declare-function drgnx-agent-panel-explain-note-always "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
 (defvar drgnx-agent-panel--shown-keys)
@@ -200,8 +201,9 @@ On a paired chat's ledger line: take that hunk back through the edit history, ke
   "On a permission card: allow it, and the same kind of request from now on."
   (interactive)
   (let ((r (or (drgnx-agent-panel-cards--perm-here) (user-error "Point is not on a permission card"))))
-    (drgnx-agent-panel--answer r (or (drgnx-agent-panel-cards--option r '("allow_always"))
-                                     (drgnx-agent-panel-cards--option r '("allow_once" "allow"))))))
+    (let ((always (drgnx-agent-panel-cards--option r '("allow_always"))))
+      (drgnx-agent-panel--answer r (or always (drgnx-agent-panel-cards--option r '("allow_once" "allow"))))
+      (when always (drgnx-agent-panel-explain-note-always r)))))
 
 ;;;; Loading the edited files' diffs
 

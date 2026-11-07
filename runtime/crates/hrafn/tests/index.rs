@@ -138,7 +138,7 @@ async fn second_refresh_touches_nothing() {
     assert_eq!(second.keys_missing, first.keys_missing);
     assert_eq!(tree.reads(), 0, "an unchanged blob is not even read");
     assert_eq!(ids_of(&s, "a.el").await, ids);
-    let l = lag(&s, Some(MODEL)).await.unwrap();
+    let l = lag(&s, Some(MODEL), hrafn::View::Base).await.unwrap();
     assert_eq!(l.chunks_behind, first.keys_missing);
     assert_eq!(l.files_behind, 2);
 }
@@ -163,7 +163,13 @@ async fn branch_back_and_forth_embeds_nothing() {
     assert_eq!(back.files_changed, 1, "the rows are rebuilt");
     assert_eq!(back.keys_missing, 0, "and nothing is embedded again");
     assert!(missing(&s, MODEL, 1000).await.unwrap().is_empty());
-    assert_eq!(lag(&s, Some(MODEL)).await.unwrap().chunks_behind, 0);
+    assert_eq!(
+        lag(&s, Some(MODEL), hrafn::View::Base)
+            .await
+            .unwrap()
+            .chunks_behind,
+        0
+    );
 }
 
 /// Pattern D.

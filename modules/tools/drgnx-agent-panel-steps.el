@@ -34,6 +34,7 @@
 (declare-function drgnx-agent-panel--one-line "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--seconds "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--cost-of "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-explain-step-lines "drgnx-agent-panel-explain")
 (declare-function drgnx-history-revert-to-here "drgnx-history-revert")
 (declare-function drgnx-history-fork-here "drgnx-history-revert")
 
@@ -76,14 +77,16 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
          (mcp (plist-get snap :mcp)) (sandbox (plist-get snap :sandbox))
          (model (plist-get snap :model)) (mode (plist-get snap :mode)))
     (delq nil
-          (list (and (stringp model) model)
+          (list (and (stringp model) (propertize model 'drgnx-agent-panel-chip 'model))
                 (and (numberp used) (numberp size) (> size 0)
                      (let ((p (round (* 100 (/ (float used) size)))))
-                       (format "%s %d%%" (cond ((< p 13) "○") ((< p 38) "◔") ((< p 63) "◑") ((< p 88) "◕") (t "●")) p)))
-                (and cost (let ((c (if (listp cost) (plist-get cost :amount) cost))) (and (numberp c) (format "$%.2f" c))))
-                (and mode (format "%s" mode))
+                       (propertize (format "%s %d%%" (cond ((< p 13) "○") ((< p 38) "◔") ((< p 63) "◑") ((< p 88) "◕") (t "●")) p)
+                                   'drgnx-agent-panel-chip 'context)))
+                (and cost (let ((c (if (listp cost) (plist-get cost :amount) cost)))
+                            (and (numberp c) (propertize (format "$%.2f" c) 'drgnx-agent-panel-chip 'cost))))
+                (and mode (propertize (format "%s" mode) 'drgnx-agent-panel-chip 'mode))
                 (and sandbox (format "%s" (if (eq sandbox t) "sandboxed" sandbox)))
-                (and mcp (format "MCP %s" (if (numberp mcp) mcp (length mcp))))
+                (and mcp (propertize (format "MCP %s" (if (numberp mcp) mcp (length mcp))) 'drgnx-agent-panel-chip 'mcp))
                 (and (numberp files) (format "%d files" files))
                 (and (numberp checks)
                      (let ((level (plist-get snap :restore_level)))
@@ -434,20 +437,32 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session (plist-get step :seq))))
 
+(defun drgnx-agent-panel--parent-tool (e)
+  "The `Task' call that E's step ran under (a subagent's step), or nil."
+  (when-let* ((seq (plist-get e :step)) (step (gethash seq drgnx-agent-panel--steps)))
+    (plist-get (plist-get step :detail) :parent_tool)))
+
+(defun drgnx-agent-panel--child-face (parent)
+  "The agent colour a subagent's steps (those under PARENT) are drawn in."
+  (intern (format "drgnx-agent-%d" (1+ (mod (sxhash-equal parent) 6)))))
+
 (defun drgnx-agent-panel--tool-row (idx e)
   (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
          (title (drgnx-agent-panel--one-line (or (plist-get e :title) (plist-get e :kind) "tool") 50))
          (result (drgnx-agent-panel--one-line (drgnx-agent-panel--text-of (plist-get e :content)) 40))
          (meta (drgnx-agent-panel--meta e))
+         (parent (drgnx-agent-panel--parent-tool e))
          (thoughts (drgnx-agent-panel--thoughts-of idx))
          (open-thinking (drgnx-agent-panel--thinking-open-p key))
          (open-detail (drgnx-agent-panel--detail-open-p key e)))
-    (concat (format "  %s %s" (drgnx-agent-panel--dot status) title)
+    (concat (format "%s%s %s" (if parent "      " "  ") (drgnx-agent-panel--dot status)
+                    (if parent (propertize title 'face (drgnx-agent-panel--child-face parent)) title))
             (if (string-empty-p result) ""
               (propertize (concat "  · " result) 'face 'drgnx-agent-panel-subtle))
             (if (drgnx-agent-panel--undone-p e) (propertize "  ↶ undone" 'face 'drgnx-agent-panel-subtle) "")
             (if meta (drgnx-agent-panel--align meta) "")
             "\n"
+            (drgnx-agent-panel-explain-step-lines e)
             (when thoughts
               (let ((text (mapconcat (lambda (th) (or (plist-get th :text) "")) thoughts "\n")))
                 (if open-thinking

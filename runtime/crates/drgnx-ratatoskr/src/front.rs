@@ -358,6 +358,7 @@ impl Front {
             registrations: None,
             settings: Some(self.settings.current().status()),
             recording: crate::recording::status(),
+            watch: Some(self.search.watch_status()),
         }
     }
 
@@ -671,6 +672,8 @@ impl Front {
             | Params::AgentsContextDrop(_)
             | Params::AgentsContextPin(_)
             | Params::AgentsCompactPreview(_)
+            | Params::AgentsConfig(_)
+            | Params::AgentsExplain(_)
             | Params::AgentsHuddleStart(_)
             | Params::AgentsHuddleGet(_)
             | Params::AgentsWheelTake(_)

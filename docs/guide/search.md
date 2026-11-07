@@ -98,9 +98,8 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
 
 ## How the index is made
 
-- It is per project (a git repository; a linked worktree shares its main checkout's index), stored in the hub's state
-  directory, not in the project. Index Status says what it holds; to drop a project's index, run Index Project with
-  `C-u`.
+- It is per project (a git repository and its linked worktrees), stored in the hub's state directory, not in the
+  project. Index Status says what it holds; to drop a project's index, run Index Project with `C-u`.
 - **Two tiers.** Tier 1 reads the files (symbols, chunks, full-text) and is fast: a project is searchable by keyword and
   symbol within a minute of the first query, and a saved file within about a second. The hub watches the files, and
   catches up after a branch switch once git's lock is gone. Tier 2 makes the vectors, with the built-in model and with
@@ -113,6 +112,28 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
   own vectors, so a server that comes back finds its vectors still there. Every answer names the model that made it.
 - The built-in model runs on the GPU when one is fast enough, else on the CPU, and the hub never starts a TEI or
   Ollama server by itself: only the wizard does, after you agreed.
+
+### Search in a worktree
+
+A search from a linked worktree (an agent's worktree, or one you made with `git worktree add`) answers from that
+worktree: the project's index (the **base**, built from the main checkout) plus an overlay of only the files where the
+worktree differs from it. A file the worktree changed is found as it is there, a file it deleted is not found, and a new
+file is found there and nowhere else. The answer's last line says so: "worktree: 14 files differ from the base".
+
+- The first search in a worktree builds its overlay in the background and answers from the base meanwhile ("worktree
+  being indexed"). Afterwards the hub keeps it current from its file watches; a worktree past the watch budget (half of
+  `fs.inotify.max_user_watches`) is checked when you search, at most every 5 seconds ("worktree being checked"), and
+  doctor names it. drgnx never raises the limit itself.
+- At most 16 worktrees keep an overlay; the one used least recently gives its up and builds it again on its next search.
+  An overlay goes when its worktree is removed or has not been searched for 14 days, never while the worktree is
+  `locked` (`git worktree lock`).
+- The hub's `search/query` with `base: true` asks the base instead.
+- What is indexed follows the base's rules: `.drgnx/search.eld` and the `drgnx-search-*` settings are read from the
+  base checkout, so a branch that changes them takes effect when the change reaches the base. Size, binary and link
+  checks run on each worktree's own files.
+- **Which checkout is the base.** The main checkout by default. When most of your worktrees branch from another line
+  (a release branch, say), set `drgnx-search-base` for the project to that checkout's folder: the overlays then hold
+  fewer files. Changing it builds the base again from the new checkout, and every overlay with it.
 
 ### What is never indexed
 

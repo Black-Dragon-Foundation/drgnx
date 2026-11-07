@@ -400,6 +400,7 @@ fn decode_default(name: &str, default: &RuntimeValues, values: &mut RuntimeValue
         "drgnx-search-include" => values.search_include = default.search_include.clone(),
         "drgnx-search-exclude" => values.search_exclude = default.search_exclude.clone(),
         "drgnx-search-off" => values.search_off = default.search_off,
+        "drgnx-search-base" => values.search_base = default.search_base.clone(),
         "drgnx-agents-plugins" => values.agents_plugins = default.agents_plugins.clone(),
         "drgnx-agents-hook-rules" => values.agents_hook_rules = default.agents_hook_rules.clone(),
         "drgnx-agents-hook-rules-off" => {

@@ -379,6 +379,7 @@ mod tests {
             .map(|m| m.name)
             .collect();
         let mut want = vec![
+            "agents/config",
             "agents/do",
             "agents/huddle/start",
             "agents/kill",

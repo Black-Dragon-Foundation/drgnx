@@ -501,3 +501,112 @@ fn end_to_end_builtin_top5() {
         assert!(paths.contains(&want), "{q}: {want} not in {paths:?}");
     }
 }
+
+/// The project `proj` and a linked worktree of it, `proj-wt` on branch `topic`, where `core/branch.el` is new and
+/// untracked.
+fn project_with_tree(root: &Root) -> (PathBuf, PathBuf) {
+    let proj = project(root, "proj");
+    let wt = root.dir.path().join("h/proj-wt");
+    git(
+        &proj,
+        &["worktree", "add", "-q", "-b", "topic", wt.to_str().unwrap()],
+    );
+    std::fs::write(
+        wt.join("core/branch.el"),
+        ";;; branch.el\n\n(defun drgnx-branch-only (x)\n  \"Only the branch has this.\"\n  x)\n",
+    )
+    .unwrap();
+    (proj, wt)
+}
+
+/// `search/query` about ROOT, with EXTRA parameters.
+fn query(c: &mut Client, id: u64, root: &Path, extra: Value) -> Value {
+    let mut p = json!({"root": root, "text": "drgnx-branch-only", "scope": "all"});
+    for (k, v) in extra.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    call(c, id, "search/query", p)
+}
+
+/// The worktree's answer once its overlay is seeded (watched, or unwatched where the budget is spent).
+fn seeded_answer(c: &mut Client, wt: &Path) -> Value {
+    let mut id = 100;
+    skuld::wait_until(
+        "the worktree's view is seeded",
+        FAILED_AFTER.as_secs(),
+        || {
+            id += 1;
+            let a = query(c, id, wt, json!({}));
+            let state = a["result"]["view"]["state"].clone();
+            (state == "live" || state == "unwatched").then_some(a)
+        },
+    )
+}
+
+fn hit_paths(a: &Value) -> Vec<String> {
+    a["result"]["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{a}"))
+        .iter()
+        .map(|h| h["path"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Pattern C (conformance `search/query-worktree`). A query whose root is a linked worktree answers from that tree's
+/// view: `view` names the worktree, its state and how many files differ, the lag line says so, and the tree's own file
+/// is found; `base: true` asks for the base, which has no such file.
+#[test]
+fn query_in_a_worktree_answers_from_its_view() {
+    let root = Root::new();
+    let (proj, wt) = project_with_tree(&root);
+    let (_hub, mut c) = ready(&root, 1);
+    let first = query(&mut c, 1, &wt, json!({}));
+    assert!(first["result"]["view"]["worktree"].is_string(), "{first}");
+    let a = seeded_answer(&mut c, &wt);
+    let view = &a["result"]["view"];
+    assert_eq!(view["differing_files"], 1, "{a}");
+    assert_eq!(
+        hit_paths(&a).first().map(String::as_str),
+        Some("core/branch.el"),
+        "{a}"
+    );
+    let line = a["result"]["lag_line"].as_str().unwrap();
+    assert!(line.contains("worktree: 1 files differ"), "{line}");
+    for (id, b) in [
+        (2, query(&mut c, 2, &wt, json!({"base": true}))),
+        (3, query(&mut c, 3, &proj, json!({}))),
+    ] {
+        assert_eq!(b["result"]["view"]["state"], "base", "{id}: {b}");
+        assert!(b["result"]["view"].get("worktree").is_none(), "{id}: {b}");
+        assert!(
+            !hit_paths(&b).contains(&"core/branch.el".to_string()),
+            "{id}: {b}"
+        );
+    }
+}
+
+/// Pattern C (conformance `search/status-trees`). `search/status` lists the project's worktree overlays and the watch
+/// budget.
+#[test]
+fn status_lists_the_trees() {
+    let root = Root::new();
+    let (proj, wt) = project_with_tree(&root);
+    let (_hub, mut c) = ready(&root, 1);
+    seeded_answer(&mut c, &wt);
+    let s = call(&mut c, 2, "search/status", json!({"root": proj}));
+    let trees = s["result"]["trees"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{s}"));
+    assert_eq!(trees.len(), 1, "{s}");
+    let t = &trees[0];
+    assert!(t["worktree"].is_string(), "{s}");
+    assert_eq!(t["root"], wt.to_str().unwrap(), "{s}");
+    assert_eq!(t["door"], "cli", "{s}");
+    assert_eq!(t["differing_files"], 1, "{s}");
+    assert!(t["watched"].is_boolean(), "{s}");
+    assert!(t["state"].is_string(), "{s}");
+    let w = &s["result"]["watch"];
+    for k in ["used", "unwatched"] {
+        assert!(w[k].is_u64(), "{k}: {s}");
+    }
+}

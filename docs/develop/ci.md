@@ -215,7 +215,7 @@ included) and the steps live in one place. Inputs:
 | Input | Values | Meaning |
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
-| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)) |
+| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)); on `artifact` and `line` the test jobs also run with `DRGNX_NIDHOGG_STRICT=1`, so a test whose Nidhogg primitive is missing fails instead of skipping |
 | `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
@@ -252,11 +252,12 @@ Between releases each repository is tested against the other's **current integra
 
 - **drgnx's CI** (`nidhogg: line`): the `nidhogg-line` job reads the branch name in `.github/ci/nidhogg-line`
   (`rel7-next`), resolves its head with `git ls-remote`, and `.github/ci/nidhogg-line.sh` finds Nidhogg's newest
-  successful `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) that still holds
+  `build.yml` run of that commit (any event: a pull request, a by-hand or a scratch run) whose tarball jobs
+  (`Linux (fedora-45)`, `macOS (NS app)`) succeeded, even when its test jobs are red, and that still holds
   the tarballs the asked tiers need (`tarball-fedora-45` for the Linux tiers, `tarball-macos` for `macos`). It
   downloads them and uploads them into this run under the same names, so every tier job installs them exactly as
   `nidhogg: artifact` does. Every tier job waits for it (`needs: nidhogg-line`) and is skipped when it failed. No such
-  run (none yet, still running, or its artifacts expired: GitHub keeps them 90 days by default, 1–90 on a public
+  run (none yet, still running, a tarball job red, or its artifacts expired: GitHub keeps them 90 days by default, 1–90 on a public
   repository) fails the job with one error line; it never falls back to the release.
 - **Nidhogg's CI** tests drgnx's integration branch's head (named in Nidhogg's `nidhogg/ci/drgnx-line`) on every
   build but a release tag's (Nidhogg's README, "CI and releases").
