@@ -1,0 +1,14 @@
+{"scenario": "pair/kimi-plan-mode-refused-while-paired", "requires": ["v1", "test-hooks"], "doc": "Gated (B). A Kimi chat in your project is paired under its lock, and Kimi's plan mode (whose plan-file writes skip its hooks) is refused there: a start that opens in plan mode is refused, and a chat that switches to plan mode is ended."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/project"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-matrix (:preset autonomous)) (drgnx-agents-profiles ((\"mock-kimi\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\")) (\"kimi-in-plan\" :provider kimi :command (\"$MOCK\" \"acp\" \"--as\" \"kimi\" \"--start-mode\" \"plan\")))))\n"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "agents/start", "params": {"profile": "kimi-in-plan", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "agents/start", "params": {"profile": "mock-kimi", "cwd": "$ROOT/project"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/send", "params": {"id": "$sid", "text": "mode plan"}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
+{"do": "poll", "conn": "c", "json": {"id": 4, "method": "agents/list"}, "expect": {"id": 4, "result": {"sessions": {"$contains": [{"id": "$sid", "status": "exited"}]}}}, "within_ms": 15000}

@@ -955,6 +955,21 @@ impl LaunchPlan {
         {
             options.insert("disallowedTools".into(), json!(PAIR_DISALLOWED));
         }
+        // Kimi Code: its Write and Edit tools are denied by a user rule of its config
+        let kimi_config = self.ro_files.iter_mut().find(|(p, b)| {
+            p.ends_with("config.toml")
+                && b.starts_with(b"# drgnx: the hub's config for this session's Kimi")
+        });
+        if let Some((_, bytes)) = kimi_config {
+            for tool in kimi_tools("edit") {
+                bytes.extend_from_slice(
+                    format!(
+                        "\n[[permission.rules]]\ntool = \"{tool}\"\ndecision = \"deny\"\nscope = \"user\"\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+        }
         self
     }
 }
