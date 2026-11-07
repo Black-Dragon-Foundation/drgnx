@@ -13,6 +13,7 @@ mod chain;
 pub mod fixture;
 pub mod layout;
 pub mod model;
+pub mod nav;
 mod overlap;
 pub mod render;
 pub mod trail;

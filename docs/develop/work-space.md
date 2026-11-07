@@ -214,6 +214,27 @@ The card text is the editor's (`drgnx-work-map-row-text`), so the rows of the fi
 search stay the editor's: the inserter puts them over the rows by `drgnx-work-id`. The runner icons are the default
 glyphs of `drgnx-face-glyphs`.
 
+### Keys and the native view model (`vegvisir::nav`)
+
+The editor answers the map's keys from a replica of the map's model (Sjá, in Nidhogg), never from the hub. The hub
+sends, with each shown item, where each arrow goes from it; `vegvisir::nav` computes those links over the frame (the
+items a view shows, their places in its layout, and the chain edges among them), with the rules the editor's own
+navigation had:
+
+- `left`/`right`: the neighbours along the item's layer in reading order (by top, then left), stopping at its ends.
+- `up`: the nearest (least vertical, then horizontal distance from the card's centre, then id) of what it came from
+  above it; when none of those has a place (a missing level, or a collapsed layer), the nearest of its ancestors on the
+  lowest layer above. `down`: the nearest of what it touches below it.
+- `then`: where the selection goes when the item goes: the last of everything it came from, by layer then id.
+- The lists the walking keys follow: `outline` (the agents by plan rank, start order, id), `team` (the outline with each
+  agent's subagents after it, in start order), `needs-you` (each strip entry's first shown item: the cards by id, then
+  the agents that need you with no card).
+
+An item without a place has no arrows. `tests/nav.rs` checks every link of the 30-agent fixture at 1600 px against
+`tests/golden/nav-thirty-1600.json`, recorded once from the editor's navigation (now frozen) over the frame in
+`tests/golden/nav-thirty-1600-frame.json`; `UPDATE_VEGVISIR_GOLDEN=1` writes the frame again, and a frame that moved
+fails until the golden is recorded again.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and

@@ -1,0 +1,6369 @@
+{
+  "chips": [],
+  "edges": [
+    {
+      "from": "agent:s01",
+      "kind": "came-from",
+      "to": "agent:s01/toolu_a"
+    },
+    {
+      "from": "agent:s01",
+      "kind": "came-from",
+      "to": "agent:s01/toolu_b"
+    },
+    {
+      "from": "agent:s01",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-map"
+    },
+    {
+      "from": "agent:s01",
+      "kind": "reads",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs"
+    },
+    {
+      "from": "agent:s01",
+      "kind": "read-vs-edit",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs"
+    },
+    {
+      "from": "agent:s01",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s01/toolu_a",
+      "kind": "overlap",
+      "to": "agent:s01/toolu_b"
+    },
+    {
+      "from": "agent:s02",
+      "kind": "overlap",
+      "to": "agent:s05"
+    },
+    {
+      "from": "agent:s02",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-data"
+    },
+    {
+      "from": "agent:s02",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s03",
+      "kind": "overlap",
+      "to": "agent:s19"
+    },
+    {
+      "from": "agent:s03",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-sources"
+    },
+    {
+      "from": "agent:s03",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s04",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-wire"
+    },
+    {
+      "from": "agent:s04",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s05",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-step"
+    },
+    {
+      "from": "agent:s05",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s06",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-s4"
+    },
+    {
+      "from": "agent:s06",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s07",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-s1"
+    },
+    {
+      "from": "agent:s07",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s08",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-edits"
+    },
+    {
+      "from": "agent:s08",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s09",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-core"
+    },
+    {
+      "from": "agent:s09",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s10",
+      "kind": "came-from",
+      "to": "branch:drgnx/as2-trace"
+    },
+    {
+      "from": "agent:s10",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s11",
+      "kind": "came-from",
+      "to": "agent:s11/toolu_c"
+    },
+    {
+      "from": "agent:s11",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-mask"
+    },
+    {
+      "from": "agent:s11",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s12",
+      "kind": "overlap",
+      "to": "agent:s14"
+    },
+    {
+      "from": "agent:s12",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-leg"
+    },
+    {
+      "from": "agent:s12",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s13",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-cards"
+    },
+    {
+      "from": "agent:s13",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s14",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-scroll"
+    },
+    {
+      "from": "agent:s14",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s15",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-pacer"
+    },
+    {
+      "from": "agent:s15",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s16",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-shell"
+    },
+    {
+      "from": "agent:s16",
+      "kind": "runs-on",
+      "to": "machine:laptop"
+    },
+    {
+      "from": "agent:s17",
+      "kind": "came-from",
+      "to": "branch:nidhogg/gl-fonts"
+    },
+    {
+      "from": "agent:s17",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s18",
+      "kind": "came-from",
+      "to": "agent:s18/toolu_d"
+    },
+    {
+      "from": "agent:s18",
+      "kind": "came-from",
+      "to": "branch:drgnx/rp-core"
+    },
+    {
+      "from": "agent:s18",
+      "kind": "runs-on",
+      "to": "machine:local"
+    },
+    {
+      "from": "agent:s18/toolu_d",
+      "kind": "reads",
+      "to": "file:drgnx/core/drgnx-hub-core.el"
+    },
+    {
+      "from": "agent:s18/toolu_d",
+      "kind": "read-vs-edit",
+      "to": "file:drgnx/core/drgnx-hub-core.el"
+    },
+    {
+      "from": "agent:s19",
+      "kind": "came-from",
+      "to": "branch:drgnx/rp-hub"
+    },
+    {
+      "from": "agent:s19",
+      "kind": "runs-on",
+      "to": "machine:local"
+    },
+    {
+      "from": "agent:s20",
+      "kind": "came-from",
+      "to": "branch:drgnx/rp-sweep"
+    },
+    {
+      "from": "agent:s20",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s21",
+      "kind": "came-from",
+      "to": "branch:drgnx/rp-mods"
+    },
+    {
+      "from": "agent:s21",
+      "kind": "runs-on",
+      "to": "machine:desktop"
+    },
+    {
+      "from": "agent:s22",
+      "kind": "came-from",
+      "to": "branch:drgnx/rp-install"
+    },
+    {
+      "from": "agent:s23",
+      "kind": "manages",
+      "to": "agent:s24"
+    },
+    {
+      "from": "agent:s23",
+      "kind": "came-from",
+      "to": "branch:org/jobq-plan"
+    },
+    {
+      "from": "agent:s23",
+      "kind": "runs-on",
+      "to": "machine:local"
+    },
+    {
+      "from": "agent:s24",
+      "kind": "came-from",
+      "to": "branch:org/jobq-report"
+    },
+    {
+      "from": "agent:s24",
+      "kind": "runs-on",
+      "to": "machine:local"
+    },
+    {
+      "from": "agent:s25",
+      "kind": "came-from",
+      "to": "branch:org/docs-brainstorm"
+    },
+    {
+      "from": "agent:s26",
+      "kind": "came-from",
+      "to": "branch:org/docs-chat"
+    },
+    {
+      "from": "ask:1",
+      "kind": "came-from",
+      "to": "plan:agent-system-p2"
+    },
+    {
+      "from": "ask:1",
+      "kind": "came-from",
+      "to": "spec:work-space"
+    },
+    {
+      "from": "ask:2",
+      "kind": "came-from",
+      "to": "spec:glitnir"
+    },
+    {
+      "from": "ask:3",
+      "kind": "came-from",
+      "to": "spec:race-proof"
+    },
+    {
+      "from": "ask:4",
+      "kind": "came-from",
+      "to": "plan:jobq"
+    },
+    {
+      "from": "ask:5",
+      "kind": "came-from",
+      "to": "agent:s25"
+    },
+    {
+      "from": "ask:6",
+      "kind": "came-from",
+      "to": "agent:s26"
+    },
+    {
+      "from": "branch:drgnx/as2",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:drgnx/as2-core",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-data",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-data",
+      "kind": "overlap",
+      "to": "branch:drgnx/as2-step"
+    },
+    {
+      "from": "branch:drgnx/as2-data",
+      "kind": "edits",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs"
+    },
+    {
+      "from": "branch:drgnx/as2-edits",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-map",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-map",
+      "kind": "edits",
+      "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs"
+    },
+    {
+      "from": "branch:drgnx/as2-s1",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-s4",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-sources",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-sources",
+      "kind": "overlap",
+      "to": "branch:drgnx/rp-hub"
+    },
+    {
+      "from": "branch:drgnx/as2-sources",
+      "kind": "edits",
+      "to": "file:drgnx/core/drgnx-hub-core.el"
+    },
+    {
+      "from": "branch:drgnx/as2-step",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-step",
+      "kind": "edits",
+      "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs"
+    },
+    {
+      "from": "branch:drgnx/as2-trace",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/as2-wire",
+      "kind": "based-on",
+      "to": "branch:drgnx/as2"
+    },
+    {
+      "from": "branch:drgnx/rp-core",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:drgnx/rp-hub",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:drgnx/rp-hub",
+      "kind": "edits",
+      "to": "file:drgnx/core/drgnx-hub-core.el"
+    },
+    {
+      "from": "branch:drgnx/rp-install",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:drgnx/rp-mods",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:drgnx/rp-sweep",
+      "kind": "based-on",
+      "to": "branch:drgnx/main"
+    },
+    {
+      "from": "branch:nidhogg/gl-cards",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-fonts",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-leg",
+      "kind": "overlap",
+      "to": "branch:nidhogg/gl-scroll"
+    },
+    {
+      "from": "branch:nidhogg/gl-leg",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-leg",
+      "kind": "edits",
+      "to": "file:nidhogg/src/xdisp.c"
+    },
+    {
+      "from": "branch:nidhogg/gl-mask",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-pacer",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-scroll",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:nidhogg/gl-scroll",
+      "kind": "edits",
+      "to": "file:nidhogg/src/xdisp.c"
+    },
+    {
+      "from": "branch:nidhogg/gl-shell",
+      "kind": "based-on",
+      "to": "branch:nidhogg/nidhogg-31"
+    },
+    {
+      "from": "branch:org/docs-brainstorm",
+      "kind": "based-on",
+      "to": "branch:org/main"
+    },
+    {
+      "from": "branch:org/docs-chat",
+      "kind": "based-on",
+      "to": "branch:org/main"
+    },
+    {
+      "from": "branch:org/jobq-plan",
+      "kind": "based-on",
+      "to": "branch:org/main"
+    },
+    {
+      "from": "branch:org/jobq-report",
+      "kind": "based-on",
+      "to": "branch:org/jobq-plan"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s01"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s02"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s03"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s04"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s05"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s06"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s07"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s08"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s09"
+    },
+    {
+      "from": "plan:agent-system-p2",
+      "kind": "came-from",
+      "to": "agent:s10"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s11"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s12"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s13"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s14"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s15"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s16"
+    },
+    {
+      "from": "plan:glitnir-p2-p4",
+      "kind": "came-from",
+      "to": "agent:s17"
+    },
+    {
+      "from": "plan:jobq",
+      "kind": "came-from",
+      "to": "agent:s23"
+    },
+    {
+      "from": "plan:jobq",
+      "kind": "came-from",
+      "to": "agent:s24"
+    },
+    {
+      "from": "plan:race-proof",
+      "kind": "came-from",
+      "to": "agent:s18"
+    },
+    {
+      "from": "plan:race-proof",
+      "kind": "came-from",
+      "to": "agent:s19"
+    },
+    {
+      "from": "plan:race-proof",
+      "kind": "came-from",
+      "to": "agent:s20"
+    },
+    {
+      "from": "plan:race-proof",
+      "kind": "came-from",
+      "to": "agent:s21"
+    },
+    {
+      "from": "plan:race-proof",
+      "kind": "came-from",
+      "to": "agent:s22"
+    },
+    {
+      "from": "spec:glitnir",
+      "kind": "came-from",
+      "to": "plan:glitnir-p2-p4"
+    },
+    {
+      "from": "spec:race-proof",
+      "kind": "came-from",
+      "to": "plan:race-proof"
+    },
+    {
+      "from": "spec:work-space",
+      "kind": "came-from",
+      "to": "plan:agent-system-p2"
+    }
+  ],
+  "items": [
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "activity": "edit",
+        "conclusion": "lanes share a slot per source",
+        "context": 41,
+        "minutes": 40,
+        "model": "Opus",
+        "reads": 1,
+        "spend": "≈$3.10",
+        "state": "running",
+        "task": "vegvisir: model and layout"
+      },
+      "id": "agent:s01",
+      "kind": "agent",
+      "label": "Opus · map core",
+      "live": true,
+      "needs_you": false,
+      "order": 1,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 10,
+        "reads": 0,
+        "state": "running",
+        "task": "vegvisir: model and layout"
+      },
+      "id": "agent:s01/toolu_a",
+      "kind": "subagent",
+      "label": "Explore · layout prior art",
+      "live": true,
+      "needs_you": false,
+      "order": 27,
+      "parent": "agent:s01",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 9,
+        "reads": 0,
+        "state": "running",
+        "task": "vegvisir: model and layout"
+      },
+      "id": "agent:s01/toolu_b",
+      "kind": "subagent",
+      "label": "Plan · the lane rule",
+      "live": true,
+      "needs_you": false,
+      "order": 28,
+      "parent": "agent:s01",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "activity": "test",
+        "conclusion": "schema 11 is free after parts 4 and 5",
+        "minutes": 25,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$1.20",
+        "state": "running",
+        "task": "The migration and hub-only records"
+      },
+      "id": "agent:s02",
+      "kind": "agent",
+      "label": "Sonnet · hub facts",
+      "live": true,
+      "needs_you": false,
+      "order": 2,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 19,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.90",
+        "state": "running",
+        "task": "Worktree bases, machines, shell reads"
+      },
+      "id": "agent:s03",
+      "kind": "agent",
+      "label": "Sonnet · sources",
+      "live": true,
+      "needs_you": false,
+      "order": 3,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 5,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.70",
+        "state": "needs-you",
+        "task": "Targeted sends and per-session entries"
+      },
+      "id": "agent:s04",
+      "kind": "agent",
+      "label": "Sonnet · wire",
+      "live": true,
+      "needs_you": true,
+      "order": 4,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 30,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$1.05",
+        "state": "running",
+        "task": "Step detail and conclusions"
+      },
+      "id": "agent:s05",
+      "kind": "agent",
+      "label": "Sonnet · step detail",
+      "live": true,
+      "needs_you": false,
+      "order": 5,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 10,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$2.40",
+        "state": "waiting",
+        "task": "Spike S4: the tracing cost"
+      },
+      "id": "agent:s06",
+      "kind": "agent",
+      "label": "Opus · S4 tracer",
+      "live": true,
+      "needs_you": false,
+      "order": 6,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 16,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.60",
+        "state": "running",
+        "task": "Spike S1: geometry and rasters"
+      },
+      "id": "agent:s07",
+      "kind": "agent",
+      "label": "Sonnet · S1 rows",
+      "live": true,
+      "needs_you": false,
+      "order": 7,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "activity": "test",
+        "conclusion": "counts come from the base snapshot, never main",
+        "minutes": 2,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.80",
+        "state": "review",
+        "task": "Edited files and hunks, the interim"
+      },
+      "id": "agent:s08",
+      "kind": "agent",
+      "label": "Sonnet · edits",
+      "live": true,
+      "needs_you": false,
+      "order": 8,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 35,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$2.80",
+        "state": "running",
+        "task": "The presence model and the current ask"
+      },
+      "id": "agent:s09",
+      "kind": "agent",
+      "label": "Opus · presence",
+      "live": true,
+      "needs_you": false,
+      "order": 9,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "minutes": 1,
+        "model": "Opus",
+        "reads": 0,
+        "state": "queued",
+        "task": "The trace supervisor"
+      },
+      "id": "agent:s10",
+      "kind": "agent",
+      "label": "Opus · trace hub",
+      "live": true,
+      "needs_you": false,
+      "order": 10,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "activity": "build",
+        "context": 86,
+        "minutes": 45,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$4.20",
+        "state": "running",
+        "task": "Rounded scroll layers"
+      },
+      "id": "agent:s11",
+      "kind": "agent",
+      "label": "Opus · corner masks",
+      "live": true,
+      "needs_you": false,
+      "order": 11,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 18,
+        "reads": 0,
+        "state": "running",
+        "task": "Rounded scroll layers"
+      },
+      "id": "agent:s11/toolu_c",
+      "kind": "subagent",
+      "label": "Explore · mask shaders",
+      "live": true,
+      "needs_you": false,
+      "order": 29,
+      "parent": "agent:s11",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 38,
+        "model": "Opus",
+        "reads": 1,
+        "spend": "≈$3.60",
+        "state": "running",
+        "task": "The layout leg"
+      },
+      "id": "agent:s12",
+      "kind": "agent",
+      "label": "Opus · layout leg",
+      "live": true,
+      "needs_you": true,
+      "order": 12,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 20,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.95",
+        "state": "running",
+        "task": "Cards and rings"
+      },
+      "id": "agent:s13",
+      "kind": "agent",
+      "label": "Sonnet · cards",
+      "live": true,
+      "needs_you": false,
+      "order": 13,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 27,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$1.10",
+        "state": "running",
+        "task": "Scroll layers promoted"
+      },
+      "id": "agent:s14",
+      "kind": "agent",
+      "label": "Sonnet · scroll layers",
+      "live": true,
+      "needs_you": true,
+      "order": 14,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 48,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$1.40",
+        "state": "stalled",
+        "task": "The pacer"
+      },
+      "id": "agent:s15",
+      "kind": "agent",
+      "label": "Sonnet · pacer",
+      "live": true,
+      "needs_you": false,
+      "order": 15,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 13,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.75",
+        "state": "running",
+        "task": "Native shell reconnect"
+      },
+      "id": "agent:s16",
+      "kind": "agent",
+      "label": "Sonnet · native shell",
+      "live": true,
+      "needs_you": false,
+      "order": 16,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "minutes": 22,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.50",
+        "state": "paused",
+        "task": "Font fallback"
+      },
+      "id": "agent:s17",
+      "kind": "agent",
+      "label": "Sonnet · fonts",
+      "live": true,
+      "needs_you": false,
+      "order": 17,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "activity": "edit",
+        "conclusion": "turn_core drops the started flag on a session end",
+        "minutes": 50,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$5.10",
+        "state": "running",
+        "task": "SESSION-END-LOSES-STARTED-1"
+      },
+      "id": "agent:s18",
+      "kind": "agent",
+      "label": "Opus · det core",
+      "live": true,
+      "needs_you": false,
+      "order": 18,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "minutes": 24,
+        "reads": 1,
+        "state": "running",
+        "task": "SESSION-END-LOSES-STARTED-1"
+      },
+      "id": "agent:s18/toolu_d",
+      "kind": "subagent",
+      "label": "general · flake hunt",
+      "live": true,
+      "needs_you": false,
+      "order": 30,
+      "parent": "agent:s18",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "minutes": 32,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$1.30",
+        "state": "running",
+        "task": "Hub client core restarts"
+      },
+      "id": "agent:s19",
+      "kind": "agent",
+      "label": "Sonnet · hub client",
+      "live": true,
+      "needs_you": false,
+      "order": 19,
+      "parent": null,
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "minutes": 8,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.85",
+        "state": "needs-you",
+        "task": "The det sweep"
+      },
+      "id": "agent:s20",
+      "kind": "agent",
+      "label": "Sonnet · det sweep",
+      "live": true,
+      "needs_you": true,
+      "order": 20,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "minutes": 14,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.65",
+        "state": "running",
+        "task": "Module teardown rows"
+      },
+      "id": "agent:s21",
+      "kind": "agent",
+      "label": "Sonnet · mods",
+      "live": true,
+      "needs_you": false,
+      "order": 21,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "activity": "test",
+        "conclusion": "install rows pass on Fedora 45",
+        "minutes": 3,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.55",
+        "state": "finished",
+        "task": "Install rows"
+      },
+      "id": "agent:s22",
+      "kind": "agent",
+      "label": "Sonnet · install",
+      "live": true,
+      "needs_you": false,
+      "order": 22,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:jobq",
+      "fields": {
+        "minutes": 12,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$1.90",
+        "state": "needs-you",
+        "task": "Write the jobq plan"
+      },
+      "id": "agent:s23",
+      "kind": "agent",
+      "label": "Opus · jobq plan",
+      "live": true,
+      "needs_you": true,
+      "order": 23,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:jobq",
+      "fields": {
+        "manager": "agent:s23",
+        "minutes": 7,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.40",
+        "state": "running",
+        "task": "The slot reporter"
+      },
+      "id": "agent:s24",
+      "kind": "agent",
+      "label": "Sonnet · slot reporter",
+      "live": true,
+      "needs_you": false,
+      "order": 24,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "minutes": 55,
+        "model": "Opus",
+        "reads": 0,
+        "spend": "≈$6.30",
+        "state": "waiting"
+      },
+      "id": "agent:s25",
+      "kind": "agent",
+      "label": "Opus · brainstorm",
+      "live": true,
+      "needs_you": false,
+      "order": 25,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "minutes": 4,
+        "model": "Sonnet",
+        "reads": 0,
+        "spend": "≈$0.20",
+        "state": "running"
+      },
+      "id": "agent:s26",
+      "kind": "agent",
+      "label": "Sonnet · chat",
+      "live": true,
+      "needs_you": false,
+      "order": 26,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:1",
+      "kind": "ask",
+      "label": "build the Work space, the map first",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:2",
+      "kind": "ask",
+      "label": "Glitnir P2 to P4 as soon as the look lands",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:3",
+      "kind": "ask",
+      "label": "fix the deferred testing rows",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:4",
+      "kind": "ask",
+      "label": "jobq asap",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:5",
+      "kind": "ask",
+      "label": "brainstorm how the Work space looks",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "ask:6",
+      "kind": "ask",
+      "label": "why does the hub restart under load?",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2",
+      "kind": "branch",
+      "label": "as2",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          4,
+          574,
+          1
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-core",
+      "kind": "branch",
+      "label": "as2-core",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s09",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          5,
+          322,
+          17
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-data",
+      "kind": "branch",
+      "label": "as2-data",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s02",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          4,
+          390,
+          10
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-edits",
+      "kind": "branch",
+      "label": "as2-edits",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s08",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          7,
+          1532,
+          0
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-map",
+      "kind": "branch",
+      "label": "as2-map",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s01",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          5,
+          302,
+          8
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-s1",
+      "kind": "branch",
+      "label": "as2-s1",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s07",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          4,
+          560,
+          4
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-s4",
+      "kind": "branch",
+      "label": "as2-s4",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s06",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          5,
+          822,
+          3
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-sources",
+      "kind": "branch",
+      "label": "as2-sources",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s03",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          5,
+          490,
+          18
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-step",
+      "kind": "branch",
+      "label": "as2-step",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s05",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          4,
+          332,
+          9
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-trace",
+      "kind": "branch",
+      "label": "as2-trace",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s10",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:agent-system-p2",
+      "fields": {
+        "edits": [
+          5,
+          118,
+          20
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/as2-wire",
+      "kind": "branch",
+      "label": "as2-wire",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s04",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/main",
+      "kind": "branch",
+      "label": "main",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "edits": [
+          6,
+          234,
+          24
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/rp-core",
+      "kind": "branch",
+      "label": "rp-core",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s18",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "edits": [
+          4,
+          184,
+          21
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/rp-hub",
+      "kind": "branch",
+      "label": "rp-hub",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s19",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "edits": [
+          4,
+          76,
+          13
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/rp-install",
+      "kind": "branch",
+      "label": "rp-install",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s22",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "edits": [
+          4,
+          52,
+          8
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/rp-mods",
+      "kind": "branch",
+      "label": "rp-mods",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s21",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:race-proof",
+      "fields": {
+        "edits": [
+          4,
+          27,
+          22
+        ],
+        "repo": "drgnx"
+      },
+      "id": "branch:drgnx/rp-sweep",
+      "kind": "branch",
+      "label": "rp-sweep",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s20",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          5,
+          460,
+          14
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-cards",
+      "kind": "branch",
+      "label": "gl-cards",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s13",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          4,
+          150,
+          26
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-fonts",
+      "kind": "branch",
+      "label": "gl-fonts",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s17",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          5,
+          532,
+          19
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-leg",
+      "kind": "branch",
+      "label": "gl-leg",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s12",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          6,
+          560,
+          27
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-mask",
+      "kind": "branch",
+      "label": "gl-mask",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s11",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          4,
+          276,
+          31
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-pacer",
+      "kind": "branch",
+      "label": "gl-pacer",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s15",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          4,
+          300,
+          29
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-scroll",
+      "kind": "branch",
+      "label": "gl-scroll",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s14",
+      "shared": false,
+      "warn": true
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "edits": [
+          4,
+          330,
+          56
+        ],
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/gl-shell",
+      "kind": "branch",
+      "label": "gl-shell",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s16",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:glitnir-p2-p4",
+      "fields": {
+        "repo": "nidhogg"
+      },
+      "id": "branch:nidhogg/nidhogg-31",
+      "kind": "branch",
+      "label": "nidhogg-31",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "edits": [
+          6,
+          1421,
+          40
+        ],
+        "repo": "org"
+      },
+      "id": "branch:org/docs-brainstorm",
+      "kind": "branch",
+      "label": "docs-brainstorm",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s25",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "edits": [
+          5,
+          53,
+          4
+        ],
+        "repo": "org"
+      },
+      "id": "branch:org/docs-chat",
+      "kind": "branch",
+      "label": "docs-chat",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s26",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:jobq",
+      "fields": {
+        "edits": [
+          5,
+          590,
+          0
+        ],
+        "repo": "org"
+      },
+      "id": "branch:org/jobq-plan",
+      "kind": "branch",
+      "label": "jobq-plan",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s23",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": "plan:jobq",
+      "fields": {
+        "edits": [
+          5,
+          262,
+          0
+        ],
+        "repo": "org"
+      },
+      "id": "branch:org/jobq-report",
+      "kind": "branch",
+      "label": "jobq-report",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": "agent:s24",
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "repo": "org"
+      },
+      "id": "branch:org/main",
+      "kind": "branch",
+      "label": "main",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "change": [
+          30,
+          12
+        ]
+      },
+      "id": "file:drgnx/core/drgnx-hub-core.el",
+      "kind": "file",
+      "label": "drgnx/core/drgnx-hub-core.el",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": true,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "change": [
+          60,
+          8
+        ]
+      },
+      "id": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "kind": "file",
+      "label": "drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": true,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "change": [
+          520,
+          0
+        ]
+      },
+      "id": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "kind": "file",
+      "label": "drgnx/runtime/crates/vegvisir/src/layout.rs",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": true,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "change": [
+          40,
+          6
+        ]
+      },
+      "id": "file:nidhogg/src/xdisp.c",
+      "kind": "file",
+      "label": "nidhogg/src/xdisp.c",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": true,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "slots": [
+          15,
+          16
+        ]
+      },
+      "id": "machine:desktop",
+      "kind": "machine",
+      "label": "desktop",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "slots": [
+          1,
+          2
+        ]
+      },
+      "id": "machine:laptop",
+      "kind": "machine",
+      "label": "laptop",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "slots": [
+          3,
+          4
+        ]
+      },
+      "id": "machine:local",
+      "kind": "machine",
+      "label": "local",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "progress": [
+          3,
+          10
+        ]
+      },
+      "id": "plan:agent-system-p2",
+      "kind": "plan",
+      "label": "Agent system part 2",
+      "live": true,
+      "needs_you": false,
+      "order": 1,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "progress": [
+          2,
+          7
+        ]
+      },
+      "id": "plan:glitnir-p2-p4",
+      "kind": "plan",
+      "label": "Glitnir P2 to P4",
+      "live": true,
+      "needs_you": false,
+      "order": 2,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "progress": [
+          0,
+          2
+        ]
+      },
+      "id": "plan:jobq",
+      "kind": "plan",
+      "label": "jobq P1 to P4",
+      "live": true,
+      "needs_you": false,
+      "order": 4,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {
+        "progress": [
+          4,
+          5
+        ]
+      },
+      "id": "plan:race-proof",
+      "kind": "plan",
+      "label": "Deferred testing rows",
+      "live": true,
+      "needs_you": false,
+      "order": 3,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "spec:glitnir",
+      "kind": "spec",
+      "label": "Glitnir P2 to P4",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "spec:race-proof",
+      "kind": "spec",
+      "label": "Race-proof tests",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    },
+    {
+      "block": null,
+      "fields": {},
+      "id": "spec:work-space",
+      "kind": "spec",
+      "label": "The Work space",
+      "live": true,
+      "needs_you": false,
+      "order": 0,
+      "parent": null,
+      "shared": false,
+      "warn": false
+    }
+  ],
+  "layout": {
+    "at": {
+      "agent:s01": {
+        "h": 10,
+        "w": 42,
+        "x": 0,
+        "y": 45
+      },
+      "agent:s01/toolu_a": {
+        "h": 10,
+        "w": 42,
+        "x": 45,
+        "y": 45
+      },
+      "agent:s01/toolu_b": {
+        "h": 10,
+        "w": 42,
+        "x": 90,
+        "y": 45
+      },
+      "agent:s02": {
+        "h": 10,
+        "w": 42,
+        "x": 135,
+        "y": 45
+      },
+      "agent:s03": {
+        "h": 10,
+        "w": 42,
+        "x": 180,
+        "y": 45
+      },
+      "agent:s04": {
+        "h": 25,
+        "w": 58,
+        "x": 225,
+        "y": 45
+      },
+      "agent:s05": {
+        "h": 10,
+        "w": 42,
+        "x": 286,
+        "y": 45
+      },
+      "agent:s06": {
+        "h": 10,
+        "w": 42,
+        "x": 331,
+        "y": 45
+      },
+      "agent:s07": {
+        "h": 10,
+        "w": 42,
+        "x": 0,
+        "y": 88
+      },
+      "agent:s08": {
+        "h": 10,
+        "w": 42,
+        "x": 45,
+        "y": 88
+      },
+      "agent:s09": {
+        "h": 10,
+        "w": 42,
+        "x": 90,
+        "y": 88
+      },
+      "agent:s10": {
+        "h": 10,
+        "w": 42,
+        "x": 135,
+        "y": 88
+      },
+      "agent:s11": {
+        "h": 10,
+        "w": 42,
+        "x": 0,
+        "y": 116
+      },
+      "agent:s11/toolu_c": {
+        "h": 10,
+        "w": 42,
+        "x": 45,
+        "y": 116
+      },
+      "agent:s12": {
+        "h": 25,
+        "w": 58,
+        "x": 90,
+        "y": 116
+      },
+      "agent:s13": {
+        "h": 10,
+        "w": 42,
+        "x": 151,
+        "y": 116
+      },
+      "agent:s14": {
+        "h": 25,
+        "w": 58,
+        "x": 196,
+        "y": 116
+      },
+      "agent:s15": {
+        "h": 10,
+        "w": 42,
+        "x": 257,
+        "y": 116
+      },
+      "agent:s16": {
+        "h": 10,
+        "w": 42,
+        "x": 302,
+        "y": 116
+      },
+      "agent:s17": {
+        "h": 10,
+        "w": 42,
+        "x": 0,
+        "y": 159
+      },
+      "agent:s18": {
+        "h": 25,
+        "w": 58,
+        "x": 0,
+        "y": 187
+      },
+      "agent:s18/toolu_d": {
+        "h": 10,
+        "w": 42,
+        "x": 61,
+        "y": 187
+      },
+      "agent:s19": {
+        "h": 25,
+        "w": 58,
+        "x": 106,
+        "y": 187
+      },
+      "agent:s20": {
+        "h": 25,
+        "w": 58,
+        "x": 167,
+        "y": 187
+      },
+      "agent:s21": {
+        "h": 25,
+        "w": 58,
+        "x": 228,
+        "y": 187
+      },
+      "agent:s22": {
+        "h": 25,
+        "w": 58,
+        "x": 289,
+        "y": 187
+      },
+      "agent:s23": {
+        "h": 25,
+        "w": 58,
+        "x": 0,
+        "y": 245
+      },
+      "agent:s24": {
+        "h": 25,
+        "w": 58,
+        "x": 61,
+        "y": 245
+      },
+      "agent:s25": {
+        "h": 25,
+        "w": 58,
+        "x": 125,
+        "y": 245
+      },
+      "agent:s26": {
+        "h": 25,
+        "w": 58,
+        "x": 186,
+        "y": 245
+      },
+      "ask:1": {
+        "h": 7,
+        "w": 48,
+        "x": 124,
+        "y": 0
+      },
+      "ask:2": {
+        "h": 7,
+        "w": 48,
+        "x": 226,
+        "y": 0
+      },
+      "ask:3": {
+        "h": 7,
+        "w": 48,
+        "x": 277,
+        "y": 0
+      },
+      "ask:4": {
+        "h": 7,
+        "w": 48,
+        "x": 328,
+        "y": 0
+      },
+      "ask:5": {
+        "h": 7,
+        "w": 48,
+        "x": 73,
+        "y": 0
+      },
+      "ask:6": {
+        "h": 7,
+        "w": 48,
+        "x": 175,
+        "y": 0
+      },
+      "branch:drgnx/as2": {
+        "h": 7,
+        "w": 40,
+        "x": 179,
+        "y": 101
+      },
+      "branch:drgnx/as2-core": {
+        "h": 7,
+        "w": 40,
+        "x": 91,
+        "y": 101
+      },
+      "branch:drgnx/as2-data": {
+        "h": 7,
+        "w": 40,
+        "x": 136,
+        "y": 73
+      },
+      "branch:drgnx/as2-edits": {
+        "h": 7,
+        "w": 40,
+        "x": 46,
+        "y": 101
+      },
+      "branch:drgnx/as2-map": {
+        "h": 7,
+        "w": 40,
+        "x": 1,
+        "y": 73
+      },
+      "branch:drgnx/as2-s1": {
+        "h": 7,
+        "w": 40,
+        "x": 1,
+        "y": 101
+      },
+      "branch:drgnx/as2-s4": {
+        "h": 7,
+        "w": 40,
+        "x": 332,
+        "y": 73
+      },
+      "branch:drgnx/as2-sources": {
+        "h": 7,
+        "w": 40,
+        "x": 181,
+        "y": 73
+      },
+      "branch:drgnx/as2-step": {
+        "h": 7,
+        "w": 40,
+        "x": 287,
+        "y": 73
+      },
+      "branch:drgnx/as2-trace": {
+        "h": 7,
+        "w": 40,
+        "x": 136,
+        "y": 101
+      },
+      "branch:drgnx/as2-wire": {
+        "h": 7,
+        "w": 40,
+        "x": 234,
+        "y": 73
+      },
+      "branch:drgnx/main": {
+        "h": 7,
+        "w": 40,
+        "x": 0,
+        "y": 230
+      },
+      "branch:drgnx/rp-core": {
+        "h": 7,
+        "w": 40,
+        "x": 9,
+        "y": 215
+      },
+      "branch:drgnx/rp-hub": {
+        "h": 7,
+        "w": 40,
+        "x": 115,
+        "y": 215
+      },
+      "branch:drgnx/rp-install": {
+        "h": 7,
+        "w": 40,
+        "x": 298,
+        "y": 215
+      },
+      "branch:drgnx/rp-mods": {
+        "h": 7,
+        "w": 40,
+        "x": 237,
+        "y": 215
+      },
+      "branch:drgnx/rp-sweep": {
+        "h": 7,
+        "w": 40,
+        "x": 176,
+        "y": 215
+      },
+      "branch:nidhogg/gl-cards": {
+        "h": 7,
+        "w": 40,
+        "x": 152,
+        "y": 144
+      },
+      "branch:nidhogg/gl-fonts": {
+        "h": 7,
+        "w": 40,
+        "x": 1,
+        "y": 172
+      },
+      "branch:nidhogg/gl-leg": {
+        "h": 7,
+        "w": 40,
+        "x": 99,
+        "y": 144
+      },
+      "branch:nidhogg/gl-mask": {
+        "h": 7,
+        "w": 40,
+        "x": 1,
+        "y": 144
+      },
+      "branch:nidhogg/gl-pacer": {
+        "h": 7,
+        "w": 40,
+        "x": 258,
+        "y": 144
+      },
+      "branch:nidhogg/gl-scroll": {
+        "h": 7,
+        "w": 40,
+        "x": 205,
+        "y": 144
+      },
+      "branch:nidhogg/gl-shell": {
+        "h": 7,
+        "w": 40,
+        "x": 303,
+        "y": 144
+      },
+      "branch:nidhogg/nidhogg-31": {
+        "h": 7,
+        "w": 40,
+        "x": 44,
+        "y": 172
+      },
+      "branch:org/docs-brainstorm": {
+        "h": 7,
+        "w": 40,
+        "x": 134,
+        "y": 273
+      },
+      "branch:org/docs-chat": {
+        "h": 7,
+        "w": 40,
+        "x": 195,
+        "y": 273
+      },
+      "branch:org/jobq-plan": {
+        "h": 7,
+        "w": 40,
+        "x": 9,
+        "y": 273
+      },
+      "branch:org/jobq-report": {
+        "h": 7,
+        "w": 40,
+        "x": 70,
+        "y": 273
+      },
+      "branch:org/main": {
+        "h": 7,
+        "w": 40,
+        "x": 238,
+        "y": 273
+      },
+      "file:drgnx/core/drgnx-hub-core.el": {
+        "h": 7,
+        "w": 36,
+        "x": 150,
+        "y": 288
+      },
+      "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs": {
+        "h": 7,
+        "w": 36,
+        "x": 228,
+        "y": 288
+      },
+      "file:drgnx/runtime/crates/vegvisir/src/layout.rs": {
+        "h": 7,
+        "w": 36,
+        "x": 3,
+        "y": 288
+      },
+      "file:nidhogg/src/xdisp.c": {
+        "h": 7,
+        "w": 36,
+        "x": 189,
+        "y": 288
+      },
+      "machine:desktop": {
+        "h": 7,
+        "w": 32,
+        "x": 267,
+        "y": 288
+      },
+      "machine:laptop": {
+        "h": 7,
+        "w": 32,
+        "x": 302,
+        "y": 288
+      },
+      "machine:local": {
+        "h": 7,
+        "w": 32,
+        "x": 337,
+        "y": 288
+      },
+      "plan:agent-system-p2": {
+        "h": 7,
+        "w": 44,
+        "x": 164,
+        "y": 30
+      },
+      "plan:glitnir-p2-p4": {
+        "h": 7,
+        "w": 44,
+        "x": 211,
+        "y": 30
+      },
+      "plan:jobq": {
+        "h": 7,
+        "w": 44,
+        "x": 305,
+        "y": 30
+      },
+      "plan:race-proof": {
+        "h": 7,
+        "w": 44,
+        "x": 258,
+        "y": 30
+      },
+      "spec:glitnir": {
+        "h": 7,
+        "w": 44,
+        "x": 211,
+        "y": 15
+      },
+      "spec:race-proof": {
+        "h": 7,
+        "w": 44,
+        "x": 258,
+        "y": 15
+      },
+      "spec:work-space": {
+        "h": 7,
+        "w": 44,
+        "x": 164,
+        "y": 15
+      }
+    },
+    "bands": [
+      {
+        "height_units": 8,
+        "row": 1,
+        "segs": [
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 97
+          },
+          {
+            "from": "ask:1",
+            "kind": "came-from",
+            "to": "plan:agent-system-p2",
+            "x0": 148,
+            "x1": 148
+          },
+          {
+            "from": "ask:1",
+            "kind": "came-from",
+            "to": "spec:work-space",
+            "x0": 148,
+            "x1": 186
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 209
+          },
+          {
+            "from": "ask:2",
+            "kind": "came-from",
+            "to": "spec:glitnir",
+            "x0": 250,
+            "x1": 233
+          },
+          {
+            "from": "ask:3",
+            "kind": "came-from",
+            "to": "spec:race-proof",
+            "x0": 301,
+            "x1": 280
+          },
+          {
+            "from": "ask:4",
+            "kind": "came-from",
+            "to": "plan:jobq",
+            "x0": 352,
+            "x1": 352
+          }
+        ],
+        "y": 7
+      },
+      {
+        "height_units": 8,
+        "row": 2,
+        "segs": [
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 97
+          },
+          {
+            "from": "ask:1",
+            "kind": "came-from",
+            "to": "plan:agent-system-p2",
+            "x0": 148,
+            "x1": 186
+          },
+          {
+            "from": "spec:work-space",
+            "kind": "came-from",
+            "to": "plan:agent-system-p2",
+            "x0": 186,
+            "x1": 186
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 209,
+            "x1": 209
+          },
+          {
+            "from": "spec:glitnir",
+            "kind": "came-from",
+            "to": "plan:glitnir-p2-p4",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "spec:race-proof",
+            "kind": "came-from",
+            "to": "plan:race-proof",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "ask:4",
+            "kind": "came-from",
+            "to": "plan:jobq",
+            "x0": 352,
+            "x1": 327
+          }
+        ],
+        "y": 22
+      },
+      {
+        "height_units": 8,
+        "row": 3,
+        "segs": [
+          {
+            "arc": true,
+            "from": "agent:s01",
+            "kind": "came-from",
+            "to": "agent:s01/toolu_a",
+            "x0": 21,
+            "x1": 66
+          },
+          {
+            "arc": true,
+            "from": "agent:s01",
+            "kind": "came-from",
+            "to": "agent:s01/toolu_b",
+            "x0": 21,
+            "x1": 111
+          },
+          {
+            "arc": true,
+            "from": "agent:s01/toolu_a",
+            "kind": "overlap",
+            "to": "agent:s01/toolu_b",
+            "x0": 66,
+            "x1": 111
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 89
+          },
+          {
+            "arc": true,
+            "from": "agent:s02",
+            "kind": "overlap",
+            "to": "agent:s05",
+            "x0": 156,
+            "x1": 307
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s01",
+            "x0": 186,
+            "x1": 21
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s02",
+            "x0": 186,
+            "x1": 156
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s07",
+            "x0": 186,
+            "x1": 178
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s08",
+            "x0": 186,
+            "x1": 178
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s09",
+            "x0": 186,
+            "x1": 178
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s10",
+            "x0": 186,
+            "x1": 178
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s03",
+            "x0": 186,
+            "x1": 201
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s04",
+            "x0": 186,
+            "x1": 254
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s05",
+            "x0": 186,
+            "x1": 307
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s06",
+            "x0": 186,
+            "x1": 352
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 209,
+            "x1": 179
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s11",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s12",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s13",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s14",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s15",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s16",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 233,
+            "x1": 224
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 284
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 284
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 284
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 284
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 284
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 329
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 329
+          }
+        ],
+        "y": 37
+      },
+      {
+        "height_units": 3,
+        "row": 4,
+        "segs": [
+          {
+            "from": "agent:s01",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-map",
+            "x0": 21,
+            "x1": 21
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 89,
+            "x1": 97
+          },
+          {
+            "from": "agent:s02",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-data",
+            "x0": 156,
+            "x1": 156
+          },
+          {
+            "arc": true,
+            "from": "branch:drgnx/as2-data",
+            "kind": "overlap",
+            "to": "branch:drgnx/as2-step",
+            "x0": 156,
+            "x1": 307
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s07",
+            "x0": 178,
+            "x1": 179
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s08",
+            "x0": 178,
+            "x1": 179
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s09",
+            "x0": 178,
+            "x1": 179
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s10",
+            "x0": 178,
+            "x1": 179
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 179,
+            "x1": 180
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 201,
+            "x1": 178
+          },
+          {
+            "from": "agent:s03",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-sources",
+            "x0": 201,
+            "x1": 201
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s11",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s12",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s13",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s14",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s15",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s16",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 224,
+            "x1": 233
+          },
+          {
+            "from": "agent:s04",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-wire",
+            "x0": 254,
+            "x1": 254
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 284,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 284,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 284,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 284,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 284,
+            "x1": 280
+          },
+          {
+            "from": "agent:s05",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-step",
+            "x0": 307,
+            "x1": 307
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 329,
+            "x1": 328
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 329,
+            "x1": 328
+          },
+          {
+            "from": "agent:s06",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-s4",
+            "x0": 352,
+            "x1": 352
+          }
+        ],
+        "y": 70
+      },
+      {
+        "height_units": 8,
+        "row": 5,
+        "segs": [
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 21,
+            "x1": 43
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 89
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 156,
+            "x1": 246
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 178,
+            "x1": 185
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s07",
+            "x0": 179,
+            "x1": 21
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s08",
+            "x0": 179,
+            "x1": 66
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s09",
+            "x0": 179,
+            "x1": 111
+          },
+          {
+            "from": "plan:agent-system-p2",
+            "kind": "came-from",
+            "to": "agent:s10",
+            "x0": 179,
+            "x1": 156
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 180,
+            "x1": 199
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 201,
+            "x1": 178
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 201,
+            "x1": 193
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s11",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s12",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s13",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s14",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s15",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s16",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 307,
+            "x1": 246
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 328,
+            "x1": 327
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 328,
+            "x1": 327
+          }
+        ],
+        "y": 80
+      },
+      {
+        "height_units": 3,
+        "row": 6,
+        "segs": [
+          {
+            "from": "agent:s07",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-s1",
+            "x0": 21,
+            "x1": 21
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 43,
+            "x1": 42
+          },
+          {
+            "from": "agent:s08",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-edits",
+            "x0": 66,
+            "x1": 66
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 89,
+            "x1": 90
+          },
+          {
+            "from": "agent:s09",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-core",
+            "x0": 111,
+            "x1": 111
+          },
+          {
+            "from": "agent:s10",
+            "kind": "came-from",
+            "to": "branch:drgnx/as2-trace",
+            "x0": 156,
+            "x1": 156
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 178,
+            "x1": 135
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 185,
+            "x1": 177
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 193,
+            "x1": 220
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 178
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s11",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s12",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s13",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s14",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s15",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s16",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 233,
+            "x1": 233
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 327
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 327
+          }
+        ],
+        "y": 98
+      },
+      {
+        "height_units": 8,
+        "row": 7,
+        "segs": [
+          {
+            "arc": true,
+            "from": "agent:s11",
+            "kind": "came-from",
+            "to": "agent:s11/toolu_c",
+            "x0": 21,
+            "x1": 66
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 42,
+            "x1": 43
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 90,
+            "x1": 89
+          },
+          {
+            "arc": true,
+            "from": "agent:s12",
+            "kind": "overlap",
+            "to": "agent:s14",
+            "x0": 119,
+            "x1": 225
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 135,
+            "x1": 149
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 177,
+            "x1": 150
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 178,
+            "x1": 195
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 220,
+            "x1": 194
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s11",
+            "x0": 233,
+            "x1": 21
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s12",
+            "x0": 233,
+            "x1": 119
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s13",
+            "x0": 233,
+            "x1": 172
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s14",
+            "x0": 233,
+            "x1": 225
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 233,
+            "x1": 255
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s15",
+            "x0": 233,
+            "x1": 278
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s16",
+            "x0": 233,
+            "x1": 323
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 256
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 256
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 300
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 300
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 300
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 300
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 300
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 345
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 345
+          }
+        ],
+        "y": 108
+      },
+      {
+        "height_units": 3,
+        "row": 8,
+        "segs": [
+          {
+            "from": "agent:s11",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-mask",
+            "x0": 21,
+            "x1": 21
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 43,
+            "x1": 42
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 89,
+            "x1": 97
+          },
+          {
+            "from": "agent:s12",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-leg",
+            "x0": 119,
+            "x1": 119
+          },
+          {
+            "arc": true,
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "overlap",
+            "to": "branch:nidhogg/gl-scroll",
+            "x0": 119,
+            "x1": 225
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 149,
+            "x1": 150
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 150,
+            "x1": 151
+          },
+          {
+            "from": "agent:s13",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-cards",
+            "x0": 172,
+            "x1": 172
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 194,
+            "x1": 149
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 195,
+            "x1": 199
+          },
+          {
+            "from": "agent:s14",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-scroll",
+            "x0": 225,
+            "x1": 225
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 255,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 256,
+            "x1": 247
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 256,
+            "x1": 247
+          },
+          {
+            "from": "agent:s15",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-pacer",
+            "x0": 278,
+            "x1": 278
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 300,
+            "x1": 299
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 300,
+            "x1": 299
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 300,
+            "x1": 299
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 300,
+            "x1": 299
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 300,
+            "x1": 299
+          },
+          {
+            "from": "agent:s16",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-shell",
+            "x0": 323,
+            "x1": 323
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 345,
+            "x1": 344
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 345,
+            "x1": 344
+          }
+        ],
+        "y": 141
+      },
+      {
+        "height_units": 8,
+        "row": 9,
+        "segs": [
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 42,
+            "x1": 43
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 97
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 119,
+            "x1": 207
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 149,
+            "x1": 160
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 150,
+            "x1": 168
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 151,
+            "x1": 152
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 199
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 225,
+            "x1": 207
+          },
+          {
+            "from": "plan:glitnir-p2-p4",
+            "kind": "came-from",
+            "to": "agent:s17",
+            "x0": 246,
+            "x1": 21
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 247,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 247,
+            "x1": 246
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 299,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 299,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 299,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 299,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 299,
+            "x1": 280
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 344,
+            "x1": 327
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 344,
+            "x1": 327
+          }
+        ],
+        "y": 151
+      },
+      {
+        "height_units": 3,
+        "row": 10,
+        "segs": [
+          {
+            "from": "agent:s17",
+            "kind": "came-from",
+            "to": "branch:nidhogg/gl-fonts",
+            "x0": 21,
+            "x1": 21
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 43,
+            "x1": 42
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 97
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 152,
+            "x1": 144
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 160,
+            "x1": 152
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 168,
+            "x1": 168
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 199
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 207
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 207
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 280
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 327
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 327
+          }
+        ],
+        "y": 169
+      },
+      {
+        "height_units": 8,
+        "row": 11,
+        "segs": [
+          {
+            "arc": true,
+            "from": "agent:s18",
+            "kind": "came-from",
+            "to": "agent:s18/toolu_d",
+            "x0": 29,
+            "x1": 82
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 42,
+            "x1": 59
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 104
+          },
+          {
+            "from": "agent:s03",
+            "kind": "overlap",
+            "to": "agent:s19",
+            "x0": 144,
+            "x1": 135
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 152,
+            "x1": 165
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 168,
+            "x1": 166
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 226
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 287
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 287
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 227
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 227
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s18",
+            "x0": 280,
+            "x1": 29
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s19",
+            "x0": 280,
+            "x1": 135
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s20",
+            "x0": 280,
+            "x1": 196
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s21",
+            "x0": 280,
+            "x1": 257
+          },
+          {
+            "from": "plan:race-proof",
+            "kind": "came-from",
+            "to": "agent:s22",
+            "x0": 280,
+            "x1": 318
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 348
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 348
+          }
+        ],
+        "y": 179
+      },
+      {
+        "height_units": 3,
+        "row": 12,
+        "segs": [
+          {
+            "from": "agent:s18",
+            "kind": "came-from",
+            "to": "branch:drgnx/rp-core",
+            "x0": 29,
+            "x1": 29
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 59,
+            "x1": 8
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 104,
+            "x1": 97
+          },
+          {
+            "from": "agent:s19",
+            "kind": "came-from",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 135,
+            "x1": 135
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "overlap",
+            "to": "branch:drgnx/rp-hub",
+            "x0": 165,
+            "x1": 135
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 166,
+            "x1": 168
+          },
+          {
+            "from": "agent:s20",
+            "kind": "came-from",
+            "to": "branch:drgnx/rp-sweep",
+            "x0": 196,
+            "x1": 196
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 226,
+            "x1": 217
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 227,
+            "x1": 236
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 227,
+            "x1": 236
+          },
+          {
+            "from": "agent:s21",
+            "kind": "came-from",
+            "to": "branch:drgnx/rp-mods",
+            "x0": 257,
+            "x1": 257
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 287,
+            "x1": 218
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 287,
+            "x1": 218
+          },
+          {
+            "from": "agent:s22",
+            "kind": "came-from",
+            "to": "branch:drgnx/rp-install",
+            "x0": 318,
+            "x1": 318
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 348,
+            "x1": 339
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 348,
+            "x1": 339
+          }
+        ],
+        "y": 212
+      },
+      {
+        "height_units": 8,
+        "row": 13,
+        "segs": [
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 8,
+            "x1": 41
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 97
+          },
+          {
+            "from": "branch:drgnx/rp-hub",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 135,
+            "x1": 168
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 168,
+            "x1": 168
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 217,
+            "x1": 199
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 218,
+            "x1": 207
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 218,
+            "x1": 207
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 236,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 236,
+            "x1": 246
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 339,
+            "x1": 327
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 339,
+            "x1": 327
+          }
+        ],
+        "y": 222
+      },
+      {
+        "height_units": 8,
+        "row": 14,
+        "segs": [
+          {
+            "arc": true,
+            "from": "agent:s23",
+            "kind": "manages",
+            "to": "agent:s24",
+            "x0": 29,
+            "x1": 90
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 41,
+            "x1": 59
+          },
+          {
+            "from": "ask:5",
+            "kind": "came-from",
+            "to": "agent:s25",
+            "x0": 97,
+            "x1": 154
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 168,
+            "x1": 184
+          },
+          {
+            "from": "branch:drgnx/rp-hub",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 168,
+            "x1": 184
+          },
+          {
+            "from": "ask:6",
+            "kind": "came-from",
+            "to": "agent:s26",
+            "x0": 199,
+            "x1": 215
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 185
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 207,
+            "x1": 185
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 246
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s23",
+            "x0": 327,
+            "x1": 29
+          },
+          {
+            "from": "plan:jobq",
+            "kind": "came-from",
+            "to": "agent:s24",
+            "x0": 327,
+            "x1": 90
+          }
+        ],
+        "y": 237
+      },
+      {
+        "height_units": 3,
+        "row": 15,
+        "segs": [
+          {
+            "from": "agent:s23",
+            "kind": "came-from",
+            "to": "branch:org/jobq-plan",
+            "x0": 29,
+            "x1": 29
+          },
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 59,
+            "x1": 8
+          },
+          {
+            "from": "agent:s24",
+            "kind": "came-from",
+            "to": "branch:org/jobq-report",
+            "x0": 90,
+            "x1": 90
+          },
+          {
+            "from": "agent:s25",
+            "kind": "came-from",
+            "to": "branch:org/docs-brainstorm",
+            "x0": 154,
+            "x1": 154
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 184,
+            "x1": 175
+          },
+          {
+            "from": "branch:drgnx/rp-hub",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 184,
+            "x1": 175
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 185,
+            "x1": 194
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 185,
+            "x1": 194
+          },
+          {
+            "from": "agent:s26",
+            "kind": "came-from",
+            "to": "branch:org/docs-chat",
+            "x0": 215,
+            "x1": 215
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 237
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 246,
+            "x1": 237
+          }
+        ],
+        "y": 270
+      },
+      {
+        "height_units": 8,
+        "row": 16,
+        "segs": [
+          {
+            "from": "branch:drgnx/as2-map",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+            "x0": 8,
+            "x1": 21
+          },
+          {
+            "from": "branch:drgnx/as2-sources",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 175,
+            "x1": 168
+          },
+          {
+            "from": "branch:drgnx/rp-hub",
+            "kind": "edits",
+            "to": "file:drgnx/core/drgnx-hub-core.el",
+            "x0": 175,
+            "x1": 168
+          },
+          {
+            "from": "branch:nidhogg/gl-leg",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 194,
+            "x1": 207
+          },
+          {
+            "from": "branch:nidhogg/gl-scroll",
+            "kind": "edits",
+            "to": "file:nidhogg/src/xdisp.c",
+            "x0": 194,
+            "x1": 207
+          },
+          {
+            "from": "branch:drgnx/as2-data",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 237,
+            "x1": 246
+          },
+          {
+            "from": "branch:drgnx/as2-step",
+            "kind": "edits",
+            "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+            "x0": 237,
+            "x1": 246
+          }
+        ],
+        "y": 280
+      }
+    ],
+    "crossings": 169,
+    "fits": true,
+    "form": {
+      "agent:s01": "compact",
+      "agent:s01/toolu_a": "compact",
+      "agent:s01/toolu_b": "compact",
+      "agent:s02": "compact",
+      "agent:s03": "compact",
+      "agent:s04": "rich",
+      "agent:s05": "compact",
+      "agent:s06": "compact",
+      "agent:s07": "compact",
+      "agent:s08": "compact",
+      "agent:s09": "compact",
+      "agent:s10": "compact",
+      "agent:s11": "compact",
+      "agent:s11/toolu_c": "compact",
+      "agent:s12": "rich",
+      "agent:s13": "compact",
+      "agent:s14": "rich",
+      "agent:s15": "compact",
+      "agent:s16": "compact",
+      "agent:s17": "compact",
+      "agent:s18": "rich",
+      "agent:s18/toolu_d": "compact",
+      "agent:s19": "rich",
+      "agent:s20": "rich",
+      "agent:s21": "rich",
+      "agent:s22": "rich",
+      "agent:s23": "rich",
+      "agent:s24": "rich",
+      "agent:s25": "rich",
+      "agent:s26": "rich"
+    },
+    "height_units": 295,
+    "lanes": [
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 1,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "ask:1",
+        "kind": "came-from",
+        "row": 1,
+        "to": "plan:agent-system-p2",
+        "x": 148
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 1,
+        "to": "agent:s26",
+        "x": 209
+      },
+      {
+        "from": "ask:4",
+        "kind": "came-from",
+        "row": 1,
+        "to": "plan:jobq",
+        "x": 352
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 2,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 2,
+        "to": "agent:s26",
+        "x": 209
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s25",
+        "x": 89
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s07",
+        "x": 178
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s08",
+        "x": 178
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s09",
+        "x": 178
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s10",
+        "x": 178
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s26",
+        "x": 179
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s11",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s12",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s13",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s14",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s15",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s16",
+        "x": 224
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s17",
+        "x": 224
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s18",
+        "x": 284
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s19",
+        "x": 284
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s20",
+        "x": 284
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s21",
+        "x": 284
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s22",
+        "x": 284
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s23",
+        "x": 329
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 3,
+        "to": "agent:s24",
+        "x": 329
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 4,
+        "to": "agent:s19",
+        "x": 178
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s07",
+        "x": 179
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s08",
+        "x": 179
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s09",
+        "x": 179
+      },
+      {
+        "from": "plan:agent-system-p2",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s10",
+        "x": 179
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s26",
+        "x": 180
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s11",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s12",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s13",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s14",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s15",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s16",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s17",
+        "x": 233
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s18",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s19",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s20",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s21",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s22",
+        "x": 280
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s23",
+        "x": 328
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 4,
+        "to": "agent:s24",
+        "x": 328
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 5,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 43
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s25",
+        "x": 89
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 5,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 178
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 5,
+        "to": "agent:s19",
+        "x": 185
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 5,
+        "to": "branch:drgnx/rp-hub",
+        "x": 193
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s26",
+        "x": 199
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s11",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s12",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s13",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s14",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s15",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s16",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s17",
+        "x": 233
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 5,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 5,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s18",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s19",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s20",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s21",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s22",
+        "x": 280
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s23",
+        "x": 327
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 5,
+        "to": "agent:s24",
+        "x": 327
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 6,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 42
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s25",
+        "x": 90
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 6,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 135
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 6,
+        "to": "agent:s19",
+        "x": 177
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s26",
+        "x": 178
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 6,
+        "to": "branch:drgnx/rp-hub",
+        "x": 220
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s11",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s12",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s13",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s14",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s15",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s16",
+        "x": 233
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s17",
+        "x": 233
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 6,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 6,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s18",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s19",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s20",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s21",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s22",
+        "x": 280
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s23",
+        "x": 327
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 6,
+        "to": "agent:s24",
+        "x": 327
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 7,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 43
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s25",
+        "x": 89
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 7,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 149
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 7,
+        "to": "agent:s19",
+        "x": 150
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 7,
+        "to": "branch:drgnx/rp-hub",
+        "x": 194
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s26",
+        "x": 195
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s17",
+        "x": 255
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 7,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 256
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 7,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 256
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s18",
+        "x": 300
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s19",
+        "x": 300
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s20",
+        "x": 300
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s21",
+        "x": 300
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s22",
+        "x": 300
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s23",
+        "x": 345
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 7,
+        "to": "agent:s24",
+        "x": 345
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 8,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 42
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 8,
+        "to": "branch:drgnx/rp-hub",
+        "x": 149
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 8,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 150
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 8,
+        "to": "agent:s19",
+        "x": 151
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s26",
+        "x": 199
+      },
+      {
+        "from": "plan:glitnir-p2-p4",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s17",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 8,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 247
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 8,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 247
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s18",
+        "x": 299
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s19",
+        "x": 299
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s20",
+        "x": 299
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s21",
+        "x": 299
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s22",
+        "x": 299
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s23",
+        "x": 344
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 8,
+        "to": "agent:s24",
+        "x": 344
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 43
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 9,
+        "to": "agent:s19",
+        "x": 152
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 9,
+        "to": "branch:drgnx/rp-hub",
+        "x": 160
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 168
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s26",
+        "x": 199
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 9,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s18",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s19",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s20",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s21",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s22",
+        "x": 280
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s23",
+        "x": 327
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 9,
+        "to": "agent:s24",
+        "x": 327
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 42
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "agent:s03",
+        "kind": "overlap",
+        "row": 10,
+        "to": "agent:s19",
+        "x": 144
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 10,
+        "to": "branch:drgnx/rp-hub",
+        "x": 152
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 168
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s26",
+        "x": 199
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 10,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s18",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s19",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s20",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s21",
+        "x": 280
+      },
+      {
+        "from": "plan:race-proof",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s22",
+        "x": 280
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s23",
+        "x": 327
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 10,
+        "to": "agent:s24",
+        "x": 327
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 59
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 11,
+        "to": "agent:s25",
+        "x": 104
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "overlap",
+        "row": 11,
+        "to": "branch:drgnx/rp-hub",
+        "x": 165
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 166
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 11,
+        "to": "agent:s26",
+        "x": 226
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 227
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 227
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 287
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 11,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 287
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 11,
+        "to": "agent:s23",
+        "x": 348
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 11,
+        "to": "agent:s24",
+        "x": 348
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 8
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 12,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 168
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 12,
+        "to": "agent:s26",
+        "x": 217
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 218
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 218
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 236
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 12,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 236
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 12,
+        "to": "agent:s23",
+        "x": 339
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 12,
+        "to": "agent:s24",
+        "x": 339
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 41
+      },
+      {
+        "from": "ask:5",
+        "kind": "came-from",
+        "row": 13,
+        "to": "agent:s25",
+        "x": 97
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 168
+      },
+      {
+        "from": "branch:drgnx/rp-hub",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 168
+      },
+      {
+        "from": "ask:6",
+        "kind": "came-from",
+        "row": 13,
+        "to": "agent:s26",
+        "x": 199
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 207
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 13,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 13,
+        "to": "agent:s23",
+        "x": 327
+      },
+      {
+        "from": "plan:jobq",
+        "kind": "came-from",
+        "row": 13,
+        "to": "agent:s24",
+        "x": 327
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 59
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 184
+      },
+      {
+        "from": "branch:drgnx/rp-hub",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 184
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 185
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 185
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 14,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 246
+      },
+      {
+        "from": "branch:drgnx/as2-map",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:drgnx/runtime/crates/vegvisir/src/layout.rs",
+        "x": 8
+      },
+      {
+        "from": "branch:drgnx/as2-sources",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 175
+      },
+      {
+        "from": "branch:drgnx/rp-hub",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:drgnx/core/drgnx-hub-core.el",
+        "x": 175
+      },
+      {
+        "from": "branch:nidhogg/gl-leg",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 194
+      },
+      {
+        "from": "branch:nidhogg/gl-scroll",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:nidhogg/src/xdisp.c",
+        "x": 194
+      },
+      {
+        "from": "branch:drgnx/as2-data",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 237
+      },
+      {
+        "from": "branch:drgnx/as2-step",
+        "kind": "edits",
+        "row": 15,
+        "to": "file:drgnx/runtime/crates/drgnx-ratatoskr/src/agents/session.rs",
+        "x": 237
+      }
+    ],
+    "ports": [],
+    "rows": [
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 1,
+        "sub": 0,
+        "y": 0
+      },
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 2,
+        "sub": 0,
+        "y": 15
+      },
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 3,
+        "sub": 0,
+        "y": 30
+      },
+      {
+        "block_line": 0,
+        "height_units": 25,
+        "layer": 4,
+        "sub": 0,
+        "y": 45
+      },
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 0,
+        "y": 73
+      },
+      {
+        "block_line": 0,
+        "height_units": 10,
+        "layer": 4,
+        "sub": 1,
+        "y": 88
+      },
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 1,
+        "y": 101
+      },
+      {
+        "block_line": 1,
+        "height_units": 25,
+        "layer": 4,
+        "sub": 0,
+        "y": 116
+      },
+      {
+        "block_line": 1,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 0,
+        "y": 144
+      },
+      {
+        "block_line": 1,
+        "height_units": 10,
+        "layer": 4,
+        "sub": 1,
+        "y": 159
+      },
+      {
+        "block_line": 1,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 1,
+        "y": 172
+      },
+      {
+        "block_line": 2,
+        "height_units": 25,
+        "layer": 4,
+        "sub": 0,
+        "y": 187
+      },
+      {
+        "block_line": 2,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 0,
+        "y": 215
+      },
+      {
+        "block_line": 2,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 1,
+        "y": 230
+      },
+      {
+        "block_line": 3,
+        "height_units": 25,
+        "layer": 4,
+        "sub": 0,
+        "y": 245
+      },
+      {
+        "block_line": 3,
+        "height_units": 7,
+        "layer": 5,
+        "sub": 0,
+        "y": 273
+      },
+      {
+        "block_line": 0,
+        "height_units": 7,
+        "layer": 6,
+        "sub": 0,
+        "y": 288
+      }
+    ],
+    "width_units": 376
+  },
+  "needs_you": [
+    {
+      "about": [
+        "agent:s04"
+      ],
+      "card": "c1",
+      "kind": "permission",
+      "text": "Codex asks: cargo clippy"
+    },
+    {
+      "about": [
+        "agent:s20"
+      ],
+      "card": "c2",
+      "kind": "push",
+      "text": "push rp-sweep to ci/*?"
+    },
+    {
+      "about": [
+        "agent:s23"
+      ],
+      "card": "c3",
+      "kind": "question",
+      "text": "jobq: one queue or two?"
+    },
+    {
+      "about": [
+        "agent:s12",
+        "agent:s14"
+      ],
+      "card": "c4",
+      "kind": "clash",
+      "text": "xdisp.c: the same lines"
+    }
+  ],
+  "version": 1
+}
