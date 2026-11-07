@@ -937,6 +937,11 @@ test_stress() { # N [--load K] [--ui|--tty|--scenario [ARGS…]] — the selecte
 }
 
 cmd_test() {
+  # huginn's dump example, when this checkout has built it (cargo build -p huginn --example dump): the differential test
+  # is on the must-run list, so a full run without it fails; CI sets the variable itself
+  if [ -z "${DRGNX_HUGINN_DUMP:-}" ] && [ -x "$here/runtime/target/debug/examples/dump" ]; then
+    export DRGNX_HUGINN_DUMP="$here/runtime/target/debug/examples/dump"
+  fi
   case "${1:-}" in
     "") test_batch ;;
     # batch flags, in any order: --one-process (every test file in one Emacs: hunting a leak across files),

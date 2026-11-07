@@ -1029,7 +1029,8 @@ Also unset: `drgnx-test-env-ambient-variables` (the SSH agent, `GPG_AGENT_INFO`,
 socket and token) and every other variable of the caller that holds a path under the real HOME (found by a scan; the
 only exceptions are `PATH`, `PWD`, `OLDPWD`, `DRGNX_USER_ELPA`, `DRGNX_RATATOSKR_BIN`, the Ratatoskr the client's
 tests run, which macOS CI builds in the checkout under HOME, and `DRGNX_HUGINN_DUMP`, huginn's dump example for the
-differential test). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
+differential test; `drgnx test` finds `runtime/target/debug/examples/dump` without the variable once
+`cargo build -p huginn --example dump` has built it, and the test is on the must-run list, so a full run without it fails). `GNUPGHOME` is RUN/gnupg (mode 700). The unit
 runner also binds `user-emacs-directory` to RUN/emacs, so nothing under `~/.emacs.d` or `~/.config/emacs` is written.
 `DRGNX_USER_ELPA` (the real `~/.config/emacs/elpa`, read-only) is the deliberate exception: tests that load packages
 read it and never write it. `TMPDIR` the runner reads before it fakes anything (its own run directory is made there).
