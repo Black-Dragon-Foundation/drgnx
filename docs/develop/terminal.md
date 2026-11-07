@@ -1,8 +1,8 @@
 # The terminal
 
 The terminal's engine is libghostty-vt, Ghostty's terminal library (MIT), linked statically into the `drgnx-term` worker
-through the crate `runtime/crates/ghostty-vt-sys`. This page covers building the engine and the worker; the Lisp side
-adds its sections as it lands.
+through the crate `runtime/crates/ghostty-vt-sys`. This page covers building the engine, the worker, the hub's
+methods and the editor's side.
 
 ## Building the engine
 
@@ -168,7 +168,9 @@ A terminal's worker outlives the hub that started it (`runtime/crates/drgnx-rata
 **Spawn:** with a user systemd, the worker runs in a scope of its own, `systemd-run --user --scope --unit
 drgnx-term-<id>`, with `MemoryMax` and `TasksMax` from the `linux-cgroup*` settings: a hub unit stopped with
 `KillMode=mixed` kills its own cgroup, not the scope. Elsewhere the worker gets a process group of its own. The worker
-binds `<state>/term/<id>.sock`; its stderr goes to `<state>/term/<id>.log`. The hub finds the binary at
+binds `<state>/term/<id>.sock`; its stderr goes to `<state>/term/<id>.log`. `term/open` connects every 20 ms of real
+time until the worker binds, for at most 5 s, on a blocking thread (the request waits inside its serving step, under
+which the test clock stands still), then reads its hello within 5 s. The hub finds the binary at
 `DRGNX_TERM_BIN`, else beside its own.
 
 **Registry:** `<state>/term/<id>.json` holds the unit, the worker's pid and start time, the shell's pid, the view
@@ -183,8 +185,10 @@ marks the terminal "from before the update" (its program keeps running; the hub 
 
 **Session end:** an editor's `hello` names its Emacs session. When the last connection carrying a session closes, its
 terminals wait 60 seconds for a hello with that session (a dropped socket, a hub restart); then they end (`close`,
-SIGHUP to the program's group). A clean Emacs exit ends them at once. Until its session says hello again, an adopted
-terminal draws nowhere; the hello re-attaches it, and its next patch is a reset.
+SIGHUP to the program's group). A clean Emacs exit ends them at once. A terminal draws on the subscribed connection
+of its session (the editor's `drgnx-hub-session`): until one subscribes again, an adopted terminal or one whose editor
+dropped its socket draws nowhere; the subscription re-attaches it, and its next patch is a reset. A hello alone (the
+editor's call connection) moves nothing.
 
 **Program running:** the worker answers `status` from the shell's OSC 133 marks (C: a command's output started, D: it
 ended), else from whether the shell has a child: Linux `/proc/<pid>/task/<pid>/children`, macOS `proc_listchildpids`.
@@ -192,3 +196,38 @@ ended), else from whether the shell has a child: Linux `/proc/<pid>/task/<pid>/c
 **Tests:** `cargo test -p drgnx-ratatoskr --lib term::` (fake workers on the socket: adoption by pid and start time,
 the protocol versions, the grace, a clean exit) and `drgnx-term`'s `tests/running.rs` (both ways of telling a
 program runs).
+
+## The editor's side
+
+`modules/tools/drgnx-term.el` (module `tools/term`; New Terminal calls `drgnx-term-start DIR [COMMAND]` when
+`drgnx-term-usable-p`). Lisp inserts rows, places the cursor, sends input and runs commands; the worker computes.
+
+- **Open:** `term/open` goes on the subscribed connection, the one the rows come back on, with the window's size in
+  cells, the program's whole environment (`TERM`, `COLORTERM`, `INSIDE_EMACS`, then `drgnx-terminal-environment`,
+  then this Emacs's) and the window `drgnx-term-scrollback-lines`. Its answer attaches the buffer to the view
+  `term:<id>` in the class `term` (one class for every terminal: the worker builds rows for cells, so a text scale or
+  a font change never re-pairs the buffer, and no `view/env` is sent). A reset that came before the answer found no
+  buffer, so the answer sends `view/resync` when nothing was applied yet. With no subscription the buffer waits and
+  `drgnx-hub-connect` runs; the subscription opens it.
+- **The view type `drgnx-term-view`:** `:delay 0` (no throttle; the 4 ms slices stay), `:ack t`, `:epoch-reset nil`,
+  `:follow-tail t`. Its PATCHED puts the inserter's overlays back, then point and the cursor on the cursor's row and
+  column (`cursor-type` from the shape: block `box`, hollow `hollow`, bar `(bar . 2)`, underline `(hbar . 2)`; not
+  visible: nil). A cursor past the row's last character (trailing blanks are not sent) is drawn by an overlay's
+  `after-string` of blanks whose last carries `cursor`.
+- **Theme:** a theme enabled or disabled repaints every terminal from the faces (`drgnx-view-patch-repaint`): rows
+  keep their keys, nothing goes to the hub.
+- **Scrollback:** `drgnx-term-scrollback-lines`'s `:apply` sends `term/config` `scrollback-lines` to every worker,
+  which removes the oldest rows or backfills; window-start reaching the buffer's top sends `term/fetch` with the first
+  row's key (one at a time; not again for the same top row once the worker said nothing is missing).
+- **Input:** `term/key` (printable keys and the named keys of `drgnx-term-mode-map`, a raw-input map) and `term/text`
+  (`drgnx-term-send-string`). While the subscription is down, or before the terminal opened, input queues per buffer,
+  at most `drgnx-term-queue-max` (4096) bytes, and goes on `drgnx-hub-connected-functions`.
+- **Session:** every hello carries `drgnx-hub-session`; the subscription re-attaches this Emacs's terminals after a
+  dropped socket or a hub restart (see [Lifetime](#lifetime)).
+- **End:** `term/exit` kills a shell's buffer, and leaves a command's with its status in `mode-line-process`. Killing
+  the buffer sends `term/close`. Turning the module off kills every terminal buffer.
+
+**Tests:** `test/unit/term-test.el` (`drgnx-term/`, a gated hub with the real worker: the shell in a worker, echo,
+a flood backfilled, the scrollback setting both ways, undo off, input queued while the hub is away, a theme change
+without a reset, a tty frame) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align,
+cursor shapes).

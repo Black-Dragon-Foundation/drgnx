@@ -2006,7 +2006,11 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline. A run
   `s:<id>` names a style the patch's `styles` sent (kept until the next reset; one the view lacks sends
   `view/resync`): an ansi foreground is the face `drgnx-term-color-N`, the rest one anonymous face per distinct
-  style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows").
+  style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows"); faint adds
+  `drgnx-term-faint`. `drgnx-view-patch-repaint` draws every row again from the faces as they are (a theme change
+  in a view whose type has `:epoch-reset nil`), the LRU emptied, with no message to the hub. A terminal's patch also
+  carries `term` (cursor, alt screen, mouse tracking, title): the inserter keeps it (`drgnx-view-patch-term`) and
+  draws the cursor's row again, so the view type's PATCHED can place the cursor after the draw.
 - **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
   segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
   reported by `view/measured`, after which the hub fits that string by the editor's width.

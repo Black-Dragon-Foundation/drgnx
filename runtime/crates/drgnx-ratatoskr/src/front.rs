@@ -524,11 +524,11 @@ impl Front {
             Params::Hello(p) => {
                 let schema = self.schema.load(Ordering::Relaxed);
                 let r = hello::hello(s, &self.cap, &p, schema).map(|r| json!(r));
-                // the editor session's terminals draw on this connection again
+                // the connection carries an editor session: its terminals draw on it once it subscribes
                 if r.is_ok()
                     && let Some(session) = &p.session
                 {
-                    self.core.terms.hello(s.conn, session.as_str());
+                    self.core.terms.note_session(s.conn, session.as_str());
                 }
                 r
             }
@@ -536,6 +536,10 @@ impl Front {
             Params::Status(_) => Ok(json!(self.status())),
             Params::Subscribe(_) => {
                 self.editors.subscribe(s.conn, out.clone());
+                // the events reach this connection now: its session's terminals draw here, from a reset each
+                if let Some(session) = self.core.terms.session_of(s.conn) {
+                    self.core.terms.hello(s.conn, &session);
+                }
                 need_keys = self.gate.pending_need_keys();
                 settings_notices = self.settings.current().notices();
                 Ok(json!(true))

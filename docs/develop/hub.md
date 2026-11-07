@@ -62,7 +62,7 @@ User docs: [Agents → The hub and the gateway](../guide/agents.md#the-hub-and-t
      started: the hub serves every method itself ([The registry](#the-registry-protocol-v1)).
 
   It stops on SIGTERM, on SIGINT, or one second after the `--parent-pid` process is gone (`kill(pid, 0)`; the last
-  `--parent-pid` counts). It stops accepting, ends its own sessions, then removes the socket and the cap while the
+  `--parent-pid` counts; real time, also under `--test-clock`). It stops accepting, ends its own sessions, then removes the socket and the cap while the
   lock is still held. It then closes every connection, after what is queued for each is written (at most 1 s for all
   of them), and the outside bridges' connections `mcp/attach` handed to MCP, so its clients see the end before the hub
   waits on anything that can hang. Last, it stops its store
@@ -239,7 +239,8 @@ Every timer of the hub and every reading of its time go through `drgnx-ratatoskr
 `tokio::time::Instant`), `wall()` and `wall_secs()` (the time of day), `sleep`, `timeout`, `interval` (a late tick
 moves the next ones), and `spawn(origin, future)`, which names a task (`"module:what"`). In a release build each is
 tokio's or std's, inlined. `real_now()` is real time on every clock, for a blocking thread's limit on something outside
-the hub (a podman pull). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
+the hub (a podman pull); `real_interval(period)` ticks on real time on every clock, for watching something outside
+the hub (the `--parent-pid` process). The session's update throttle (`EMIT_EVERY`, 50 ms), its Stop timers (`STOP_ANSWER`, the
 close when idle), a move's wait, a connection's `STUCK_AFTER` and flush, and a job's time box and stop all read it,
 and so does every other timer: the hub's tick loops (sessions, delivery, schema, runner, supervisor, manager, idle),
 the debounces, the paced reads, the accept back-off, the sandbox probe's limits and the stored timestamps. A `Delay`

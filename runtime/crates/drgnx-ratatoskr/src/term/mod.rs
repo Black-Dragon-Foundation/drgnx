@@ -249,20 +249,16 @@ impl Terms {
         };
         rec.write(&dir).map_err(|e| e.to_string())?;
         // the worker binds its socket once it runs
-        let mut tries = 0;
-        let (r, w, hello) = loop {
-            match adopt::connect(&socket, Duration::from_secs(5)).await {
-                Ok(c) => break c,
-                Err(e) if tries >= 100 => {
+        let (r, w, hello) =
+            match adopt::connect_started(&socket, Duration::from_secs(5), Duration::from_secs(5))
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
                     Record::remove(&dir, &id);
                     return Err(format!("the terminal worker did not answer: {e}"));
                 }
-                Err(_) => {
-                    tries += 1;
-                    crate::clock::sleep(Duration::from_millis(50)).await;
-                }
-            }
-        };
+            };
         rec.shell_pid = Some(hello.shell_pid);
         let _ = rec.write(&dir);
         if let Some(sess) = &session {
@@ -454,7 +450,15 @@ impl Terms {
         }
     }
 
-    /// Connection CONN said hello as editor session SESSION: its terminals draw there again (a reset each).
+    /// Connection CONN said hello as editor session SESSION: the session lives (its grace ends); its terminals stay
+    /// where they draw until a connection of it subscribes ([`Terms::hello`]).
+    pub fn note_session(&self, conn: u64, session: &str) {
+        let mut st = lock(&self.inner.state);
+        st.life.hello(session);
+        st.sessions.insert(conn, session.to_owned());
+    }
+
+    /// Connection CONN, subscribed, carries editor session SESSION: its terminals draw there again (a reset each).
     pub fn hello(&self, conn: u64, session: &str) {
         let ids: Vec<String> = {
             let mut st = lock(&self.inner.state);

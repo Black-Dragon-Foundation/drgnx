@@ -1,0 +1,374 @@
+;;; drgnx-term.el --- Module tools/term: drgnx's own terminal, run by a worker of the hub -*- lexical-binding: t -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; New Terminal runs your shell in a terminal worker the hub starts (`drgnx-term', on libghostty-vt:
+;; docs/develop/terminal.md).  The worker owns the PTY and the screen and sends finished rows; this buffer only inserts
+;; them.  It is a hub-fed view of type `drgnx-term-view': no throttle, each patch acknowledged (the worker keeps one in
+;; flight), and its faces repaint in place when the theme changes (no reset).  After each draw, point and the cursor
+;; go where the worker's cursor is (`cursor-type' from its shape; a cursor past the row's last character is drawn
+;; there by an overlay's padding).
+;;
+;; The buffer holds the screen and up to `drgnx-term-scrollback-lines' rows above it.  The worker removes the oldest
+;; rows and, after a flood, fills the rows the buffer missed, newest first; changing the setting trims or fills every
+;; terminal at once.  Scrolling to the top of the buffer asks the worker for missing rows above (`term/fetch').  Undo is
+;; off.  While the hub is away (or before the terminal has opened), input waits, at most `drgnx-term-queue-max'
+;; bytes, and goes once the hub is back.  The terminals of this Emacs survive a hub restart: the hub adopts the
+;; workers, and the next subscription draws them again from a reset.
+
+;;; Code:
+(require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
+(require 'drgnx-modules)
+(require 'drgnx-setting)
+(require 'drgnx-timer)
+(require 'drgnx-view)
+(require 'drgnx-hub-client)
+(declare-function drgnx-terminal-environment "drgnx-terminal" ())
+(declare-function drgnx-terminal-shell "drgnx-terminal" ())
+
+;;;; Faces
+
+(defface drgnx-term-default '((t))
+  "The terminal's text in its default colours: remapped over `default' in a terminal's buffer."
+  :group 'drgnx)
+
+(defface drgnx-term-selection '((t :inherit region))
+  "The terminal's selected text."
+  :group 'drgnx)
+
+(defface drgnx-term-search '((t :inherit lazy-highlight))
+  "The matches of Find in Terminal."
+  :group 'drgnx)
+
+(defface drgnx-term-search-selected '((t :inherit isearch))
+  "The match of Find in Terminal that is selected."
+  :group 'drgnx)
+
+(defface drgnx-term-cursor '((t :inherit cursor))
+  "The terminal's cursor colour, as programs that ask for it are told."
+  :group 'drgnx)
+
+;;;; State
+
+(defconst drgnx-term-queue-max 4096
+  "The most bytes of input a terminal holds while the hub is away; what comes after is dropped (said once).")
+
+(defvar drgnx-term--buffers (make-hash-table :test #'equal)
+  "Terminal id → its buffer, for the terminals this Emacs opened.  Pruned with the buffer.")
+
+(defconst drgnx-term-class "term"
+  "The display class of every terminal view: the worker builds its rows for cells, not for the window's fonts, so a
+text scale or a font change never re-pairs the buffer.")
+
+(defvar-local drgnx-term--id nil "This terminal's id at the hub, once `term/open' answered.")
+(defvar-local drgnx-term--state nil "nil (not asked yet), `opening', `open', `failed' or `exited'.")
+(defvar-local drgnx-term--program nil "The program and its arguments this terminal runs.")
+(defvar-local drgnx-term--shell nil "Non-nil when this terminal runs the user's shell (its buffer goes when it ends).")
+(defvar-local drgnx-term--queue nil "Input waiting for the hub, newest first: (METHOD . PARAMS) each.")
+(defvar-local drgnx-term--queued 0 "The bytes of input in `drgnx-term--queue'.")
+(defvar-local drgnx-term--dropped nil "Non-nil once input was dropped while the hub is away (said once).")
+(defvar-local drgnx-term--pad-overlay nil "The overlay that draws the cursor past the end of its row.")
+(defvar-local drgnx-term--fetching nil "Non-nil while a `term/fetch' waits for its answer.")
+(defvar-local drgnx-term--top-done nil "The first row's key when the worker last said nothing is missing above it.")
+
+(defun drgnx-term--up-p ()
+  "Non-nil while this Emacs's subscribed connection to the hub is up."
+  (process-live-p drgnx-hub--events))
+
+(defun drgnx-term-buffers ()
+  "The live terminal buffers this Emacs opened."
+  (let (out)
+    (maphash (lambda (_ b) (when (buffer-live-p b) (push b out))) drgnx-term--buffers)
+    out))
+
+;;;; Input: sent now, or queued while the hub is away
+
+(defun drgnx-term--bytes (params)
+  "The bytes PARAMS of an input message count against `drgnx-term-queue-max'."
+  (+ (string-bytes (or (plist-get params :text) "")) (string-bytes (or (plist-get params :key) "")) 1))
+
+(defun drgnx-term--send (method params)
+  "METHOD with PARAMS (without the id) for this buffer's terminal: now while the hub is up and the terminal open,
+else queued (input only, at most `drgnx-term-queue-max' bytes; `term/config' is not queued: the next open or
+subscription reads the setting)."
+  (cond ((and drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
+         (drgnx-hub--call-on drgnx-hub--events method (append (list :id drgnx-term--id) params) #'ignore))
+        ((equal method "term/config") nil)
+        ((memq drgnx-term--state '(failed exited)) nil)
+        (t (let ((n (drgnx-term--bytes params)))
+             (if (> (+ drgnx-term--queued n) drgnx-term-queue-max)
+                 (unless drgnx-term--dropped
+                   (setq drgnx-term--dropped t)
+                   (message "Terminal: the hub is away and %d bytes of input wait already; more is dropped"
+                            drgnx-term--queued))
+               (push (cons method params) drgnx-term--queue)
+               (setq drgnx-term--queued (+ drgnx-term--queued n)))))))
+
+(defun drgnx-term--flush ()
+  "Send this terminal's queued input, oldest first."
+  (when (and drgnx-term--queue drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
+    (let ((q (nreverse drgnx-term--queue)))
+      (setq drgnx-term--queue nil drgnx-term--queued 0 drgnx-term--dropped nil)
+      (dolist (m q) (drgnx-term--send (car m) (cdr m))))))
+
+(defun drgnx-term-send-string (text)
+  "Type TEXT into this buffer's terminal, as it is (`term/text')."
+  (drgnx-term--send "term/text" (list :text text)))
+
+(defun drgnx-term-send-key (key &optional mods text)
+  "Press KEY (a name: `return', `tab', `a', `f5') with MODS (a list of `ctrl', `shift', `alt', `super') in this
+buffer's terminal; TEXT is what it types.  The worker encodes it from the terminal's modes (`term/key')."
+  (drgnx-term--send "term/key" (append (list :key key :mods (vconcat mods)) (and text (list :text text)))))
+
+(defun drgnx-term-self-insert ()
+  "Type the character of this key into the terminal."
+  (interactive)
+  (let ((s (string last-command-event)))
+    (drgnx-term-send-key s nil s)))
+
+(defconst drgnx-term--named-keys
+  '((return . "return") (13 . "return") (tab . "tab") (9 . "tab") (backspace . "backspace") (127 . "backspace")
+    (delete . "delete") (escape . "escape") (left . "left") (up . "up") (right . "right") (down . "down")
+    (home . "home") (end . "end") (prior . "prior") (next . "next") (insert . "insert"))
+  "Emacs events typed into the terminal as named keys, and their names.")
+
+(defun drgnx-term-named-key ()
+  "Press this named key (Return, Tab, Backspace, the arrows…) in the terminal."
+  (interactive)
+  (when-let* ((name (alist-get last-command-event drgnx-term--named-keys)))
+    (drgnx-term-send-key name)))
+
+(defvar drgnx-term-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m [remap self-insert-command] #'drgnx-term-self-insert)
+    (dolist (k drgnx-term--named-keys) (define-key m (vector (car k)) #'drgnx-term-named-key))
+    m)
+  "A terminal's raw input: printable keys, Return, Tab, Backspace, Delete, Escape, the arrows and the page keys go
+to the program; every other key stays drgnx's.")
+
+;;;; Settings
+
+(defvar drgnx-term-scrollback-lines)
+
+(defun drgnx-term--apply-scrollback ()
+  "`:apply' of `drgnx-term-scrollback-lines': every live terminal's worker trims or fills its buffer at once."
+  (maphash (lambda (_ b)
+             (when (buffer-live-p b)
+               (with-current-buffer b
+                 (drgnx-term--send "term/config"
+                                   (list :config (vector (vector "scrollback-lines" drgnx-term-scrollback-lines)))))))
+           drgnx-term--buffers))
+
+(drgnx-defsetting drgnx-term-scrollback-lines 10000
+  "How many rows a terminal's buffer keeps above its screen.  A change trims or fills every terminal at once.  The
+terminal itself remembers at least 10,000 lines whatever this says, so Find in Terminal and copy reach further."
+  :type 'natnum :group 'drgnx :scope 'global :agents 'never :schema 'natnum :apply #'drgnx-term--apply-scrollback)
+
+;;;; The view
+
+(defconst drgnx-term--cursor-types
+  '(("block" . box) ("block_hollow" . hollow) ("bar" . (bar . 2)) ("underline" . (hbar . 2)))
+  "The worker's cursor shapes as `cursor-type' values.")
+
+(defun drgnx-term--pad (pos n)
+  "Draw the cursor N cells past POS, the end of its row (N 0: no padding)."
+  (let ((ov drgnx-term--pad-overlay))
+    (if (<= n 0)
+        (when ov (overlay-put ov 'after-string nil))
+      (unless ov (setq ov (setq drgnx-term--pad-overlay (make-overlay pos pos nil t nil))))
+      (move-overlay ov pos pos)
+      (let ((s (make-string (1+ n) ?\s)))
+        (put-text-property n (1+ n) 'cursor t s)
+        (overlay-put ov 'after-string s)))))
+
+(defun drgnx-term--place-cursor ()
+  "Point and the cursor where the worker's cursor is (the last patch's `term'), in the current terminal buffer."
+  (when-let* ((cur (plist-get (drgnx-view-patch-term drgnx-view-patch) :cursor))
+              (beg (drgnx-view-row-start drgnx-view (nth 0 cur))))
+    (let* ((eol (save-excursion (goto-char beg) (line-end-position)))
+           (want (+ beg (nth 1 cur))) (pos (min want eol)))
+      (setq cursor-type (and (eq (nth 3 cur) t) (or (cdr (assoc (nth 2 cur) drgnx-term--cursor-types)) 'box)))
+      (drgnx-term--pad pos (- want pos))
+      (goto-char pos)
+      (dolist (w (get-buffer-window-list nil nil t)) (set-window-point w pos)))))
+
+(defun drgnx-term--patched (view keys)
+  "PATCHED of `drgnx-term-view': the inserter's overlays back, then the cursor."
+  (drgnx-view-patch--patched view keys)
+  (with-current-buffer (drgnx-view--buffer view) (drgnx-term--place-cursor)))
+
+(drgnx-view-define 'drgnx-term-view :render #'drgnx-view-patch-render :patched #'drgnx-term--patched
+                   :slice drgnx-view-slice :delay 0 :follow-tail t :ack t :epoch-reset nil)
+
+;;;; Rows above the buffer
+
+(defun drgnx-term--fetch (buffer)
+  "Ask BUFFER's worker for the rows missing above its first row (`term/fetch'); one ask at a time."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((top (and drgnx-view (drgnx-view-key-at (point-min)))))
+        (when (and top (not drgnx-term--fetching) (not (equal top drgnx-term--top-done))
+                   drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
+          (setq drgnx-term--fetching t)
+          (drgnx-hub--call-on drgnx-hub--events "term/fetch" (list :id drgnx-term--id :before_key top)
+                              (lambda (r _e)
+                                (when (buffer-live-p buffer)
+                                  (with-current-buffer buffer
+                                    (setq drgnx-term--fetching nil)
+                                    (unless (plist-get r :version) (setq drgnx-term--top-done top)))))))))))
+
+(defun drgnx-term--scrolled (window start)
+  "`window-scroll-functions' of a terminal buffer: at the buffer's top, ask for the rows above (from a timer)."
+  (let ((b (window-buffer window)))
+    (when (= start (with-current-buffer b (point-min)))
+      (drgnx-timer-soon (cons 'drgnx-term-fetch b) 0 #'drgnx-term--fetch :args (list b) :owner b))))
+
+;;;; Opening
+
+(defun drgnx-term--env ()
+  "The program's whole environment, as `[[NAME, VALUE]…]': drgnx's terminal entries, then
+`drgnx-terminal-environment', then this Emacs's; an entry without `=' unsets its name."
+  (let ((seen (make-hash-table :test #'equal)) (out nil))
+    (dolist (e (append (list "TERM=xterm-256color" "COLORTERM=truecolor"
+                             (format "INSIDE_EMACS=%s,drgnx" emacs-version) "COLUMNS" "LINES")
+                       (drgnx-terminal-environment) process-environment))
+      (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
+        (unless (gethash name seen)
+          (puthash name t seen)
+          (when i (push (vector name (substring e (1+ i))) out)))))
+    (vconcat (nreverse out))))
+
+(defun drgnx-term--window-size (window)
+  "WINDOW's body in cells and its frame's cell in px: (COLS ROWS [W H])."
+  (let ((f (window-frame window)))
+    (list (max 2 (window-body-width window)) (max 1 (window-body-height window))
+          (vector (frame-char-width f) (frame-char-height f)))))
+
+(defun drgnx-term--open (buffer)
+  "Ask the hub for BUFFER's terminal (`term/open') on the subscribed connection, where its rows come back; while the
+hub is not up, connect, and the subscription opens it (`drgnx-term--connected')."
+  (with-current-buffer buffer
+    (if (not (drgnx-term--up-p))
+        (progn (setq drgnx-term--state nil) (drgnx-hub-connect))
+      (setq drgnx-term--state 'opening)
+      (let ((size (drgnx-term--window-size (or (get-buffer-window buffer) (selected-window)))))
+        (drgnx-hub--call-on drgnx-hub--events "term/open"
+                            (list :dir (expand-file-name default-directory) :command (vconcat drgnx-term--program)
+                                  :env (drgnx-term--env) :cols (nth 0 size) :rows (nth 1 size) :cell_px (nth 2 size)
+                                  :class drgnx-term-class :window drgnx-term-scrollback-lines)
+                            (lambda (r e) (drgnx-term--opened buffer r e)))))))
+
+(defun drgnx-term--opened (buffer result error)
+  "`term/open' answered RESULT (or ERROR) for BUFFER: it becomes the terminal's view; the queued input goes."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (if error
+          (progn
+            (setq drgnx-term--state 'failed mode-line-process ":failed")
+            (message "The terminal could not start: %s" (or (plist-get error :message) error)))
+        (setq drgnx-term--id (plist-get result :id) drgnx-term--state 'open)
+        (puthash drgnx-term--id buffer drgnx-term--buffers)
+        (drgnx-view-patch-attach (plist-get result :view) drgnx-term-class :type 'drgnx-term-view)
+        ;; the first reset may have come before this answer, when no buffer showed the view: ask for another
+        (unless (drgnx-view-patch-version drgnx-view-patch)
+          (funcall drgnx-view-patch-send-function "view/resync"
+                   (list :view (plist-get result :view) :class drgnx-term-class :version 0)))
+        (drgnx-term--flush)))))
+
+(defun drgnx-term--connected ()
+  "`drgnx-hub-connected-functions': terminals not opened yet open now; the others' queued input goes."
+  (dolist (b (append (drgnx-term-buffers)
+                     (seq-filter (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'drgnx-term-mode)
+                                                  (null (buffer-local-value 'drgnx-term--state b))))
+                                 (buffer-list))))
+    (with-current-buffer b
+      (if (null drgnx-term--state) (drgnx-term--open b) (drgnx-term--flush)))))
+
+(defun drgnx-term--killed ()
+  "`kill-buffer-hook' of a terminal buffer: its terminal is closed and forgotten."
+  (when drgnx-term--id
+    (remhash drgnx-term--id drgnx-term--buffers)
+    (when (and (eq drgnx-term--state 'open) (drgnx-term--up-p))
+      (drgnx-hub--call-on drgnx-hub--events "term/close" (list :id drgnx-term--id) #'ignore))
+    (setq drgnx-term--id nil)))
+
+;;;; Events
+
+(defun drgnx-term--exited (data)
+  "The terminal's program ended (DATA: its code or signal): a shell's buffer goes, a command's stays to be read."
+  (setq drgnx-term--state 'exited)
+  (remhash drgnx-term--id drgnx-term--buffers)
+  (setq drgnx-term--id nil)
+  (if drgnx-term--shell
+      (kill-buffer (current-buffer))
+    (setq mode-line-process
+          (format ":%s" (if (plist-get data :signal) (format "signal %s" (plist-get data :signal))
+                          (format "exit %s" (plist-get data :code)))))
+    (force-mode-line-update)))
+
+(defun drgnx-term--event (event data)
+  "`drgnx-hub-event-functions': a `term/*' event goes to its terminal's buffer."
+  (when (and (stringp event) (string-prefix-p "term/" event))
+    (when-let* ((b (gethash (plist-get data :id) drgnx-term--buffers)) ((buffer-live-p b)))
+      (with-current-buffer b
+        (pcase event
+          ("term/exit" (drgnx-term--exited data)))))))
+
+(defun drgnx-term--theme-changed (&optional _theme)
+  "A theme was enabled or disabled: every terminal repaints from the faces now, without a reset."
+  (dolist (b (drgnx-term-buffers)) (drgnx-view-patch-repaint b)))
+
+;;;; The mode and the start
+
+(define-derived-mode drgnx-term-mode nil "Terminal"
+  "A terminal: its program runs in a worker of the hub, and this buffer shows the rows the worker sends.
+Typing goes to the program (`drgnx-term-mode-map')."
+  (setq buffer-undo-list t truncate-lines t)
+  (setq-local scroll-margin 0)
+  (setq-local hscroll-margin 0)
+  (face-remap-add-relative 'default 'drgnx-term-default)
+  (add-hook 'window-scroll-functions #'drgnx-term--scrolled nil t)
+  (add-hook 'kill-buffer-hook #'drgnx-term--killed nil t))
+
+(defun drgnx-term-start (dir &optional command)
+  "A new terminal in DIR running the user's shell, or COMMAND (a program and its arguments) instead, shown by
+`pop-to-buffer' (the rules put it in the panel); returns its buffer.  A shell's buffer goes when the shell ends; a
+command's stays, so what it printed can be read."
+  (let ((buffer (generate-new-buffer "*terminal*")))
+    (with-current-buffer buffer
+      (drgnx-term-mode)
+      (setq default-directory (file-name-as-directory (expand-file-name dir))
+            drgnx-term--program (or command (list (drgnx-terminal-shell)))
+            drgnx-term--shell (not command)))
+    (pop-to-buffer buffer)
+    (drgnx-term--open buffer)
+    buffer))
+
+(defun drgnx-term-usable-p (dir)
+  "Non-nil when a terminal in DIR can be drgnx's own: not on Windows, DIR not remote, module tools/term has run."
+  (and (not (eq system-type 'windows-nt))
+       (not (file-remote-p dir))
+       (drgnx-modules--ok-p 'tools/term)))
+
+(defun drgnx-term--teardown ()
+  "Turning the module off: every terminal ends (its buffer killed closes it)."
+  (dolist (b (drgnx-term-buffers)) (kill-buffer b))
+  (dolist (b (buffer-list))
+    (when (eq (buffer-local-value 'major-mode b) 'drgnx-term-mode) (kill-buffer b))))
+
+(drgnx-module-define 'tools/term
+                     :doc "New Terminal runs your shell in drgnx's own terminal: a worker of the hub on Ghostty's engine."
+                     :stage 'startup :requires '(tools/terminal)
+                     :teardown #'drgnx-term--teardown
+                     :setup
+                     (lambda ()
+                       (add-hook 'drgnx-hub-event-functions #'drgnx-term--event)
+                       (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
+                       (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)
+                       (add-hook 'disable-theme-functions #'drgnx-term--theme-changed)))
+
+(provide 'drgnx-term)
+;;; drgnx-term.el ends here

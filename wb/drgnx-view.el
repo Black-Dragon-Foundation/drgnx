@@ -1248,7 +1248,10 @@ font or scale change makes the rows draw again anyway).")
 ;; - a view type with `:ack t' sends `view/ack' with the version after each applied patch.
 ;; Styles (a terminal's cells) arrive as `[id, style]', kept per buffer until the next reset.  An ansi foreground is
 ;; the face `drgnx-term-color-N' itself, so a remap or theme shows at once; program (rgb) colours and attributes
-;; become one anonymous face per distinct style from an LRU (`drgnx-view-patch-style-face-max').
+;; become one anonymous face per distinct style from an LRU (`drgnx-view-patch-style-face-max'); faint text adds
+;; `drgnx-term-faint'.  A theme change repaints in place (`drgnx-view-patch-repaint': the LRU emptied, every row drawn
+;; again).  A terminal's patch also carries `term' (cursor, alt screen, mouse tracking, title): kept in the state, and
+;; the cursor's row is drawn again so the view type's PATCHED places the cursor after the draw.
 ;; Selection, dimming and the stale shade are the view's own state, put back as the last step of every draw.
 
 (defvar drgnx-hub--events)
@@ -1332,6 +1335,10 @@ render offload's combined pass compares the two).  Never a user option.")
   "The terminal's colour 15 (a hub-fed row's `{ansi: 15}' foreground)."
   :group 'drgnx)
 
+(defface drgnx-term-faint '((t :inherit shadow))
+  "Faint (SGR 2) text of the terminal: under the text's own colour, so it shows on text in the default colour."
+  :group 'drgnx)
+
 (defconst drgnx-view-patch-ansi-faces
   (vconcat (mapcar (lambda (n) (intern (format "drgnx-term-color-%d" n))) (number-sequence 0 15)))
   "The face of each `{ansi: N}' colour, by N.")
@@ -1370,6 +1377,7 @@ least recently used quarter goes.")
 older epoch, held.  RESYNC: non-nil while a `view/resync' is outstanding.  STALE: dimmed."
   view class hub version (epoch 0) held resync stale
   ack (epoch-reset t)                           ; the view type's options
+  term                                          ; a terminal's last metadata (cursor, alt screen, mouse, title)
   (styles (make-hash-table))                    ; style id → its style (a plist as the event has it)
   (faces (make-hash-table :test #'equal))       ; style → (TICK . FACE), the LRU of `drgnx-view-patch-style-face-max'
   (face-tick 0)
@@ -1565,6 +1573,10 @@ Returns what was done: `drop', `hold', `resync', `apply', or nil when no buffer 
             ('apply
              (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
              (drgnx-view-patch--apply-ops state drgnx-view patch)
+             ;; a terminal's cursor: its row is drawn again, so the view type's PATCHED places it after the draw
+             (when-let* ((term (plist-get patch :term)))
+               (setf (drgnx-view-patch-term state) term)
+               (when-let* ((key (car (plist-get term :cursor)))) (drgnx-view-dirty drgnx-view (list key))))
              (when (drgnx-view-patch-ack state)
                (funcall drgnx-view-patch-send-function "view/ack"
                         (list :view (drgnx-view-patch-view state) :class (drgnx-view-patch-class state)
@@ -1594,6 +1606,15 @@ already."
           (drgnx-view-patch--forget s)
           (setf (drgnx-view-patch-class s) class (drgnx-view-patch-epoch s) 0)
           (puthash (cons (drgnx-view-patch-view s) class) buffer drgnx-view-patch--buffers))))))
+
+(defun drgnx-view-patch-repaint (buffer)
+  "BUFFER's hub-fed rows again from the faces as they are now (a theme changed): the style faces are made afresh and
+every row is drawn again, with no message to the hub."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when (and drgnx-view-patch (drgnx-view-p drgnx-view))
+        (clrhash (drgnx-view-patch-faces drgnx-view-patch))
+        (drgnx-view-dirty drgnx-view t)))))
 
 (defun drgnx-view-patch--disconnected ()
   "The hub went away: every hub-fed view is stale (dimmed, keys work) and forgets its version and hub."
@@ -1655,7 +1676,8 @@ foreground, before it the style's other attributes as one anonymous face, shared
         (let* ((n (plist-get (plist-get style :fg) :ansi))
                (ansi (and (natnump n) (< n 16) (aref drgnx-view-patch-ansi-faces n)))
                (attrs (drgnx-view-patch--style-attrs style))
-               (face (cond ((and ansi attrs) (list attrs ansi)) (ansi) (attrs))))
+               (face (delq nil (list attrs ansi (and (drgnx-view-patch--on (plist-get style :faint)) 'drgnx-term-faint))))
+               (face (if (cdr face) face (car face))))
           (when (>= (hash-table-count faces) drgnx-view-patch-style-face-max)
             (drgnx-view-patch--evict-faces faces))
           (puthash style (cons tick face) faces)

@@ -16784,7 +16784,7 @@
             ]
           },
           "session": {
-            "description": "The editor session the connection carries (an editor sends it): its terminals draw here again, and end when\nno connection says it for a minute.",
+            "description": "The editor session the connection carries (an editor sends it): its terminals draw on its subscribed\nconnection, and end when no connection says it for a minute.",
             "maxLength": 64,
             "type": [
               "string",

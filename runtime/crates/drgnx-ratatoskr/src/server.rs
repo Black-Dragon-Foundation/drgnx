@@ -400,10 +400,8 @@ pub async fn run(args: ServeArgs) -> Exit {
             .and_then(|p| p.parse().ok())
             .filter(|p| *p > 0)
     });
-    let mut parent = parent_pid.map(|p| {
-        let every = crate::clock::interval(Duration::from_secs(1));
-        (p, every)
-    });
+    // real time on any clock: it watches a real process, and on the test clock it is no task's timer
+    let mut parent = parent_pid.map(|p| (p, crate::clock::real_interval(Duration::from_secs(1))));
     let exit = loop {
         let parent_gone = async {
             match &mut parent {

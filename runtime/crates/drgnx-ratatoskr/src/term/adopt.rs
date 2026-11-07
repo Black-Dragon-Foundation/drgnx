@@ -58,7 +58,39 @@ pub async fn connect(
     socket: &std::path::Path,
     within: Duration,
 ) -> io::Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello)> {
-    let s = UnixStream::connect(socket).await?;
+    hello(UnixStream::connect(socket).await?, within).await
+}
+
+/// A connection to the worker just started on SOCKET, tried every 20 ms until it binds, for at most BIND_WITHIN of real
+/// time, and its hello (read within WITHIN).  The worker is a process outside the hub, and `term/open` waits for it
+/// inside its serving step, under which the test clock stands still: the retries cannot wait on the hub's clock.
+pub async fn connect_started(
+    socket: &std::path::Path,
+    bind_within: Duration,
+    within: Duration,
+) -> io::Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello)> {
+    let path = socket.to_owned();
+    let s = crate::clock::blocking(move || {
+        let deadline = crate::clock::real_now() + bind_within;
+        loop {
+            match std::os::unix::net::UnixStream::connect(&path) {
+                Ok(s) => return Ok(s),
+                Err(e) if crate::clock::real_now() >= deadline => return Err(e),
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    })
+    .await
+    .map_err(io::Error::other)??;
+    s.set_nonblocking(true)?;
+    hello(UnixStream::from_std(s)?, within).await
+}
+
+/// The hello the worker on S says first, read within WITHIN.
+async fn hello(
+    s: UnixStream,
+    within: Duration,
+) -> io::Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf, Hello)> {
     let (r, w) = s.into_split();
     let mut r = BufReader::new(r);
     let mut line = String::new();

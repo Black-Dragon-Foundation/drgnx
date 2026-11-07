@@ -167,6 +167,22 @@ async fn session_gone_after_60s_ends_worker() {
 }
 
 #[tokio::test]
+async fn hello_alone_keeps_terminals_where_they_draw() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = record(tmp.path(), "aa", "s1");
+    let mut rx = fake_worker(&rec.socket, PROTO);
+    let (t, _ev) = open(tmp.path()).await;
+    // a connection of the session that does not subscribe (the editor's call connection) moves nothing
+    t.note_session(5, "s1");
+    assert_eq!(t.session_of(5).as_deref(), Some("s1"));
+    assert!(t.send("aa", &In::Text { text: "x".into() }));
+    assert!(
+        matches!(next(&mut rx).await, In::Text { .. }),
+        "no attach came before the text"
+    );
+}
+
+#[tokio::test]
 async fn clean_exit_closes_at_once() {
     let tmp = tempfile::tempdir().unwrap();
     let a = record(tmp.path(), "aa", "s1");

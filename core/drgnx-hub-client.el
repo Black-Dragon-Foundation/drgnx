@@ -55,6 +55,11 @@ only and must be told again, such as the login shell's variables.")
   "The connection whose event `drgnx-hub-event-functions' run for, while they run (else nil): a handler that acts
 only for a hub that proved itself checks its `:drgnx-proven'.")
 
+(defvar drgnx-hub-session (format "%d-%x" (emacs-pid) (random (ash 1 40)))
+  "This Emacs's session id, said in every hello.  The hub keeps the session's terminals while a connection carries it,
+and for a minute after the last one closes (a dropped socket, a hub restart); a subscribed connection of it is where
+they draw (docs/develop/terminal.md, \"Lifetime\").")
+
 (defvar drgnx-hub--client nil "This Emacs's connection to the hub, for requests.")
 (defvar drgnx-hub--events nil "This Emacs's subscribed connection to the hub.")
 (defvar drgnx-hub--subscribing nil "This Emacs's connection whose `subscribe' the hub has not answered yet.")
@@ -628,7 +633,7 @@ core judges the answer from what the hello said: the proof the hub must give bac
                         (append (list :proto drgnx-hub-proto :nonce nonce)
                                 (and version (list :drgnx_version version))
                                 (list :schema drgnx-work-db-schema-version :records drgnx-hub-records
-                                      :client (if noninteractive "cli" "editor"))
+                                      :client (if noninteractive "cli" "editor") :session drgnx-hub-session)
                                 (and proof (list :proof proof)))
                         nil :full t :first t
                         :hello (list :problem (and (consp cap) (or (plist-get cap :problem) "it cannot be read"))

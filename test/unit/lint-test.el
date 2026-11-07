@@ -116,9 +116,9 @@ spec's `:box' colour too) or :distant-foreground."
          (when (drgnx-lint--keyboard-key-p key) (format "%S binds a keyboard key" (car form))))
         (`(,(or 'global-set-key 'keymap-global-set) . ,_) (format "%S" (car form))))))))
 
-(defconst drgnx-lint--raw-input-maps '(drgnx-live-driving-map)
+(defconst drgnx-lint--raw-input-maps '(drgnx-live-driving-map drgnx-term-mode-map)
   "Keymaps allowed to bind keyboard keys in code: they forward raw input (to a web page, like a terminal's raw map), so
-their keys are not commands and have no registry entries.  Everything else gets its keys from the profiles.")
+their keys are not commands and have no registry entries (the terminal's keys go to its program).  Everything else gets its keys from the profiles.")
 
 (defconst drgnx-lint--decode-maps '(input-decode-map key-translation-map)
   "The terminal's decoding maps: a key sequence computed in code there is what a terminal sends (bytes, CSI forms), not

@@ -1,8 +1,27 @@
 # Your shell and drgnx
 
-New Terminal (`C-S-\`` in the VS Code profile) runs your own shell in a real terminal ([eat](https://codeberg.org/akib/emacs-eat))
-in the panel. Three small files in `etc/shell/` make that shell work better with drgnx. They are optional: without
-them the terminal still works.
+New Terminal (`C-S-\`` in the VS Code profile) runs your own shell in a real terminal in the panel: drgnx's own
+([below](#drgnxs-terminal)), or [eat](https://codeberg.org/akib/emacs-eat) while module `tools/term` is off. Three
+small files in `etc/shell/` make that shell work better with drgnx. They are optional: without them the terminal
+still works.
+
+## drgnx's terminal
+
+Your shell runs in a small program of its own (a worker the drgnx hub starts, on Ghostty's terminal engine); the
+terminal's buffer only shows the screen it sends. So:
+
+- **Output never stalls typing.** A command that prints a flood shows the screen as it goes; the lines that scrolled
+  past fill in, newest first, as soon as the output pauses.
+- **Scrollback** is the setting `drgnx-term-scrollback-lines` (10,000 rows above the screen). Changing it trims or
+  fills every open terminal at once. Scrolling to the top of the buffer fetches the rows it is missing. The terminal
+  itself remembers at least 10,000 lines whatever the setting.
+- **The hub can restart under it.** Your shell keeps running; while the hub is away the terminal dims, and what you
+  type waits (up to 4 kB) and goes when it is back. The terminal then draws afresh.
+- **When the shell ends**, its buffer closes. A program drgnx runs for you in a terminal (Export Keys) leaves its buffer
+  open, its exit status in the mode line, so you can read what it printed.
+- Undo is off in a terminal's buffer; the theme's colours apply at once.
+- Wide characters (CJK) keep the columns after them in place. Not yet: an emoji whose glyph is wider than its two
+  cells can show as `…` or push the rest of its line a few pixels, and a joined emoji (👩‍💻) takes four cells.
 
 ## The one line
 

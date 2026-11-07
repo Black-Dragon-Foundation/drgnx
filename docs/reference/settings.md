@@ -1692,6 +1692,24 @@ Read at every start; a change turns it on or off at once.  Without a watchdog in
 | `:agents` | `never` |
 | `:schema` | - |
 
+## drgnx-term-scrollback-lines
+
+How many rows a terminal's buffer keeps above its screen.  A change trims or fills every terminal at once.  The
+terminal itself remembers at least 10,000 lines whatever this says, so Find in Terminal and copy reach further.
+
+| Key | Value |
+| --- | --- |
+| Default | `10000` |
+| Type | `natnum` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-term--apply-scrollback` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `natnum` |
+
 ## drgnx-trust-parents
 
 Folders whose projects are trusted for data: their workspace settings apply, and their code waits for Review
