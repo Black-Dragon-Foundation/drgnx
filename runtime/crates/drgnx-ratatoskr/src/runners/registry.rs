@@ -252,6 +252,21 @@ fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// SCRIPT as the remote shell runs it: its output, then its exit status after the marker (`parse_out`). The status is
+/// SCRIPT's own, kept before the newline is printed (an `echo` in between would leave `$?` 0 for every script).
+fn wrapped(script: &str) -> String {
+    format!("( {script}\n); s=$?; echo; echo {EXIT}$s")
+}
+
+/// The output of a [`wrapped`] script: what it printed, and its exit status (-1 when unreadable); none without the marker.
+fn parse_out(text: &str) -> Option<(String, i32)> {
+    let at = text.rfind(EXIT)?;
+    Some((
+        text[..at].trim_end_matches('\n').trim_end().to_string(),
+        text[at + EXIT.len()..].trim().parse::<i32>().unwrap_or(-1),
+    ))
+}
+
 /// The name a host gets when the user gives none: its first label, in the characters a name may have.
 pub fn default_name(host: &str) -> String {
     let h = host.rsplit('@').next().unwrap_or(host);
@@ -372,11 +387,7 @@ impl Registry {
         limit: Duration,
     ) -> Result<Out, RegError> {
         let mut c = cfg.clone();
-        c.remote.control = vec![
-            "sh".into(),
-            "-c".into(),
-            format!("( {script}\n); echo; echo {EXIT}$?"),
-        ];
+        c.remote.control = vec!["sh".into(), "-c".into(), wrapped(script)];
         let channels = self.cfg.transport.open(&c).await?;
         let Channels {
             control,
@@ -414,11 +425,8 @@ impl Registry {
         })?;
         let text = String::from_utf8_lossy(&out).into_owned();
         let stderr = String::from_utf8_lossy(&err).trim().to_string();
-        let (body, code) = match text.rfind(EXIT) {
-            Some(at) => (
-                text[..at].trim_end_matches('\n').trim_end().to_string(),
-                text[at + EXIT.len()..].trim().parse::<i32>().unwrap_or(-1),
-            ),
+        let (body, code) = match parse_out(&text) {
+            Some(v) => v,
             None => {
                 return Err(failed(format!(
                     "{}: the command ended without an exit code: {stderr}",
@@ -751,7 +759,10 @@ impl Registry {
             }
             self.sh_ok(
                 &cfg,
-                &format!("podman pull --quiet {}", quote(img)),
+                &format!(
+                    "podman image exists {img} || podman pull --quiet {img}",
+                    img = quote(img)
+                ),
                 &[],
                 LONG,
             )
@@ -1073,6 +1084,25 @@ fn all_missing(p: &Probe) -> Vec<Missing> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // [D] a local `sh` runs the wrapper as the runner's shell does
+    #[test]
+    fn a_remote_scripts_exit_status_is_its_own() {
+        for (script, out, code) in [
+            ("true", "", 0),
+            ("false", "", 1),
+            ("echo hi; exit 3", "hi", 3),
+            ("printf 'a\\nb'; false", "a\nb", 1),
+        ] {
+            let o = std::process::Command::new("sh")
+                .args(["-c", &wrapped(script)])
+                .output()
+                .unwrap();
+            let got = parse_out(&String::from_utf8_lossy(&o.stdout));
+            assert_eq!(got, Some((out.to_string(), code)), "{script}");
+        }
+        assert_eq!(parse_out("no marker"), None);
+    }
 
     // [D] pure
     #[test]
