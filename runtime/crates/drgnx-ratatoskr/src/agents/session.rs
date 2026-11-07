@@ -1037,6 +1037,8 @@ pub(crate) struct StepSink {
     pub map: Option<Arc<crate::work::map::Map>>,
     /// The trace supervisor: a shell step's close takes what its command opened (none: a test).
     pub traces: Option<Arc<crate::work::trace::Traces>>,
+    /// The conflict predictor: an edit step's file against the other worktrees' (none: a test).
+    pub predict: Option<Arc<crate::runner::predict::Live>>,
 }
 
 /// What `open` and `resume` know of a session before its agent is running.
@@ -2287,6 +2289,7 @@ fn assemble(
             presence: Some(front.core.presence.clone()),
             map: Some(front.core.map.clone()),
             traces: Some(front.core.traces.clone()),
+            predict: Some(front.core.predict.clone()),
         },
         ctx,
     ));
@@ -3090,6 +3093,14 @@ async fn write_steps(
             && step.snapshot.is_some()
         {
             map.edited(&ctx.session).await;
+        }
+        // an edit step closed on a file: the conflict predictor checks it against the other worktrees' changes there
+        if let (Some(predict), Some(d)) = (&sink.predict, &c.detail)
+            && id != 0
+            && d.kind.as_deref() == Some("edit")
+            && let Some(p) = d.path.as_deref().filter(|p| !p.is_empty())
+        {
+            predict.edited(&ctx.session, ctx.cwd.join(p));
         }
         // a shell step closed: what its traced command opened goes out once its listener ended too
         if let (Some(traces), Some(cmd)) = (&sink.traces, &c.command)
@@ -6356,6 +6367,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         let open = |class, tool: Option<&str>| OpenStep {
@@ -6460,6 +6472,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         for cost in [Some(0.15), None] {
@@ -6561,6 +6574,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         tokio::spawn(write_steps(rx, sink, ctx));
         for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
@@ -6629,6 +6643,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         let ctx = StepCtx {
             flow: Arc::default(),
@@ -6716,6 +6731,7 @@ mod tests {
             presence: None,
             map: None,
             traces: None,
+            predict: None,
         };
         let ctx = StepCtx {
             flow: Arc::default(),

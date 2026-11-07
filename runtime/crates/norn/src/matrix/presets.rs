@@ -88,6 +88,9 @@ fn row(a: Action, p: Preset) -> [Cell; 3] {
         (ChatProjectEdit, Cautious) => [NEVER, NEVER, NEVER],
         (ChatProjectEdit, Balanced) => [NEVER, NEVER, ASK],
         (ChatProjectEdit, Autonomous) => [NEVER, NEVER, ALLOW],
+        // two agents state their positions in a huddle for the user to decide: a card first under Cautious
+        (Huddles, Cautious) => [ASK, ASK, ASK],
+        (Huddles, _) => [ALLOW, ALLOW, ALLOW],
     }
 }
 

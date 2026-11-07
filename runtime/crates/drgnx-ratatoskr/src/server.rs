@@ -274,6 +274,8 @@ pub async fn run(args: ServeArgs) -> Exit {
     crate::clock::spawn("map:run", crate::work::map::run(front.clone()));
     // the editors' buffer views follow the presence model from now on
     front.core.buffers.bind(&front);
+    // an edit step's file is checked against the other worktrees' from now on
+    front.core.predict.bind(&front);
     // settings.el and the shipped defaults, as data, before anything is served (its last good values in runtime.db)
     front
         .settings

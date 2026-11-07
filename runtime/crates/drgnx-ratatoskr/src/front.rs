@@ -663,6 +663,8 @@ impl Front {
             | Params::AgentsContextDrop(_)
             | Params::AgentsContextPin(_)
             | Params::AgentsCompactPreview(_)
+            | Params::AgentsHuddleStart(_)
+            | Params::AgentsHuddleGet(_)
             | Params::AgentsWheelTake(_)
             | Params::AgentsWheelGive(_)
             | Params::AgentsWheelSaved(_)
@@ -824,6 +826,9 @@ impl Front {
         };
         if let (Some(card), Ok(_)) = (settled, &result) {
             self.core.agents.card_settled(card).await;
+            if let Some(me) = self.tool_hub.front() {
+                self.core.huddles.card_settled(&me, card).await;
+            }
             self.core.plugins.card_settled(card);
         }
         if let Err(e) = &result

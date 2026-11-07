@@ -562,6 +562,20 @@ const CHECKOUTS_MAX: usize = 4096;
 pub fn checkout_of(file: &Path) -> Option<(PathBuf, String)> {
     use sha2::{Digest, Sha256};
     use std::os::unix::ffi::OsStrExt;
+    let (top, main) = top_and_main(file)?;
+    let sum = Sha256::digest(main.as_os_str().as_bytes());
+    let id = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    Some((top, id))
+}
+
+/// The main checkout (real path) of the repository FILE is in: for a linked worktree, the checkout whose `.git` it
+/// shares.  Read as [`checkout_of`] reads.
+pub fn main_checkout(file: &Path) -> Option<PathBuf> {
+    top_and_main(file).map(|(_, main)| main)
+}
+
+/// FILE's checkout top folder and its main checkout's real path.
+fn top_and_main(file: &Path) -> Option<(PathBuf, PathBuf)> {
     let mut dir = file.parent()?;
     loop {
         let dotgit = dir.join(".git");
@@ -582,9 +596,7 @@ pub fn checkout_of(file: &Path) -> Option<(PathBuf, String)> {
                 Some(n) if n == ".git" => common.parent()?.to_path_buf(),
                 _ => common,
             };
-            let sum = Sha256::digest(main.as_os_str().as_bytes());
-            let id = sum.iter().take(8).map(|b| format!("{b:02x}")).collect();
-            return Some((dir.to_path_buf(), id));
+            return Some((dir.to_path_buf(), main));
         }
         dir = dir.parent()?;
     }

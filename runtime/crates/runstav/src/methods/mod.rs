@@ -206,6 +206,8 @@ params! {
     AgentsToolInput(agents::ToolInputParams),
     AgentsToolOutput(agents::ToolOutputParams),
     AgentsPause(agents::ById),
+    AgentsHuddleStart(agents::HuddleStart),
+    AgentsHuddleGet(agents::ById),
     AgentsWheelTake(agents::ById),
     AgentsWheelGive(agents::ById),
     AgentsWheelSaved(agents::WheelSaved),

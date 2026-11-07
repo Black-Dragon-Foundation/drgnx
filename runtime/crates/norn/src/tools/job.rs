@@ -603,5 +603,12 @@ async fn escalate(coord: &Coord, who: &Identity, args: EscalateArgs) -> Result<S
         answers: None,
         question: false,
     };
-    send_text(coord, who, message, None).await
+    let sent = send_text(coord, who, message, None).await;
+    // a clash the agent is in may open a huddle (the hub decides)
+    if sent.is_ok()
+        && let Identity::Session { sid, .. } = who
+    {
+        coord.hub().escalated(sid);
+    }
+    sent
 }

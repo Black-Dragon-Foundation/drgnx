@@ -755,6 +755,29 @@ impl Hub for ToolHub {
     }
 
     /// A chat's `edit_file` or `write_file`: its session's write through the pair door.
+    fn huddle_reply(
+        &self,
+        sid: &str,
+        huddle: String,
+        text: String,
+        proposal: Option<String>,
+    ) -> BoxFuture<'_, Result<String, String>> {
+        let (front, sid) = (self.front(), sid.to_owned());
+        Box::pin(async move {
+            let f = front.ok_or("the hub is starting")?;
+            f.core
+                .huddles
+                .reply(&f, &sid, &huddle, text, proposal)
+                .await
+        })
+    }
+
+    fn escalated(&self, sid: &str) {
+        if let Some(f) = self.front() {
+            f.core.huddles.escalated(&f, sid);
+        }
+    }
+
     fn pair_write(
         &self,
         sid: &str,

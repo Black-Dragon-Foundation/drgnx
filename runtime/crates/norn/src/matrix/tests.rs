@@ -24,7 +24,7 @@ fn balanced_is_the_mockups_table() {
     use Action::*;
     use Verdict::*;
     let p = preset(Preset::Balanced);
-    let rows: [(Action, [Verdict; 3]); 28] = [
+    let rows: [(Action, [Verdict; 3]); 29] = [
         (AgentsStart, [Allow, Never, Never]),
         (AgentsModel, [Allow, Never, Never]),
         (AgentsControl, [Allow, Never, Never]),
@@ -53,8 +53,9 @@ fn balanced_is_the_mockups_table() {
         (ChatProjectRead, [Never, Never, Ask]),
         (PluginAbilities, [Allow, Allow, Ask]),
         (ChatProjectEdit, [Never, Never, Ask]),
+        (Huddles, [Allow, Allow, Allow]),
     ];
-    assert_eq!(p.cells.len(), 28 * 3);
+    assert_eq!(p.cells.len(), 29 * 3);
     for (a, vs) in rows {
         for (r, want) in [Role::Manager, Role::Worker, Role::Chat]
             .into_iter()
@@ -104,7 +105,7 @@ fn browser_rows_per_preset() {
             assert_eq!(decide(&eff(&[&m], &who(r)), a, None), want);
         }
     }
-    assert_eq!(Action::ALL.len(), 28);
+    assert_eq!(Action::ALL.len(), 29);
     let at = |a| Action::ALL.iter().position(|x| *x == a).unwrap();
     assert_eq!(
         (at(Browser), at(BrowserWeb), at(BrowserPrivate)),
@@ -150,7 +151,7 @@ fn chat_project_edit_per_preset_and_column() {
         Action::from_id("chat.project-edit"),
         Some(Action::ChatProjectEdit)
     );
-    assert_eq!(Action::ALL.last(), Some(&Action::ChatProjectEdit));
+    assert!(Action::ALL.contains(&Action::ChatProjectEdit));
 }
 
 #[test]
@@ -593,4 +594,20 @@ fn a_widening_names_the_action() {
         w.to_string(),
         format!("{} is wider than the parent allows", Action::PushMain.id())
     );
+}
+
+/// [D] Huddles: Autonomous and Balanced allow them in every column, Cautious asks (a card, nothing prompts).
+#[test]
+fn huddles_per_preset() {
+    use Preset::*;
+    use Verdict::*;
+    for (p, want) in [(Cautious, Ask), (Balanced, Allow), (Autonomous, Allow)] {
+        let m = preset(p);
+        for r in [Role::Manager, Role::Worker, Role::Chat] {
+            let c = m.cells[&(Action::Huddles, Column::Role(r))];
+            assert_eq!((c.verdict, c.limit), (want, None), "{p:?} {r:?}");
+            assert_eq!(decide(&eff(&[&m], &who(r)), Action::Huddles, None), want);
+        }
+    }
+    assert_eq!(Action::from_id("huddles"), Some(Action::Huddles));
 }

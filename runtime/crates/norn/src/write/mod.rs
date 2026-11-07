@@ -11,6 +11,7 @@ pub mod cards;
 pub mod decisions;
 pub mod event;
 pub mod exec;
+pub mod huddles;
 pub mod jobs;
 pub mod messages;
 pub mod meta;

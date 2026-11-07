@@ -9,6 +9,8 @@
   "agents/entries/unsubscribe": ["user"],
   "agents/follow": ["user"],
   "agents/get": ["user"],
+  "agents/huddle/get": ["user"],
+  "agents/huddle/start": ["user"],
   "agents/kill": ["user"],
   "agents/list": ["user", "agent", "service"],
   "agents/move": ["user"],
