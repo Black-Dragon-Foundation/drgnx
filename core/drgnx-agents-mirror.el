@@ -227,6 +227,21 @@ the hub).  The agent runs in the hub, so it keeps working when this Emacs closes
   (let ((type (plist-get entry :type)))
     (or (eq type 'stop) (and (eq type 'error) (plist-get entry :stop) t))))
 
+(defun drgnx-agents-mirror--complete-blocks (old new)
+  "NEW, an entry as an event brought it, with the Markdown `blocks' of an agent message complete: the hub sends all of
+them once, then only a `patch' of the blocks that changed.  The patch replaces (or adds) those of OLD's, and the
+result has no `patch', so the mirror holds what `agents/get' answers (blocks as a list, as decoded)."
+  (let ((patch (plist-get new :patch)))
+    (if (not (> (length patch) 0))
+        new
+      (let ((blocks (append (plist-get old :blocks) nil)))
+        (seq-doseq (p patch)
+          (let ((n (plist-get p :block)))
+            (while (< (length blocks) n) (setq blocks (append blocks (list nil))))
+            (if (< n (length blocks)) (setcar (nthcdr n blocks) p) (setq blocks (append blocks (list p))))))
+        (append (cl-loop for (k v) on new by #'cddr unless (memq k '(:patch :blocks)) append (list k v))
+                (list :blocks blocks))))))
+
 (defun drgnx-agents-mirror--apply-entries (m entries)
   "Put ENTRIES ((INDEX ENTRY)…, as the hub's JSON arrays arrive) into mirror M's transcript.  The number of entries
 that end a turn (`drgnx-agents-mirror--ends-turn-p': `stop', or a failed turn's `error') that were not in the
@@ -237,7 +252,7 @@ transcript before."
               (when (>= i (length v)) (setq v (vconcat v (make-vector (- (1+ i) (length v)) nil))))
               (when (and (drgnx-agents-mirror--ends-turn-p (car read)) (not (drgnx-agents-mirror--ends-turn-p (aref v i))))
                 (cl-incf stops))
-              (aset v i (car read))))
+              (aset v i (drgnx-agents-mirror--complete-blocks (aref v i) (car read)))))
           entries)
     (setf (drgnx-agent-session-entries m) (append v nil))
     stops))
