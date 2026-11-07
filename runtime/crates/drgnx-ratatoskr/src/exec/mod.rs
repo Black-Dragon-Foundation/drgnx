@@ -1666,7 +1666,7 @@ impl Inner {
                             let _ = crate::clock::blocking(move || {
                                 sleipnir::linux::podman::run_limited(
                                     &podman,
-                                    &["rm", "-f", &name],
+                                    &["rm", "-f", "-t", "0", &name],
                                     &container::podman_env(&shell),
                                     Duration::from_secs(30),
                                 )

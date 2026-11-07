@@ -1341,7 +1341,7 @@ fn net_hooks(d: &Path, info: &str) -> Hooks {
     std::fs::write(
         &fake,
         format!(
-            "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) echo \"rm $3\" >> {d}/ran; exit 0 ;;\nesac\n\
+            "#!/bin/sh\n{info}case \"$1\" in\n  image|import|rmi) exit 0 ;;\n  ps|images) echo '[]'; exit 0 ;;\n  rm) for a in \"$@\"; do n=$a; done; echo \"rm $n\" >> {d}/ran; exit 0 ;;\nesac\n\
              if [ \"$2\" = -i ]; then cat {d}/ready; [ -f {d}/die ] && {{ echo 'drgnx-px: bad frame' >&2; exit 4; }}\n\
              while IFS= read -r _; do :; done; exit 0; fi\nexec sleep 30\n"
         ),

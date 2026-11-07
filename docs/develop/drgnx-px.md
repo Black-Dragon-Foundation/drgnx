@@ -171,11 +171,12 @@ sidecar and refuses the job with design §6's text. The job's meta records the s
 
 The job's watch has a third arm beside the child and the time box: the channel's end (or a graceful hub stop through
 `Runner::end_networked`). Either ends the job `infra: proxy`: the sidecar's stderr is read first, then
-`JobNetwork::end` removes the job's container and then stops the sidecar (podman records the job's dependency on
-it), then the reason (`net::end_reason`: how the channel ended, the sidecar's exit code and its meaning, its last
+`JobNetwork::end` removes the job's container with no stop timeout (`rm -f -t 0`: its client had its grace), ends
+the channel, whose task holds the sidecar's stdin, so the sidecar exits on its own, and then stops the sidecar
+(podman records the job's dependency on it), then the reason (`net::end_reason`: how the channel ended, the sidecar's exit code and its meaning, its last
 stderr line) goes to the log and `why`, and the job's process group is killed. The status is `ExecStatus::Infra`
 (`infra` on the wire and in the graph's `exec` end). A restarted hub doesn't adopt a job with `relay` and no end: it
-`podman rm -f`s the container, ends it `infra: proxy` ("the hub restarted, and a networked job can't keep its relay")
+`podman rm -f -t 0`s the container, ends it `infra: proxy` ("the hub restarted, and a networked job can't keep its relay")
 and leaves it out of the sweep's running set, so the sweep removes the sidecar. On a Mac, `net::rootless_connection`
 picks the machine's rootless connection from `podman system connection list --format json`.
 

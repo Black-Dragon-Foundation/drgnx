@@ -176,25 +176,31 @@ impl JobNetwork {
             .unwrap_or_default()
     }
 
-    /// Takes the relay down after the job (S11): `podman rm -f` the job's container first (podman records the job's
-    /// dependency on the sidecar), then stop the sidecar.  Answers the sidecar's exit code.
-    pub async fn end(self) -> Option<i32> {
+    /// Takes the relay down after the job (S11): `podman rm -f -t 0` the job's container first (podman records the
+    /// job's dependency on the sidecar; its client had its grace already), then end the channel, which closes the
+    /// sidecar's stdin so it exits by itself, then stop the sidecar.  Answers the sidecar's exit code.
+    pub async fn end(mut self) -> Option<i32> {
         if let Some(a) = &self.asker {
             a.abort();
         }
         let _ = tokio::process::Command::new(&self.podman)
-            .args(["rm", "-f", &self.job])
+            .args(["rm", "-f", "-t", "0", &self.job])
             .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
             .await;
+        // the channel task owns the sidecar's stdio: dropped (awaited after the abort), the sidecar reads its EOF; a
+        // channel that ended already ([`JobNetwork::ended`]) dropped it then
+        if !self.channel.is_finished() {
+            self.channel.abort();
+            let _ = (&mut self.channel).await;
+        }
         let code = match self.sidecar {
             Some(s) => s.stop(&self.podman, &self.names.sidecar, &self.env).await,
             None => None,
         };
-        self.channel.abort();
         self.log.abort();
         code
     }
@@ -354,6 +360,60 @@ mod tests {
         assert!(
             t.contains("exited 137: killed, most likely at its memory limit"),
             "{t}"
+        );
+    }
+
+    /// A stopped job owes its container no grace past the stop's own (its client was signalled already): the job is
+    /// removed `-t 0`, and the sidecar's stdin closes before the sidecar is stopped, so it exits by itself rather than
+    /// waiting out `STOP_LIMIT`.  The stand-in `podman run` exits when its stdin closes, like drgnx-px.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_end_removes_the_job_at_once_and_lets_the_sidecar_exit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (podman, rms) = (dir.path().join("podman"), dir.path().join("rm"));
+        std::fs::write(
+            &podman,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\nrun) cat >/dev/null; exit 0 ;;\nrm) echo \"$*\" >> {} ;;\nesac\n",
+                rms.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut sidecar = Sidecar::start(&podman, vec!["run".into()], &[])
+            .await
+            .expect("the stand-in starts");
+        let io = sidecar.take_io().expect("its stdio");
+        let (ptx, prx) = tokio::sync::mpsc::channel(16);
+        let net = JobNetwork {
+            _proxy: gleipnir::net::proxy::start(
+                proxy_config(vec![], &[], job_web(None)),
+                std::sync::Arc::new(gleipnir::net::proxy::SystemResolver),
+                ptx,
+            ),
+            web: job_web(None),
+            sidecar: Some(sidecar),
+            names: container::net_names(&container::placement("ffffffff"), "x1").unwrap(),
+            job: container::name_of("x1").unwrap(),
+            // the channel holds the sidecar's stdio while the relay runs
+            channel: tokio::spawn(async move {
+                let _io = io;
+                std::future::pending::<End>().await
+            }),
+            log: tokio::spawn(async {}),
+            events: Some(prx),
+            asker: None,
+            podman,
+            env: vec![],
+        };
+        let job = net.job.clone();
+        assert_eq!(net.end().await, Some(0), "the sidecar exits by itself");
+        let rms = std::fs::read_to_string(&rms).unwrap();
+        assert_eq!(
+            rms.lines().next(),
+            Some(format!("rm -f -t 0 {job}").as_str()),
+            "{rms}"
         );
     }
 
