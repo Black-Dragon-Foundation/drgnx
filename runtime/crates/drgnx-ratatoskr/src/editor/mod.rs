@@ -65,6 +65,9 @@ struct Body {
     agents: Vec<BufferAgent>,
     gutter: Vec<GutterRange>,
     approximate: Option<bool>,
+    /// The version of the edit history's tracked buffer of the file (its last batch's); none when no buffer of it is
+    /// tracked, and the frame then names the version the view's watch sent.
+    doc_version: Option<u64>,
 }
 
 /// The keys a change of FILE names: the file, and `REPO:REL` (the same file in every worktree of its repository).
@@ -217,7 +220,7 @@ impl Buffers {
         // the lines each agent wrote, from the edit history's operations where it holds the file: an agent's own
         // worktree, and a paired agent's writes in the user's checkout (in its identity: the user's side of every
         // projection, never a worktree agent's)
-        let (kept, mirror) = history_of(front, file).await;
+        let (kept, mirror, doc_version) = history_of(front, file).await;
         if let Some(by) = &kept {
             for (sid, r) in ranges::agent_lines(by) {
                 gutter.push(GutterRange {
@@ -263,6 +266,7 @@ impl Buffers {
             approximate: projected
                 .is_some_and(project::UserSource::approximate)
                 .then_some(true),
+            doc_version,
         };
         lock(&self.last).insert(file.to_string(), body.clone());
         body
@@ -447,7 +451,10 @@ impl Buffers {
 
 /// What the edit history holds of FILE, when its project's history is open: the lines each author wrote, and the
 /// text of the editor's tracked buffer of it (the mirror).
-async fn history_of(front: &Front, file: &str) -> (Option<ranges::LinesBy>, Option<String>) {
+async fn history_of(
+    front: &Front,
+    file: &str,
+) -> (Option<ranges::LinesBy>, Option<String>, Option<u64>) {
     let hubs = front.core.history.clone();
     let file = file.to_string();
     crate::clock::blocking(move || {
@@ -460,12 +467,13 @@ async fn history_of(front: &Front, file: &str) -> (Option<ranges::LinesBy>, Opti
         let (hub, tree) = hubs.open_of(&top)?;
         let kept = hub.lines_by(&tree, &rel).ok().flatten();
         let mirror = hub.mirror_text(&tree, &rel).ok().flatten();
-        Some((kept, mirror))
+        let version = hub.mirror_version(&tree, &rel).ok().flatten();
+        Some((kept, mirror, version))
     })
     .await
     .ok()
     .flatten()
-    .unwrap_or((None, None))
+    .unwrap_or((None, None, None))
 }
 
 /// FILE's text, CRLF and all; none past [`crate::work::detail::EDIT_TEXT_MAX`] bytes, empty when it is not there.
@@ -490,7 +498,7 @@ fn frame_of(
         view,
         version,
         base,
-        doc_version,
+        doc_version: b.doc_version.or(doc_version),
         approximate: b.approximate,
         agents: b.agents.clone(),
         gutter: b.gutter.clone(),

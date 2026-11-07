@@ -247,11 +247,11 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
         .collect();
     // an agent's change (a paired chat's write the editor applied) shows at once; the user's after the quiet
     let by_agent = changes.iter().any(|c| c.origin.starts_with("agent:"));
-    let (id, hash) = (p.buffer_id, p.region_hash);
+    let (id, hash, version) = (p.buffer_id, p.region_hash, p.version);
     let file = hub.buffer_file(&id);
     // the time is read here: a blocking thread does not carry the virtual clock
     let now = crate::clock::wall_secs();
-    let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, now))
+    let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, version, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(failed)?;
@@ -275,7 +275,7 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
 pub async fn resync(f: &Front, _: &Caller, p: w::ResyncParams) -> Result<w::Done, Error> {
     let hub = f.core.history.of_buffer(&p.buffer_id)?;
     let now = crate::clock::wall_secs();
-    crate::clock::blocking(move || hub.resync(&p.buffer_id, &p.text, now))
+    crate::clock::blocking(move || hub.resync(&p.buffer_id, &p.text, p.version, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(failed)?;

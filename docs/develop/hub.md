@@ -1396,7 +1396,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `graph/settings` | user | `{get?: Empty, set?: {only_user_closes?: boolean}}` | `{only_user_closes: boolean}` | yes |
 | `graph/sql` | user | `{deadline_ms?: natnum, params?: [SqlParam], rows?: natnum, sql: string}` | `{columns?: [string], rows?: [[any]], truncated: boolean}` | no |
 | `hello` | user, agent, service | `{client?: string, cwd?: AbsPath, drgnx_version?: string, nonce: Nonce, proof?: Hex64, proto: natnum, records?: natnum, schema?: natnum}` | `HelloReply` | no |
-| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string}` | `{ok?: boolean, resync?: boolean}` | yes |
+| `history/batch` | user | `{buffer_id: string, changes: [{inserted: string, old_len: natnum, origin?: string, start: natnum}], region_hash: string, version: natnum}` | `{ok?: boolean, resync?: boolean}` | yes |
 | `history/blame` | user | `{end: integer, path: string, start: integer, worktree_root: string}` | `{spans: [BlameSpan]}` | no |
 | `history/compare` | user | `{a: string, b: string}` | `{files: [ComparedFile]}` | no |
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
@@ -1405,7 +1405,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |
-| `history/resync` | user | `{buffer_id: string, text: string}` | `{ok: boolean}` | yes |
+| `history/resync` | user | `{buffer_id: string, text: string, version: natnum}` | `{ok: boolean}` | yes |
 | `history/revert/apply` | user | `{choices?: [{choice: "keep-users"} \| {choice: "take-reverted"} \| {choice: "edited", text: string}], message?: string, mode?: "keep-mine" \| "roll-back-mine", preview_id: integer}` | `Applied` | yes |
 | `history/revert/hunk` | user | `{hunk: integer, op: integer, path: string, worktree: string}` | `HunkReverted` | yes |
 | `history/revert/preview` | user | `{decision?: integer, seq?: integer, session?: string}` | `RevertCard` | no |
@@ -1966,8 +1966,10 @@ overlays from it):
   (task `editor:flush`) builds each due file's frame once and sends `agent-buffer` to that view's connection only
   (`Front::send_to`), so a view gets at most one frame per 50 ms. Every frame is whole; `version` counts the view's
   frames and `base` names the one it follows, so an editor that sees a gap watches again for a full frame. A watch with
-  a newer `doc_version` (the buffer's own change count) is the user typing: that view's frame follows after 300 ms
-  without another (task `editor:quiet`). Nothing is built while no view matches, and an unwatched file costs nothing.
+  a newer `doc_version` (the buffer's version, its edit history drain counter) is the user typing: that view's frame
+  follows after 300 ms without another (task `editor:quiet`). A frame of a file the edit history tracks names the
+  tracked buffer's version (its last `history/batch` or `history/resync`) as `doc_version`; any other the watch's. Nothing is built while no view matches, and an
+  unwatched file costs nothing.
 - **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
   session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
   and kind: `pending` for an edit about to land, and `changed` for the lines a session wrote. Where the project's edit

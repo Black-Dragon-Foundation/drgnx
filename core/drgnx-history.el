@@ -45,9 +45,10 @@
 
 (defvar drgnx-history-drained-functions nil
   "Abnormal hook run after each drain that sent changes, with (BUFFER COUNTER CHANGES): the buffer, how many drains
-of it have sent changes (1 for the first), and the changes sent, in the hub's shape.  CHANGES is `resync' when the
-buffer's changes since the last drain went unsent (Nidhogg's ring lost some, or the whole text went instead): a gap,
-counted as a drain of its own.  A listener that signals is ignored; with no listener the drain does nothing more.")
+of it have sent changes (1 for the first: the buffer's version, which each batch carries), and the changes sent, in
+the hub's shape.  CHANGES is `resync' when the buffer's changes since the last drain went unsent (Nidhogg's ring lost
+some, or the whole text went instead): a gap, counted as a drain of its own.  A listener that signals is ignored; with
+no listener the drain does nothing more.")
 
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
@@ -239,7 +240,8 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
         (drgnx-history--gap buffer st)
         (unless (drgnx-history--send "history/resync"
                                      (list :buffer_id (drgnx-history--st-id st)
-                                           :text (buffer-substring-no-properties (point-min) (point-max)))
+                                           :text (buffer-substring-no-properties (point-min) (point-max))
+                                           :version (drgnx-history--st-drains st))
                                      (lambda (_result err)
                                        (setf (drgnx-history--st-resyncing st) nil)
                                        (if err (drgnx-history--forget buffer)
@@ -274,10 +276,12 @@ costs time in proportion to the buffer and must not sit between two keystrokes. 
           ((drgnx-history--st-resyncing st) (drgnx-history--gap buffer st))  ; the text on its way includes these
           (t (let* ((changes (drgnx-history--changes drained))
                     (batches (drgnx-history--batches changes drgnx-history-batch-max))
-                    (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)) (sent t))
+                    (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)) (sent t)
+                    (version (1+ (drgnx-history--st-drains st))))
                (while batches
                  (let* ((batch (pop batches)) (lastp (null batches)))
-                   (unless (drgnx-history--send "history/batch" (list :buffer_id id :changes batch :region_hash hash)
+                   (unless (drgnx-history--send "history/batch"
+                                                (list :buffer_id id :changes batch :region_hash hash :version version)
                                                 (if lastp (lambda (r e) (drgnx-history--batch-replied buffer st r e)) #'ignore))
                      (setq batches nil sent nil)
                      (drgnx-history--forget buffer))))

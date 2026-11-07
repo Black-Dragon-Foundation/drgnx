@@ -138,7 +138,7 @@ the `agents/get' answer."
 
 (ert-deftest drgnx-agent-pair-hub/open-and-closed-reach-the-hub ()
   "The hub reads a file from the editor while a buffer has it open (`pair/open', from `find-file-hook') and from the
-disk once the buffer is killed (`pair/closed', from `kill-buffer-hook')."
+disk once the buffer is killed (`pair/closed', from `kill-buffer-hook'), where a write then lands too."
   (drgnx-agent-pair-hub-test--with
     (let* ((file (concat project "README")) (buf (find-file-noselect file)))
       (with-current-buffer buf (goto-char (point-max)) (insert "unsaved\n"))
@@ -149,9 +149,10 @@ disk once the buffer is killed (`pair/closed', from `kill-buffer-hook')."
         (with-current-buffer buf (set-buffer-modified-p nil))
         (kill-buffer buf)
         (drgnx-agent-pair-hub-test--send sid (drgnx-agent-pair-hub-test--read file) (drgnx-agent-pair-hub-test--edit file))
-        ;; from the disk now, and a write of a file no editor has open is refused
-        (drgnx-agent-pair-hub-test--said sid "call: readme\ncall: not open in the editor")
-        (drgnx-test-deliver-all)))))
+        ;; from the disk now, and a write of a file no editor has open lands on the disk (the hub writes it)
+        (drgnx-agent-pair-hub-test--said sid "call: readme\ncall: written to the file on disk (no editor has it open)")
+        (drgnx-test-deliver-all)
+        (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "README\n"))))))
 
 (ert-deftest drgnx-agent-pair-hub/open-set-is-resent-after-a-restart ()
   "A new subscription (after the hub went away or this Emacs reconnected) sends the whole open set again: the hub

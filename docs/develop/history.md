@@ -267,13 +267,15 @@ change another program made is its own, `Outside`. Tests run every order (`every
 stream; `history/register` starts a loop that feeds it to the hub (a changed file is diffed onto its document, a change
 to `HEAD`, the index or a ref rescans every known path). Ignored files are skipped.
 
-**Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers
-`{doc, tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in
-are `tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash}` applies changes (character
-offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>#<step>` for a change merged in or a paired chat's write: the record's cause carries
-the session and its step; an `agent:` origin without the step is refused) and answers
-`{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`; more than 1 MiB inserted
-is refused as `split-required`. `history/resync {buffer_id, text}` replaces the document's text as the user's change;
+**Methods** (`methods.rs`, `wire.rs`; user only). `history/register {path, worktree_root, buffer_id}` answers `{doc,
+tracked}`: a gitignored file, a credentials file, a personal-notes file and a folder a sandboxed agent worked in are
+`tracked: false` with the reason. `history/batch {buffer_id, changes, region_hash, version}` applies changes (character
+offsets in the document's LF text) as the origin's peer (`user`, or `agent:<session>#<step>` for a change merged in or a
+paired chat's write: the record's cause carries the session and its step; an `agent:` origin without the step is
+refused) and answers `{ok}` or `{resync: true}` when the SHA-256 of the document's text differs from `region_hash`; more
+than 1 MiB inserted is refused as `split-required`. `history/resync {buffer_id, text, version}` replaces the document's
+text as the user's change; `version` is the buffer's version once the change is in (the editor's drain counter; a resync
+is a drain of its own), kept with the tracked buffer: the editor's frames of the file name it as `doc_version`;
 `history/unregister {buffer_id}` stops tracking.
 
 **Timers** (`timers.rs`). Started with the project's hub, on the hub's clock (`crate::clock`, so `--test-clock` and

@@ -12,12 +12,12 @@
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:sid", "name": "$string"}}, "within_ms": 30000}
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "history/register", "params": {"path": "a.txt", "worktree_root": "$ROOT/work", "buffer_id": "b1"}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
-{"do": "send", "conn": "e", "json": {"id": 3, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 3, "inserted": "AGENT-LINE", "origin": "agent:$sid"}], "region_hash": "669621b0e1307438ed274708000464fe9653653867573b8be49d571b8f0773a0"}}}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 0, "old_len": 3, "inserted": "AGENT-LINE", "origin": "agent:$sid#1"}], "region_hash": "669621b0e1307438ed274708000464fe9653653867573b8be49d571b8f0773a0", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"ok": true}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 3, "method": "agents/wheel/take", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "c", "json": {"id": 3, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "agent-wheel", "data": {"id": "$sid", "state": "held"}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 11, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "4bcfad7d96ffa9ece7b3961c64b88faf297edc331badcc97bb19bc7c3ca06b21"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 11, "old_len": 0, "inserted": "USER-LINE\n"}], "region_hash": "4bcfad7d96ffa9ece7b3961c64b88faf297edc331badcc97bb19bc7c3ca06b21", "version": 2}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 5, "method": "agents/wheel/give", "params": {"id": "$sid"}}}
 {"do": "expect", "conn": "e", "json": {"event": "wheel-save", "data": {"req": "$capture:req", "id": "$sid"}}, "within_ms": 10000}

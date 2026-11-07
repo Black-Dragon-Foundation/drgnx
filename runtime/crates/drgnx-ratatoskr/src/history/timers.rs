@@ -171,7 +171,7 @@ mod tests {
             origin: "user".into(),
         };
         let now = crate::clock::wall_secs();
-        let reply = hub.batch("b1", &[change], &hash("one\n"), now).unwrap();
+        let reply = hub.batch("b1", &[change], &hash("one\n"), 1, now).unwrap();
         assert_eq!(reply, crate::history::BatchReply::Ok);
         (hub, repo, hist)
     }

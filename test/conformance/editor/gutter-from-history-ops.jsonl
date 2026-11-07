@@ -1,4 +1,4 @@
-{"scenario": "editor/gutter-from-history-ops", "requires": ["v1", "test-hooks"], "doc": "The gutter on the user's checkout comes from the edit history's operations: the editor tracks a.txt and applies a paired agent's write to line 2 (a batch with origin agent:paired-1), which shows at once in that agent's identity, not projected; the user then types on that line (a batch of their own), and after the quiet the line is the user's and in no agent's gutter. Pattern B on the hub's virtual clock: each flush and the quiet by __test_advance."}
+{"scenario": "editor/gutter-from-history-ops", "requires": ["v1", "test-hooks"], "doc": "The gutter on the user's checkout comes from the edit history's operations: the editor tracks a.txt and applies a paired agent's write to line 2 (a batch with origin agent:paired-1#1, its step 1), which shows at once in that agent's identity, not projected; the user then types on that line (a batch of their own), and after the quiet the line is the user's and in no agent's gutter. Pattern B on the hub's virtual clock: each flush and the quiet by __test_advance."}
 {"do": "root"}
 {"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q -b main && printf 'l1\\nl2\\nl3\\n' > a.txt && git add a.txt && git -c user.email=t@example.invalid -c user.name=t commit -qm base"], "expect_code": 0}
@@ -11,12 +11,12 @@
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"tracked": true}}, "within_ms": 30000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"view": "v1", "version": 1, "base": 0, "agents": [], "gutter": []}}}
-{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 3, "old_len": 2, "inserted": "P2", "origin": "agent:paired-1"}], "region_hash": "833fd2af51471b023d4b1fa8c0d643339a318353fa44d2c27b231894dbdb2e39"}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 3, "old_len": 2, "inserted": "P2", "origin": "agent:paired-1#1"}], "region_hash": "833fd2af51471b023d4b1fa8c0d643339a318353fa44d2c27b231894dbdb2e39", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"ok": true}}, "within_ms": 30000}
 {"do": "send", "conn": "c", "json": {"id": 1, "method": "__test_advance", "params": {"ms": 60}}}
 {"do": "expect", "conn": "c", "json": {"id": 1, "result": {"now_ms": "$number"}}, "within_ms": 30000}
 {"do": "expect", "conn": "e", "json": {"event": "agent-buffer", "data": {"view": "v1", "version": 2, "base": 1, "gutter": [{"session": "paired-1", "kind": "changed", "start": 2, "end": 2, "help": "$string"}]}}, "within_ms": 10000}
-{"do": "send", "conn": "e", "json": {"id": 5, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 3, "old_len": 0, "inserted": "u"}], "region_hash": "54c33f292a7b06d8b5a33f5ceb5932cd8b4d812f28151b6c68f96247cf7db21d"}}}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "history/batch", "params": {"buffer_id": "b1", "changes": [{"start": 3, "old_len": 0, "inserted": "u"}], "region_hash": "54c33f292a7b06d8b5a33f5ceb5932cd8b4d812f28151b6c68f96247cf7db21d", "version": 2}}}
 {"do": "expect", "conn": "e", "json": {"id": 5, "result": {"ok": true}}, "within_ms": 30000}
 {"do": "send", "conn": "e", "json": {"id": 6, "method": "agents/buffer/watch", "params": {"view": "v1", "file": "$ROOT/repo/a.txt", "doc_version": 2}}}
 {"do": "expect", "conn": "e", "json": {"id": 6, "result": {"view": "v1", "version": 3, "base": 0}}}

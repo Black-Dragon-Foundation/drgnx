@@ -15,6 +15,7 @@
 (declare-function drgnx-agents-editor-watched-buffers "drgnx-agents-editor")
 (defvar drgnx-agents-editor-apply-functions)
 (defvar drgnx-agent-identity-watched-function)
+(defvar drgnx-history-drained-functions)
 
 (defvar drgnx-agents-editor-test--calls nil)
 
@@ -76,6 +77,29 @@
             (should-not (drgnx-agents-editor-frame a))
             (should-not (overlays-in (point-min) (point-max))))
         (kill-buffer a) (kill-buffer b)))))
+
+(ert-deftest drgnx-agents-editor/a-frame-names-the-history-version ()
+  ;; the edit history's drain counter is the buffer's version: a frame made for an older one is dropped, one made for
+  ;; it is shown, and a watch after a restart sends it
+  (drgnx-agents-editor-test--with
+    (delete-other-windows)
+    (let ((a (drgnx-agents-editor-test--file dir "a.txt")) (applied 0))
+      (unwind-protect
+          (let ((drgnx-agents-editor-apply-functions (list (lambda (&rest _) (cl-incf applied)))))
+            (set-window-buffer (selected-window) a)
+            (drgnx-agents-editor-sync-windows)
+            (run-hook-with-args 'drgnx-history-drained-functions a 3 '((:start 0 :old_len 0 :inserted "y")))
+            (let ((view (buffer-local-value 'drgnx-agents-editor--view a)))
+              (drgnx-agents-editor--event "agent-buffer" (list :view view :full t :version 1 :doc_version 2
+                                                               :agents '((:ordinal 1))))
+              (should (= applied 0))
+              (drgnx-agents-editor--event "agent-buffer" (list :view view :full t :version 2 :doc_version 3
+                                                               :agents '((:ordinal 1))))
+              (should (= applied 1)))
+            (drgnx-agents-editor--rewatch)
+            (let ((watch (cdr (assoc "agents/buffer/watch" drgnx-agents-editor-test--calls))))
+              (should (eql 3 (plist-get watch :doc_version)))))
+        (kill-buffer a)))))
 
 (ert-deftest drgnx-agents-editor/off-unwatches-and-leaves-nothing ()
   (let ((before (list window-buffer-change-functions window-size-change-functions drgnx-hub-event-functions
