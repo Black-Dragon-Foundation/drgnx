@@ -1,0 +1,34 @@
+{"scenario": "hooks/at-review-an-error-makes-a-card-not-a-bounce", "requires": ["v1", "test-hooks"], "doc": "[C] A hook that cannot run at review (an approved plugin whose component will not load) keeps the review blocked as a `hook` card for the user (\"hook broken failed at review: ...\"; review again, dismiss, stop): the reviewer does not start, the task is not bounced to its worker and no review failure is counted."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "write_file", "path": "$ROOT/src/plugin.json", "json": {"name": "broken", "version": "1.0.0", "hooks": [{"point": "at-review", "verdicts": ["deny"]}]}}
+{"do": "write_file", "path": "$ROOT/src/plugin.wasm", "text": "not a component"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "run", "args": ["plugins", "install", "$ROOT/src"], "expect_code": 0, "expect_stdout": "installed broken 1.0.0"}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "plugins/list", "params": {}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"plugins": [{"name": "broken", "state": "unapproved", "hash": "$capture:h"}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 6, "method": "plugins/approve", "params": {"name": "broken", "hash": "$h"}}}
+{"do": "expect", "conn": "c", "json": {"id": 6, "result": {"state": "approved"}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-plugins", "source": "row", "value": ["broken"]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say Looks fine.\\nsay **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$any", "kind": "hook", "title": "$string"}}, "within_ms": 90000}
+{"do": "sql_expect", "sql": "select state, title like 'hook broken failed at review: %', json_extract(data, '$.point') from card where kind = 'hook'", "rows": [["open", 1, "at-review"]]}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 3000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test ! -e $ROOT/r.log"], "expect_code": 0}
+{"do": "sql_expect", "sql": "select count(*) from event where kind = 'review'", "rows": [[0]]}
+{"do": "send", "conn": "c", "json": {"id": 7, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 7, "result": {"id": "$job", "tasks": [{"n": 1, "status": "needs-input"}]}}, "within_ms": 10000}

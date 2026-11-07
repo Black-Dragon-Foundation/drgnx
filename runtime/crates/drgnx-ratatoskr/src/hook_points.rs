@@ -17,7 +17,10 @@
 //!   note, a refusal of what an fs write would put on disk, or (fs writes only) a replacement of the content. It
 //!   shares the plugin host and the loaded-plugin cache of [`Plugins`] with the before-tool point.
 //!
-//! Before a commit and at review use [`record_data`] and [`write_row`] too.
+//! - **Before a commit** ([`before_commit`]) and **at review** ([`at_review`]): the runner's two points, with a job and
+//!   a task and no calling session (the input's `session`, `step` and `role` are null). A plugin's HTTP uses the job's
+//!   cell (`IoCtx::Job`). A hook that errors (a timeout, a trap, "not run") is told apart from one that said no
+//!   ([`hook_failure`]): the runner raises a `hook` card for it instead of bouncing the task.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1008,6 +1011,205 @@ pub async fn after_edit(front: &Front, s: &Session, edit: &EditInfo) -> Outcome 
         edit,
     )
     .await
+}
+
+/// The merge a `before-commit` hook is asked about.
+#[derive(Clone, Debug, Default)]
+pub struct CommitInfo {
+    /// The task's branch.
+    pub branch: String,
+    /// The merge commit's message as the hub would write it.
+    pub message: String,
+    pub diff_stat: String,
+    /// The files the merge changes, relative to the repository.
+    pub paths: Vec<String>,
+}
+
+/// The review an `at-review` hook is asked about.
+#[derive(Clone, Debug, Default)]
+pub struct ReviewInfo {
+    pub summary: String,
+    pub report: String,
+    pub diff_stat: String,
+}
+
+/// Whose point it is: the job, its task, and the Urdr project that picks the rules and plugins.
+#[derive(Clone, Copy, Debug)]
+pub struct JobSite<'a> {
+    pub job: &'a str,
+    pub task: &'a str,
+    pub project: Option<&'a str>,
+}
+
+/// The rules and enabled hooks of PROJECT asked at POINT about DETAIL, through IO (a job's point has no calling
+/// session; IO is the job's cell, or why there is none). Nothing subscribed: `None`. Fail closed: a plugin that would
+/// not load or run is a deny "hook NAME failed: …" (a note when the hook is advisory).
+pub(crate) async fn ask_job_point(
+    plugins: &Plugins,
+    project: Option<&str>,
+    io: Result<Arc<dyn HostIo>, String>,
+    point: Point,
+    paths: Vec<PathBuf>,
+    detail: Value,
+    accepts: bool,
+) -> Option<Outcome> {
+    let rules = plugins.rules_for(project);
+    let installed = plugins.enabled_for(project);
+    let input = HookInput {
+        point,
+        session: None,
+        step: None,
+        tool_kind: None,
+        tool: None,
+        paths,
+        command: None,
+        detail,
+    };
+    if !hooks::subscribed(&input, &rules, &installed) {
+        return None;
+    }
+    let budget = Duration::from_millis(u64::from(point.budget_ms()));
+    let (loaded, mut failed) = load(plugins, &installed);
+    let mut records = match (plugins.host(), io) {
+        (Ok(host), Ok(io)) if !loaded.is_empty() => {
+            let h = hooks::PluginHooks {
+                host,
+                io,
+                refresh: |_: &mut HookInput| {},
+            };
+            hooks::run(&input, budget, accepts, &rules, &loaded, &h).await
+        }
+        (host, io) => {
+            let why = host.err().or(io.err()).unwrap_or_default();
+            if !why.is_empty() {
+                for l in &loaded {
+                    if let Some(p) = installed
+                        .iter()
+                        .find(|p| p.manifest.name.as_str() == l.name())
+                    {
+                        failed.push((p.clone(), why.clone()));
+                    }
+                }
+            }
+            hooks::run(&input, budget, accepts, &rules, &[], &NoPlugins).await
+        }
+    };
+    for (p, why) in failed {
+        if !hooks::subscribed(&input, &[], std::slice::from_ref(&p)) {
+            continue;
+        }
+        let m = &p.manifest;
+        let advisory = m
+            .hooks
+            .iter()
+            .find(|h| h.point == point)
+            .is_some_and(|h| h.advisory);
+        records.push(Record {
+            source: Source::Plugin {
+                name: m.name.as_str().to_owned(),
+                version: m.version.clone(),
+                hash: p.hash,
+            },
+            verdict: None,
+            ms: 0,
+            error: Some(format!("hook {} failed: {why}", m.name.as_str())),
+            advisory,
+        });
+    }
+    Some(hooks::combine(None, accepts, &records))
+}
+
+/// [`ask_job_point`] for SITE's job, through the job's cell (`IoCtx::Job`), recorded as a row.
+async fn run_job_point(
+    front: &Front,
+    site: JobSite<'_>,
+    point: Point,
+    paths: Vec<PathBuf>,
+    detail: Value,
+    accepts: bool,
+) -> Option<Outcome> {
+    let manifests: Vec<brokkr::Manifest> = front
+        .core
+        .plugins
+        .enabled_for(site.project)
+        .iter()
+        .map(|p| p.manifest.clone())
+        .collect();
+    let refs: Vec<&brokkr::Manifest> = manifests.iter().collect();
+    let io = crate::plugins::host_io(
+        front,
+        Some((
+            crate::plugins::io::IoCtx::Job(site.job.to_owned()),
+            crate::agents::launch::NetCell::ProviderOnly,
+        )),
+        &refs,
+    )
+    .map(|io| io as Arc<dyn HostIo>)
+    .map_err(|e| e.message);
+    let outcome = ask_job_point(
+        &front.core.plugins,
+        site.project,
+        io,
+        point,
+        paths,
+        detail,
+        accepts,
+    )
+    .await?;
+    let ctx = RowCtx {
+        job: Some(site.job.to_owned()),
+        task: Some(site.task.to_owned()),
+        ..RowCtx::default()
+    };
+    write_row(&front.writer, point, &ctx, &outcome).await;
+    Some(outcome)
+}
+
+/// The hooks asked about the merge of INFO's branch for the job's task, after the gate cleared and before the merge
+/// commit. A `change` replaces the commit message ([`commit_message`]). `None`: nothing subscribed.
+pub async fn before_commit(front: &Front, site: JobSite<'_>, info: &CommitInfo) -> Option<Outcome> {
+    let detail = json!({"commit": {
+        "branch": info.branch, "message": info.message, "diff_stat": info.diff_stat, "paths": info.paths,
+    }});
+    let paths = info.paths.iter().map(PathBuf::from).collect();
+    run_job_point(front, site, Point::BeforeCommit, paths, detail, true).await
+}
+
+/// The hooks asked about the review that is about to start for the job's task. Their notes go into the reviewer's
+/// brief; a deny fails the review. `None`: nothing subscribed.
+pub async fn at_review(front: &Front, site: JobSite<'_>, info: &ReviewInfo) -> Option<Outcome> {
+    let detail = json!({"review": {
+        "summary": info.summary, "report": info.report, "diff_stat": info.diff_stat,
+    }});
+    run_job_point(front, site, Point::AtReview, Vec::new(), detail, false).await
+}
+
+/// The commit message a `before-commit` `change` carries.
+pub fn commit_message(out: &Outcome) -> Option<String> {
+    let (Decision::Proceed {
+        changed: Some(c), ..
+    }
+    | Decision::Ask {
+        changed: Some(c), ..
+    }) = &out.decision
+    else {
+        return None;
+    };
+    c.get("message")?.as_str().map(str::to_owned)
+}
+
+/// The text of the error that blocked OUT (a timeout, a trap, a plugin that would not load or run), as opposed to a
+/// hook that said no: the deciding record has an error and no verdict. `POINT_WORD` ("review", "commit") goes into
+/// "hook NAME failed at review: WHAT".
+pub fn hook_failure(out: &Outcome, point_word: &str) -> Option<String> {
+    if !matches!(out.decision, Decision::Deny(_)) {
+        return None;
+    }
+    let err = out.provenance.get(out.decided_by?)?.error.as_deref()?;
+    Some(match err.split_once(" failed: ") {
+        Some((head, why)) => format!("{head} failed at {point_word}: {why}"),
+        None => format!("a hook failed at {point_word}: {err}"),
+    })
 }
 
 /// The replacement content a `change` verdict carries, and the name of the hook that made it.

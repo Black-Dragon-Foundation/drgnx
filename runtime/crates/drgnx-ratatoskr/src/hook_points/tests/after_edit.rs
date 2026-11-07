@@ -25,7 +25,7 @@ impl Kv for NoKv {
     }
 }
 
-struct NoIo;
+pub(super) struct NoIo;
 
 impl HostIo for NoIo {
     fn http(&self, _: &str, _: HttpReq) -> BoxFuture<'_, Result<HttpResp, String>> {
@@ -40,13 +40,13 @@ impl HostIo for NoIo {
     fn log(&self, _: &str, _: Level, _: &str) {}
 }
 
-struct Rig {
-    dir: tempfile::TempDir,
-    plugins: Plugins,
+pub(super) struct Rig {
+    pub(super) dir: tempfile::TempDir,
+    pub(super) plugins: Plugins,
     _store: urdr::Store,
 }
 
-async fn rig(approved: &[&str]) -> Rig {
+pub(super) async fn rig(approved: &[&str]) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let (store, db) = crate::runtime_db::open(dir.path()).unwrap();
     let settings = Arc::new(Settings::new());

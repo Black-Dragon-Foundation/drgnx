@@ -1,0 +1,32 @@
+{"scenario": "hooks/before-commit-dismiss-merges-only-for-the-user", "requires": ["v1", "test-hooks"], "doc": "[C] The hook card's `dismiss` merges the held task anyway, and only the user can answer a job card: the same call on an agent's connection is not-allowed and the card stays open. After the user's dismissal the merge commit is in the job's branch and the job is done."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/repo && cd $ROOT/repo && git init -q && git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init"], "expect_code": 0}
+{"do": "write_file", "path": "$CONFIG/settings.el", "mode": "600", "text": "(drgnx-settings :version 1 (drgnx-agents-profiles ((\"mock-claude\" :provider claude :command (\"$MOCK\" \"acp\" \"--as\" \"claude\" \"--script\" \"$ROOT/w.txt\" \"--log\" \"$ROOT/w.log\")) (\"mock-gemini\" :provider gemini :command (\"$MOCK\" \"acp\" \"--as\" \"gemini\" \"--script\" \"$ROOT/r.txt\" \"--log\" \"$ROOT/r.log\")))) (drgnx-agents-routes ((implement \"mock-claude\") (review \"mock-gemini\"))))\n"}
+{"do": "write_file", "path": "$ROOT/plan.md", "text": "# Plan\n\n**Repo:** $ROOT/repo\n\n### Task 1: Add the note\n\n**Role:** implement\n\nAdd note.txt.\n"}
+{"do": "start", "hub": "h", "args": ["--agent-socket", "s1:j1"]}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "connect", "conn": "a", "hub": "h", "socket": "agent:s1", "as": "service"}
+{"do": "send", "conn": "c", "json": {"id": 10, "method": "config/settings", "params": {"overrides": [{"name": "drgnx-agents-hook-rules", "source": "row", "value": [{"id": "no-merge", "point": "before-commit", "verdict": "deny", "reason": "freeze until Monday"}]}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 10, "result": {"applied": 1}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "job/propose", "params": {"plan": "$ROOT/plan.md"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": {"id": "$capture:job", "status": "proposed"}}, "within_ms": 10000}
+{"do": "write_file", "path": "$ROOT/w.txt", "text": "tool:edit note.txt\\ncommit work\\ncall:complete_task {\"task\": \"$job#1\", \"seen_version\": 0}\n"}
+{"do": "write_file", "path": "$ROOT/r.txt", "text": "say Looks fine.\\nsay **VERDICT: pass**\n"}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "job/approve", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$any", "kind": "hook", "title": "$string"}}, "within_ms": 90000}
+{"do": "send", "conn": "a", "json": {"id": 3, "method": "job/card", "params": {"card": 2, "action": "dismiss"}}}
+{"do": "expect", "conn": "a", "json": {"id": 3, "error": {"code": "not-allowed"}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select state from card where kind = 'hook'", "rows": [["open"]]}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "job/card", "params": {"card": 2, "action": "dismiss"}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"id": "$job"}}, "within_ms": 10000}
+{"do": "file", "path": "$STATE/hub/runs/$job/_job/note.txt", "contains": "edited by ratatoskr-mock", "within_ms": 60000}
+{"do": "connect", "conn": "q", "hub": "h"}
+{"do": "expect_silent", "conn": "q", "for_ms": 5000}
+{"do": "send", "conn": "c", "json": {"id": 5, "method": "job/status", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 5, "result": {"id": "$job", "status": "done", "tasks": [{"n": 1, "status": "done"}]}}, "within_ms": 10000}
+{"do": "sql_expect", "sql": "select state, choice from card where kind = 'hook'", "rows": [["settled", "dismiss"]]}
