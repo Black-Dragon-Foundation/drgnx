@@ -92,7 +92,7 @@
         (wanted nil))
     (setq drgnx-agent-panel-huddle--rec rec wanted (drgnx-agent-panel-huddle--wanted))
     (if (member (format "%s" (plist-get rec :state)) '("asked" "open"))
-        (puthash (plist-get rec :id) t drgnx-agent-panel-huddle--open)
+        (puthash (plist-get rec :id) rec drgnx-agent-panel-huddle--open)
       (remhash (plist-get rec :id) drgnx-agent-panel-huddle--open))
     (when (drgnx-view-p drgnx-view)
       (when-let* ((gone (seq-remove (lambda (k) (member k wanted)) shown))) (drgnx-view-remove drgnx-view gone))

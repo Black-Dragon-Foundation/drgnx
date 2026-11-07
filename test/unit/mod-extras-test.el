@@ -82,3 +82,16 @@
     (drgnx-module-define 'test/late :doc "l" :stage 'idle :setup #'ignore)
     (drgnx-modules-run 'idle)
     (should (equal seen '(idle)))))
+
+(ert-deftest drgnx-modules/no-module-requires-gptel ()
+  ;; the agent panel replaced the chat UI: no shipped Lisp, module package list or lock row names gptel
+  (let (hits)
+    (dolist (dir '("core" "modules"))
+      (dolist (f (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents f)
+          (when (re-search-forward "gptel" nil t) (push (file-relative-name f drgnx-dir) hits)))))
+    (should (equal nil (sort hits #'string<)))
+    (with-temp-buffer
+      (insert-file-contents (expand-file-name "etc/drgnx.lock.eld" drgnx-dir))
+      (should-not (re-search-forward "gptel" nil t)))))
