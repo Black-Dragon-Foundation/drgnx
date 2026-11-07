@@ -560,6 +560,11 @@ skuld::every_order(&p, skuld::Bound::default(), Conn::new, |conn, order| conn.ch
 `skuld::wait_until(what, secs, f)` is the one real-time wait Rust tests may use: it polls `f` every 10 ms and panics
 naming `what` after `secs`. The deadline only bounds a failure, so a test never widens it to pass.
 
+`skuld::while_running(what, &mut task, fut)` is how a test waits beside a spawned call: a panic in a spawned task only
+ends the task, so a test waiting for what the call would have done (a card, a watch, a channel whose sender it also
+holds) would wait forever. It returns `fut`'s output, and fails naming `what` and the task's panic when the task ends
+first (`abilities/tests.rs`'s ask rows wait for their card this way).
+
 `cargo test -p skuld` checks the helper against answers known exactly: the closed forms (12,870 for 2×8, 1,680 for
 3×3, 63,063,000 for 4×4, binomials up to 7×7, the cap), and brute force over every interleaving for the orders an
 exhaustive or a delay-bounded run visits (with and without edges, two and three sources), each once; the re-entry

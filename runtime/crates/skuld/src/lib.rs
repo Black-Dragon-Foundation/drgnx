@@ -21,10 +21,14 @@
 //! failure. [`window`] is a window in which nothing may happen; [`origin`] and [`host_now`] give a clock reading as a
 //! value, never to wait with. `tests/real_time_in_tests.rs` keeps every other real-time call out of test code.
 //!
+//! [`while_running`] waits beside a spawned call: a panic only ends its task, so a test that waits for what the task
+//! would have done fails when the task ends first instead of waiting forever.
+//!
 //! The crate is test support: other crates name it under `[dev-dependencies]` only.
 
 mod count;
 mod explore;
+mod task;
 mod wait;
 
 #[cfg(test)]
@@ -32,6 +36,7 @@ mod tests;
 
 pub use count::count;
 pub use explore::{Bound, Mode, Report, every_order, random_orders};
+pub use task::while_running;
 pub use wait::{host_now, origin, wait_until, wait_until_async, window};
 
 /// A core's event type: every kind it declares must be produced by some order, or the run fails.
