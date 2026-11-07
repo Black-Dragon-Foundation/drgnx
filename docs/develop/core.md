@@ -841,6 +841,10 @@ right-click menus (contexts via `drgnx-surfaces-define-context`), which-key labe
 the **key sheet** ("Keyboard Shortcuts", `*drgnx keys*`), a markdown cheat sheet (`drgnx-surfaces-export-markdown`), "next time:
 KEY" tips after a command run from a menu or the palette, and the **command palette** (`C-S-p` in every profile): every available
 command as "Category: Title" with its key and description beside it, through the normal completion UI.
+A module adds a section to the key sheet by putting a function on `drgnx-surfaces-cheatsheet-sections` (it returns
+`(TITLE . LINES)` or nil); the sheet inserts each one after "Key problems". Quitting asks once about programs still
+running: each function on `drgnx-session-running-functions` returns the names to list (the terminal modules' own),
+errors are ignored, and live processes are added.
 With `extra/completion` on and Glitnir active it floats: the category `drgnx-command` is in
 `vertico-multiform-categories`, which turns on `vertico-buffer` with `drgnx-palette-frame--display`
 (`core/drgnx-palette-frame.el`) as its display action. The action returns the root window of drgnx's own reused child

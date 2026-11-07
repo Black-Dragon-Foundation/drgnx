@@ -482,60 +482,49 @@ order.  A name that is no workload is an error: a typo must not run nothing and 
   (let ((dir (getenv "DRGNX_USER_ELPA")))
     (and dir (not (string-empty-p dir)) (expand-file-name dir))))
 
-(defun drgnx-perf-run--eat-elpa-p ()
-  "Non-nil when $DRGNX_USER_ELPA holds an eat package (the terminal workloads can then run in the container)."
-  (let ((elpa (drgnx-perf-run--user-elpa)))
-    (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`eat-[0-9.]+\\'") t)))
-
 (defun drgnx-perf-run--websocket-elpa-p ()
   "Non-nil when $DRGNX_USER_ELPA holds a websocket package (the Live view workload can then run in the container)."
   (let ((elpa (drgnx-perf-run--user-elpa)))
     (and elpa (file-directory-p elpa) (directory-files elpa nil "\\`websocket-[0-9]") t)))
 
 (defun drgnx-perf-run--terminal-setup-form (command &rest switches)
-  "The terminal workloads' setup: eat (from the user's packages if need be) and the session functions they use.
-The eat terminal runs COMMAND with SWITCHES directly: no shell, so no shell configuration is involved."
-  (prin1-to-string
-   `(progn
-      (unless (require 'eat nil t)
-        ;; the lab's $DRGNX_USER_ELPA, put in here: the session does not inherit it
-        (let* ((elpa (expand-file-name (or ,(drgnx-perf-run--user-elpa) "~/.config/emacs/elpa")))
-               (dir (car (last (and (file-directory-p elpa) (directory-files elpa t "\\`eat-[0-9.]+\\'"))))))
-          (unless dir (error "The terminal workloads need the eat package"))
-          (add-to-list 'load-path dir)
-          (require 'eat)))
-      ;; the session started without eat's package, so the module was skipped (missing-packages): run it now, as it runs
-      ;; for a user who has eat installed (its key split, its GC timing)
-      (let ((spec (cdr (assq 'tools/terminal-eat drgnx-modules--table))))
-        (when (and spec (not (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)))
-          (drgnx-modules--run-one 'tools/terminal-eat spec 'startup)))
-      ;; never measure a terminal without the module (its key split, its GC timing) and not know it
-      (unless (eq (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status) 'ok)
-        (error "The terminal workloads need the tools/terminal-eat module to run (status %S)"
-               (plist-get (cdr (assq 'tools/terminal-eat (drgnx-modules-report))) :status)))
-      (defvar drgnx-perf--term nil "The terminal's buffer.")
-      (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
-      (defun drgnx-perf--term-open ()
-        (let ((buf (generate-new-buffer "*eat-perf*")))
-          (with-current-buffer buf (eat-mode))
-          (eat-exec buf "perf" (executable-find ,command) nil ',switches)
-          (set-process-query-on-exit-flag (get-buffer-process buf) nil)
-          (setq drgnx-perf--term buf)))
-      (defun drgnx-perf--term-show ()
-        "The terminal in the panel (the display rules choose where), the editor window selected."
-        (let ((win (selected-window)))
-          (display-buffer drgnx-perf--term)
-          (select-window win)))
-      (defun drgnx-perf--term-teardown ()
-        (when (buffer-live-p drgnx-perf--term)
-          (let ((proc (get-buffer-process drgnx-perf--term)) (kill-buffer-query-functions nil))
-            (kill-buffer drgnx-perf--term)
-            (let ((d (+ (float-time) 3)))   ; wait for the process to be gone
-              (while (and proc (process-live-p proc) (< (float-time) d)) (accept-process-output nil 0.05)))))
-        (setq drgnx-perf--term nil)
-        t)
-      (drgnx-perf--term-open)
-      t)))
+  "The terminal workloads' setup: a hub of the workload (`drgnx-perf-run--hub-form'; its terminal worker beside it),
+module tools/term run on it, and the session functions the workloads use.  The terminal runs COMMAND with SWITCHES
+directly: no shell, so no shell configuration is involved."
+  (concat
+   "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) "
+   (prin1-to-string
+    `(progn
+       ;; the session's modules ran before its hub was up: run tools/term now, as it runs for a user
+       (let ((spec (cdr (assq 'tools/term drgnx-modules--table))))
+         (when (and spec (not (drgnx-modules--ok-p 'tools/term)))
+           (drgnx-modules--run-one 'tools/term spec 'startup)))
+       ;; never measure without the module and not know it
+       (unless (drgnx-modules--ok-p 'tools/term)
+         (error "The terminal workloads need the tools/term module to run (status %S)"
+                (plist-get (cdr (assq 'tools/term (drgnx-modules-report))) :status)))
+       (defvar drgnx-perf--term nil "The terminal's buffer.")
+       (defvar drgnx-perf--term-tick 0 "The terminal buffer's modification tick when the keys began.")
+       (defun drgnx-perf--term-live-p ()
+         "Whether the terminal is open: its program runs in the hub's worker."
+         (and (buffer-live-p drgnx-perf--term) (eq (buffer-local-value 'drgnx-term--state drgnx-perf--term) 'open)))
+       (defun drgnx-perf--term-open ()
+         (setq drgnx-perf--term (drgnx-term-start temporary-file-directory (list (executable-find ,command) ,@switches)))
+         (unless (drgnx-perf--wait 30 #'drgnx-perf--term-live-p) (error "The terminal did not open")))
+       (defun drgnx-perf--term-show ()
+         "The terminal in the panel (the display rules choose where), the editor window selected."
+         (let ((win (selected-window)))
+           (display-buffer drgnx-perf--term)
+           (select-window win)))
+       (defun drgnx-perf--term-teardown ()
+         (when (buffer-live-p drgnx-perf--term)
+           (let ((kill-buffer-query-functions nil)) (kill-buffer drgnx-perf--term)))   ; term/close ends its worker
+         (setq drgnx-perf--term nil)
+         (drgnx-perf--hub-stop)
+         t)
+       (drgnx-perf--term-open)
+       t))
+   ")"))
 
 (defun drgnx-perf-run--hub-form ()
   "The agent workloads' setup, as a form string: the session functions that start Ratatoskr (a test-hooks build,
@@ -764,12 +753,12 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                        (drgnx-wb-area-window 'panel) (drgnx-wb-area-window 'right) t)"
        :repeat 3
        :teardown ,(concat "(progn " drgnx-perf-run--window-switch-teardown-form " " kill-fixture ")"))
-      ;; typing in an eat terminal (cat: the tty echoes every key, eat draws it)
+      ;; typing in drgnx's terminal (cat: the tty echoes every key, the worker draws it)
       (terminal-typing
        :setup ,(drgnx-perf-run--terminal-setup-form "cat")
        :each "(progn (pop-to-buffer drgnx-perf--term) (select-window (get-buffer-window drgnx-perf--term)) t)"
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
-       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) t)"
+       :check "(drgnx-perf--term-live-p)"
        :teardown "(drgnx-perf--term-teardown)")
       ;; typing in the fixture while a terminal in the panel streams output (seq 1 2000, in a loop)
       (terminal-output
@@ -778,7 +767,7 @@ error if it does not hold).  With :actions, :measure runs after the input and it
                       " (drgnx-perf--term-show) (setq drgnx-perf--term-tick (buffer-chars-modified-tick drgnx-perf--term)) t)")
        :timers t
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
-       :check "(and (process-live-p (get-buffer-process drgnx-perf--term)) (get-buffer-window drgnx-perf--term)
+       :check "(and (drgnx-perf--term-live-p) (get-buffer-window drgnx-perf--term)
                     (> (buffer-chars-modified-tick drgnx-perf--term) drgnx-perf--term-tick) t)"   ; output streamed while typing
        :teardown ,(concat "(progn (drgnx-perf--term-teardown) " kill-fixture ")"))
       ;; the off-the-main-thread workloads (§17.6): report-only until their step lands (harness/drgnx-perf-workloads.el)
@@ -1183,8 +1172,8 @@ version and the commit, as JSON in FILE."
               '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
     (live-view . "the container image has no websocket package")
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
-    (terminal-typing . "the container image has no eat package")
-    (terminal-output . "the container image has no eat package")
+    (terminal-typing . "measured with eat; drgnx's terminal is seeded by its perf task on the desktop island")
+    (terminal-output . "measured with eat; drgnx's terminal is seeded by its perf task on the desktop island")
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))
@@ -1203,18 +1192,15 @@ version and the commit, as JSON in FILE."
 container.  Seed one (budgets.eld) and take it off this list.")
 
 (defconst drgnx-perf-run-container-skipped
-  '((live-view . "the container image has no websocket package")
-    (terminal-typing . "the container image has no eat package")
-    (terminal-output . "the container image has no eat package"))
+  '((live-view . "the container image has no websocket package"))
   "Workloads that error in the GUI container (seen 2026-10-20, CI perf lab), and why.  In a container the lab names
 them and leaves them out (as it leaves out the evil workloads without evil), so one that cannot run there does not
 fail the whole run; they still run on a host.  Each is also in `drgnx-perf-run-unseeded'.")
 
 (defun drgnx-perf-run--container-skip (workload)
-  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The terminal workloads
-run when $DRGNX_USER_ELPA holds eat (`bin/drgnx' mounts it in the perf tier), the Live view when it holds websocket."
-  (unless (or (and (memq workload '(terminal-typing terminal-output)) (drgnx-perf-run--eat-elpa-p))
-              (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p)))
+  "Why WORKLOAD is left out in the container (`drgnx-perf-run-container-skipped'), or nil.  The Live view runs when
+$DRGNX_USER_ELPA holds websocket (`bin/drgnx' mounts it in the perf tier)."
+  (unless (and (eq workload 'live-view) (drgnx-perf-run--websocket-elpa-p))
     (cdr (assq workload drgnx-perf-run-container-skipped))))
 
 (defconst drgnx-perf-run-hook-budget 2 "ms: any hook function's p90 (the spec), judged in the --audit pass.")
