@@ -12,6 +12,8 @@ use urdr::{Handle, Mode, Store, StoreSpec};
 pub enum StoreError {
     Store(urdr::Error),
     Sqlite(rusqlite::Error),
+    /// A read of a checkout or its git, for the overlay.
+    Io(std::io::Error),
 }
 
 impl fmt::Display for StoreError {
@@ -19,6 +21,7 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::Store(e) => write!(f, "code store: {e}"),
             StoreError::Sqlite(e) => write!(f, "code store: {e}"),
+            StoreError::Io(e) => write!(f, "code store: {e}"),
         }
     }
 }
@@ -31,17 +34,24 @@ impl From<urdr::Error> for StoreError {
     }
 }
 
+impl From<std::io::Error> for StoreError {
+    fn from(e: std::io::Error) -> Self {
+        StoreError::Io(e)
+    }
+}
+
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
         StoreError::Store(urdr::Error::Sqlite(e))
     }
 }
 
-/// One row of `file` (the tree is the caller's: the base, or a worktree's view).
+/// One row of `file` (the tree is the caller's: the base, or a worktree's view). A `blob` of none is a tombstone: the
+/// worktree does not have the path (or does not admit it) while the base does; only a worktree's row can be one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileRow {
     pub path: String,
-    pub blob: String,
+    pub blob: Option<String>,
     pub class: String,
     pub lang: String,
     pub generated: bool,
@@ -165,7 +175,7 @@ pub(crate) fn write_file_row(c: &Connection, tree: i64, f: &FileRow) -> urdr::Re
         f.size as i64,
         f.indexed_at
     ])?;
-    if let Some(o) = old.filter(|o| *o != f.blob) {
+    if let Some(o) = old.filter(|o| Some(o) != f.blob.as_ref()) {
         sweep(c, &f.path, &o)?;
     }
     Ok(())
@@ -237,22 +247,46 @@ pub(crate) fn write_chunks(
     Ok(ids)
 }
 
+impl FileRow {
+    /// A worktree's tombstone of PATH.
+    pub fn tombstone(path: &str) -> FileRow {
+        FileRow {
+            path: path.to_string(),
+            blob: None,
+            class: String::new(),
+            lang: String::new(),
+            generated: false,
+            size: 0,
+            indexed_at: 0,
+        }
+    }
+}
+
 /// TREE's row of a file and, unless its pair already has content (shared with another row; FORCE rewrites it, after
-/// a chunker change), the pair's chunks and symbols. The pair's chunk ids.
+/// a chunker change), the pair's chunks and symbols from BUILT. The pair's chunk ids; none, with nothing written, when
+/// the pair has no content and BUILT is none (the caller reads and chunks it, then writes again). A tombstone writes
+/// its row only.
 pub(crate) fn write_version(
     c: &Connection,
     tree: i64,
     f: &FileRow,
-    chunks: &[ChunkIn],
-    symbols: &[SymbolIn],
+    built: Option<(&[ChunkIn], &[SymbolIn])>,
     force: bool,
-) -> urdr::Result<Vec<i64>> {
-    write_file_row(c, tree, f)?;
-    let have = content_ids(c, &f.path, &f.blob)?;
+) -> urdr::Result<Option<Vec<i64>>> {
+    let Some(blob) = f.blob.as_deref() else {
+        write_file_row(c, tree, f)?;
+        return Ok(Some(vec![]));
+    };
+    let have = content_ids(c, &f.path, blob)?;
     if !have.is_empty() && !force {
-        return Ok(have);
+        write_file_row(c, tree, f)?;
+        return Ok(Some(have));
     }
-    write_chunks(c, &f.path, &f.blob, chunks, symbols)
+    let Some((chunks, symbols)) = built else {
+        return Ok(None);
+    };
+    write_file_row(c, tree, f)?;
+    write_chunks(c, &f.path, blob, chunks, symbols).map(Some)
 }
 
 pub struct CodeStore {

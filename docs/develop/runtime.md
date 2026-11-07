@@ -1044,6 +1044,21 @@ with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `ve
 re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
 `stale`.
 
+**Worktree overlays** (`hrafn::overlay`). A worktree T's rows are the paths where its admitted blob differs from the
+base's: a row naming T's blob, or a tombstone (NULL blob) where the base has the path and T does not admit it.
+`seed`, `rediff` and `recheck(paths)` take a `Cx` (store, tree, root, T's git door, the base's `Config` and deny-list
+check) and are idempotent. A seed or re-diff looks only at the paths that can differ: the symmetric difference of T's
+HEAD tree and the base rows (by blob, no read), T's stat-dirty and untracked paths, and T's current rows; a path
+stat-clean at a committed blob equal to the base's is decided without a read. Admission runs on T's own bytes with
+the base's rules, so a file can be admitted in one view and not the other. A link is never admitted in any view,
+through either door: a committed link is refused by its mode and a link on disk by the read, both before any hash
+(the CLI door's `hash-object` would hash the target's content, gix the target's name). A blob the gix door marks
+uncertain always gets its row. A seed marks the tree `seeding` and, in its last transaction, `live` with `head`,
+`branch` and `seeded_from`; one cut short is simply run again. Tier 1 moves every tree that is not seeding in the same
+transaction as each base change (a tree whose row equals the new base content loses it; a tree with no row gets one
+naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
+chunks a `(path, blob)` a worktree already stores.
+
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
 

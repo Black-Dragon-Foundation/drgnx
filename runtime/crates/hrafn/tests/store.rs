@@ -26,7 +26,7 @@ async fn count(s: &CodeStore, sql: &'static str) -> i64 {
 fn file(path: &str) -> FileRow {
     FileRow {
         path: path.into(),
-        blob: "b".into(),
+        blob: Some("b".into()),
         class: "code".into(),
         lang: "elisp".into(),
         generated: false,

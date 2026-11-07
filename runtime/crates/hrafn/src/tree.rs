@@ -7,9 +7,9 @@
 
 use crate::door::DoorKind;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, write_version,
+    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, row_blob, write_version,
 };
-use rusqlite::{Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
 /// Rows a dropped tree loses per transaction, so queries run between the batches.
 const DROP_BATCH: i64 = 512;
@@ -81,6 +81,66 @@ pub struct TreeRow {
     pub door: DoorKind,
     pub state: TreeState,
     pub last_used: i64,
+}
+
+/// The base's PATH moves to NEW (none: gone or no longer admitted), inside the base batch's transaction, before the
+/// base row is written (H16 overlay design §5.1 item 4). Every tree that is not seeding follows, with no read of its
+/// files: a tree whose row names NEW now equals the base, so its row goes; a tree with no row was equal to the old
+/// base content, so it gets a row naming that content (a tombstone when the base had none), which keeps that content
+/// from the sweep.
+pub(crate) fn transition(c: &Connection, path: &str, new: Option<&str>) -> urdr::Result<()> {
+    let old: Option<FileRow> = c
+        .prepare(
+            "select blob, class, lang, generated, size, indexed_at from file where tree = 0 and path = ?1",
+        )?
+        .query_row([path], |r| {
+            Ok(FileRow {
+                path: path.to_string(),
+                blob: r.get(0)?,
+                class: r.get(1)?,
+                lang: r.get(2)?,
+                generated: r.get::<_, i64>(3)? != 0,
+                size: r.get::<_, i64>(4)?.try_into().unwrap_or(0),
+                indexed_at: r.get(5)?,
+            })
+        })
+        .optional()?;
+    if old.as_ref().and_then(|o| o.blob.as_deref()) == new {
+        return Ok(());
+    }
+    // a tree being seeded is not followed: its seed compares every path that can differ with the base as it is then
+    let trees: Vec<i64> = c
+        .prepare("select id from tree where state != 'seeding'")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for t in trees {
+        match row_blob(c, t, path)? {
+            Some(z) if z.as_deref() == new => {
+                // no sweep: the base's row names the content next
+                c.prepare("delete from file where tree = ?1 and path = ?2")?
+                    .execute(params![t, path])?;
+            }
+            Some(_) => {}
+            None => {
+                let row = old.clone().unwrap_or_else(|| FileRow::tombstone(path));
+                c.prepare(
+                    "insert into file(tree, path, blob, class, lang, generated, size, indexed_at)
+                     values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                )?
+                .execute(params![
+                    t,
+                    row.path,
+                    row.blob,
+                    row.class,
+                    row.lang,
+                    row.generated,
+                    row.size as i64,
+                    row.indexed_at
+                ])?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn tree_row(r: &Row<'_>) -> rusqlite::Result<TreeRow> {
@@ -208,7 +268,12 @@ impl CodeStore {
     ) -> Result<Vec<i64>, StoreError> {
         Ok(self
             .handle()
-            .write(move |c| write_version(c, view.tree(), &row, &chunks, &symbols, false))
+            .write(move |c| {
+                Ok(
+                    write_version(c, view.tree(), &row, Some((&chunks, &symbols)), false)?
+                        .unwrap_or_default(),
+                )
+            })
             .await?)
     }
 

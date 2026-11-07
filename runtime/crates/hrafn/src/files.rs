@@ -588,6 +588,58 @@ fn check_search_eld(root_fd: &eitri::Pinned) -> io::Result<()> {
     }
 }
 
+/// What a path alone decides about indexing it: the configuration's globs, the hub's deny-list, dot paths, names of
+/// secrets and nested repositories. The overlay applies the same rules to a worktree's paths (the base's `Config`).
+pub(crate) struct Rules {
+    off: bool,
+    include: Vec<Vec<Tok>>,
+    exclude: Vec<Vec<Tok>>,
+    nested: Vec<String>,
+}
+
+impl Rules {
+    /// The rules of CONFIG in a checkout whose nested repositories are NESTED (as `Git::nested` gives them).
+    pub(crate) fn new(config: &Config, nested: &[String]) -> Rules {
+        Rules {
+            off: config.off,
+            include: config.include.iter().map(|g| glob_tokens(g)).collect(),
+            exclude: config.exclude.iter().map(|g| glob_tokens(g)).collect(),
+            nested: nested.iter().map(|n| format!("{n}/")).collect(),
+        }
+    }
+
+    pub(crate) fn admits(&self, path: &str, allow: &dyn Fn(&str) -> bool) -> bool {
+        !(self.off
+            || path.contains('\n') // `hash-object --stdin-paths` is line-based
+            || dot_path(path)
+            || sensitive_name(path)
+            || self.nested.iter().any(|p| path.starts_with(p))
+            || (!self.include.is_empty() && !glob_matches(&self.include, path))
+            || glob_matches(&self.exclude, path)
+            || !allow(path))
+    }
+}
+
+/// PATH's bytes when its content can be indexed: a regular file (a link, a FIFO or a missing file is refused by the
+/// read, which never follows a link), at most [`MAX_FILE_BYTES`], with no NUL among its first bytes.
+pub(crate) fn read_admitted(root_fd: &eitri::Pinned, path: &str) -> Option<Vec<u8>> {
+    let bytes = eitri::read_regular(root_fd.fd.as_fd(), Path::new(path), MAX_FILE_BYTES).ok()?;
+    (!bytes[..bytes.len().min(BINARY_PROBE)].contains(&0)).then_some(bytes)
+}
+
+/// The listed row of an admitted file: its BLOB, BYTES and whether `.gitattributes` marks it generated (ATTR).
+pub(crate) fn listed(path: String, blob: String, bytes: &[u8], attr: bool) -> Listed {
+    let lang = lang_of(&path, &bytes[..bytes.len().min(256)]);
+    Listed {
+        class: class_of(&path, lang),
+        generated: generated_by_marker(bytes) || attr || generated_by_name(&path),
+        lang,
+        size: bytes.len() as u64,
+        blob,
+        path,
+    }
+}
+
 /// The files of the project at `root` that Hrafn indexes, sorted by path. `allow` is the hub's deny-list check on a
 /// path relative to `root`; `config` can only narrow the list.
 pub fn list(
@@ -602,59 +654,27 @@ pub fn list(
     if config.off {
         return Ok(vec![]);
     }
-    let include: Vec<_> = config.include.iter().map(|g| glob_tokens(g)).collect();
-    let exclude: Vec<_> = config.exclude.iter().map(|g| glob_tokens(g)).collect();
-    let nested = git.nested(root)?;
-    let nested_prefixes: Vec<String> = nested.iter().map(|n| format!("{n}/")).collect();
-
-    struct Cand {
-        path: String,
-        lang: Lang,
-        size: u64,
-        marker: bool,
-    }
-    let mut cands: Vec<Cand> = Vec::new();
+    let rules = Rules::new(config, &git.nested(root)?);
+    let mut cands: Vec<(String, Vec<u8>)> = Vec::new();
     let mut seen = HashSet::new();
     for path in git.ls_files(root)? {
-        if !seen.insert(path.clone())
-            || path.contains('\n') // `hash-object --stdin-paths` is line-based
-            || dot_path(&path)
-            || sensitive_name(&path)
-            || nested_prefixes.iter().any(|p| path.starts_with(p))
-            || (!include.is_empty() && !glob_matches(&include, &path))
-            || glob_matches(&exclude, &path)
-            || !allow(&path)
-        {
+        if !seen.insert(path.clone()) || !rules.admits(&path, allow) {
             continue;
         }
-        // Links, FIFOs, missing files and over-size files are all refused by the bounded read.
-        let Ok(bytes) = eitri::read_regular(root_fd.fd.as_fd(), Path::new(&path), MAX_FILE_BYTES)
-        else {
+        let Some(bytes) = read_admitted(&root_fd, &path) else {
             continue;
         };
-        if bytes[..bytes.len().min(BINARY_PROBE)].contains(&0) {
-            continue;
-        }
-        cands.push(Cand {
-            lang: lang_of(&path, &bytes[..bytes.len().min(256)]),
-            size: bytes.len() as u64,
-            marker: generated_by_marker(&bytes),
-            path,
-        });
+        cands.push((path, bytes));
     }
-    let paths: Vec<String> = cands.iter().map(|c| c.path.clone()).collect();
+    let paths: Vec<String> = cands.iter().map(|c| c.0.clone()).collect();
     let blobs = git.blobs(root, &paths)?;
     let attr: HashSet<String> = git.generated(root, &paths)?.into_iter().collect();
     let mut out: Vec<Listed> = cands
         .into_iter()
         .zip(blobs)
-        .map(|(c, blob)| Listed {
-            class: class_of(&c.path, c.lang),
-            generated: c.marker || attr.contains(&c.path) || generated_by_name(&c.path),
-            lang: c.lang,
-            size: c.size,
-            blob,
-            path: c.path,
+        .map(|((path, bytes), blob)| {
+            let generated = attr.contains(&path);
+            listed(path, blob, &bytes, generated)
         })
         .collect();
     out.sort_by(|a, b| a.path.cmp(&b.path));

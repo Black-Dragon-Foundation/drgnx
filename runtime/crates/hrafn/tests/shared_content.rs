@@ -39,7 +39,7 @@ fn sym(name: &str) -> SymbolIn {
 fn row(path: &str, blob: &str) -> FileRow {
     FileRow {
         path: path.into(),
-        blob: blob.into(),
+        blob: Some(blob.into()),
         class: "code".into(),
         lang: "elisp".into(),
         generated: false,

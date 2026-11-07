@@ -11,6 +11,7 @@ pub mod eval;
 pub mod files;
 pub mod fresh;
 pub mod index;
+pub mod overlay;
 pub mod query;
 pub mod schema;
 pub mod store;

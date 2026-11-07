@@ -9,9 +9,10 @@
 use crate::chunk::{BUDGET, CHUNKER_VERSION, chunk_file};
 use crate::files::Listed;
 use crate::store::{
-    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, remove_file_row, sweep_all, vec_key,
-    write_version,
+    ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, content_ids, remove_file_row, sweep_all,
+    vec_key, write_version,
 };
+use crate::tree::transition;
 use rusqlite::{Connection, params};
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -79,25 +80,36 @@ const MISSING_KEYS: &str =
      (select 1 from vec v where v.model = ?1 and v.key = c.key)";
 
 /// One file's rows, chunked off the store thread.
-struct Built {
-    row: FileRow,
-    chunks: Vec<ChunkIn>,
-    symbols: Vec<SymbolIn>,
+pub(crate) struct Built {
+    pub(crate) row: FileRow,
+    pub(crate) chunks: Vec<ChunkIn>,
+    pub(crate) symbols: Vec<SymbolIn>,
 }
 
-fn build(l: &Listed, bytes: &[u8]) -> Built {
+/// A listed file's `file` row.
+pub(crate) fn row_of(l: &Listed) -> FileRow {
+    FileRow {
+        path: l.path.clone(),
+        blob: Some(l.blob.clone()),
+        class: l.class.as_str().into(),
+        lang: l.lang.as_str().into(),
+        generated: l.generated,
+        size: l.size,
+        indexed_at: now_secs(),
+    }
+}
+
+/// A file read for tier 1: its rows chunked, or its row alone when its content is stored already.
+enum Pending {
+    Built(Built),
+    Reuse(FileRow),
+}
+
+pub(crate) fn build(l: &Listed, bytes: &[u8]) -> Built {
     let text = String::from_utf8_lossy(bytes);
     let (chunks, symbols) = chunk_file(&l.path, l.lang, l.generated, &text, BUDGET);
     Built {
-        row: FileRow {
-            path: l.path.clone(),
-            blob: l.blob.clone(),
-            class: l.class.as_str().into(),
-            lang: l.lang.as_str().into(),
-            generated: l.generated,
-            size: l.size,
-            indexed_at: now_secs(),
-        },
+        row: row_of(l),
         chunks: chunks
             .into_iter()
             .map(|c| ChunkIn {
@@ -162,33 +174,66 @@ pub async fn refresh(
     if rebuild {
         store.handle().write(clear_trees).await?;
     }
+    // a pair a worktree already stores is neither read nor chunked again (unless the chunker changed)
+    let stored: HashSet<String> = if rebuild {
+        HashSet::new()
+    } else {
+        let pairs: Vec<(String, String)> = changed
+            .iter()
+            .map(|l| (l.path.clone(), l.blob.clone()))
+            .collect();
+        store
+            .handle()
+            .read(move |c| {
+                let mut out = HashSet::new();
+                for (p, b) in pairs {
+                    if !content_ids(c, &p, &b)?.is_empty() {
+                        out.insert(p);
+                    }
+                }
+                Ok(out)
+            })
+            .await?
+    };
     for batch in changed.chunks(FILE_BATCH) {
-        let mut built = Vec::with_capacity(batch.len());
+        let mut pending = Vec::with_capacity(batch.len());
         for l in batch {
+            if stored.contains(&l.path) {
+                pending.push(Pending::Reuse(row_of(l)));
+                continue;
+            }
             match read(&l.path) {
-                Ok(bytes) => built.push(build(l, &bytes)),
+                Ok(bytes) => pending.push(Pending::Built(build(l, &bytes))),
                 Err(_) if known.contains_key(&l.path) => gone.push(l.path.clone()),
                 Err(_) => {}
             }
         }
-        out.files_changed += built.len() as u32;
-        out.chunks_written += built.iter().map(|b| b.chunks.len() as u32).sum::<u32>();
-        store
-            .handle()
-            .write(move |c| {
-                let used = next_used(c)?;
-                for b in &built {
-                    write_version(c, 0, &b.row, &b.chunks, &b.symbols, rebuild)?;
-                    for ch in &b.chunks {
-                        c.execute(
-                            "update vec set last_used = ?1 where key = ?2",
-                            params![used, ch.key.as_slice()],
-                        )?;
-                    }
+        // a reused pair swept since it was looked up: read and chunked after all
+        loop {
+            out.files_changed += pending.len() as u32;
+            out.chunks_written += pending
+                .iter()
+                .map(|p| match p {
+                    Pending::Built(b) => b.chunks.len() as u32,
+                    Pending::Reuse(_) => 0,
+                })
+                .sum::<u32>();
+            let missed = store
+                .handle()
+                .write(move |c| write_base(c, &pending, rebuild))
+                .await?;
+            if missed.is_empty() {
+                break;
+            }
+            out.files_changed -= missed.len() as u32;
+            pending = Vec::new();
+            for l in batch.iter().filter(|l| missed.contains(&l.path)) {
+                match read(&l.path) {
+                    Ok(bytes) => pending.push(Pending::Built(build(l, &bytes))),
+                    Err(_) => gone.push(l.path.clone()),
                 }
-                Ok(())
-            })
-            .await?;
+            }
+        }
     }
     if !gone.is_empty() {
         out.files_changed += gone.len() as u32;
@@ -196,6 +241,7 @@ pub async fn refresh(
             .handle()
             .write(move |c| {
                 for p in &gone {
+                    transition(c, p, None)?;
                     remove_file_row(c, 0, p)?;
                 }
                 Ok(())
@@ -307,12 +353,46 @@ pub async fn collect(store: &CodeStore, model: &str) -> Result<u32, StoreError> 
         .await?)
 }
 
+/// One batch of base writes in one transaction, each with its transition of every tree first (so the old content a
+/// tree now names is not swept). The paths whose content was to be reused but is gone: nothing was written for them.
+fn write_base(c: &Connection, pending: &[Pending], rebuild: bool) -> urdr::Result<Vec<String>> {
+    let used = next_used(c)?;
+    let mut missed = Vec::new();
+    for p in pending {
+        match p {
+            Pending::Reuse(row) => {
+                let blob = row.blob.as_deref().unwrap_or_default();
+                if content_ids(c, &row.path, blob)?.is_empty() {
+                    missed.push(row.path.clone());
+                    continue;
+                }
+                transition(c, &row.path, row.blob.as_deref())?;
+                write_version(c, 0, row, None, false)?;
+            }
+            Pending::Built(b) => {
+                transition(c, &b.row.path, b.row.blob.as_deref())?;
+                write_version(c, 0, &b.row, Some((&b.chunks, &b.symbols)), rebuild)?;
+                for ch in &b.chunks {
+                    c.execute(
+                        "update vec set last_used = ?1 where key = ?2",
+                        params![used, ch.key.as_slice()],
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(missed)
+}
+
 /// Every worktree's rows dropped and the content only they named swept; the trees are marked `stale`, so they
 /// re-seed on their next use (H16 overlay design §6.4).
 fn clear_trees(c: &Connection) -> urdr::Result<()> {
     c.execute("delete from file where tree > 0", [])?;
     sweep_all(c)?;
-    c.execute("update tree set state = 'stale'", [])?;
+    c.execute(
+        "update tree set state = 'stale' where state != 'seeding'",
+        [],
+    )?;
     Ok(())
 }
 
@@ -325,7 +405,10 @@ pub async fn reset(store: &CodeStore) -> Result<(), StoreError> {
         .write(|c| {
             c.execute("delete from chunk", [])?;
             c.execute("delete from file", [])?;
-            c.execute("update tree set state = 'stale'", [])?;
+            c.execute(
+                "update tree set state = 'stale' where state != 'seeding'",
+                [],
+            )?;
             c.execute(
                 "delete from meta where key in (?1, ?2)",
                 [META_CHUNKER, META_BUILT_FROM],
