@@ -147,6 +147,11 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A podman that logs its argv (one line per call) and stdin length, and exists-or-not by a marker file.
+    ///
+    /// Tests that write a script and run it take this lock: a script's write fd inherited by another test's fork
+    /// makes the exec fail with ETXTBSY.
+    static EXEC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn fake_podman(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("podman");
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -253,6 +258,7 @@ mod tests {
 
     #[test]
     fn a_missing_image_is_imported_from_stdin_with_the_entrypoint() {
+        let _lock = EXEC.lock().unwrap_or_else(|e| e.into_inner());
         let t = tempfile::tempdir().unwrap();
         let log = t.path().join("log");
         let p = fake_podman(
@@ -280,6 +286,7 @@ mod tests {
 
     #[test]
     fn an_existing_image_is_not_imported_again() {
+        let _lock = EXEC.lock().unwrap_or_else(|e| e.into_inner());
         let t = tempfile::tempdir().unwrap();
         let log = t.path().join("log");
         let p = fake_podman(
@@ -293,6 +300,7 @@ mod tests {
 
     #[test]
     fn a_failed_import_says_what_podman_said_and_a_slow_one_is_killed() {
+        let _lock = EXEC.lock().unwrap_or_else(|e| e.into_inner());
         let t = tempfile::tempdir().unwrap();
         let p = fake_podman(
             t.path(),

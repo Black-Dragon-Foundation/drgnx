@@ -84,12 +84,26 @@ start time, job, reserve, current, expiry), written by rename, mode 0600 in a 07
 ## The podman argv
 
 `linux::podman::argv(req, caps, runner_args)` is the one builder of a `podman run` line, used by the hub's own container
-jobs (`exec/container.rs` calls it with `RunnerArgs::local()`) and by the runners. It is pure and builds on every
+jobs (`exec/container.rs` calls it with `RunnerArgs::local(owner_tag)`) and by the runners. It is pure and builds on every
 target, so a hub on macOS uses it too. Fixed for every job: `--rm`, `--pull=never`, `--userns=keep-id`,
 `--cap-drop=all`, `--security-opt=no-new-privileges`, `--read-only`, `--tmpfs /tmp`, the pids, memory and CPU limits,
 `--memory-swap` equal to `--memory`, `--oom-score-adj=1000`, `--cgroup-conf=memory.oom.group=1`, `--network=none`, a
-digest-pinned image from the allow-list, and the command after the image, where podman reads no options. A granted
-network is the proxy socket and `drgnx-fwd`, mounted read-only, as the entrypoint ([gleipnir.md](gleipnir.md)).
+digest-pinned image from the allow-list, and the command after the image, where podman reads no options. Every job container
+carries its owner's labels (`drgnx.owner=<tag>` on a hub, `drgnx.runner=<hub id>` on a runner, and `drgnx.job=<id>`), so
+a sweep finds exactly its own; `RunnerArgs.job_labels` turns them off. A granted network (`Caps.proxy`, a `JobNet`
+naming the job's sidecar) replaces `--network=none` with `--network=container:<sidecar>`: the job shares the relay
+sidecar's loopback-only network namespace, and gets the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`,
+`https_proxy` = `http://127.0.0.1:3128`; `NO_PROXY`, `no_proxy` = `localhost,127.0.0.1,::1`) and nothing else: no mount,
+no `--dns`, no `--sysctl net.*` (crun refuses them in a joined namespace), no entrypoint. `argv` refuses a sidecar that
+is not the one `net_names` gives this job.
+
+`net_names(ra, job)` gives the sidecar's name, `drgnx-px-<tag>-<job>` on a hub and `<prefix>-px-<job>` on a runner (a
+runner prefix that could reach the hub's `drgnx-job-` or `drgnx-px-` names, or another runner's `…-px-` sidecars, is
+refused), and the labels. `sidecar_argv(names, ra, image)` is the sidecar's line: `run -i --rm --pull=never
+--log-driver=none --detach-keys= --user 65534:65534`, no capabilities, read-only, 32 pids, `128m` memory and swap, one
+CPU, `--network=none`, never `-t` (a tty would rewrite the frames' bytes), and `--listen 127.0.0.1:3128 --job-ip
+127.0.0.1` after the image. `--detach-keys=` stays: podman scans a piped stdin for its detach sequence, and a match
+would close the channel. The sidecar runs in podman's default user namespace (no `keep-id`).
 
 On a runner (`RunnerArgs::runner(prefix, hub_id, slice)`) the container is named `<prefix>-<id>`, labelled
 `drgnx.runner=<hub id>` (the runner removes only containers with both), and placed with `--cgroup-parent=<job slice>`:
@@ -102,10 +116,9 @@ exactly this set (`RunnerMounts`), nothing else:
 | the slot's target dir | `/target` (`CARGO_TARGET_DIR`) | `rw,Z` |
 | each cache the suite declares | its own absolute path, never under `/work`, `/target`, `/tmp` or `/run/drgnx` | `rw,Z` |
 | the key socket and `drgnx-key` | `/run/drgnx/key.sock`, `/run/drgnx/key` | `ro,Z` |
-| the proxy socket and `drgnx-fwd` (a granted network) | `/run/drgnx/proxy.sock`, `/run/drgnx/fwd` | `ro,Z` |
 
 A keyed job (`KeyMounts.vars`, each `(key name, variable)`) runs as `drgnx-key exec NAME=VAR… -- CMD`: `drgnx-key` is
-the entrypoint, or, with network, the forwarder's command (`drgnx-fwd PORT SOCKET -- /run/drgnx/key exec … -- CMD`).
+the entrypoint, with or without network.
 The argv names the keys and variables only; a name or variable that isn't plain is refused. The job's request has no
 field to put anything around the command.
 

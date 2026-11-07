@@ -953,7 +953,7 @@ impl Inner {
     async fn container_spec(
         &self,
         id: &str,
-        dir: &Path,
+        _dir: &Path,
         spec: &ExecSpec,
     ) -> Result<(draugr::Spec, Option<container::JobProxy>), Refusal> {
         let job = spec.container.as_ref().expect("a container job");
@@ -963,27 +963,21 @@ impl Inner {
             .clone()
             .ok_or_else(container::podman_missing)?;
         let mut caps = job.caps.clone();
-        // A granted network is this job's own proxy: a socket on a short path under the runtime dir and a copy of the
-        // forwarder in the job's folder, both mounted read-only.  One that cannot be given refuses the job.
+        // A granted network is this job's own proxy, on a socket under the runtime dir, and its sidecar's name.  One that
+        // cannot be given refuses the job.
+        let owner = container::owner_tag();
         let mut proxy = None;
         if let Some(n) = job.net {
-            let forwarder = self.hooks.forwarder.clone().ok_or_else(|| {
-                setup("this job was granted network access, but drgnx-fwd (the forwarder) is not installed beside the hub")
-            })?;
             let run_dir = runstav::paths::socket_path(&Env::process())
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(std::env::temp_dir);
-            let jp = container::prepare_proxy(
-                id,
-                dir,
-                &run_dir,
-                &forwarder,
-                n,
-                &caps.net_hosts,
-                &caps.pins,
-            )?;
-            caps.proxy = Some(jp.mounts.clone());
+            let jp = container::prepare_proxy(id, &run_dir, n, &caps.net_hosts, &caps.pins)?;
+            let names = container::net_names(&container::placement(&owner), id)
+                .map_err(|r| refusal(&r.message))?;
+            caps.proxy = Some(container::JobNet {
+                sidecar: names.sidecar,
+            });
             proxy = Some(jp);
         }
         // the mount is the session's worktree, never a folder the request names; the command runs in its CWD inside
@@ -1002,7 +996,7 @@ impl Inner {
             net: job.net.is_some(),
             runner: None,
         };
-        let args = container::argv(&req, &caps)?;
+        let args = container::argv(&req, &caps, &owner)?;
         let (p, reference) = (
             podman.clone(),
             container::resolve(&caps, &job.image)?.to_string(),

@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub use sleipnir::linux::podman::{
-    CONTROLLERS, Caps, ContainerReq, FORWARDER, FORWARDER_ARGS, PIDS, PROXY_SOCKET, Proxy, WORK,
-    limits_enforced,
+    CONTROLLERS, Caps, ContainerReq, JobNet, NetNames, PIDS, WORK, limits_enforced, net_names,
 };
 
 fn refuse(message: impl Into<String>) -> Refusal {
@@ -81,10 +80,26 @@ pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
     podman::resolve(caps, name).map_err(|r| refuse(r.message))
 }
 
+/// The placement of the hub's own jobs: `drgnx-job-<id>`, no parent slice, labelled with the hub's OWNER tag.
+pub fn placement(owner: &str) -> podman::RunnerArgs {
+    podman::RunnerArgs::local(owner)
+}
+
+/// This hub's tag in container names and labels: the 8 hex of its socket's name (`hub-<tag>.sock`), which the hash of
+/// its data dir makes.
+pub fn owner_tag() -> String {
+    runstav::paths::socket_path(&runstav::paths::Env::process())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("hub-")?.strip_suffix(".sock"))
+        .unwrap_or("00000000")
+        .to_string()
+}
+
 /// The `podman run` arguments (without the program) for REQ under CAPS: the shared builder with the hub's own
-/// placement (`drgnx-job-<id>`, no parent slice, no runner label).
-pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
-    podman::argv(req, caps, &podman::RunnerArgs::local()).map_err(|r| refuse(r.message))
+/// placement ([`placement`] of OWNER).
+pub fn argv(req: &ContainerReq, caps: &Caps, owner: &str) -> Result<Vec<OsString>, Refusal> {
+    podman::argv(req, caps, &placement(owner)).map_err(|r| refuse(r.message))
 }
 
 /// The refusal for a hub that found no `podman` on its PATH at start.
@@ -97,15 +112,15 @@ pub fn podman_missing() -> Refusal {
     }
 }
 
-/// A job's proxy: the listener on its socket, the socket (removed when the job ends) and the forwarder's copy.
+/// A job's proxy: the listener on its socket and the socket (removed when the job ends).
 pub struct JobProxy {
     _handle: gleipnir::net::proxy::ProxyHandle,
-    pub mounts: Proxy,
+    pub socket: PathBuf,
 }
 
 impl Drop for JobProxy {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.mounts.socket);
+        let _ = std::fs::remove_file(&self.socket);
     }
 }
 
@@ -114,28 +129,16 @@ pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
     run_dir.join("drgnx-jobs").join(format!("{job}.sock"))
 }
 
-/// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
-/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS and the names
-/// PINS pins.  An error means the job was granted a network it cannot be given.
+/// Makes job JOB's proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS and the names PINS pins.
+/// An error means the job was granted a network it cannot be given.
 pub fn prepare_proxy(
     job: &str,
-    dir: &Path,
     run_dir: &Path,
-    forwarder: &Path,
     net: NetCell,
     hosts: &[(String, Vec<String>)],
     pins: &[(String, IpAddr)],
 ) -> Result<JobProxy, Refusal> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let copy = dir.join("fwd");
-    std::fs::copy(forwarder, &copy)
-        .and_then(|_| std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)))
-        .map_err(|e| {
-            refuse(format!(
-                "this job was granted network access, but the forwarder {} cannot be copied: {e}",
-                forwarder.display()
-            ))
-        })?;
+    use std::os::unix::fs::DirBuilderExt;
     let socket = socket_for(job, run_dir);
     if let Some(parent) = socket.parent() {
         std::fs::DirBuilder::new()
@@ -147,10 +150,7 @@ pub fn prepare_proxy(
     let handle = start_proxy(&socket, net, hosts, pins)?;
     Ok(JobProxy {
         _handle: handle,
-        mounts: Proxy {
-            socket,
-            forwarder: copy,
-        },
+        socket,
     })
 }
 
@@ -292,9 +292,8 @@ mod tests {
             cpus: 2,
             pids: PIDS,
             net_hosts: test_hosts(),
-            proxy: Some(Proxy {
-                socket: "/run/h/job.sock".into(),
-                forwarder: "/opt/drgnx-fwd".into(),
+            proxy: Some(JobNet {
+                sidecar: "drgnx-px-0a1b2c3d-x1a".into(),
             }),
             pins: vec![],
         }
@@ -322,7 +321,7 @@ mod tests {
     /// no runner label; refusals keep their rule.  The builder's own rows are `sleipnir::linux::podman`'s tests.
     #[test]
     fn the_hub_builds_its_jobs_with_the_shared_argv() {
-        let a = strs(argv(&req(&["make", "test"]), &caps()).unwrap());
+        let a = strs(argv(&req(&["make", "test"]), &caps(), "0a1b2c3d").unwrap());
         assert_eq!(a[2..4], ["--name", "drgnx-job-x1a"]);
         assert!(a.windows(2).any(|w| w == ["--memory-swap", "4G"]));
         assert!(a.contains(&"--oom-score-adj=1000".to_string()));
@@ -333,76 +332,36 @@ mod tests {
         assert_eq!(a[a.len() - 3..], [REF, "make", "test"]);
         let mut r = req(&["ls"]);
         r.image = "evil".into();
-        assert_eq!(argv(&r, &caps()).unwrap_err().rule, Rule::Malformed);
+        assert_eq!(
+            argv(&r, &caps(), "0a1b2c3d").unwrap_err().rule,
+            Rule::Malformed
+        );
         assert_eq!(resolve(&caps(), "tools").unwrap(), REF);
     }
 
     #[tokio::test]
-    async fn every_mount_source_lies_in_the_jobs_own_dirs() {
+    async fn a_job_proxy_has_a_short_socket_that_goes_with_the_job() {
         let d = tempfile::tempdir().unwrap();
-        let (job_dir, run_dir, installed) = (
-            d.path().join("job"),
-            d.path().join("run"),
-            d.path().join("bin-drgnx-fwd"),
-        );
-        std::fs::create_dir_all(&job_dir).unwrap();
-        std::fs::write(&installed, b"binary").unwrap();
+        let run_dir = d.path().join("run");
         let jp = prepare_proxy(
             "j1",
-            &job_dir,
             &run_dir,
-            &installed,
             NetCell::ProviderAndPackages,
             &test_hosts(),
             &[],
         )
         .unwrap();
-        // the socket path stays short; the copy is the job's own; the installed file is never a mount source
-        assert!(jp.mounts.socket.starts_with(&run_dir));
-        assert!(jp.mounts.socket.as_os_str().len() < 108);
-        assert_eq!(jp.mounts.forwarder, job_dir.join("fwd"));
-        assert_eq!(std::fs::read(&jp.mounts.forwarder).unwrap(), b"binary");
-        let c = Caps {
-            proxy: Some(jp.mounts.clone()),
-            ..caps()
-        };
+        assert!(jp.socket.starts_with(&run_dir));
+        assert!(jp.socket.as_os_str().len() < 108);
+        // a granted network adds no mount: the worktree is the one
         let mut r = req(&["ls"]);
         r.worktree = d.path().join("tree");
         r.net = true;
-        let a = strs(argv(&r, &c).unwrap());
-        let sources: Vec<&str> = a
-            .windows(2)
-            .filter(|w| w[0] == "-v")
-            .map(|w| w[1].split(':').next().unwrap())
-            .collect();
-        assert_eq!(sources.len(), 3);
-        for s in sources {
-            let p = Path::new(s);
-            assert!(
-                p.starts_with(d.path().join("tree"))
-                    || p.starts_with(&job_dir)
-                    || p.starts_with(&run_dir),
-                "{s}"
-            );
-            assert_ne!(p, installed);
-        }
-        assert!(a.iter().all(|s| !s.ends_with(":ro,z")));
-        let sock = jp.mounts.socket.clone();
+        let a = strs(argv(&r, &caps(), "0a1b2c3d").unwrap());
+        assert_eq!(a.iter().filter(|s| *s == "-v").count(), 1);
+        let sock = jp.socket.clone();
         drop(jp);
         assert!(!sock.exists());
-        // a forwarder that is not there refuses the job instead of running it without a network
-        assert!(
-            prepare_proxy(
-                "j2",
-                &job_dir,
-                &run_dir,
-                &d.path().join("none"),
-                NetCell::Open,
-                &test_hosts(),
-                &[]
-            )
-            .is_err()
-        );
     }
 
     #[tokio::test]
@@ -455,13 +414,13 @@ mod tests {
         };
         let c = crate::settings::containers::caps(&v);
         assert_eq!((c.memory.as_str(), c.cpus, c.pids), ("512M", 3, PIDS));
-        let a = strs(argv(&req(&["ls"]), &c).unwrap());
+        let a = strs(argv(&req(&["ls"]), &c, "0a1b2c3d").unwrap());
         assert!(a.windows(2).any(|w| w == ["--memory", "512M"]));
         assert!(a.windows(2).any(|w| w == ["--cpus", "3"]));
         // a limit podman would misread is refused
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
-        assert!(argv(&req(&["ls"]), &c).is_err());
+        assert!(argv(&req(&["ls"]), &c, "0a1b2c3d").is_err());
         // the job's proxy pins what the setting pins
         v.sandbox_proxy_pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
         assert_eq!(

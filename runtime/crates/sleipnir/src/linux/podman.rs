@@ -30,16 +30,16 @@ fn refuse(message: impl Into<String>) -> Refusal {
 pub const WORK: &str = "/work";
 /// Where a runner job's target dir appears; `CARGO_TARGET_DIR` names it.
 pub const TARGET: &str = "/target";
-/// Where the proxy socket and the forwarder appear.
-pub const PROXY_SOCKET: &str = "/run/drgnx/proxy.sock";
-pub const FORWARDER: &str = "/run/drgnx/fwd";
 /// Where the key socket and `drgnx-key` appear.
 pub const KEY_SOCKET: &str = "/run/drgnx/key.sock";
 pub const KEY_HELPER: &str = "/run/drgnx/key";
-/// The port the forwarder opens on the job's own loopback, in front of the proxy socket.
+/// The port the relay sidecar listens on, on the loopback of the namespace it shares with its job.
 pub const PROXY_PORT: u16 = 3128;
-/// The arguments the forwarder takes before the job's command: the port, the socket, `--`.
-pub const FORWARDER_ARGS: usize = 3;
+/// The sidecar's limits (design §5.2): its worst case is about 50 MiB.
+const SIDECAR_PIDS: &str = "32";
+const SIDECAR_MEMORY: &str = "128m";
+/// The user the sidecar runs as (`nobody` in its image).
+const SIDECAR_USER: &str = "65534:65534";
 /// The process limit of a container job.
 pub const PIDS: u32 = 512;
 /// The name prefix of the hub's own (local) containers.
@@ -63,8 +63,8 @@ pub struct Caps {
     pub memory: String,
     pub cpus: u32,
     pub pids: u32,
-    /// What a job that was granted network reaches the proxy through; none: a grant is refused.
-    pub proxy: Option<Proxy>,
+    /// The relay sidecar a job that was granted network shares its network namespace with; none: a grant is refused.
+    pub proxy: Option<JobNet>,
     /// The hosts (`host:port`) a granted network reaches, by tier name.
     pub net_hosts: Vec<(String, Vec<String>)>,
     /// Names the job's proxy resolves to a fixed address instead of asking DNS (a pinned name may lead to a private
@@ -73,14 +73,13 @@ pub struct Caps {
     pub pins: Vec<(String, std::net::IpAddr)>,
 }
 
-/// A granted network is not a network: the job keeps `--network=none`, and two files are bind-mounted read-only into
-/// it, the job's proxy socket and the forwarder that gives the job's own loopback a port in front of that socket.
+/// A granted network is a relay sidecar, not a network: the sidecar runs with `--network=none`, and the job joins its
+/// network namespace (`--network=container:`), so the job has a loopback and nothing else, and reaches the owner's
+/// proxy through the relay at `127.0.0.1:3128`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Proxy {
-    /// The job's proxy socket on the host.
-    pub socket: PathBuf,
-    /// The job's own copy of `drgnx-fwd` on the host.
-    pub forwarder: PathBuf,
+pub struct JobNet {
+    /// The sidecar's container name ([`net_names`]).
+    pub sidecar: String,
 }
 
 /// What a job asks: an image name from the allow-list, a command, its source, the network granted.
@@ -101,8 +100,7 @@ pub struct ContainerReq {
 }
 
 /// A runner job's mount set, exactly: the source `ro,z` (`rw,Z` for a `writes_tree` copy), the slot's
-/// target dir `rw,Z`, one mount per declared cache `rw,Z`, the key socket and `drgnx-key` `ro,Z`, and the proxy socket
-/// and `drgnx-fwd` `ro,Z` (from [`Caps::proxy`]). Nothing else.
+/// target dir `rw,Z`, one mount per declared cache `rw,Z`, and the key socket and `drgnx-key` `ro,Z`. Nothing else.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerMounts {
     /// The source is the job's private copy, which it may write.
@@ -154,15 +152,23 @@ pub struct RunnerArgs {
     pub label: Option<String>,
     /// The name is this followed by the job id.
     pub name_prefix: String,
+    /// Who owns the containers: the data-dir tag of a hub (8 hex), or `<prefix>/<hub id>` on a runner. A hub's
+    /// containers carry it as `drgnx.owner`, and its sidecar's name.
+    pub owner: String,
+    /// The job container carries the owner's labels (`drgnx.owner` or `drgnx.runner`, and `drgnx.job`), so a sweep
+    /// finds exactly its own.
+    pub job_labels: bool,
 }
 
 impl RunnerArgs {
-    /// The hub's own container jobs: `drgnx-job-<id>`, no parent slice, no label.
-    pub fn local() -> RunnerArgs {
+    /// The hub's own container jobs: `drgnx-job-<id>`, no parent slice, labelled with OWNER_TAG.
+    pub fn local(owner_tag: &str) -> RunnerArgs {
         RunnerArgs {
             cgroup_parent: None,
             label: None,
             name_prefix: LOCAL_PREFIX.to_string(),
+            owner: owner_tag.to_string(),
+            job_labels: true,
         }
     }
 
@@ -172,6 +178,8 @@ impl RunnerArgs {
             cgroup_parent: Some(slice.to_string()),
             label: Some(hub_id.to_string()),
             name_prefix: format!("{prefix}-"),
+            owner: format!("{prefix}/{hub_id}"),
+            job_labels: true,
         }
     }
 }
@@ -195,6 +203,137 @@ pub fn name_of(prefix: &str, id: &str) -> Result<String, Refusal> {
         )));
     }
     Ok(format!("{prefix}{id}"))
+}
+
+/// The names a networked job's sidecar goes by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NetNames {
+    /// The sidecar's container name: `drgnx-px-<tag>-<job>` locally, `<prefix>-px-<job>` on a runner.
+    pub sidecar: String,
+    /// The labels of the sidecar and the job, as `key=value`: `drgnx.owner=<tag>` (a hub) or `drgnx.runner=<hub id>`
+    /// (a runner), then `drgnx.job=<job>`.
+    pub labels: Vec<String>,
+}
+
+/// The sidecar's name and the labels of JOB under RA. A runner whose prefix could make its names those of the hub's
+/// (`drgnx-job-…`, `drgnx-px-…`) or of another runner's sidecars (`…-px`) is refused.
+pub fn net_names(ra: &RunnerArgs, job: &str) -> Result<NetNames, Refusal> {
+    name_of(&ra.name_prefix, job)?;
+    let sidecar = match &ra.label {
+        None => {
+            if !plain(&ra.owner) {
+                return Err(refuse(format!(
+                    "the owner tag {:?} is not a plain name",
+                    ra.owner
+                )));
+            }
+            format!("drgnx-px-{}-{job}", ra.owner)
+        }
+        Some(_) => {
+            let p = &ra.name_prefix;
+            if p.starts_with(LOCAL_PREFIX)
+                || p.starts_with("drgnx-px-")
+                || p.trim_end_matches('-').ends_with("-px")
+                || p == "px-"
+            {
+                return Err(refuse(format!(
+                    "the runner prefix {p:?} would give its containers the names of a hub's or another runner's sidecars"
+                )));
+            }
+            format!("{p}px-{job}")
+        }
+    };
+    Ok(NetNames {
+        sidecar,
+        labels: labels(ra, job)?,
+    })
+}
+
+/// `drgnx.owner=<tag>` (a hub) or `drgnx.runner=<hub id>` (a runner), then `drgnx.job=<job>`.
+fn labels(ra: &RunnerArgs, job: &str) -> Result<Vec<String>, Refusal> {
+    let first = match &ra.label {
+        Some(hub) => {
+            if !plain(hub) {
+                return Err(refuse(format!("the hub id {hub:?} is not a plain name")));
+            }
+            format!("drgnx.runner={hub}")
+        }
+        None => {
+            if !plain(&ra.owner) {
+                return Err(refuse(format!(
+                    "the owner tag {:?} is not a plain name",
+                    ra.owner
+                )));
+            }
+            format!("drgnx.owner={}", ra.owner)
+        }
+    };
+    Ok(vec![first, format!("drgnx.job={job}")])
+}
+
+/// `--cgroup-parent=SLICE` of a runner's containers.
+fn slice_arg(slice: &str) -> Result<OsString, Refusal> {
+    if !plain(slice) || !slice.ends_with(".slice") {
+        return Err(refuse(format!(
+            "the job's slice {slice:?} is not a slice name"
+        )));
+    }
+    Ok(format!("--cgroup-parent={slice}").into())
+}
+
+/// The `podman run` arguments (without the program) for the relay sidecar N names, from IMAGE
+/// (`localhost/drgnx-px:<hash>`): attached with `-i` (the channel is its stdin and stdout, never a tty), no network at
+/// all, the loopback its job shares, and nothing but the relay's flags after the image.
+pub fn sidecar_argv(n: &NetNames, ra: &RunnerArgs, image: &str) -> Result<Vec<OsString>, Refusal> {
+    if image.is_empty() || image.starts_with('-') || image.contains(char::is_whitespace) {
+        return Err(refuse(format!(
+            "the sidecar's image {image:?} is not an image name"
+        )));
+    }
+    let mut a: Vec<OsString> = [
+        "run",
+        "-i",
+        "--rm",
+        "--pull=never",
+        "--log-driver=none",
+        "--detach-keys=",
+        "--user",
+        SIDECAR_USER,
+        "--cap-drop=all",
+        "--security-opt=no-new-privileges",
+        "--read-only",
+        "--pids-limit",
+        SIDECAR_PIDS,
+        "--memory",
+        SIDECAR_MEMORY,
+        "--memory-swap",
+        SIDECAR_MEMORY,
+        "--cpus",
+        "1",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    if let Some(slice) = &ra.cgroup_parent {
+        a.push(slice_arg(slice)?);
+    }
+    for l in &n.labels {
+        a.push("--label".into());
+        a.push(l.into());
+    }
+    a.extend(["--network=none", "--name"].map(OsString::from));
+    a.push((&n.sidecar).into());
+    a.push(image.into());
+    a.extend(
+        [
+            "--listen".to_string(),
+            format!("127.0.0.1:{PROXY_PORT}"),
+            "--job-ip".to_string(),
+            "127.0.0.1".to_string(),
+        ]
+        .map(OsString::from),
+    );
+    Ok(a)
 }
 
 /// The reference pinned by digest that the allow-list holds for NAME.
@@ -254,13 +393,20 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             "agents-job-memory, agents-job-cpus: a limit that fits podman",
         ));
     }
-    let proxy = match req.net {
+    let sidecar = match req.net {
         false => None,
         true => {
             let p = caps.proxy.as_ref().ok_or_else(|| {
                 refuse("this job was granted network access, but it has no proxy to go through")
             })?;
-            Some((mount_source(&p.socket)?, mount_source(&p.forwarder)?))
+            // the sidecar is this job's own: a name from anywhere else is never joined
+            if p.sidecar != net_names(ra, &req.job)?.sidecar {
+                return Err(refuse(format!(
+                    "this job's sidecar {:?} is not the one named for it",
+                    p.sidecar
+                )));
+            }
+            Some(p.sidecar.as_str())
         }
     };
     let mut a: Vec<OsString> = [
@@ -290,21 +436,27 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
     a.push(format!("--oom-score-adj={OOM_SCORE}").into());
     a.push("--cgroup-conf=memory.oom.group=1".into());
     if let Some(slice) = &ra.cgroup_parent {
-        if !plain(slice) || !slice.ends_with(".slice") {
-            return Err(refuse(format!(
-                "the job's slice {slice:?} is not a slice name"
-            )));
-        }
-        a.push(format!("--cgroup-parent={slice}").into());
+        a.push(slice_arg(slice)?);
     }
-    if let Some(hub) = &ra.label {
+    if ra.job_labels {
+        for l in labels(ra, &req.job)? {
+            a.push("--label".into());
+            a.push(l.into());
+        }
+    } else if let Some(hub) = &ra.label {
         if !plain(hub) {
             return Err(refuse(format!("the hub id {hub:?} is not a plain name")));
         }
         a.push("--label".into());
         a.push(format!("drgnx.runner={hub}").into());
     }
-    a.push("--network=none".into());
+    a.push(
+        match sidecar {
+            Some(s) => format!("--network=container:{s}"),
+            None => "--network=none".to_string(),
+        }
+        .into(),
+    );
     match &req.runner {
         None => {
             a.push("-v".into());
@@ -356,19 +508,17 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
     } else {
         Path::new(WORK).join(&req.subdir).into_os_string()
     });
-    if let Some((socket, forwarder)) = &proxy {
-        // the socket is this job's alone (`Z`: private label); so is the forwarder, the job's own copy
-        a.push("-v".into());
-        a.push(format!("{socket}:{PROXY_SOCKET}:ro,Z").into());
-        a.push("-v".into());
-        a.push(format!("{forwarder}:{FORWARDER}:ro,Z").into());
+    if sidecar.is_some() {
+        // the job shares the sidecar's loopback, where the relay listens
         let url = format!("http://127.0.0.1:{PROXY_PORT}");
         for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
             a.push("-e".into());
             a.push(format!("{k}={url}").into());
         }
-        a.push("--entrypoint".into());
-        a.push(FORWARDER.into());
+        for k in ["NO_PROXY", "no_proxy"] {
+            a.push("-e".into());
+            a.push(format!("{k}=localhost,127.0.0.1,::1").into());
+        }
     }
     // a keyed job's command runs under drgnx-key, which reads each key from the socket into its own environment and
     // execs the command; the job's request has no field to put anything around it
@@ -388,21 +538,13 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
         }
         _ => vec![],
     };
-    if proxy.is_none() && !keyed.is_empty() {
+    if !keyed.is_empty() {
         a.push("--entrypoint".into());
         a.push(KEY_HELPER.into());
     }
     a.push(image.into());
-    if proxy.is_some() {
-        // the entrypoint binds the port, then runs the command in its place
-        a.push(PROXY_PORT.to_string().into());
-        a.push(PROXY_SOCKET.into());
-        a.push("--".into());
-        a.extend(keyed);
-    } else {
-        // the entrypoint is drgnx-key itself
-        a.extend(keyed.into_iter().skip(1));
-    }
+    // the entrypoint is drgnx-key itself
+    a.extend(keyed.into_iter().skip(1));
     a.extend(req.argv.iter().map(OsString::from));
     Ok(a)
 }
@@ -509,6 +651,8 @@ mod tests {
 
     const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    const TAG: &str = "0a1b2c3d";
+
     fn caps() -> Caps {
         Caps {
             images: vec![ContainerImage {
@@ -519,11 +663,20 @@ mod tests {
             cpus: 2,
             pids: PIDS,
             net_hosts: vec![("packages".into(), vec!["crates.io:443".into()])],
-            proxy: Some(Proxy {
-                socket: "/run/h/job.sock".into(),
-                forwarder: "/opt/drgnx-fwd".into(),
+            proxy: Some(JobNet {
+                sidecar: "drgnx-px-0a1b2c3d-x1a".into(),
             }),
             pins: vec![],
+        }
+    }
+
+    /// The caps of a runner job: its sidecar is named by the runner's prefix.
+    fn rcaps() -> Caps {
+        Caps {
+            proxy: Some(JobNet {
+                sidecar: "drgnx-run-px-x1a".into(),
+            }),
+            ..caps()
         }
     }
 
@@ -559,9 +712,8 @@ mod tests {
         }
     }
 
-    /// [D] A keyed job's command runs as `drgnx-key exec NAME=VAR… -- CMD`: drgnx-key is the entrypoint, or follows
-    /// the forwarder with network; the argv holds the names only, and a name podman or a shell would misread is
-    /// refused.
+    /// [D] A keyed job's command runs as `drgnx-key exec NAME=VAR… -- CMD`: drgnx-key is the entrypoint; the argv holds
+    /// the names only, and a name podman or a shell would misread is refused.
     #[test]
     fn a_keyed_job_runs_under_drgnx_key_exec_with_names_only() {
         let mut r = runner_req(&["cargo", "publish"]);
@@ -587,26 +739,6 @@ mod tests {
             !a.iter()
                 .any(|s| s.starts_with("--env") || s.starts_with("--secret"))
         );
-        // with network: the forwarder first, then drgnx-key, then the command
-        r.net = true;
-        let a = on_runner(&r, &caps()).unwrap();
-        let image = a.iter().position(|s| s == REF).unwrap();
-        assert_eq!(a[image - 2..image], ["--entrypoint", "/run/drgnx/fwd"]);
-        assert_eq!(
-            a[image + 1..],
-            [
-                "3128",
-                "/run/drgnx/proxy.sock",
-                "--",
-                "/run/drgnx/key",
-                "exec",
-                "CRATES_IO=CARGO_REGISTRY_TOKEN",
-                "gh-token=GH_TOKEN",
-                "--",
-                "cargo",
-                "publish"
-            ]
-        );
         for (name, var) in [
             ("A B", "V"),
             ("A", "1V"),
@@ -629,7 +761,7 @@ mod tests {
     }
 
     fn local(r: &ContainerReq, c: &Caps) -> Result<Vec<String>, Refusal> {
-        argv(r, c, &RunnerArgs::local()).map(strs)
+        argv(r, c, &RunnerArgs::local(TAG)).map(strs)
     }
 
     fn on_runner(r: &ContainerReq, c: &Caps) -> Result<Vec<String>, Refusal> {
@@ -667,6 +799,10 @@ mod tests {
             "2",
             "--oom-score-adj=1000",
             "--cgroup-conf=memory.oom.group=1",
+            "--label",
+            "drgnx.owner=0a1b2c3d",
+            "--label",
+            "drgnx.job=x1a",
             "--network=none",
             "-v",
             "/work/tree:/work:Z",
@@ -690,6 +826,8 @@ mod tests {
                 "--cgroup-parent=drgnx-runner-work-x1a.slice",
                 "--label",
                 "drgnx.runner=hub1",
+                "--label",
+                "drgnx.job=x1a",
             ]
             .map(String::from),
         );
@@ -750,7 +888,7 @@ mod tests {
     }
 
     /// [D] A runner job's mounts are exactly the design's set: the source `ro,z` (`rw,Z` for a private copy), the
-    /// target, each cache, the key socket and helper; the proxy pair only with a grant. No other `-v`.
+    /// target, each cache, the key socket and helper; a grant adds no mount. No other `-v`.
     #[test]
     fn runner_argv_mounts_exactly_the_set() {
         let mounts = |a: &[String]| -> Vec<String> {
@@ -784,15 +922,10 @@ mod tests {
         m.keys = None;
         m.caches.clear();
         r.net = true;
-        let a = on_runner(&r, &caps()).unwrap();
+        let a = on_runner(&r, &rcaps()).unwrap();
         assert_eq!(
             mounts(&a),
-            [
-                "/r/slots/k1:/work:rw,Z",
-                "/r/slots/k1-target:/target:rw,Z",
-                "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
-                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,Z",
-            ]
+            ["/r/slots/k1:/work:rw,Z", "/r/slots/k1-target:/target:rw,Z"]
         );
         // a cache that would shadow the source, the target or our sockets, or climb out, is refused
         for inside in [
@@ -884,11 +1017,19 @@ mod tests {
         let mut r = req(&["ls"]);
         r.net = true;
         let a = local(&r, &caps()).unwrap();
-        assert!(a.contains(&"--network=none".to_string()));
-        assert!(
-            !a.iter()
-                .any(|s| s.starts_with("--network=") && s != "--network=none")
-        );
+        assert!(a.contains(&"--network=container:drgnx-px-0a1b2c3d-x1a".to_string()));
+        assert!(!a.contains(&"--network=none".to_string()));
+        assert_eq!(a.iter().filter(|s| s.starts_with("--network")).count(), 1);
+        // a sidecar that is not this job's own is never joined: another job's, another hub's, a host network
+        for other in ["drgnx-px-0a1b2c3d-x1b", "drgnx-px-ffffffff-x1a", "host", ""] {
+            let c = Caps {
+                proxy: Some(JobNet {
+                    sidecar: other.into(),
+                }),
+                ..caps()
+            };
+            assert!(local(&r, &c).is_err(), "{other:?}");
+        }
         // a grant with no proxy is refused, never turned into the host's network
         assert!(
             local(
@@ -902,56 +1043,323 @@ mod tests {
         );
     }
 
-    /// [D]
-    #[test]
-    fn a_grant_adds_exactly_two_ro_mounts_the_proxy_env_and_the_entrypoint() {
-        let plain = local(&req(&["ls", "-l"]), &caps()).unwrap();
-        let mut r = req(&["ls", "-l"]);
-        r.net = true;
-        let a = local(&r, &caps()).unwrap();
-        let at = plain.iter().position(|s| s == REF).unwrap();
-        assert_eq!(a[..at], plain[..at]);
-        let image = a.iter().position(|s| s == REF).unwrap();
-        assert_eq!(image - at, 2 + 2 + 8 + 2);
-        let extra = &a[at..image];
-        assert_eq!(
-            extra[..4],
-            [
-                "-v",
-                "/run/h/job.sock:/run/drgnx/proxy.sock:ro,Z",
-                "-v",
-                "/opt/drgnx-fwd:/run/drgnx/fwd:ro,Z"
-            ]
-        );
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            let want = format!("{k}=http://127.0.0.1:3128");
-            assert!(
-                extra.windows(2).any(|w| w[0] == "-e" && w[1] == want),
-                "{k}"
-            );
-        }
-        assert_eq!(extra[12..], ["--entrypoint", "/run/drgnx/fwd"]);
-        assert_eq!(
-            a[image + 1..],
-            ["3128", "/run/drgnx/proxy.sock", "--", "ls", "-l"]
-        );
-        assert_eq!(a[image + 1..].len() - 2, FORWARDER_ARGS);
-        let c = Caps {
-            proxy: Some(Proxy {
-                socket: "/a:b/s".into(),
-                forwarder: "/f".into(),
-            }),
-            ..caps()
-        };
-        assert!(local(&r, &c).is_err());
+    /// The flags of a networked job in order, for NAME, the labels and the sidecar it joins.
+    fn networked(name: &str, between: &[&str], labels: [&str; 2], sidecar: &str) -> Vec<String> {
+        let mut v: Vec<&str> = vec![
+            "run",
+            "--rm",
+            "--name",
+            name,
+            "--pull=never",
+            "--userns=keep-id",
+            "--cap-drop=all",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            "--pids-limit",
+            "512",
+            "--memory",
+            "4G",
+            "--memory-swap",
+            "4G",
+            "--cpus",
+            "2",
+            "--oom-score-adj=1000",
+            "--cgroup-conf=memory.oom.group=1",
+        ];
+        v.extend(between);
+        v.extend(["--label", labels[0], "--label", labels[1]]);
+        let net = format!("--network=container:{sidecar}");
+        v.push(&net);
+        v.extend([
+            "-v",
+            "/work/tree:/work:Z",
+            "-w",
+            "/work",
+            "-e",
+            "HTTP_PROXY=http://127.0.0.1:3128",
+            "-e",
+            "HTTPS_PROXY=http://127.0.0.1:3128",
+            "-e",
+            "http_proxy=http://127.0.0.1:3128",
+            "-e",
+            "https_proxy=http://127.0.0.1:3128",
+            "-e",
+            "NO_PROXY=localhost,127.0.0.1,::1",
+            "-e",
+            "no_proxy=localhost,127.0.0.1,::1",
+            REF,
+            "ls",
+            "-l",
+        ]);
+        v.iter().map(|s| s.to_string()).collect()
     }
 
-    /// [D]
+    /// [D] A job granted network joins its sidecar's namespace and nothing else changes: no `--dns`, no `--sysctl`,
+    /// no network mount, no entrypoint, the six proxy variables on the sidecar's loopback.
     #[test]
-    fn no_grant_adds_no_proxy_flag() {
-        let a = local(&req(&["ls"]), &caps()).unwrap();
-        assert!(!a.iter().any(|s| s.contains("proxy") || s == "--entrypoint"));
-        assert_eq!(a.len(), 26 + 1 + 1);
+    fn a_networked_job_has_exactly_these_flags() {
+        let mut r = req(&["ls", "-l"]);
+        r.net = true;
+        assert_eq!(
+            local(&r, &caps()).unwrap(),
+            networked(
+                "drgnx-job-x1a",
+                &[],
+                ["drgnx.owner=0a1b2c3d", "drgnx.job=x1a"],
+                "drgnx-px-0a1b2c3d-x1a"
+            )
+        );
+        assert_eq!(
+            on_runner(&r, &rcaps()).unwrap(),
+            networked(
+                "drgnx-run-x1a",
+                &["--cgroup-parent=drgnx-runner-work-x1a.slice"],
+                ["drgnx.runner=hub1", "drgnx.job=x1a"],
+                "drgnx-run-px-x1a"
+            )
+        );
+        let a = local(&r, &caps()).unwrap();
+        for never in [
+            "--dns",
+            "--dns=none",
+            "--add-host",
+            "--entrypoint",
+            "--sysctl",
+        ] {
+            assert!(!a.iter().any(|s| s.starts_with(never)), "{never}");
+        }
+    }
+
+    /// [D] A job without a grant is today's argv, plus the owner's labels, whether or not caps hold a sidecar.
+    #[test]
+    fn a_job_without_network_is_unchanged() {
+        let a = local(&req(&["ls", "-l"]), &caps()).unwrap();
+        let none = Caps {
+            proxy: None,
+            ..caps()
+        };
+        assert_eq!(a, local(&req(&["ls", "-l"]), &none).unwrap());
+        let mut want = networked(
+            "drgnx-job-x1a",
+            &[],
+            ["drgnx.owner=0a1b2c3d", "drgnx.job=x1a"],
+            "unused",
+        );
+        want.retain(|s| s != "-e" && !s.contains("PROXY") && !s.contains("_proxy"));
+        let at = want
+            .iter()
+            .position(|s| s.starts_with("--network"))
+            .unwrap();
+        want[at] = "--network=none".into();
+        assert_eq!(a, want);
+        // without job labels: exactly the argv from before the relay
+        let mut ra = RunnerArgs::local(TAG);
+        ra.job_labels = false;
+        let b = argv(&req(&["ls", "-l"]), &none, &ra).map(strs).unwrap();
+        assert!(!b.iter().any(|s| s.starts_with("drgnx.")));
+        assert_eq!(b.len() + 4, a.len());
+    }
+
+    /// [D] The proxy variables never exempt the reserved name the host's grants use: that name goes through the proxy.
+    #[test]
+    fn no_proxy_never_names_the_reserved_host() {
+        let mut r = req(&["ls"]);
+        r.net = true;
+        for a in [
+            local(&r, &caps()).unwrap(),
+            on_runner(&r, &rcaps()).unwrap(),
+        ] {
+            let vars: Vec<&String> = a
+                .iter()
+                .filter(|s| s.starts_with("NO_PROXY=") || s.starts_with("no_proxy="))
+                .collect();
+            assert_eq!(vars.len(), 2);
+            for v in vars {
+                assert!(!v.contains("host.drgnx.internal"), "{v}");
+                assert_eq!(v.split_once('=').unwrap().1, "localhost,127.0.0.1,::1");
+            }
+        }
+    }
+
+    /// [D] A keyed job granted network still runs `drgnx-key` as the entrypoint: nothing else sits before it.
+    #[test]
+    fn a_keyed_networked_job_keeps_drgnx_key_as_entrypoint() {
+        let mut r = runner_req(&["cargo", "publish"]);
+        r.runner.as_mut().unwrap().keys.as_mut().unwrap().vars =
+            vec![("CRATES_IO".into(), "CARGO_REGISTRY_TOKEN".into())];
+        r.net = true;
+        let a = on_runner(&r, &rcaps()).unwrap();
+        let image = a.iter().position(|s| s == REF).unwrap();
+        assert_eq!(a[image - 2..image], ["--entrypoint", "/run/drgnx/key"]);
+        assert_eq!(a.iter().filter(|s| *s == "--entrypoint").count(), 1);
+        assert_eq!(
+            a[image + 1..],
+            [
+                "exec",
+                "CRATES_IO=CARGO_REGISTRY_TOKEN",
+                "--",
+                "cargo",
+                "publish"
+            ]
+        );
+        assert!(a.contains(&"--network=container:drgnx-run-px-x1a".to_string()));
+    }
+
+    fn sidecar(ra: &RunnerArgs, job: &str) -> Result<Vec<String>, Refusal> {
+        let n = net_names(ra, job)?;
+        sidecar_argv(&n, ra, "localhost/drgnx-px:0123456789abcdef").map(strs)
+    }
+
+    /// [D] The sidecar: attached, no tty, the detach keys off (a one-byte read of the default sequence must not detach
+    /// the channel), `nobody` in podman's own user namespace (no `keep-id`), no network at all, nothing mounted.
+    #[test]
+    fn the_sidecar_has_exactly_these_flags() {
+        let tail = |name: &str| -> Vec<String> {
+            [
+                "--network=none",
+                "--name",
+                name,
+                "localhost/drgnx-px:0123456789abcdef",
+                "--listen",
+                "127.0.0.1:3128",
+                "--job-ip",
+                "127.0.0.1",
+            ]
+            .map(String::from)
+            .to_vec()
+        };
+        let head: Vec<String> = [
+            "run",
+            "-i",
+            "--rm",
+            "--pull=never",
+            "--log-driver=none",
+            "--detach-keys=",
+            "--user",
+            "65534:65534",
+            "--cap-drop=all",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--pids-limit",
+            "32",
+            "--memory",
+            "128m",
+            "--memory-swap",
+            "128m",
+            "--cpus",
+            "1",
+        ]
+        .map(String::from)
+        .to_vec();
+        let want = |mid: &[&str], name: &str| -> Vec<String> {
+            let mut v = head.clone();
+            v.extend(mid.iter().map(|s| s.to_string()));
+            v.extend(tail(name));
+            v
+        };
+        assert_eq!(
+            sidecar(&RunnerArgs::local(TAG), "x1a").unwrap(),
+            want(
+                &[
+                    "--label",
+                    "drgnx.owner=0a1b2c3d",
+                    "--label",
+                    "drgnx.job=x1a"
+                ],
+                "drgnx-px-0a1b2c3d-x1a"
+            )
+        );
+        assert_eq!(
+            sidecar(
+                &RunnerArgs::runner("drgnx-run", "hub1", "drgnx-runner-work-x1a.slice"),
+                "x1a"
+            )
+            .unwrap(),
+            want(
+                &[
+                    "--cgroup-parent=drgnx-runner-work-x1a.slice",
+                    "--label",
+                    "drgnx.runner=hub1",
+                    "--label",
+                    "drgnx.job=x1a"
+                ],
+                "drgnx-run-px-x1a"
+            )
+        );
+        let a = sidecar(&RunnerArgs::local(TAG), "x1a").unwrap();
+        for never in [
+            "-t",
+            "--tty",
+            "--userns=keep-id",
+            "-v",
+            "--dns",
+            "--sysctl",
+            "--entrypoint",
+        ] {
+            assert!(
+                !a.iter().any(|s| s == never || s.starts_with(never)),
+                "{never}"
+            );
+        }
+        // an image podman would read as an option is refused
+        let ra = RunnerArgs::local(TAG);
+        let n = net_names(&ra, "x1a").unwrap();
+        for bad in ["", "-v", "a b"] {
+            assert!(sidecar_argv(&n, &ra, bad).is_err(), "{bad:?}");
+        }
+    }
+
+    /// [D] The laptop is a hub and a runner at once, with jobs of the same id: no container name is shared, and a
+    /// runner whose prefix would reach the hub's names or another runner's sidecars is refused.
+    #[test]
+    fn hub_and_runner_names_never_collide() {
+        let hub = RunnerArgs::local(TAG);
+        let run = RunnerArgs::runner("drgnx-run", "h1", "drgnx-runner-work-x1.slice");
+        let mut names = vec![
+            name_of(&hub.name_prefix, "x1").unwrap(),
+            net_names(&hub, "x1").unwrap().sidecar,
+            name_of(&run.name_prefix, "x1").unwrap(),
+            net_names(&run, "x1").unwrap().sidecar,
+        ];
+        assert_eq!(
+            names,
+            [
+                "drgnx-job-x1",
+                "drgnx-px-0a1b2c3d-x1",
+                "drgnx-run-x1",
+                "drgnx-run-px-x1"
+            ]
+        );
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 4);
+        // two hubs differ by tag
+        assert_ne!(
+            net_names(&hub, "x1").unwrap().sidecar,
+            net_names(&RunnerArgs::local("ffffffff"), "x1")
+                .unwrap()
+                .sidecar
+        );
+        // the labels tell hub and runner apart
+        assert_eq!(
+            net_names(&hub, "x1").unwrap().labels,
+            ["drgnx.owner=0a1b2c3d", "drgnx.job=x1"]
+        );
+        assert_eq!(
+            net_names(&run, "x1").unwrap().labels,
+            ["drgnx.runner=h1", "drgnx.job=x1"]
+        );
+        // prefixes that would make a runner's names the hub's, or another runner's sidecars
+        for prefix in ["drgnx-job", "drgnx-px-0a1b2c3d", "drgnx-run-px", "px"] {
+            let ra = RunnerArgs::runner(prefix, "h1", "s.slice");
+            assert!(net_names(&ra, "x1").is_err(), "{prefix}");
+        }
+        // a job id or an owner podman would read as more than a name
+        assert!(net_names(&hub, "x 1").is_err());
+        assert!(net_names(&RunnerArgs::local("a b"), "x1").is_err());
+        assert!(net_names(&RunnerArgs::local("-a"), "x1").is_err());
     }
 
     /// [D]

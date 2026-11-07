@@ -898,7 +898,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
         net_hosts: vec![],
         pins: vec![],
     };
-    let a: Vec<String> = container::argv(&req, &caps)
+    let a: Vec<String> = container::argv(&req, &caps, "0a1b2c3d")
         .unwrap()
         .into_iter()
         .map(|s| s.to_string_lossy().into_owned())
@@ -910,7 +910,7 @@ fn a_container_job_in_a_subfolder_mounts_the_worktree() {
     let w = a.iter().position(|s| s == "-w").unwrap();
     assert!(a[w + 1].ends_with("/crates/x"), "{}", a[w + 1]);
     req.subdir = "".into();
-    assert!(container::argv(&req, &caps).is_ok());
+    assert!(container::argv(&req, &caps, "0a1b2c3d").is_ok());
 }
 
 /// S6: an agent's job that finds the machine full is recorded as queued and answered at once; it starts when the slot

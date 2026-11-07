@@ -727,7 +727,7 @@ impl<W: Write> Serve<W> {
             return Err("variables for the container aren't carried yet".into());
         }
         let image = image.ok_or("a runner job is a container job: it needs an image")?;
-        // the job's own copies of the bundle's drgnx-key and drgnx-fwd: each container relabels its mounts (`Z`)
+        // the job's own copy of the bundle's drgnx-key: each container relabels its mounts (`Z`)
         let own_copy = |name: &str| -> Result<PathBuf, String> {
             let from = self.exe.with_file_name(name);
             let to = dir.join(name);
@@ -758,13 +758,6 @@ impl<W: Write> Serve<W> {
             fs::write(&f, text).map_err(|e| format!("{NET_ALLOW}: {e}"))?;
             Some(f)
         };
-        let proxy = match &hub_allow {
-            None => None,
-            Some(_) => Some(podman::Proxy {
-                socket: dir.join(crate::helper::PROXY_SOCK),
-                forwarder: own_copy("drgnx-fwd")?,
-            }),
-        };
         let parser: Parser =
             serde_json::from_value(serde_json::Value::String(if parser.is_empty() {
                 "exit".into()
@@ -774,6 +767,13 @@ impl<W: Write> Serve<W> {
             .map_err(|_| format!("no row parser {parser:?}"))?;
         slices::ensure_tree(SLICE_ROOT, self.cfg.profile)?;
         let slice = slices::job_slice(SLICE_ROOT, id)?;
+        let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
+        let proxy = match &hub_allow {
+            None => None,
+            Some(_) => Some(podman::JobNet {
+                sidecar: podman::net_names(&ra, id).map_err(|r| r.message)?.sidecar,
+            }),
+        };
         let caps = Caps {
             proxy,
             ..job_caps(&meta.grant, image, pins)
@@ -797,7 +797,6 @@ impl<W: Write> Serve<W> {
                 keys,
             }),
         };
-        let ra = RunnerArgs::runner(&self.cfg.prefix, &self.cfg.hub_id, &slice);
         let container = podman::name_of(&ra.name_prefix, id).map_err(|r| r.message)?;
         let mut argv = vec!["podman".to_string()];
         for a in podman::argv(&req, &caps, &ra).map_err(|r| r.message)? {
