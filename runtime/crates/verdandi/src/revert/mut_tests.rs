@@ -209,3 +209,34 @@ fn keep_mine_finds_a_neighbour_the_scope_deleted_and_put_back() {
     keep_mine(&d, &sc, &[], &[], &mut Vec::new()).unwrap();
     assert_eq!(d.get_text(TEXT).to_string(), "zabc");
 }
+
+#[test]
+fn a_deletion_after_the_scopes_insert_starts_from_that_insert() {
+    let d = LoroDoc::new();
+    edit(&d, USER, |t| t.insert(0, "ab").unwrap());
+    // the scope types X in front, then deletes "ab" (one op, the second of the scope): its version before is the insert
+    edit(&d, AGENT, |t| {
+        t.insert(0, "X").unwrap();
+        t.delete(1, 2).unwrap();
+    });
+    let sc = scope_of(&d, &[span(AGENT, 0, 3)]);
+    assert_eq!(sc.deletions.len(), 1);
+    assert_eq!(sc.deletions[0].before, Frontiers::from(ID::new(AGENT, 0)));
+    assert_eq!((sc.deletions[0].start, sc.deletions[0].end), (1, 3));
+    keep_mine(&d, &sc, &[], &[], &mut Vec::new()).unwrap();
+    assert_eq!(d.get_text(TEXT).to_string(), "ab");
+}
+
+#[test]
+fn keep_mine_puts_back_a_deleted_run_around_the_scopes_own_characters() {
+    let d = LoroDoc::new();
+    // one run of element ids (peer 1, counters 0..6) whose middle, "cd", is the scope's; the scope deletes it all
+    edit(&d, AGENT, |t| t.insert(0, "ab").unwrap());
+    edit(&d, AGENT, |t| t.insert(2, "cd").unwrap());
+    edit(&d, AGENT, |t| t.insert(4, "ef").unwrap());
+    edit(&d, AGENT, |t| t.delete(0, 6).unwrap());
+    let sc = scope_of(&d, &[span(AGENT, 2, 4), span(AGENT, 6, 12)]);
+    assert_eq!(sc.deletions.len(), 1);
+    keep_mine(&d, &sc, &[], &[], &mut Vec::new()).unwrap();
+    assert_eq!(d.get_text(TEXT).to_string(), "abef");
+}
