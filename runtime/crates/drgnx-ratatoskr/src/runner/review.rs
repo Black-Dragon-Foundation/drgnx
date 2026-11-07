@@ -192,9 +192,13 @@ async fn mark_review(front: &Front, sid: &str) {
     }
 }
 
-/// Whether the user dismissed POINT's hook card for TASK: its hooks do not run again for it.
+/// Whether the user dismissed POINT's hook card for TASK in its current review round (the failed reviews so far): the
+/// hook does not run again in this round, a new one runs it again.
 fn dismissed(data: &Map<String, Value>, task: &str, point: &str) -> bool {
-    data_for(data, "hook-dismissed", task).and_then(Value::as_str) == Some(point)
+    data_for(data, "hook-dismissed", task).is_some_and(|d| {
+        d.get("point").and_then(Value::as_str) == Some(point)
+            && d.get("round").and_then(Value::as_i64) == Some(count(data, "fails", task))
+    })
 }
 
 /// The `git diff --stat` and the changed paths of RANGE in DIR; empty when git cannot tell.
@@ -208,11 +212,45 @@ async fn diff_of(dir: &Path, range: &str) -> (String, Vec<String>) {
     (stat, names.lines().map(str::to_owned).collect())
 }
 
+/// The `before-commit` hooks for a merge of TREE into the branch at JOB_TREE, the one path every commit the hub makes
+/// into a user's branch goes through: `Some(message)` merges (the message a hook changed, else git's own); a deny or an
+/// error is a `hook` card (of CARD_TASK, when the merge is a task's) and `None`.
+pub(crate) async fn before_commit_hooks(
+    front: &Front,
+    site: hook_points::JobSite<'_>,
+    card_task: Option<&str>,
+    tree: &TaskTree,
+    job_tree: &Path,
+) -> Result<Option<Option<String>>, Error> {
+    let (diff_stat, paths) = diff_of(job_tree, &format!("HEAD...{}", tree.branch)).await;
+    let info = hook_points::CommitInfo {
+        branch: tree.branch.clone(),
+        message: format!("Merge {}", tree.branch),
+        diff_stat,
+        paths,
+    };
+    let (job, tid) = (site.job, site.task);
+    let Some(out) = hook_points::before_commit(front, site, &info).await else {
+        return Ok(Some(None));
+    };
+    if let Some(why) = hook_points::hook_failure(&out, "commit") {
+        raise_hook_card(front, job, card_task, "before-commit", &why, None).await?;
+        return Ok(None);
+    }
+    if let Some((name, reason)) = hook_points::refusal_of(&out) {
+        let title = format!("the before-commit hook refused the merge of {tid}");
+        let body = format!("{reason} \u{2014} by {name}");
+        raise_hook_card(front, job, card_task, "before-commit", &title, Some(body)).await?;
+        return Ok(None);
+    }
+    Ok(Some(hook_points::commit_message(&out)))
+}
+
 /// The `hook` card of TASK at POINT (`before-commit`, `at-review`): the hub's TITLE, the plugin's words in BODY.
-async fn raise_hook_card(
+pub(crate) async fn raise_hook_card(
     front: &Front,
     job: &str,
-    task: &str,
+    task: Option<&str>,
     point: &str,
     title: &str,
     body: Option<String>,
@@ -221,7 +259,7 @@ async fn raise_hook_card(
     if let Some(b) = body {
         data["body"] = json!(b);
     }
-    raise_card(front, &service(), job, Some(task), "hook", title, data)
+    raise_card(front, &service(), job, task, "hook", title, data)
         .await
         .map(|_| ())
 }
@@ -679,7 +717,7 @@ impl PlanHooks {
             return Ok(Some(Vec::new()));
         };
         if let Some(why) = hook_points::hook_failure(&out, "review") {
-            raise_hook_card(front, job, tid, "at-review", &why, None).await?;
+            raise_hook_card(front, job, Some(tid), "at-review", &why, None).await?;
             return Ok(None);
         }
         if let Some((name, reason)) = hook_points::refusal_of(&out) {
@@ -705,32 +743,13 @@ impl PlanHooks {
         if dismissed(data, tid, "before-commit") {
             return Ok(Some(None));
         }
-        let (diff_stat, paths) = diff_of(job_tree, &format!("HEAD...{}", tree.branch)).await;
-        let info = hook_points::CommitInfo {
-            branch: tree.branch.clone(),
-            message: format!("Merge {}", tree.branch),
-            diff_stat,
-            paths,
-        };
+        let project = data.get("project").and_then(Value::as_str);
         let site = hook_points::JobSite {
             job,
             task: tid,
-            project: data.get("project").and_then(Value::as_str),
+            project,
         };
-        let Some(out) = hook_points::before_commit(front, site, &info).await else {
-            return Ok(Some(None));
-        };
-        if let Some(why) = hook_points::hook_failure(&out, "commit") {
-            raise_hook_card(front, job, tid, "before-commit", &why, None).await?;
-            return Ok(None);
-        }
-        if let Some((name, reason)) = hook_points::refusal_of(&out) {
-            let title = format!("the before-commit hook refused the merge of {tid}");
-            let body = format!("{reason} \u{2014} by {name}");
-            raise_hook_card(front, job, tid, "before-commit", &title, Some(body)).await?;
-            return Ok(None);
-        }
-        Ok(Some(hook_points::commit_message(&out)))
+        before_commit_hooks(front, site, Some(tid), tree, job_tree).await
     }
 
     /// A reviewer agent for TASK, in the task's tree, on PROFILE (the first of the `review` route by default).
@@ -1513,6 +1532,7 @@ pub(crate) async fn retry(
             "passed",
             "review-restarts",
             "merge-tries",
+            "hook-dismissed",
         ] {
             put_in(d, bucket, &t, None);
         }
@@ -1697,7 +1717,13 @@ async fn act(
                 .to_owned();
             let (t2, p2) = (tid.to_owned(), point.clone());
             update_data(front, &service(), job, move |d| {
-                put_in(d, "hook-dismissed", &t2, Some(json!(p2)));
+                let round = count(d, "fails", &t2);
+                put_in(
+                    d,
+                    "hook-dismissed",
+                    &t2,
+                    Some(json!({"point": p2, "round": round})),
+                );
                 if p2 == "before-commit" {
                     put_in(d, "passed", &t2, Some(json!(true)));
                 }

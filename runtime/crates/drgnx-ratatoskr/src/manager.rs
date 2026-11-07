@@ -16,6 +16,7 @@ use crate::agents::Origin;
 use crate::agents::session::{self, Session};
 use crate::dispatch::Caller;
 use crate::front::Front;
+use crate::hook_points;
 use crate::matrix_gate::{ActionCtx, Delegation, Gate, Manager};
 use crate::runner::{self, TaskTree};
 use norn::matrix::{Action, Cell, Effective, Who, narrow};
@@ -1101,7 +1102,7 @@ async fn merge(
 ) -> Result<String, String> {
     let sid = me.id.as_str();
     let mine = branches_of(f, sid).await;
-    let Some((_, tree)) = mine
+    let Some((worker, tree)) = mine
         .into_iter()
         .find(|(_, t)| t.branch == a.branch.as_str())
     else {
@@ -1165,19 +1166,39 @@ async fn merge(
             ))
         }
         Gate::Never(why) => Err(format!("the merge gate refuses: {why}")),
-        Gate::Allow => match git.merge_into(&job_tree, &tree, None).await {
-            Ok(runner::git::MergeOutcome::Merged) => {
-                if let Some(d) = f.dirs.get() {
-                    let h = &f.core.history;
-                    crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old).await;
+        Gate::Allow => {
+            // every commit the hub makes into a user's branch goes through the before-commit hooks
+            let site = hook_points::JobSite {
+                job: sid,
+                task: &worker,
+                project: None,
+            };
+            let message = match runner::review::before_commit_hooks(f, site, None, &tree, &job_tree)
+                .await
+                .map_err(|e| e.message)?
+            {
+                Some(message) => message,
+                None => {
+                    return Err(
+                        "a before-commit hook holds the merge (a card asks the user); call merge again after it is settled"
+                            .into(),
+                    );
                 }
-                Ok(json!({"merged": true, "into": target}).to_string())
+            };
+            match git.merge_into(&job_tree, &tree, message.as_deref()).await {
+                Ok(runner::git::MergeOutcome::Merged) => {
+                    if let Some(d) = f.dirs.get() {
+                        let h = &f.core.history;
+                        crate::history::merge::record(h, &d.hub, &job_tree, &tree.path, old).await;
+                    }
+                    Ok(json!({"merged": true, "into": target}).to_string())
+                }
+                Ok(runner::git::MergeOutcome::Conflict(files)) => {
+                    Ok(json!({"merged": false, "conflicts": files}).to_string())
+                }
+                Err(e) => Err(format!("merge failed: {}", e.stderr)),
             }
-            Ok(runner::git::MergeOutcome::Conflict(files)) => {
-                Ok(json!({"merged": false, "conflicts": files}).to_string())
-            }
-            Err(e) => Err(format!("merge failed: {}", e.stderr)),
-        },
+        }
     }
 }
 

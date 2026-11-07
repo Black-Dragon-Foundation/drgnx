@@ -139,7 +139,8 @@ of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.
   A **change** (`{"message": "…"}`) replaces the commit message. A **deny** holds the merge: a `hook` card says "the
   before-commit hook refused the merge of J7-3" and quotes your reason and which rule or plugin gave it. The card
   offers **Retry the merge** (after you fixed what the hook objected to), **Dismiss and carry on** (merge this task
-  anyway; only you can, an agent cannot) and **Stop the job**.
+  anyway; only you can, an agent cannot) and **Stop the job**. A manager's `merge` tool goes through the same hook: a
+  deny answers the manager with the reason and raises the card.
 - **`at-review`** runs when a task is about to go to its reviewer. An **annotate** adds its note to the reviewer's
   brief. A **deny** fails the review without starting the reviewer: the task goes back to its agent with your reason,
   as any failed review, and counts toward the three failed reviews after which the task waits on you.
@@ -147,6 +148,9 @@ of `drgnx-agents-net-hosts`), exactly as a hook's are under an agent.
   point stays blocked and a `hook` card says "hook NAME failed at review: WHAT" (or "at commit"), with **Retry** or
   **Review again**, **Dismiss** and **Stop the job**. The task is not sent back to its agent and no failed review is
   counted. A hook marked `advisory` only adds a note.
+
+Dismissing a hook card skips that hook for the current review round only: after a failed review, the next round asks
+the hook again.
 
 A `hook` card is withdrawn when its job stops.
 
