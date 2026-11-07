@@ -453,7 +453,7 @@ STATE KEY`, a function of the cached frame and the display scale (`drgnx-work-ma
   its text holds. A band is a blank line in a small face (`drgnx-work-band`) of its height; the edge tiles draw into it.
 - **Cards.** A card's line is placed by pixel `:align-to` from the layout's x, in the decoration faces
   (`drgnx-card-top`, `-mid`, `-bottom`, `-single`: PD's open boxes under Glitnir), its text cut to the card's width by
-  `string-pixel-width` (memoised in `drgnx-work-map--fit-memo`, bounded). Every card character carries the text
+  `string-pixel-width` (`drgnx-view-fit`, memoised in `drgnx-view--fit-memo`, bounded). Every card character carries the text
   property `drgnx-work-id`. The layer label stands in the 84 px margin on a layer's first row.
 - **Index.** `drgnx-work-map--index` (weak on the layout) maps a row key to its items left to right and to its layout
   row, built once per frame.

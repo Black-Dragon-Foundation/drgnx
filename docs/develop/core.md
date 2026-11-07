@@ -1978,6 +1978,37 @@ through `core/drgnx-color.el`), the terminal's width table, the time zone and re
   its buffer (`kill-buffer-hook`) or by `drgnx-view-env-unregister`, and the owning module's teardown calls
   `drgnx-view-env-teardown`.
 
+### Hub-fed views: inserting the hub's patches
+
+`(drgnx-view-patch-attach VIEW CLASS :buffer B :start S :epoch E)` makes a buffer show the hub-built rows of one
+(view, display class): a view of the type `drgnx-view-rows`, whose rows are stored by key as the `view-patch` events
+carry them. `drgnx-view-apply-patch` (on `drgnx-hub-event-functions` while a hub-fed buffer lives) only stores rows
+and marks the view (`reset`, `insert`, `dirty`, `remove`), so the throttle and the 4 ms slices stay the view core's.
+Hub-fed views do not call `drgnx-view-sync-rows`.
+
+- **The rules**, in order (`drgnx-view-patch--decide`, pure; `drgnx-view-patch--accept` keeps the books, tested in
+  every order of arrival, disconnect, reconnect, env and selection): a patch whose `hub` is not the last reset's, or
+  before the pair's first reset, is dropped, and so is a reset of that hub that is not newer; an epoch behind the one
+  this editor sent (`drgnx-view-patch-env-sent`, called by `drgnx-view-env`) is held (at most 64) and the view dims
+  without a layout change; a reset at the current epoch drops every held patch; a `base` older than the version is
+  dropped silently; a newer `base`, or a row naming an image the view lacks, sends `view/resync`, at most one
+  outstanding. On `drgnx-hub-disconnect-functions` every hub-fed view dims (`drgnx-view-stale`; keys still work) and
+  forgets its version and hub.
+- **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
+  properties only `drgnx-` ones and `drgnx-view-patch-props` (`intern-soft`, never `intern`). A stop's placeholder
+  character shows one shared `(space :align-to (PX))` per PX; an image's shows the image (an id-keyed cache, at most
+  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline.
+- **The fit guard:** a row with a stop is measured once (the text before its first stop, `string-pixel-width`); a
+  segment wider than the stop is fitted again with `drgnx-view-fit` (padded, so later positions keep their place) and
+  reported by `view/measured`, after which the hub fits that string by the editor's width.
+- **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
+  at 4000). The Work map, the Board and the timeline's lane labels use it too.
+- **Selection, dimming and the stale shade** are the view's own state, put back by PATCHED after every draw over the
+  rows by key; `drgnx-view-patch-select` draws the selection at once, so it wins over a queued patch. A removed
+  selected row moves the selection to the next row, else the previous, else none.
+- `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
+  pass that compares the two.
+
 ## Modal core (`drgnx-modal.el`)
 
 The engine-neutral half of modal editing; evil plugs into it (the `editor/evil` module, below), another engine could.

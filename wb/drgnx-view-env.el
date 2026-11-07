@@ -32,6 +32,7 @@
 (defvar text-scale-mode-amount)
 (defvar text-scale-mode-step)
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-view-patch-env-sent "drgnx-view")
 
 (defconst drgnx-view-env-delay 0.1
   "Seconds of idleness after a width change before its env is sent.")
@@ -179,7 +180,9 @@ forgotten."
         (push key live)
         (when (or force (null old) (/= epoch (nth 0 old)) (not (equal (plist-get params :width_px) (nth 2 old))))
           (puthash key (list epoch look (plist-get params :width_px)) drgnx-view-env--sent)
-          (funcall drgnx-view-env-send-function "view/env" (append params (list :epoch epoch))))))
+          (funcall drgnx-view-env-send-function "view/env" (append params (list :epoch epoch)))
+          ;; the inserter holds patches of an older epoch from now on
+          (when (fboundp 'drgnx-view-patch-env-sent) (drgnx-view-patch-env-sent view (car c) epoch)))))
     (let ((gone nil))
       (maphash (lambda (k _) (when (and (equal (car k) view) (not (member k live))) (push k gone))) drgnx-view-env--sent)
       (dolist (k gone) (remhash k drgnx-view-env--sent)))))

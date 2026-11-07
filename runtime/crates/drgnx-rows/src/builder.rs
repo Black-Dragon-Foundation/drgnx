@@ -46,10 +46,10 @@ impl RowBuilder {
         self
     }
 
-    /// The next piece starts at PX.
+    /// The next piece starts at PX: one placeholder character, displayed as the space up to PX.
     pub fn stop(&mut self, px: u32) -> &mut Self {
         self.row.stops.push((self.len, px));
-        self
+        self.push(" ", None)
     }
 
     /// The image ID here, ALT on a terminal (one placeholder character in the text).
