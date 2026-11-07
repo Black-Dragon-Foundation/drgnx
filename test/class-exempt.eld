@@ -6,7 +6,6 @@
 ;; drgnx-lint/no-stale-exempt-rows fails a row whose file is gone (remove the row when the file goes);
 ;; drgnx-lint/every-test-has-a-class fails a file with neither a class line nor a row.
 (
- ("test/unit/agents-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/job-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/mod-review-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")
  ("test/unit/work-ui-test.el" :why "frozen UI: the agent panel, cockpit, job window, review and Work UI are replaced")

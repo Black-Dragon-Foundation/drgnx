@@ -254,13 +254,8 @@ check passes. `find-file` on `TREE/x` then resolves it again, with handlers on, 
 
   An agent's content is plain text, and agents' names are written with no handler. Written into such a file, it
   would leave the secret unencrypted on disk (or the archive uncompressed). With handlers on it would reach EasyPG
-  (gpg, pinentry) or jka-compr. The hub writes an agent's files itself, never through Emacs's handlers, so only the
-  editor's side needs the rule:
-  - the edit review rejects the edit (the agent is told), and Done refuses if the file became one since.
-- A local agent session's edit review (`drgnx-agents-ui--path-ok-p`) refuses a path that resolves to nil (above).
-  - The review copies the file, and Done writes it, by the true name, with no handler (`drgnx-agents-ui--target`).
-  - The copy has a suffix of its own, never the agent's.
-  - For a session whose folder is remote, handlers stay on: its paths are remote by design.
+  (gpg, pinentry) or jka-compr. The hub writes an agent's files itself, never through Emacs's handlers, and the
+  editor no longer writes an agent's edit (the retired Agents view's review did, and kept this rule).
 - Tests use `test/fixtures/handler-trap.el`:
   - it plants the links in a temp worktree, and the trap replaces the handlers with one that records every call;
   - a name in a `load-path` directory is Emacs looking for or loading a library (Emacs's own are `.el.gz` on
@@ -1287,7 +1282,7 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
 - **The function** is a symbol (`list-timers`, the fingerprint and the errors name it); a lambda, a closure or an
   `apply-partially` signals `wrong-type-argument`.
 - **The owner.** nil (the default) is the module whose setup or `drgnx-modules-with-owner` code runs now, with its
-  run token, else `:core`. A module symbol (`:owner 'tools/agents-ui`, from a hook function that runs later) takes
+  run token, else `:core`. A module symbol (`:owner 'tools/agents`, from a hook function that runs later) takes
   the module's current run; a module with no run refuses the start (nil, nothing started). A buffer owns its timers
   until it is killed: its first timer adds `drgnx-timer--buffer-killed` to the buffer's own `kill-buffer-hook`
   (permanent-local, as is its key list `drgnx-timer--buffer-keys`; no global hook). A process owns them while it
@@ -1298,7 +1293,6 @@ timer and non-nil for an idle one (once per pause), as in `run-at-time` and `run
   one-shot `agents-ui-mirror-first`, 3 s into the first pause) and `tools/jobs` owns
   `job-ui-recount-idle` (idle, every 60 s), so a second setup replaces the timer instead of stacking another, and
   turning the module off ends it. Timers started later (from a command or a hook) name their module with `:owner`:
-  `tools/agents` owns the Agents list's 30 s tick `agents-ui-tick` (it only marks the list's view, and runs only while a window shows the list; see Views),
   `ui/face` owns quick help's `quickhelp-timeout`, `-unmap`, `-look`, `-away` and `-hover` and the start page's
   `start-first-frame`, `ui/terminal` the per-frame
   `(tty-fallback-hint . FRAME)`, `tools/jobs` the coalesced `job-ui-recount`, `tools/ai` the `ai-probe` one-shot; the
@@ -1864,45 +1858,20 @@ work. Without VIEW it sums every live view (`:max-slice-rows`: the largest).
   the new ones after its header, marked dirty for its box; a new search resets the view. PATCHED updates the status
   line. Tests: `drgnx-replace/` in `test/unit/mod-replace-view-test.el`, `drgnx-view-ui/` in `test/ui/view-ui-test.el`.
 
-- **The agent transcript**: `tools/agents` defines `agent-transcript` in its setup (`modules/tools/drgnx-agents-ui.el`; `:follow-tail t`,
-  `:key-test 'eq`, the default DELAY and SLICE). Its rows are `:commands`, each entry plist that shows something, each
-  permission and review plist, `:status` and `:queue`. An `agent` entry renders as `(TEXT . "\n\n")` and a `thought` as
-  `("… " TEXT . "\n")`, so a streamed chunk is a GROW of the text after BODY-LENGTH. The agent's process filter only
-  touches the view (`drgnx-agents-ui--changed`). SYNC has a fast path: when the session's lists are `eq` to those of
-  the last sync, the entries, permissions and reviews lists are as long (a `delq` keeps the head when the first item
-  stays), each queued message is the same (a requeue replaces one in place) and no tool or plan entry still running
-  changed (they change in place: compared by signature), it only compares each running text's length with its drawn
-  body and marks a grow; otherwise `drgnx-view-sync-rows` diffs the rows. An answer's or a thought's signature is its
-  type alone, so the turn's end (`:done`) draws nothing again. A grow draw allocates the same on a 4 kB and a 400 kB
-  answer (`drgnx-agents-ui/grow-allocation-is-independent-of-size`). The footer rows follow the entries, so a new
-  entry while a turn runs is an insert, not an append.
-
-  The model keeps streamed text as chunks (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
+- **The model keeps streamed text as chunks** (`core/drgnx-agents.el`): a running `agent` or `thought` entry has `:chunks`
   (newest first) and `:length`, so appending a chunk costs a cons whatever the answer's size
   (`drgnx-agents/a-chunk-costs-the-chunk-not-the-answer`). `(drgnx-agents-entry-text E)` joins them into `:text` once and
-  keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining; `(drgnx-agents-entry-tail
-  E FROM)` builds the text after FROM from the newest chunks only (the transcript's GROW). Code that reads an answer's
-  whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries` flush
-  join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`.
+  keeps it until the next chunk; `(drgnx-agents-entry-length E)` reads the length without joining. Code that reads an
+  answer's whole text goes through `drgnx-agents-entry-text`. The turn's end, `agents/get` and the hub's `agent-entries`
+  flush join every entry first (`drgnx-agents-join-text`), so a done entry and the wire carry a whole `:text`. The
+  panel (`modules/tools/drgnx-agent-panel*.el`) draws a session from the hub's own rows, not from these entries.
 
-- **The Agents list**, a view with no rows, is `agents-list` (`:render #'ignore`, `:sync #'drgnx-agents-ui--list-print`,
-  the default DELAY): the buffer is a `tabulated-list-mode` buffer whose text belongs to tabulated-list, and the view
-  gives it the throttle, the visibility check and the stale mark. A session's change (`drgnx-agents-ui--changed`) and
-  the 30 s tick (`agents-ui-tick`) only touch the view; SYNC runs `drgnx-agents-ui--update-lines` inside
-  `drgnx-view-with-kept-windows` (key = `tabulated-list-id`): a line whose id and columns are unchanged is not touched,
-  a changed one is replaced, gone and new ids are deleted and inserted, so a window stays on its session when lines move.
-  (`tabulated-list-print` with UPDATE cannot do this: it needs a sort key and keeps a line of the same id even when its
-  columns changed.) The view's START is the only marker; SYNC moves it to the end of the buffer after each update,
-  because the self-check would otherwise take the list's text for foreign text and delete it. A hidden list draws and
-  allocates nothing, and `drgnx-agents-ui-list-buffer` (the placeholder, `agents-view`) touches and draws it now.
-  The tick itself runs only while the list shows: `drgnx-agents-ui--tick-update`, subscribed (idle lane) to
-  `windows-changed`, `pane-shown`, `pane-hidden` and `frame-removed`, starts `agents-ui-tick` (owner `tools/agents`,
-  30 s, repeating) while a window in `drgnx-state-windows` of any recorded frame shows `*drgnx Agents*`, and cancels it
-  when none does (a running tick keeps its phase). It reads the records and ignores the event's data; the setup
-  also calls it once. The list may show in the dock or in an editor window, so it checks buffers, not pane kinds. A
-  window on an iconified frame still counts (the store has no event for visibility; the tick only marks, and the view
-  draws nothing there). The view's own check stays the one that hides the drawing. Tests: `drgnx-agents-ui/the-tick-runs-only-while-the-list-shows`,
-  `…/hiding-stops-the-tick`, `…/the-list-in-an-editor-window-ticks-too`.
+- **The agents list** is the view type `agent-panel-list` (`modules/tools/drgnx-agent-panel-list.el`, part of
+  `tools/agent-panel`): one row for each mirrored session, keyed by its hub id, its signature the name, status, context
+  percent and the counts of what waits. `drgnx-agents-changed-functions` marks the view (`drgnx-agent-panel-list-changed`,
+  which also notes the time the session last changed for the layouts); a hidden list draws nothing, and
+  `drgnx-agent-panel-list-buffer` (the dock tab's placeholder, `agents-view`) touches and draws it now. RET
+  (`agents-open`) opens the panel of the row's session. Tests: `drgnx-agent-panel/agents-view-lists-panels`.
 
 - **The Outline** (`wb/drgnx-outline.el`) is the view type `outline` (DELAY 0, `equal` keys, PATCHED `drgnx-outline--mark-current`), attached to its
   buffer when `drgnx-outline--buffer` makes it. A refresh builds imenu's index once and makes the rows integers:

@@ -890,11 +890,7 @@ keys); every binding is undone after."
     (search-semantic "C-k C-f" nil) (terminal-new "C-S-`" nil) (scm-view "C-S-g" nil)
     (view-zen "C-k z" nil)
     (view-zen "<f11>" nil) (view-zoom-in "C-=" nil) (view-zoom-in "C-+" nil) (view-zoom-out "C--" nil)
-    (view-zoom-reset "C-0" nil) (decor-activate "RET" drgnx-decor-button-map) (agents-view "C-k a" nil) (agents-stop "C-c C-c" drgnx-agents-transcript-mode-map)
-    (agents-deliver "C-c C-d" drgnx-agents-transcript-mode-map) (agents-open "RET" drgnx-agents-list-mode-map)
-    (agents-reply "RET" drgnx-agents-transcript-mode-map)
-    (agents-review-done "C-c C-c" drgnx-agents-review-mode-map)
-    (agents-review-reject "C-c C-k" drgnx-agents-review-mode-map)
+    (view-zoom-reset "C-0" nil) (decor-activate "RET" drgnx-decor-button-map)
     (ai-accept-word "C-<right>" drgnx-ai-ghost-showing-map) (ai-dismiss "C-g" drgnx-ai-ghost-showing-map)
     (ai-tab "TAB" drgnx-ai-ghost-mode-map) (ai-edit "C-k C-e" nil)
     (ai-edit-apply-hunk "C-c C-a" drgnx-ai-edit-review-mode-map)
@@ -997,7 +993,7 @@ The commands of modules that need no installed package are in it, the later stag
                               agents-panel-chip agents-panel-revoke-always
                               agents-panel-start agents-panel-move agents-panel-compact agents-panel-mode agents-panel-model
                               agents-here-mark agents-here-huddle agents-huddle agents-huddle-send agents-huddle-open
-                              work-huddle))   ; part 3: the agent panel; H on a map overlap
+                              work-huddle agents-view agents-open))   ; part 3: the agent panel (its list) and H on a map overlap
          (drgnx-keys-test--later-stages t)
          (r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'linux)))
     (should (equal (mapcar (lambda (b) (list (plist-get b :id) (plist-get b :key) (plist-get b :map)))

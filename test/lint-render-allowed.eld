@@ -5,7 +5,7 @@
 ;; migrate (a live view; :until names the task that rewrites it), recovery (the view core's own reset).
 ;; Counts can only fall: the task that rewrites a site deletes its entry.  A branch merged later adds its sites.
 (
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui--update-lines :what delete-region :kind migrate :why "drops the trailing lines of ids no longer listed; a line diff, not an erase" :until "RP8-a")
+ (:file "modules/tools/drgnx-agents-session.el" :in drgnx-agents-session-job-log :what erase-buffer :kind document :why "the job log is shown on the user's action")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "phase 2 (live browser notes)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-apply :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")
@@ -17,7 +17,6 @@
  (:file "modules/tools/drgnx-agent-settings.el" :in drgnx-agent-settings--render :what erase-buffer :kind document :why "the settings page is drawn on the user's action")
  (:file "modules/tools/drgnx-plugins-ui.el" :in drgnx-plugins--render :what erase-buffer :kind document :why "the plugins page is drawn on the user's action and when the hub says a plugin changed")
  (:file "modules/tools/drgnx-agents-editor-here.el" :in drgnx-agents-editor-here-show :what erase-buffer :kind document :why "the who-is-here list is drawn when the user asks for it, a handful of rows")
- (:file "modules/tools/drgnx-agents-ui.el" :in drgnx-agents-ui-job-log :what erase-buffer :kind document :why "the job log is shown on the user's action")
  (:file "modules/tools/drgnx-ai-ui.el" :in drgnx-ai--answer-buffer :what erase-buffer :kind document :why "an answer is shown when the user asks")
  (:file "modules/tools/drgnx-browser.el" :in drgnx-browser--placeholder :what erase-buffer :kind document :why "the placeholder page is drawn once")
  (:file "modules/tools/drgnx-browser.el" :in drgnx-browser--show-screenshot :what erase-buffer :kind document :why "a screenshot is shown on the user's action")

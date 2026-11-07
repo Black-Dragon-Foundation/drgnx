@@ -528,7 +528,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     local bmem_run="${DRGNX_TEST_BATCH_MEMORY:-4g}"
     args=(--memory "$bmem_run" --memory-swap "$bmem_run")
   fi
-  # packages the tests load (kkp, corfu, gptel, …), read-only, in every tier; without them those tests skip
+  # packages the tests load (kkp, corfu, …), read-only, in every tier; without them those tests skip
   if [ -n "${DRGNX_USER_ELPA:-}" ] && [ -d "$DRGNX_USER_ELPA" ]; then
     elpa="$(cd "$DRGNX_USER_ELPA" && pwd)"
     # a `:' would split -v's SOURCE:TARGET:OPTIONS (and could add options)

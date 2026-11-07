@@ -23,7 +23,7 @@
 (load (expand-file-name "test/fixtures/agent-config-fixture" drgnx-m11c2-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/mock-mcp" drgnx-m11c2-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-m11c2-ui-test--repo) nil t)
-(dolist (m '("tools/drgnx-agents-ui" "tools/drgnx-agent-settings" "lang/drgnx-lang" "tools/drgnx-remote"))
+(dolist (m '("tools/drgnx-agent-panel-list" "tools/drgnx-agent-settings" "lang/drgnx-lang" "tools/drgnx-remote"))
   (load (expand-file-name (concat "modules/" m) drgnx-m11c2-ui-test--repo) nil t))
 
 (defconst drgnx-m11c2-ui-test--secret "s3cr3t-env-value-0123456789"

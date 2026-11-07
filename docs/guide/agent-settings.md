@@ -7,7 +7,7 @@ settings.
 
 Opening the page:
 
-- From the Agents tab, `,` on a session's row opens the page of that session's agent, for its project (Agents:
+- From the Agents list, `,` on a session's row opens the page of that session's agent, for its project (Agents:
   Settings of This Agent). Settings from a transcript does the same.
 - Elsewhere, Agents: Settings (palette; `SPC a c` in the Vim profile) asks which agent, with Claude Code first. The
   page is for the project of the buffer you are in.

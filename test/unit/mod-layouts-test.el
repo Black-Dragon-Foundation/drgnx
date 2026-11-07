@@ -7,13 +7,14 @@
 (require 'drgnx-wb)
 (require 'drgnx-area)
 (require 'drgnx-groups)
-(load (expand-file-name "modules/tools/drgnx-agents-ui" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel-list" drgnx-dir) nil t)
+(load (expand-file-name "modules/tools/drgnx-agent-panel" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-layouts" drgnx-dir) nil t)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 
 (defconst drgnx-layouts-test--buffers
   '("*drgnx-layouts-explorer*" "*drgnx-layouts-code*" "*drgnx-layouts-a*" "*drgnx-layouts-b*" "*drgnx-layouts-proc*"
-    "*drgnx Agents*" "*agent: alpha*" "*agent: beta*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
+    "*drgnx Agents*" "*drgnx agent: a1*" "*drgnx agent: b1*" "*drgnx: no agent*" "*drgnx-layouts-output*"))
 
 (defmacro drgnx-layouts-test--with (&rest body)
   "BODY in a 200×60 frame with one editor window on *drgnx-layouts-code*, an Explorer section, the right dock's
@@ -28,8 +29,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
             (drgnx-wb--sections nil)
             (drgnx-wb--areas (copy-tree drgnx-wb--areas))
             (drgnx-agents--sessions nil)
-            (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-            (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))     ; no job directory is read
+            (drgnx-agent-panel-list--last (make-hash-table :test #'eq :weakness 'key))
             (display-buffer-alist nil) (display-buffer-overriding-action '(nil))
             (size (cons (frame-width) (frame-height))))
        (drgnx-layouts--define-config)
@@ -40,11 +40,11 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
          (set-frame-parameter nil p nil))
        (drgnx-wb-define-section 'files :slot 0 :title "EXPLORER"
                                 :buffer (lambda () (get-buffer-create "*drgnx-layouts-explorer*")))
-       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
+       (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer)
        (drgnx-rules-mode 1)
        (switch-to-buffer (get-buffer-create "*drgnx-layouts-code*"))
        (set-window-parameter nil 'drgnx-tabs nil)
-       (unwind-protect (progn ,@body)
+       (unwind-protect (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) 1))) ,@body)  ; a panel asks the hub, which is not there
          (remove-hook 'window-size-change-functions #'drgnx-layouts--zen-resize)
          (drgnx-rules-mode -1)
          (drgnx-wb-hide-sidebar)
@@ -77,11 +77,11 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (ert-deftest drgnx-layouts/agent-arranges-like-zed ()
   (drgnx-layouts-test--with
-    (let ((alpha (drgnx-agents--make :id "a1" :name "alpha" :status 'idle))
-          (beta (drgnx-agents--make :id "b1" :name "beta" :status 'idle)))
+    (let ((alpha (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle))
+          (beta (drgnx-agents--make :id "b1" :remote "b1" :name "beta" :status 'idle)))
       (setq drgnx-agents--sessions (list beta alpha))           ; beta is newer, alpha acted last
-      (puthash alpha (float-time) drgnx-agents-ui--last)
-      (puthash beta (- (float-time) 600) drgnx-agents-ui--last)
+      (puthash alpha (float-time) drgnx-agent-panel-list--last)
+      (puthash beta (- (float-time) 600) drgnx-agent-panel-list--last)
       (drgnx-wb-area-show 'panel 'output (drgnx-layouts-test--output))
       (drgnx-layouts-apply 'agent)
       (should (eq (drgnx-layouts-current) 'agent))
@@ -92,8 +92,8 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (let ((groups (drgnx-groups-list)))
         (should (= 2 (length groups)))
         (should (eq (window-buffer (car groups)) (drgnx-layouts-test--code)))
-        (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*"))
-        (should (eq (buffer-local-value 'major-mode (window-buffer (cadr groups))) 'drgnx-agents-transcript-mode))
+        (should (equal (buffer-name (window-buffer (cadr groups))) "*drgnx agent: a1*"))
+        (should (eq (buffer-local-value 'major-mode (window-buffer (cadr groups))) 'drgnx-agent-panel-mode))
         (should (< (window-left-column (car groups)) (window-left-column (cadr groups))))
         (should (= (window-top-line (car groups)) (window-top-line (cadr groups))))
         (should (eq (selected-window) (car groups))))             ; focus stays in the editor
@@ -116,7 +116,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 
 (ert-deftest drgnx-layouts/switching-back-restores ()
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (drgnx-layouts-apply 'agent)
     ;; the user changes the Agent arrangement: a wider right dock, the panel on Output
     (let ((window-resize-pixelwise t))
@@ -140,7 +140,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
       (should (window-live-p (drgnx-wb-area-window 'panel)))
       (should (drgnx-wb-sidebar-showing-p))
       (should (= 2 (length (drgnx-groups-list))))
-      (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*agent: alpha*"))
+      (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*drgnx agent: a1*"))
       (should (drgnx-signal-editor-window-p (selected-window)))
       (drgnx-layouts-apply 'editor)
       (should-not (drgnx-wb-sidebar-showing-p))
@@ -162,7 +162,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 (ert-deftest drgnx-layouts/switching-loses-nothing ()
   :tags '(:cond)
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let* ((a (get-buffer-create "*drgnx-layouts-a*")) (b (get-buffer-create "*drgnx-layouts-b*"))
            (code (drgnx-layouts-test--code))
            (proc (make-process :name "drgnx-layouts-sleep" :buffer (get-buffer-create "*drgnx-layouts-proc*")
@@ -185,7 +185,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
           (should (equal (window-parameter (car groups) 'drgnx-tabs) (list a code b)))
           (should (eq (window-buffer (car groups)) code))
           (should (= pt (window-point (car groups))))
-          (should (equal (buffer-name (window-buffer (cadr groups))) "*agent: alpha*")))
+          (should (equal (buffer-name (window-buffer (cadr groups))) "*drgnx agent: a1*")))
         (should (eq (window-buffer (drgnx-wb-area-window 'panel)) (process-buffer proc)))
         ;; one key cycles every layout and comes back
         (let ((names (drgnx-layouts-names)) (seen nil))
@@ -252,7 +252,7 @@ Agents tab, no agent session, no layout state and a temp config dir (layouts.eld
 (ert-deftest drgnx-layouts/agent-zen-editor-builds-editor-from-before-zen ()
   ;; Editor's first visit, just out of Zen: built from the arrangement Zen was entered from, not Zen's one window.
   (drgnx-layouts-test--with
-    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :name "alpha" :status 'idle)))
+    (setq drgnx-agents--sessions (list (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle)))
     (let ((a (get-buffer-create "*drgnx-layouts-a*")) (code (drgnx-layouts-test--code)))
       (drgnx-layouts-apply 'agent)
       (set-window-parameter (car (drgnx-groups-list)) 'drgnx-tabs (list a code))

@@ -22,7 +22,7 @@
 (load (expand-file-name "test/fixtures/git-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/state-fixture" drgnx-m11c1-ui-test--repo) nil t)
 (load (expand-file-name "test/fixtures/wait-fixture" drgnx-m11c1-ui-test--repo) nil t)
-(dolist (m '("tools/drgnx-replace" "tools/drgnx-agents-ui" "tools/drgnx-layouts" "tools/drgnx-browser" "tools/drgnx-live"
+(dolist (m '("tools/drgnx-replace" "tools/drgnx-agent-panel-list" "tools/drgnx-agent-panel" "tools/drgnx-layouts" "tools/drgnx-browser" "tools/drgnx-live"
              "tools/drgnx-shortcuts"))
   (load (expand-file-name (concat "modules/" m) drgnx-m11c1-ui-test--repo) nil t))
 
@@ -59,7 +59,7 @@
            (buffer-string)))))
 
 (defconst drgnx-m11c1-ui-test--buffers
-  '("*drgnx-m11c1-output*" "*drgnx Agents*" "*agent: alpha*" "*agent: beta*" "*drgnx live*" "*drgnx keyboard shortcuts*"
+  '("*drgnx-m11c1-output*" "*drgnx Agents*" "*drgnx agent: a1*" "*drgnx agent: b1*" "*drgnx live*" "*drgnx keyboard shortcuts*"
     "*drgnx: browser*")
   "Buffers the walk makes, killed after it.")
 
@@ -73,8 +73,7 @@
            (drgnx-wb--areas (copy-tree drgnx-wb--areas))
            (drgnx-layouts-shapes (copy-sequence drgnx-layouts-shapes))
            (drgnx-agents--sessions nil)
-           (drgnx-agents-ui--last (make-hash-table :test #'eq :weakness 'key))
-           (drgnx-agents-ui--jobs-cache (cons 1.0e+INF nil))
+           (drgnx-agent-panel-list--last (make-hash-table :test #'eq :weakness 'key))
            (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
            (drgnx-keys--applied nil) (drgnx-keys--session-layers nil) (drgnx-keys-last nil)
            (drgnx-surfaces--usage nil) (drgnx-surfaces--usage-dirty nil)
@@ -105,7 +104,7 @@
               (drgnx-browser--register-shape)
               (drgnx-browser--define-commands)
               (drgnx-shortcuts--define-commands)
-              (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agents-ui-list-buffer)
+              (drgnx-wb-define-tab 'right 'agents :title "Agents" :placeholder #'drgnx-agent-panel-list-buffer)
               (drgnx-rules-mode 1)
               (find-file (expand-file-name "src/parser.el" repo))
               (drgnx-test-use-editor (selected-window))
@@ -137,19 +136,19 @@
               (drgnx-replace-bar-close)
 
               ;; 3. the Agent layout (an agent with a short chat) and Zen
-              (let ((alpha (drgnx-agents--make :id "a1" :name "alpha" :status 'idle :conn 'fake :cwd repo))
-                    (beta (drgnx-agents--make :id "b1" :name "beta" :status 'idle :conn 'fake :cwd repo)))
+              (let ((alpha (drgnx-agents--make :id "a1" :remote "a1" :name "alpha" :status 'idle :conn 'fake :cwd repo))
+                    (beta (drgnx-agents--make :id "b1" :remote "b1" :name "beta" :status 'idle :conn 'fake :cwd repo)))
                 (setf (drgnx-agent-session-entries alpha)
                       (list (list :type 'user :text "Rename needle-check to needle-ok everywhere.")
                             (list :type 'agent :text "Done: 14 places in 3 files, the tests pass." :done t)
                             (list :type 'stop :stop "end_turn" :done t)))
                 (setq drgnx-agents--sessions (list beta alpha))
-                (puthash alpha (float-time) drgnx-agents-ui--last)
-                (puthash beta (- (float-time) 600) drgnx-agents-ui--last))
+                (puthash alpha (float-time) drgnx-agent-panel-list--last)
+                (puthash beta (- (float-time) 600) drgnx-agent-panel-list--last))
               (drgnx-layouts-apply 'agent)
               (should (eq (drgnx-layouts-current) 'agent))
               (should (= 2 (length (drgnx-groups-list))))
-              (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*agent: alpha*"))
+              (should (equal (buffer-name (window-buffer (cadr (drgnx-groups-list)))) "*drgnx agent: a1*"))
               (should (window-live-p (drgnx-wb-area-window 'right)))
               (redisplay t)
               (drgnx-m11c1-ui-test--shot shots "m11c1-layout-agent.png")

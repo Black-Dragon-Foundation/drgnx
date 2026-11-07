@@ -383,7 +383,7 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 ;;;; Opening the selection
 
 (defvar drgnx-agents--sessions)
-(declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
 (declare-function drgnx-agent-session-remote "drgnx-agents")
 
 (declare-function drgnx-work-code-open-file "drgnx-work-code")
@@ -391,11 +391,10 @@ the side panel follows; the chain's edge tiles one frame later (the timer takes 
 (declare-function drgnx-work-code--roots "drgnx-work-code")
 
 (defun drgnx-work--open-agent (sid)
-  "Open the transcript of the hub session SID in today's Agents view (the agent panel replaces this later)."
-  (if-let* ((s (and (boundp 'drgnx-agents--sessions)
-                    (seq-find (lambda (x) (equal (drgnx-agent-session-remote x) sid)) drgnx-agents--sessions))))
-      (progn (require 'drgnx-agents-ui) (drgnx-agents-ui-transcript s))
-    (message "Work: no transcript of this agent here")))
+  "Open the panel of the hub session SID."
+  (if (fboundp 'drgnx-agent-panel-open)
+      (drgnx-agent-panel-open sid)
+    (message "Work: the agent panel is not on")))
 
 (defun drgnx-work-map--root-named (name)
   "The workspace root whose directory is called NAME, or nil."

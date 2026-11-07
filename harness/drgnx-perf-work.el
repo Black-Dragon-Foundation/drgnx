@@ -50,12 +50,6 @@ agents with the map shown or hidden, say whether the premise holds and take it a
        (defun drgnx-perf--work-view () (buffer-local-value 'drgnx-view drgnx-perf--work-buf))
        (defun drgnx-perf--work-state ()
          (drgnx-work-client-view-state (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf)))
-       (defun drgnx-perf--work-transcript ()
-         "A transcript of the first agent in a window below the editor (the Agents view open on one), the editor selected."
-         (let* ((editor (selected-window)) (s (car drgnx-work-thirty--mirrors)) (b (drgnx-agents-ui-transcript-buffer s)))
-           (unless (get-buffer-window b) (set-window-buffer (split-window editor nil 'below) b))
-           (select-window editor)
-           (drgnx-agents-mirror-show (drgnx-agent-session-remote s))))
        t))
    ")"))
 
@@ -465,7 +459,7 @@ the draw alone made."
 (defun drgnx-perf-work-workloads (visit kill-fixture)
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
-`work-typing-shown', `work-typing-hidden', `work-typing-mirror', `view-patch' and `work-trail'."
+`work-typing-shown', `work-typing-hidden', `view-patch' and `work-trail'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -500,9 +494,6 @@ fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster'
                          :each ,(funcall typing-each)
                          :actions ,typing :check ,typing-check :teardown ,down)
       (work-typing-hidden :setup ,(funcall up nil "")
-                          :each ,(funcall typing-each)
-                          :actions ,typing :check ,typing-check :teardown ,down)
-      (work-typing-mirror :setup ,(funcall up t "(drgnx-perf--work-transcript)")
                           :each ,(funcall typing-each)
                           :actions ,typing :check ,typing-check :teardown ,down)
       ;; inserting a hub-built row patch shaped like a 30-agent Work map update (report-only; docs/develop/perf.md)

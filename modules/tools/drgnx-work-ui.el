@@ -35,7 +35,8 @@
 (declare-function drgnx-wb-sidebar-showing-p "drgnx-wb")
 (declare-function drgnx-wb-toggle-sidebar "drgnx-wb")
 (declare-function drgnx-agents-profile-names "drgnx-agents")
-(declare-function drgnx-agents-ui-transcript "drgnx-agents-ui")
+(declare-function drgnx-agent-panel-open "drgnx-agent-panel")
+(declare-function drgnx-agent-session-remote "drgnx-agents")
 
 (defface drgnx-work-ui-spec '((t :inherit bold)) "A spec's title." :group 'drgnx)
 (defface drgnx-work-ui-done '((t :inherit shadow)) "Done tasks, steps and TODOs; counts." :group 'drgnx)
@@ -289,7 +290,7 @@ and its commits are recorded for the task."
          (plan (drgnx-work-ui--plan-of task))
          (cwd (or (plist-get plan :worktree) (plist-get plan :repo) (file-name-directory (plist-get plan :path))))
          (s (progn (require 'drgnx-agents-mirror) (drgnx-agents-mirror-start profile cwd (plist-get task :id)))))
-    (when (fboundp 'drgnx-agents-ui-transcript) (drgnx-agents-ui-transcript s))
+    (when (and (fboundp 'drgnx-agent-panel-open) (drgnx-agent-session-remote s)) (drgnx-agent-panel-open (drgnx-agent-session-remote s)))
     s))
 
 ;;;; Scanning again (in another Emacs)

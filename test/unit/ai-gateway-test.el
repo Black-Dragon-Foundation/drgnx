@@ -19,10 +19,6 @@
 (load (expand-file-name "test/fixtures/runtime-settings-fixture" drgnx-dir) nil t)
 (load (expand-file-name "modules/tools/drgnx-commit-message" drgnx-dir) nil t)
 
-(defvar gptel-backend)
-(defvar gptel-model)
-(defvar gptel-stream)
-(declare-function gptel-request "gptel")
 
 (unless (fboundp 'git-commit-mode)                         ; magit's commit buffer, when magit is not here
   (define-minor-mode git-commit-mode "A stand-in for magit's commit message mode."))
@@ -214,44 +210,6 @@ no provider key; the mock got the hub's key and never the editor's token."
           (drgnx-test-wait (lambda () (string-prefix-p "hi" (buffer-string))) :secs 20 :what "the message"))
         (should (string-prefix-p "hi" (buffer-string))))
       (should (string-search "+two" (plist-get (drgnx-ai-gateway-test--through root "/v1/chat/completions") :body))))))
-
-(ert-deftest drgnx-ai-gateway/gptel-backend-points-at-the-gateway ()
-  :tags '(:frozen)
-  ;; the backend's address, protocol, endpoint and key (gptel's request itself is gptel's: the streaming test below)
-  (drgnx-ai-gateway-test--with nil
-    (let ((spec (drgnx-ai-gptel-spec 'a "m")) (u (url-generic-parse-url (cdr drgnx-hub--editor))))
-      (should (eq (car spec) 'gptel-make-openai))
-      (should (equal (plist-get (cddr spec) :host) (format "127.0.0.1:%d" (url-portspec u))))
-      (should (equal (plist-get (cddr spec) :protocol) "http"))
-      (should (equal (plist-get (cddr spec) :endpoint) "/p/a/chat/completions"))
-      (should (equal (funcall (plist-get (cddr spec) :key)) (car drgnx-hub--editor))))
-    ;; a keyless provider is gptel's direct backend, as before
-    (let ((spec (drgnx-ai-gptel-spec 'o "m")))
-      (should (eq (car spec) 'gptel-make-ollama))
-      (should-not (plist-member (cddr spec) :key)))))
-
-(ert-deftest drgnx-ai-gateway/gptel-streams-through-the-gateway ()
-  :tags '(:frozen :timing)                      ; the two chunks arrive a second apart, and the test asserts that gap
-  ;; two chunks a second apart: the first reaches gptel's callback before the second is sent.  gptel comes from the
-  ;; user's ELPA, read-only (DRGNX_USER_ELPA, else ~/.config/emacs/elpa), as mod-extras-teardown-test.el loads it
-  (let* ((elpa (expand-file-name (or (getenv "DRGNX_USER_ELPA") "~/.config/emacs/elpa")))
-         (load-path (append load-path (and (file-directory-p elpa)
-                                           (seq-filter #'file-directory-p (directory-files elpa t "\\`[^.]"))))))
-    (skip-unless (locate-library "gptel"))
-    (require 'gptel)
-    (require 'gptel-openai)             ; gptel-make-openai: autoloaded only after package-initialize, not by a load-path
-    (drgnx-ai-gateway-test--with
-        (list (list :path "/v1/chat/completions" :content_type "text/event-stream"
-                    :chunks (vector (vector 0 "data: {\"choices\":[{\"delta\":{\"content\":\"one\"}}]}\n\n")
-                                    (vector 1000 "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\n")
-                                    (vector 0 "data: [DONE]\n\n"))))
-      (let* ((spec (drgnx-ai-gptel-spec 'a "m")) (gptel-backend (apply (car spec) (cdr spec))) (gptel-model 'm)
-             (gptel-stream t) (seen nil))
-        (gptel-request "hi" :stream t :callback (lambda (resp _info) (when (stringp resp) (push (cons (float-time) resp) seen))))
-        (drgnx-test-wait (lambda () (>= (length seen) 2)) :secs 20 :what "both chunks")
-        (let ((first (car (last seen))) (second (car (last seen 2))))
-          (should (equal (cdr first) "one"))
-          (should (>= (- (car second) (car first)) 0.5)))))))
 
 (ert-deftest drgnx-ai-gateway/the-indexer-asks-for-a-token-of-its-own ()
   ;; a batch Emacs as the job is: no key, no token; it ensures the hub and takes a token of its own, and the hub's key

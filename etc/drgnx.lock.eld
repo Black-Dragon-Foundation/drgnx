@@ -131,14 +131,6 @@
 		     "Go to last change" :commit
 		     "72f556524b88e9d30dc7fc5b0dc32078c166fda7" :url
 		     "https://github.com/emacs-evil/goto-chg")
-	   (gptel :version "0.9.9.6" :archive "nongnu" :kind tar :file
-		  "gptel-0.9.9.6.tar" :sha256
-		  "0aa684b3e273ef6788756cffa4d018fe0bed0ecc853640fb82abaacd9d7ca5dd"
-		  :size 1003520 :requires
-		  ((transient "0.7.8") (compat "30.1.0.0")) :summary
-		  "Interact with ChatGPT or other LLMs" :commit
-		  "2b02618b2eba819b996eca7f71bf4dd4b91eb532" :url
-		  "https://github.com/karthink/gptel")
 	   (indent-bars :version "1.0.1" :archive "gnu" :kind tar
 			:file "indent-bars-1.0.1.tar" :sha256
 			"49b75d50585a93d7c49e0e064649c6cf8f296412e1717350490d2af0b4e685b5"

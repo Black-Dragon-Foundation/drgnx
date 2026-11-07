@@ -18,7 +18,6 @@
 
 ;; the session's agent code, which the replay workloads drive
 (defvar drgnx-agents--sessions)
-(declare-function drgnx-agents-ui-transcript-buffer "drgnx-agents-ui")
 (declare-function drgnx-timer-now "drgnx-timer")
 (declare-function drgnx-timer-cancel "drgnx-timer")
 (declare-function drgnx-timer-start "drgnx-timer")
@@ -1192,11 +1191,6 @@ the recording's end finishes the answer and starts it over.  Returns the session
     (when-let* ((b (get-buffer (format "*agent: %s*" name))))
       (when-let* ((w (get-buffer-window b))) (ignore-errors (delete-window w)))
       (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))
-
-(defun drgnx-perf-replay-buffer (name)
-  "Replay NAME's transcript buffer, drawn (not shown)."
-  (require 'drgnx-agents-ui)
-  (drgnx-agents-ui-transcript-buffer (drgnx-perf-replay-session (drgnx-perf-replay--get name))))
 
 (defun drgnx-perf-live-mb ()
   "The live Lisp heap in MB after a collection, from `garbage-collect-heapsize' (Nidhogg), else `drgnx-perf-heap-mb'."

@@ -120,3 +120,10 @@ O open in a buffer". When the hub kept only the ends of a huge output the count 
 - The **edits ledger** lists the files the agent edited with their added and removed lines (`L` lists or folds it). The
   line says how many edits came **since you looked**: looking is opening the ledger, which sets a mark at the newest
   entry, and later edits count from there. A panel you have never looked at counts every edit.
+
+## The agents list
+
+*Show Agents* (`agents-view`) lists the sessions the hub runs, one on a line: name, status, how full the context is
+and what waits for you. `RET` opens that session's panel. Enter on an agent's card on the Work map opens the panel
+too. This list and the panel replaced the old Agents view; chat with a model (gptel) is gone with it, and the
+agent panel is where you talk to a model now.

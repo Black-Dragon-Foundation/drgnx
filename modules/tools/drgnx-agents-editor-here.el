@@ -340,10 +340,10 @@ named yet (no ordinal) is not listed."
 ;;;; Setup
 
 (defun drgnx-agents-editor-here--bar-list (left)
-  "LEFT, the status bar's left segments, with `agents-here' straight after `agents'."
-  (if (or (memq 'agents-here left) (not (memq 'agents left)))
+  "LEFT, the status bar's left segments, with `agents-here' straight after `jobs'."
+  (if (or (memq 'agents-here left) (not (memq 'jobs left)))
       left
-    (let (out) (dolist (s left) (push s out) (when (eq s 'agents) (push 'agents-here out))) (nreverse out))))
+    (let (out) (dolist (s left) (push s out) (when (eq s 'jobs) (push 'agents-here out))) (nreverse out))))
 
 (defun drgnx-agents-editor-here-setup ()
   "Cache the workspace's presence and show it.  Called by the module's setup."

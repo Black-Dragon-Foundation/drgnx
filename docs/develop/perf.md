@@ -27,9 +27,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | scrolling | 30 pages down and up in the same file | input latency |
 | tabs | 20 next-tab switches among 20 open files | input latency |
 | explorer | focus the Explorer, 10 rows down (each one moves), back | input latency |
-| agent-typing | typing while an agent streams a reply into the Agents tab: a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
-| transcript-replay | the typing workload's six strings while the editor's other window shows a transcript fed from a recording by a timer at the recorded pace (no agent; checked: chunks arrived while typing); runs in the container | input latency |
-| agent-stream | the typing workload's six strings while the editor's other window shows a transcript whose running answer starts 400 kB long (not done) and the hub's mock streams 100-character chunks onto it, 50 a second, for thirty seconds (checked: still streaming at the end): a chunk costs the chunk, and only the new text is drawn | input latency |
+| agent-typing | typing while an agent streams a reply (the Agents list is shown): a `ratatoskr-mock acp` in a Ratatoskr hub, the editor's session a mirror of the hub's (see "The agent workloads" below); the turn takes three seconds (checked: its `stop` entry is not in the mirror yet at the end) | input latency |
 | code-scrolling | `<next>`×30 then `<prior>`×30 through the 12k-line fixture with sticky scroll and indent guides (when installed) on — smooth scrolling is on but pixel scrolling is a wheel's, not `<next>`'s | input latency |
 | diff-scrolling | `<next>`×30 then `<prior>`×30 through a 10k-line diff in the split layout | input latency |
 | typing-with-ghost | the typing workload with ghost text on: a mock model answers every pause at once, the pause shortened to 10 ms so each key asks and the next cancels (checked: it asked) | input latency |
@@ -55,13 +53,12 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | startup | a drgnx daemon (isolated: its own HOME and drgnx dirs, the harness's environment allowlist) until its server answers (a daemon that never answers fails), 4 starts, the first dropped | server-ready time, modules' time |
 | memory | after the workloads, a GC, then one key (`<down>`) and the pause after it, read once the idle collection's timer has given the freed heap back to the system (as it does for a user: `drgnx-gc--idle`) | RSS |
 
-**The agent workloads** (`agent-typing`, `agent-stream`) run a Ratatoskr hub in the session, as the
+**The agent workload** (`agent-typing`) run a Ratatoskr hub in the session, as the
 user's editor does: `$DRGNX_RATATOSKR_BIN` (a build with the `test-hooks` feature, `ratatoskr-mock` in the same folder;
 without it the workloads fail and say so) is started with a settings file of its own whose profile `mock` is
 `ratatoskr-mock acp --as claude --script FILE`. The script's n-th line is the program of the n-th prompt (`say TEXT`,
 `silent SECONDS`: docs/develop/runtime.md), so a turn is the same whatever the prompt says. A prompt past the last
-line runs its own words and ends at once, so `agent-stream`'s script has a line for every run one mock serves: an A/A's
-warm-ups and rounds on both sides (`drgnx-perf-workers/agent-stream-has-a-turn-for-every-run`). The session holds
+line runs its own words and ends at once, so a script needs a line for every run one mock serves. The session holds
 mirrors (`drgnx-agents-mirror-start`). The hub tells of a session's state at most every 50 ms, so a short turn can go
 by with no `busy` status: the workloads count the `stop` entries of the transcript to know that a turn has ended (the
 check "typed while it streamed" is a turn that has not ended), never the status. The agents and their events are the hub's.
@@ -367,21 +364,16 @@ every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
   `test/fixtures/lsp-replay.el` (a batch Emacs on stdio that answers each request from the recorded exchange
   `lsp-exchange.eld`: no network, no language server; it reads its stdin through `/proc/PID/fd/0` on Linux, and on
   any POSIX system through the FIFO of `test/fixtures/mock-acp-stdin.sh` when started under it); `vc-git` reads the status and the log of the fixture repository
-  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two `transcript-replay`
-  streams start. Each step prints its time, RSS and live Lisp heap.
+  (made in a temporary directory, two commits at fixed dates and an uncommitted change); two transcript replays
+  (headless sessions fed from `transcript.eld`) start. Each step prints its time, RSS and live Lisp heap.
 - **Steady**, until MIN minutes (default 30) have passed: rounds of `drgnx-perf-day-workloads` (`typing`, `scrolling`,
-  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`,
-  `transcript-replay`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
+  `tabs`, `explorer`, `code-scrolling`, `diff-scrolling`, `replace-typing`, `replace-retype`, `window-switch`), their order shuffled per round from the fixed seed. After each round: RSS and the live heap
   (`drgnx-perf-heap-mb`, after a collection), and the number of collections. With the watchdog on, the day also reads its cumulative counters
   (never reset) at the start, after build-up and after each round, and prints per phase and per round: the monitor's CPU
   as a percent of the wall, the drain's p95 and largest bucket, missed against samples, and the stalls with felt and
   the most frequent signatures. The closing line says whether `drgnx-watchdog-mode` is on and whether the preloaded
   Lisp is natively compiled. Each workload's own stalls and `:watchdog` numbers are kept per round in the results
   JSON (`:workload_watchdog`), with the interval's numbers under `:watchdog`.
-- **`transcript-replay`** is `agent-stream` with no agent: a session with no process whose transcript is fed from
-  `transcript.eld` by a timer, one `drgnx-agents--append-text` and `drgnx-agents--changed` per recorded chunk at the
-  recorded delay, while keys are typed in the editor window beside it. It runs in the container, which `agent-stream`
-  cannot. It has no budgets yet (`drgnx-perf-run-unseeded`).
 - **Rules** (`drgnx-perf-day-verdict`): RSS grows at most 20 % from the first steady round to the last, and no
   workload fails. There is **no 400 MB rule** (that is the soak's); a day is not compared with a user's numbers (a user's
   RSS is not the Lisp heap, the number of collections follows their consing, pauses differ by machine).
@@ -719,7 +711,7 @@ only after `DRGNX_PERF_LANDED` names its step.
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
 | `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5; each repeat kills the buffer the one before made (they once stayed, 100 MB that the `memory` row read) | input max 50, `:complete-ms` 1000 (ot8) |
 
-`agent-stream`, `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
+`terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
 endless `seq` loop), so a digest that is equal on and off needs a fixed-length run; that is DEFERRED, not done here.
 
 **Fixtures.** Generators, not big files: `test/fixtures/workers/generators.el` writes the sources (1 and 2 MB per language),
@@ -759,7 +751,6 @@ get its situation fails instead of measuring something else. Mock agents only; n
 | work-relayout | 320 layout commands (`f`, `o`, `1` to `6`, 40 times; only about one in six makes the hub send a frame with a layout, and the lab's p95 needs 100 samples; each command first waits up to a second for the layout before it, which is why the lab's own input p90 reads about 1 s) | `:relayout :p95` 50 ms, from the command to the frame it asked for drawn (the view has nothing pending); `:stalls` 0 |
 | work-live | 30 s with the map shown and the agents streaming (checked: the map got at least 30 deltas) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0 |
 | work-typing-shown, work-typing-hidden | the typing workload's six strings with the map shown in the editor's other window, and with it open but shown nowhere (the hub told: no deltas) | `:input :p95` 16 ms each, `:stalls` 0; the rule between them (shown at most 1 ms over hidden) is `drgnx-perf-run--relative-fails`, judged when both are in the run |
-| work-typing-mirror | the same with the map shown and a transcript of one agent open (the mirror of 30 streaming agents) | `:input :p95` 16 ms, `:stalls` 0; at most 1 ms over `typing` (same rule function) |
 | view-patch | no hub: a hub-fed view (`drgnx-view-patch-attach`) holding 30 agents' cards (150 rows, a run of faces, an item id, two stops and an image each), then 100 patches, each replacing one row of every agent (30 rows), parsed from JSON, applied and drawn | report-only until the render offload's combined pass: `:alloc` (objects for the parse, the apply and the draw), `:draw_kb` (kB the draw made), `:slices`, `:rows`. First smoke run (2026-11-07, GUI container): alloc p50 6052 objects, draw 6.7 kB |
 | work-trail | a mock session whose one turn took 10,000 read steps (checked: its newest step is 10,000 or more); the trail opened until its first rows are drawn, then 20 steps appended (each with its draw) | `:draw_ms` 100; `:append_ms :max` 1 (from the merge to the end of the view's draw of it) |
 

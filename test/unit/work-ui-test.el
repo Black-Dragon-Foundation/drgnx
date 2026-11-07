@@ -361,7 +361,7 @@ without SVG (librsvg), e.g. a terminal-only build."
   (drgnx-work-ui-test--with root
     (let ((started nil))
       (cl-letf (((symbol-function 'drgnx-agents-mirror-start) (lambda (profile cwd &optional task) (setq started (list profile cwd task)) 'session))
-                ((symbol-function 'drgnx-agents-ui-transcript) #'ignore))
+                ((symbol-function 'drgnx-agent-panel-open) #'ignore))
         (with-current-buffer (drgnx-work-ui-buffer)
           (drgnx-work-ui-test--goto "Plan Alpha") (drgnx-work-ui-toggle) (drgnx-work-ui-test--draw)
           (drgnx-work-ui-test--goto "Task 2: second")
