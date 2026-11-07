@@ -272,6 +272,29 @@ for `repositories: nidhogg` and `permission-actions: read`. Its secrets `NIDHOGG
 `NIDHOGG_LINE_APP_KEY` live in drgnx; `ci.yml`, `gui.yml`, `tty.yml` and `macos.yml` pass them to the tiers workflow.
 Without them the job fails with that message. A pull request from a fork gets no secrets, so its line run fails.
 
+Why not the existing `drgnx-fork-sync` App: it writes the ACP forks' contents and workflows, and giving drgnx's CI
+its key (plus Actions: Read and an install on `nidhogg`) would hand every drgnx CI run write access to the forks. The
+narrow App can only read Actions data of `nidhogg`.
+
+Setup (an org owner, once). GitHub has no CLI for creating an App; in the browser, open
+<https://github.com/organizations/Black-Dragon-Foundation/settings/apps/new> and set:
+
+- **Name** `drgnx-ci-artifacts`, **Homepage URL** drgnx's repository URL, **Webhook**: off (clear "Active").
+- **Repository permissions**: Actions: Read-only; Metadata: Read-only (always required); nothing else.
+- **Where can this GitHub App be installed?** Only on this account.
+
+Then create the App and note its **App ID**; **Generate a private key** (it downloads a `.pem` file); **Install
+App** on Black-Dragon-Foundation, **Only select repositories**: `nidhogg`. Store the two secrets in drgnx and delete
+the downloaded key:
+
+```sh
+R=Black-Dragon-Foundation/drgnx
+gh secret set NIDHOGG_LINE_APP_ID -R $R --body <APP_ID>
+gh secret set NIDHOGG_LINE_APP_KEY -R $R < <downloaded>.pem
+```
+
+`actions/create-github-app-token` is one of GitHub's own actions, pinned by commit like the others.
+
 When a release round starts, the two files move to the next line; after the release, the callers go back to
 `nidhogg: release` on the new pin ([Joint rounds](#joint-rounds) is the by-hand variant for one pair).
 
