@@ -176,6 +176,7 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-include" => values.search_include = de(v)?,
         "drgnx-search-exclude" => values.search_exclude = de(v)?,
         "drgnx-search-off" => values.search_off = de(v)?,
+        "drgnx-search-base" => values.search_base = de(v)?,
         "drgnx-agents-plugins" => values.agents_plugins = de(v)?,
         "drgnx-agents-hook-rules" => {
             values.agents_hook_rules =
@@ -318,6 +319,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-include" => json!(values.search_include),
         "drgnx-search-exclude" => json!(values.search_exclude),
         "drgnx-search-off" => json!(values.search_off),
+        "drgnx-search-base" => json!(values.search_base),
         "drgnx-agents-plugins" => json!(values.agents_plugins),
         "drgnx-agents-hook-rules" => match &values.agents_hook_rules {
             Value::Null => json!([]),
@@ -365,6 +367,7 @@ pub const PER_PROJECT: &[&str] = &[
     "drgnx-search-include",
     "drgnx-search-exclude",
     "drgnx-search-off",
+    "drgnx-search-base",
     // the user's own per-project plugin choice and hook rules: the Lisp declares them `:scope project :workspace never`,
     // and only the user's private workspace file holds a project's value
     "drgnx-agents-plugins",
@@ -660,6 +663,7 @@ mod tests {
                         "drgnx-search-include",
                         "drgnx-search-exclude",
                         "drgnx-search-off",
+                        "drgnx-search-base",
                         "drgnx-agents-plugins",
                         "drgnx-agents-hook-rules",
                         "drgnx-agents-hook-rules-off"

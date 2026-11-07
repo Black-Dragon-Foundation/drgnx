@@ -12,6 +12,8 @@ use urdr::{Handle, Mode, Store, StoreSpec};
 pub enum StoreError {
     Store(urdr::Error),
     Sqlite(rusqlite::Error),
+    /// A read of a checkout or its git, for the overlay.
+    Io(std::io::Error),
 }
 
 impl fmt::Display for StoreError {
@@ -19,6 +21,7 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::Store(e) => write!(f, "code store: {e}"),
             StoreError::Sqlite(e) => write!(f, "code store: {e}"),
+            StoreError::Io(e) => write!(f, "code store: {e}"),
         }
     }
 }
@@ -31,17 +34,24 @@ impl From<urdr::Error> for StoreError {
     }
 }
 
+impl From<std::io::Error> for StoreError {
+    fn from(e: std::io::Error) -> Self {
+        StoreError::Io(e)
+    }
+}
+
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
         StoreError::Store(urdr::Error::Sqlite(e))
     }
 }
 
-/// One row of `file`.
+/// One row of `file` (the tree is the caller's: the base, or a worktree's view). A `blob` of none is a tombstone: the
+/// worktree does not have the path (or does not admit it) while the base does; only a worktree's row can be one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileRow {
     pub path: String,
-    pub blob: String,
+    pub blob: Option<String>,
     pub class: String,
     pub lang: String,
     pub generated: bool,
@@ -101,68 +111,182 @@ pub fn vec_key(chunker: u32, embed_text: &str) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// A file's row, inside the caller's transaction.
-pub(crate) fn write_file_row(c: &Connection, f: &FileRow) -> urdr::Result<()> {
+/// TREE's blob of PATH: none when TREE has no row, `Some(None)` for a tombstone.
+pub(crate) fn row_blob(
+    c: &Connection,
+    tree: i64,
+    path: &str,
+) -> urdr::Result<Option<Option<String>>> {
+    let mut st = c.prepare("select blob from file where tree = ?1 and path = ?2")?;
+    let mut rows = st.query(params![tree, path])?;
+    Ok(match rows.next()? {
+        Some(r) => Some(r.get(0)?),
+        None => None,
+    })
+}
+
+/// The reference sweep of one pair: `(path, blob)`'s chunks (their FTS rows and symbols go by trigger) are deleted
+/// when no `file` row names the pair any more. Whether they went.
+pub(crate) fn sweep(c: &Connection, path: &str, blob: &str) -> urdr::Result<bool> {
+    let named: bool = c
+        .prepare("select exists(select 1 from file where path = ?1 and blob = ?2)")?
+        .query_row(params![path, blob], |r| r.get(0))?;
+    if named {
+        return Ok(false);
+    }
+    c.prepare("delete from chunk where path = ?1 and blob = ?2")?
+        .execute(params![path, blob])?;
+    Ok(true)
+}
+
+/// Every pair no `file` row names, swept at once (after a bulk delete of rows).
+pub(crate) fn sweep_all(c: &Connection) -> urdr::Result<()> {
     c.execute(
-        "insert or replace into file(path, blob, class, lang, generated, size, indexed_at)
-         values (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            f.path,
-            f.blob,
-            f.class,
-            f.lang,
-            f.generated,
-            f.size as i64,
-            f.indexed_at
-        ],
+        "delete from chunk where not exists
+           (select 1 from file f where f.path = chunk.path and f.blob = chunk.blob)",
+        [],
     )?;
     Ok(())
 }
 
-/// `path`'s chunks, FTS rows and symbols in place of what it had, inside the caller's transaction. The new chunk ids,
-/// in order.
+/// `(path, blob)`'s chunk ids, in order (empty: the pair has no content stored).
+pub(crate) fn content_ids(c: &Connection, path: &str, blob: &str) -> urdr::Result<Vec<i64>> {
+    let mut st = c.prepare("select id from chunk where path = ?1 and blob = ?2 order by id")?;
+    let ids = st
+        .query_map(params![path, blob], |r| r.get(0))?
+        .collect::<Result<Vec<i64>, _>>()?;
+    Ok(ids)
+}
+
+/// TREE's row of a file, inside the caller's transaction; the pair the row named before is swept.
+pub(crate) fn write_file_row(c: &Connection, tree: i64, f: &FileRow) -> urdr::Result<()> {
+    let old = row_blob(c, tree, &f.path)?.flatten();
+    c.prepare(
+        "insert or replace into file(tree, path, blob, class, lang, generated, size, indexed_at)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?
+    .execute(params![
+        tree,
+        f.path,
+        f.blob,
+        f.class,
+        f.lang,
+        f.generated,
+        f.size as i64,
+        f.indexed_at
+    ])?;
+    if let Some(o) = old.filter(|o| Some(o) != f.blob.as_ref()) {
+        sweep(c, &f.path, &o)?;
+    }
+    Ok(())
+}
+
+/// TREE's row of PATH removed, inside the caller's transaction, and its pair swept.
+pub(crate) fn remove_file_row(c: &Connection, tree: i64, path: &str) -> urdr::Result<()> {
+    let old = row_blob(c, tree, path)?.flatten();
+    c.prepare("delete from file where tree = ?1 and path = ?2")?
+        .execute(params![tree, path])?;
+    if let Some(o) = old {
+        sweep(c, path, &o)?;
+    }
+    Ok(())
+}
+
+/// `(path, blob)`'s chunks, FTS rows and symbols in place of what the pair had, inside the caller's transaction. The
+/// new chunk ids, in order.
 pub(crate) fn write_chunks(
     c: &Connection,
     path: &str,
+    blob: &str,
     chunks: &[ChunkIn],
     symbols: &[SymbolIn],
 ) -> urdr::Result<Vec<i64>> {
-    c.execute("delete from chunk where path = ?1", [path])?;
+    c.prepare("delete from chunk where path = ?1 and blob = ?2")?
+        .execute(params![path, blob])?;
     let mut ids = Vec::with_capacity(chunks.len());
     for ch in chunks {
-        c.execute(
-            "insert into chunk(path, start, end, line_start, line_end, symbol, key, embed, embed_text)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                path,
-                ch.start,
-                ch.end,
-                ch.line_start,
-                ch.line_end,
-                ch.symbol,
-                ch.key.as_slice(),
-                ch.embed,
-                ch.embed_text
-            ],
-        )?;
+        c.prepare(
+            "insert into chunk(path, blob, start, end, line_start, line_end, symbol, key, embed, embed_text)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )?
+        .execute(params![
+            path,
+            blob,
+            ch.start,
+            ch.end,
+            ch.line_start,
+            ch.line_end,
+            ch.symbol,
+            ch.key.as_slice(),
+            ch.embed,
+            ch.embed_text
+        ])?;
         let id = c.last_insert_rowid();
-        c.execute(
+        c.prepare(
             "insert into chunk_fts(rowid, path, symbols, doc, body) values (?1, ?2, ?3, ?4, ?5)",
-            params![id, path, encode_symbol(&ch.symbols), ch.doc, ch.body],
-        )?;
+        )?
+        .execute(params![
+            id,
+            path,
+            encode_symbol(&ch.symbols),
+            ch.doc,
+            ch.body
+        ])?;
         ids.push(id);
     }
     for s in symbols {
         let chunk = ids.get(s.chunk).copied().ok_or(urdr::Error::Aborted)?;
-        c.execute(
-            "insert into symbol(name, kind, path, start, end, chunk, definer, doc1)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                s.name, s.kind, path, s.start, s.end, chunk, s.definer, s.doc1
-            ],
-        )?;
+        c.prepare(
+            "insert into symbol(name, kind, path, blob, start, end, chunk, definer, doc1)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?
+        .execute(params![
+            s.name, s.kind, path, blob, s.start, s.end, chunk, s.definer, s.doc1
+        ])?;
     }
     Ok(ids)
+}
+
+impl FileRow {
+    /// A worktree's tombstone of PATH.
+    pub fn tombstone(path: &str) -> FileRow {
+        FileRow {
+            path: path.to_string(),
+            blob: None,
+            class: String::new(),
+            lang: String::new(),
+            generated: false,
+            size: 0,
+            indexed_at: 0,
+        }
+    }
+}
+
+/// TREE's row of a file and, unless its pair already has content (shared with another row; FORCE rewrites it, after
+/// a chunker change), the pair's chunks and symbols from BUILT. The pair's chunk ids; none, with nothing written, when
+/// the pair has no content and BUILT is none (the caller reads and chunks it, then writes again). A tombstone writes
+/// its row only.
+pub(crate) fn write_version(
+    c: &Connection,
+    tree: i64,
+    f: &FileRow,
+    built: Option<(&[ChunkIn], &[SymbolIn])>,
+    force: bool,
+) -> urdr::Result<Option<Vec<i64>>> {
+    let Some(blob) = f.blob.as_deref() else {
+        write_file_row(c, tree, f)?;
+        return Ok(Some(vec![]));
+    };
+    let have = content_ids(c, &f.path, blob)?;
+    if !have.is_empty() && !force {
+        write_file_row(c, tree, f)?;
+        return Ok(Some(have));
+    }
+    let Some((chunks, symbols)) = built else {
+        return Ok(None);
+    };
+    write_file_row(c, tree, f)?;
+    write_chunks(c, &f.path, blob, chunks, symbols).map(Some)
 }
 
 pub struct CodeStore {
@@ -193,36 +317,33 @@ impl CodeStore {
         &self.handle
     }
 
-    /// Insert or replace a file's row.
+    /// Insert or replace a file's base row (the content the row named before is swept when nothing else names it).
     pub async fn put_file(&self, f: FileRow) -> Result<(), StoreError> {
-        Ok(self.handle.write(move |c| write_file_row(c, &f)).await?)
+        Ok(self.handle.write(move |c| write_file_row(c, 0, &f)).await?)
     }
 
-    /// Replace everything stored for `path`'s chunks and symbols in one transaction. Returns the new chunk ids, in
-    /// order.
+    /// Replace everything stored for `(path, blob)`'s chunks and symbols in one transaction. Returns the new chunk
+    /// ids, in order.
     pub async fn replace_chunks(
         &self,
         path: &str,
+        blob: &str,
         chunks: Vec<ChunkIn>,
         symbols: Vec<SymbolIn>,
     ) -> Result<Vec<i64>, StoreError> {
-        let path = path.to_string();
+        let (path, blob) = (path.to_string(), blob.to_string());
         Ok(self
             .handle
-            .write(move |c| write_chunks(c, &path, &chunks, &symbols))
+            .write(move |c| write_chunks(c, &path, &blob, &chunks, &symbols))
             .await?)
     }
 
-    /// Remove a file with its chunks, FTS rows and symbols.
+    /// Remove a file's base row, with its chunks, FTS rows and symbols unless a worktree's row still names them.
     pub async fn delete_file(&self, path: &str) -> Result<(), StoreError> {
         let path = path.to_string();
         Ok(self
             .handle
-            .write(move |c| {
-                c.execute("delete from chunk where path = ?1", [&path])?;
-                c.execute("delete from file where path = ?1", [&path])?;
-                Ok(())
-            })
+            .write(move |c| remove_file_row(c, 0, &path))
             .await?)
     }
 

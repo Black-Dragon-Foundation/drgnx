@@ -12,7 +12,7 @@
 //! - **The embedders** of a project are the built-in model's worker (when `drgnx-search-builtin` is on and the model is
 //!   `Ready`) and the servers the gateway has. A change in that set opens the project again.
 
-use super::project::{Project, ProjectError, ProjectSpec, Tier2, project_id};
+use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::worker::WorkerEmbedder;
 use super::{DocEmbedder, Search, download, power, prefer, servers};
 use crate::clock;
@@ -58,8 +58,13 @@ struct Open {
     project: Arc<Project>,
     /// The models that fill it: a different set is another project.
     sig: String,
-    _watch: Option<hrafn::NotifyWatch>,
+    _watch: Arc<hrafn::ProjectWatch>,
+    /// Keeps the entry of `Hub::watches` alive as long as the project is open.
+    _watch_state: Arc<Mutex<hrafn::WatchState>>,
 }
+
+/// `max_user_watches`: the user's inotify budget.
+const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 
 type Projects = Arc<tokio::sync::Mutex<HashMap<String, Open>>>;
 
@@ -70,6 +75,8 @@ pub struct Hub {
     dirs: OnceLock<Dirs>,
     search: OnceLock<Search>,
     projects: Projects,
+    /// Each open project's watch state, for `status.watch` (a closed project's entry dies with its watcher).
+    watches: Mutex<Vec<(PathBuf, Weak<Mutex<hrafn::WatchState>>)>>,
     download: Arc<Mutex<Download>>,
 }
 
@@ -107,8 +114,26 @@ fn wire_lag(l: &Lag) -> w::Lag {
     }
 }
 
-/// An answer as the wire has it.
-pub fn wire_answer(a: &hrafn::Answer) -> w::QueryAnswer {
+/// Which view answered, as the wire has it.
+fn wire_view(of: &ViewOf, a: &hrafn::Answer) -> w::QueryView {
+    w::QueryView {
+        worktree: of.worktree.clone(),
+        differing_files: a.lag.differing_files.unwrap_or(0),
+        state: of
+            .state
+            .map_or("base", hrafn::TreeState::as_str)
+            .to_string(),
+    }
+}
+
+/// An answer as the wire has it, with the view VIEW that answered.
+pub fn wire_answer(a: &hrafn::Answer, view: w::QueryView) -> w::QueryAnswer {
+    // a worktree's view says when its rows are being built or checked
+    let note = match view.state.as_str() {
+        "seeding" => "worktree being indexed (the base answered); ",
+        "stale" | "unwatched" if view.worktree.is_some() => "worktree being checked; ",
+        _ => "",
+    };
     w::QueryAnswer {
         hits: a
             .hits
@@ -127,7 +152,8 @@ pub fn wire_answer(a: &hrafn::Answer) -> w::QueryAnswer {
         lag: wire_lag(&a.lag),
         model: a.model.clone(),
         notice: a.notice.clone(),
-        lag_line: a.lag_line(),
+        lag_line: format!("{note}{}", a.lag_line()),
+        view,
     }
 }
 
@@ -225,6 +251,30 @@ impl Hub {
         self.search.get()?.builtin()
     }
 
+    /// `status.watch`: the inotify budget and each open project's watches.
+    pub fn watch_status(&self) -> runstav::methods::hub::WatchStatus {
+        use runstav::methods::hub::{ProjectWatch, WatchStatus};
+        let mut projects = Vec::new();
+        if let Ok(mut rows) = self.watches.lock() {
+            rows.retain(|(_, w)| w.strong_count() > 0);
+            for (root, w) in rows.iter() {
+                if let Some(s) = w.upgrade().and_then(|s| s.lock().ok().map(|s| s.clone())) {
+                    projects.push(ProjectWatch {
+                        root: root.to_string_lossy().into_owned(),
+                        watched: s.watched as u64,
+                        error: s.error,
+                    });
+                }
+            }
+        }
+        WatchStatus {
+            max_user_watches: std::fs::read_to_string(MAX_USER_WATCHES)
+                .ok()
+                .and_then(|t| t.trim().parse().ok()),
+            projects,
+        }
+    }
+
     fn dirs(&self) -> Result<&Dirs, Error> {
         self.dirs
             .get()
@@ -246,7 +296,36 @@ impl Hub {
         front.settings.current().loaded.values.search_builtin
     }
 
-    /// The project's globs: the file, narrowed by what the editor sent for the project.
+    /// The names the editor's per-project settings of ROOT's project are under (its id and slug).
+    async fn project_names(root: &Path) -> Vec<String> {
+        // git runs (up to 3 s): not on a runtime worker
+        let at = root.to_path_buf();
+        let project = crate::clock::blocking(move || norn::project::resolve(&at))
+            .await
+            .ok()
+            .flatten();
+        project
+            .iter()
+            .flat_map(|p| [p.id.clone(), p.slug.clone()])
+            .collect()
+    }
+
+    /// The checkout `drgnx-search-base` names for ROOT's project, when it does.
+    async fn base_for(front: &Front, root: &Path) -> Option<PathBuf> {
+        let names = Self::project_names(root).await;
+        names
+            .iter()
+            .find_map(|p| {
+                front
+                    .settings
+                    .effective("drgnx-search-base", Some(p))
+                    .filter(|(_, seen)| *seen)
+                    .map(|(v, _)| v)
+            })
+            .and_then(|v| v.as_str().map(PathBuf::from))
+    }
+
+    /// The project's globs: the file (in ROOT, the base checkout), narrowed by what the editor sent for the project.
     async fn config_for(&self, front: &Front, root: &Path) -> Config {
         let mut cfg = match config_file(root) {
             Ok(c) => c,
@@ -261,16 +340,7 @@ impl Hub {
                 };
             }
         };
-        // git runs (up to 3 s): not on a runtime worker
-        let at = root.to_path_buf();
-        let project = crate::clock::blocking(move || norn::project::resolve(&at))
-            .await
-            .ok()
-            .flatten();
-        let names: Vec<String> = project
-            .iter()
-            .flat_map(|p| [p.id.clone(), p.slug.clone()])
-            .collect();
+        let names = Self::project_names(root).await;
         let get = |name: &str| -> Option<Value> {
             names.iter().find_map(|p| {
                 front
@@ -323,9 +393,12 @@ impl Hub {
         {
             embedders.push(b);
         }
+        let base = Self::base_for(front, &real).await;
+        // another base is another project too: it is opened again (and its base rebuilt)
         let sig = embedders
             .iter()
             .map(|e| e.model().to_string())
+            .chain(base.iter().map(|b| format!("base={}", b.display())))
             .collect::<Vec<_>>()
             .join(",");
         let mut open = self.projects.lock().await;
@@ -334,7 +407,9 @@ impl Hub {
         {
             return Ok(o.project.clone());
         }
-        let config = self.config_for(front, &real).await;
+        let config = self
+            .config_for(front, base.as_deref().unwrap_or(&real))
+            .await;
         let project = Arc::new(
             Project::open(ProjectSpec {
                 root: real.clone(),
@@ -344,15 +419,48 @@ impl Hub {
                 config,
                 embedders,
                 power_root: PathBuf::from(power::SYS),
+                base,
                 #[cfg(feature = "test-hooks")]
                 test_permits: None,
             })
             .await
             .map_err(project_error)?,
         );
-        let watch = hrafn::NotifyWatch::new(&real, &real.join(".git")).ok();
-        if let Some(wt) = &watch {
-            project.watch(wt);
+        let common = real.join(".git");
+        let watch = Arc::new(hrafn::ProjectWatch::new(move || {
+            hrafn::HostWatch::new(&common).map(|w| Arc::new(w) as Arc<dyn hrafn::Watch>)
+        }));
+        // the base checkout's events arm tier 1: it is the watcher's main tree
+        let base_root = project.base_root().to_path_buf();
+        let main = match crate::history::wire::git_dirs(&base_root) {
+            Some((gitdir, _)) if base_root != real => hrafn::TreeSpec {
+                key: hrafn::MAIN_TREE.into(),
+                root: base_root,
+                gitdir,
+            },
+            _ => hrafn::TreeSpec::main(&real),
+        };
+        let w2 = watch.clone();
+        let added = crate::clock::blocking(move || w2.add_tree(main))
+            .await
+            .map_err(internal)?;
+        if watch.is_up() {
+            project.watch(watch.clone());
+        }
+        let state = hrafn::Watch::shared_state(&*watch);
+        if let Err(e) = added
+            && let Ok(mut s) = state.lock()
+            && s.error.is_none()
+        {
+            tracing::warn!("search: no file watch for {}: {e}", real.display());
+            s.error = Some(e.to_string());
+        }
+        if let Some(e) = state.lock().ok().and_then(|s| s.error.clone()) {
+            tracing::warn!("search: {} runs unwatched: {e}", real.display());
+        }
+        if let Ok(mut rows) = self.watches.lock() {
+            rows.retain(|(_, w)| w.strong_count() > 0);
+            rows.push((real.clone(), Arc::downgrade(&state)));
         }
         project.start_tier2();
         let weak = Arc::downgrade(&project);
@@ -372,6 +480,7 @@ impl Hub {
                 project: project.clone(),
                 sig,
                 _watch: watch,
+                _watch_state: state,
             },
         );
         Ok(project)
@@ -396,7 +505,8 @@ impl Hub {
         }
     }
 
-    /// The answer to a question about ROOT's code (the MCP tool's and `search/query`'s).
+    /// The answer to a question about ROOT's code (the MCP tool's and `search/query`'s), from ROOT's view (a linked
+    /// worktree's rows over the base), or from the base with BASE.
     pub async fn query(
         &self,
         front: &Front,
@@ -404,9 +514,23 @@ impl Hub {
         text: &str,
         scope: Scope,
         k: u32,
-    ) -> Result<hrafn::Answer, Error> {
+        base: bool,
+    ) -> Result<w::QueryAnswer, Error> {
         let p = self.project(front, root).await?;
         p.fresh_for_query().await.map_err(project_error)?;
+        let of = if base {
+            ViewOf {
+                view: hrafn::View::Base,
+                worktree: None,
+                root: p.root().to_path_buf(),
+                state: None,
+                checking: false,
+            }
+        } else {
+            // plain git never runs where a sandboxed agent worked: such a tree gets the gix door
+            let touched = front.core.runs.git().is_touched(root).await.unwrap_or(true);
+            p.view_for(root, touched).await.map_err(project_error)?
+        };
         let builtin = if Self::builtin_on(front) {
             self.builtin()
         } else {
@@ -476,19 +600,21 @@ impl Hub {
             scope,
             k: k.clamp(1, 100),
         };
-        let pr = p.clone();
+        let (pr, at) = (p.clone(), of.root.clone());
         let mut a = hrafn::search(
             p.store(),
             &q,
+            of.view,
             qvec.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
-            &move |rel: &str| pr.read_now(rel),
+            &move |rel: &str| pr.read_now_in(&at, rel),
         )
         .await
         .map_err(internal)?;
         if a.model.is_none() {
             a.notice = notice.or(a.notice);
         }
-        Ok(a)
+        let view = wire_view(&of, &a);
+        Ok(wire_answer(&a, view))
     }
 
     async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
@@ -499,8 +625,9 @@ impl Hub {
             .read(|c| {
                 let mut st = c.prepare(
                     "select f.class, count(*), coalesce(sum(n.n), 0) from file f
-                     left join (select path, count(*) as n from chunk group by path) n on n.path = f.path
-                     group by f.class order by f.class",
+                     left join (select path, blob, count(*) as n from chunk group by path, blob) n
+                       on n.path = f.path and n.blob = f.blob
+                     where f.tree = 0 group by f.class order by f.class",
                 )?;
                 let classes = st
                     .query_map([], |r| {
@@ -532,6 +659,40 @@ impl Hub {
             .map_err(project_error)?;
         let coverage_errors = p.coverage_errors().await.map_err(project_error)?;
         let st = p.status().borrow().clone();
+        let trees: Vec<w::TreeInfo> = p
+            .tree_status()
+            .await
+            .map_err(project_error)?
+            .into_iter()
+            .map(|t| w::TreeInfo {
+                worktree: t.key,
+                root: t.root,
+                state: t.state.as_str().to_string(),
+                door: t.door.as_str().to_string(),
+                differing_files: t.rows,
+                watched: t.watched,
+            })
+            .collect();
+        let used = self
+            .watches
+            .lock()
+            .ok()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|(r, _)| r == p.root())
+                    .and_then(|(_, w)| w.upgrade())
+                    .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
+            })
+            .unwrap_or(0);
+        let limit: Option<u64> = std::fs::read_to_string(MAX_USER_WATCHES)
+            .ok()
+            .and_then(|t| t.trim().parse().ok());
+        let watch = w::SearchWatch {
+            used,
+            budget: limit.map(|l| l / 2),
+            limit,
+            unwatched: trees.iter().filter(|t| !t.watched).count() as u64,
+        };
         Ok(w::StatusAnswer {
             files: per_class.iter().map(|c| c.files).sum(),
             chunks: per_class.iter().map(|c| c.chunks).sum(),
@@ -542,6 +703,8 @@ impl Hub {
             worker: worker_status(builtin.as_deref()),
             tier2: tier2_name(&st.tier2).to_string(),
             embedded: st.embedded,
+            trees,
+            watch,
         })
     }
 
@@ -792,9 +955,17 @@ pub async fn serve(
         Params::SearchQuery(q) => {
             let scope = scope_of(q.scope);
             let k = q.k.unwrap_or(10);
-            hub.query(front, Path::new(q.root.as_str()), q.text.as_str(), scope, k)
-                .await
-                .map(|a| json!(wire_answer(&a)))
+            let base = q.base == Some(true);
+            hub.query(
+                front,
+                Path::new(q.root.as_str()),
+                q.text.as_str(),
+                scope,
+                k,
+                base,
+            )
+            .await
+            .map(|a| json!(a))
         }
         Params::SearchStatus(r) => hub
             .status(front, Path::new(r.root.as_str()))

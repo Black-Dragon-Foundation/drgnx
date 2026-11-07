@@ -1021,16 +1021,83 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v1:
+0600, migrations as data). Schema v3:
 
 | Table | Holds |
 |---|---|
-| `file` | path, git blob, class, language, generated flag, size, indexed time |
-| `chunk` | byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
+| `tree` | the worktrees with an overlay: `key` (history's worktree id), root, git dir, branch, head, `seeded_from`, git `door` (`cli`/`gix`), `state` (`seeding`, `live`, `stale`, `unwatched`), `last_used` |
+| `file` | one row per `(tree, path)`: git blob, class, language, generated flag, size, indexed time. `tree = 0` is the base checkout; a worktree has rows only where its blob differs from the base's, a NULL blob marking a path it does not have. The only per-tree table |
+| `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
-| `symbol`, `symbol_fts` | defined names with kind, span, chunk and definer; a trigram FTS over the names |
+| `symbol`, `symbol_fts` | defined names with kind, span, `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+
+**Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
+the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
+a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept (its
+chunks, FTS rows and symbols deleted) when no `file` row names it any more. There is no reference counter; the
+`file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
+its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
+`(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
+with `id` set from its old rowid, `file` gets `tree = 0`; the FTS tables and `vec` are untouched, so nothing is
+re-chunked or re-embedded. A chunker change or `index::reset` drops every worktree's rows and marks the trees
+`stale`.
+
+**Worktree overlays** (`hrafn::overlay`). A worktree T's rows are the paths where its admitted blob differs from the
+base's: a row naming T's blob, or a tombstone (NULL blob) where the base has the path and T does not admit it.
+`seed`, `rediff` and `recheck(paths)` take a `Cx` (store, tree, root, T's git door, the base's `Config` and deny-list
+check) and are idempotent. A seed or re-diff looks only at the paths that can differ: the symmetric difference of T's
+HEAD tree and the base rows (by blob, no read), T's stat-dirty and untracked paths, and T's current rows; a path
+stat-clean at a committed blob equal to the base's is decided without a read. Admission runs on T's own bytes with
+the base's rules, so a file can be admitted in one view and not the other. A link is never admitted in any view,
+through either door: a committed link is refused by its mode and a link on disk by the read, both before any hash
+(the CLI door's `hash-object` would hash the target's content, gix the target's name). A blob the gix door marks
+uncertain always gets its row. The door hashes the file as it is when it runs, so after the hash the file is read
+again: a hash is kept only while the file still holds the bytes read (and chunked), a file that changed is hashed
+again, and one still changing after three rounds is left to the hint its write sends. A seed marks the tree `seeding` and, in its last transaction, `live` with `head`,
+`branch` and `seeded_from`; one cut short is simply run again. Tier 1 moves every tree that is not seeding in the same
+transaction as each base change (a tree whose row equals the new base content loses it; a tree with no row gets one
+naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor
+chunks a `(path, blob)` a worktree already stores.
+
+**Views.** `hrafn::search(store, query, view, qvec, now)` and `hrafn::lag(store, model, view)` take a `View`: `Base`,
+or `Tree(id)`, the base with T's rows over it. A path resolves to one `file` row per view (T's over the base's: at
+most two primary-key probes), and a chunk or symbol is seen when that row names its blob; every route (the pinned,
+name, path, keyword and vector lists, and a hit's metadata) applies it before its `limit`, and the vector scan takes
+the first chunk of a key the view sees. A tombstone hides the base's file; a tree's new file is in that tree only.
+`now` reads the view's root (the caller builds it), so a hit is found again in T's file. The lag is the view's: the
+base's counts the base's content only, and a tree's adds its rows' chunks and takes away the base chunks it
+shadows, read through `chunk_path_blob (path, blob, embed, key)`; its line starts "worktree: N files differ from the
+base". `tests/view_query.rs` holds the plan rows: no route scans `chunk`, `symbol` or `file`.
+
+**Worktrees in the hub** (`search::project`). `Project::view_for(root, touched)` resolves a query's root: the main
+checkout (or a folder in it) is the base; a linked worktree is registered under history's `WorktreeId` (the same key
+its watcher events and `file-version` records carry, and `tree.key` in the store), joins the project's one watcher,
+and is seeded on first use, on the blocking pool under tier 1's lock. While it seeds the base answers ("worktree
+being indexed"). A `stale` or `unwatched` tree answers at once from its rows and starts a check (a re-diff: HEAD,
+the stat-based status, its overlay paths), at most one per `CHECK_TTL` (5 s). At most `RESIDENT_CAP` (16) trees hold
+rows; the least recently used goes first (`tree.last_used` is strictly increasing). On `ENOSPC`, or past the budget
+(half of `max_user_watches`), the least recently used other tree gives its watch up and is checked at query time;
+doctor names it. Watcher events of a tree re-check its paths, its git events re-diff it, and an overflow marks every
+tree stale and re-diffs it. The history feed (`Project::feed`, attached when history first watches a tree of the
+project) re-checks each version's path; a lagged receiver marks the trees stale and re-diffs them. The hourly sweep
+drops the overlay of a worktree `git worktree list` no longer shows, or whose folder is gone, and of one unused for
+14 days, but never a `locked` one. Opening the store marks every tree that is not seeding `stale`. `search/query`
+answers from the root's view (`base: true` asks for the base) with `view: {worktree?, differing_files, state}`, and
+`search/status` lists `trees` and the `watch` budget.
+
+**The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
+is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
+built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
+the project again.
+
+**Ranked files in a view** (`hrafn::rank`). In a tree the file set is the base's paths less the tree's tombstones plus
+its new paths: `base_paths` is the one shared list, `delta(view)` reads only the tree's rows, and `rank(base, delta,
+query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
+ranked query of render offload Task 21 (`search/files`) builds on these.
 
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
@@ -1059,6 +1126,31 @@ from a `#!` line when it has none. A file is marked `generated` (listed, not dro
 `*-autoloads.el`, `loaddefs.el`, `*.lock` or `*.min.*`.
 
 `coverage(listed, chunks_per_file)` reports a class with files but no chunks, and any non-empty file with no chunk.
+
+### The git door per tree
+
+Each checkout Hrafn indexes reaches git through a `TreeGit` door (`hrafn::door`): `head` (the commit and the branch
+HEAD names), `tree_diff(a, b)` (no rename detection: a rename is a deletion and an addition), `stat_status` (tracked
+paths that may differ from HEAD, and untracked files under the standard excludes), `ls_tree(commit)`, `blobs(paths)`
+and `filtered(paths)` (the paths whose `.gitattributes` or `core.autocrlf` name a conversion: `filter`, `text`, `eol`,
+`ident`, `working-tree-encoding`). Gitlinks (submodule entries) are never reported. `as_git` gives the same door as
+the file list's `Git`, so the full listing runs on it too.
+
+`DoorKind::for_tree(touched)` picks the door, and `door(kind)` builds it; the kind is stored with the tree (`cli`,
+`gix`).
+
+- **`GitCli`** (user trees) runs the `git` executable. Its blobs come from `hash-object` with the repository's
+  filters, as the base's do, so they are never uncertain.
+- **`GixDoor`** (trees a sandboxed agent has worked in) is in-process and read-only, on `gix` (pinned exactly, with
+  only the `sha1`, `index` and `dirwalk` features). It opens the repository isolated (its own config only: no
+  environment, no global or system config, never the git binary), reads refs, the index, trees and attributes, and
+  hashes the raw bytes (equal to `git hash-object --no-filters`; a link's blob is its target). It runs no filter
+  driver, hook or fsmonitor, never opens a submodule and writes nothing, not even the index. Its status is stat-only:
+  an index entry whose stat differs from `lstat`, or is racy, is reported as possibly dirty and costs one read later.
+  A blob whose path `filtered` names is marked `uncertain`, so the overlay writes its row rather than trusting a raw
+  hash against a filtered one. Files are read beneath the tree's root with no link followed (`eitri`). `history` and
+  `show` (the eval's) are not served. A user-wide `core.excludesFile` or `core.attributesFile` is not read; the
+  errors that leaves are false differences (an extra untracked file, an extra row), never missed ones.
 
 ### Chunks and symbols
 
@@ -1164,7 +1256,17 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
 - **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
   due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
-  `NotifyWatch` (feature `host`, the `notify` crate) feeds it. A project without watches diffs the blobs at query time
+  One watcher instance per project (`hrafn::HostWatch`, feature `host`) feeds it and serves the main checkout and its
+  worktrees: inotify driven directly on Linux and Android (mask without `IN_OPEN` and `IN_MODIFY`), `notify`'s FSEvents
+  on macOS. Events are tagged with their tree (`File{tree, rel}`, `Git{tree}`, `Lock{tree, held}`, `Overflow`; the longest
+  registered root wins, a ref change wakes only the trees on that branch or whose HEAD moved); only the main checkout's
+  own events arm its `Settle`, and a queue overflow marks every tree stale. It watches only what can be indexed: one non-recursive
+  watch per directory git does not ignore (one `ls-files --others --ignored --directory` at open; `target/` and
+  `.claude/worktrees/` get none), a directory created later is checked with `check-ignore` and added with the files
+  already in it, and of the gitdir only itself and `refs/`, never `objects/`. When the user's inotify budget is spent
+  (`ENOSPC`) the watches already added are dropped and the project runs unwatched, never silently: the state is in
+  `status.watch` (`{max_user_watches, projects: [{root, watched, error?}]}`), the hub logs it, and `doctor` prints a
+  `watch:` line per unwatched project. A project without watches diffs the blobs at query time
   (`fresh::diff`, at most 2,000 differences named).
 - **The device (`hrafn_embed::device`).** A cached choice whose key (model, `ENGINE_VERSION`, each adapter's name and
   driver) matches; on battery the CPU path with nothing measured or cached; otherwise the first adapter of `order`
@@ -1204,7 +1306,7 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   A query reads indexes and small tables, never the `chunk` table (its rows hold their text): the lag's counts run on
   `chunk_embed`, name prefixes on `symbol_name_nc` (`like` ignores case, so the index has the same collation), path
   tokens on `file`, and the vector scan reads `vec` alone, looking a chunk up only for a vector that can enter the best
-  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes.
+  200. Each is a plan test in `hrafn/tests/query.rs`. Store schema 2 adds the two indexes; schema 3 widens `chunk_embed` to `(embed, key, path, blob)` and the path list reads the base's `file` rows by primary key.
 - **The methods (`search/methods.rs`).** `Hub` (`Front::search`) opens a project on first use of its root and runs its
   driver (`Project::tick` every 500 ms on the hub clock, dropped with the project); `search/query` refreshes tier 1 when
   the files changed (the watcher's events, else a blob diff), picks the model (`search::prefer`), embeds the question

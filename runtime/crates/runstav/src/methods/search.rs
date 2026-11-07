@@ -32,6 +32,23 @@ pub struct QueryParams {
     /// How many hits, 1 to 100; default 10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k: Option<u32>,
+    /// True: answer from the base (the main checkout's rows) even when `root` is a linked worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<bool>,
+}
+
+/// Which view answered: the base, or a linked worktree's rows over it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueryView {
+    /// The worktree's key (history's worktree id); absent in the base view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
+    /// The paths where the worktree differs from the base (tombstones too); 0 in the base view.
+    pub differing_files: u32,
+    /// `base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows
+    /// answered and a check runs).
+    pub state: String,
 }
 
 /// One hit.
@@ -77,6 +94,7 @@ pub struct QueryAnswer {
     pub notice: Option<String>,
     /// The line that ends a text answer, e.g. "vectors: 12 files behind (…); keyword and symbol results are current".
     pub lag_line: String,
+    pub view: QueryView,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -131,6 +149,41 @@ pub struct StatusAnswer {
     pub tier2: String,
     /// Vectors tier 2 wrote since the hub opened the project.
     pub embedded: u64,
+    /// The project's worktree overlays.
+    pub trees: Vec<TreeInfo>,
+    pub watch: SearchWatch,
+}
+
+/// One worktree overlay.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreeInfo {
+    /// History's worktree id.
+    pub worktree: String,
+    pub root: String,
+    /// `seeding`, `live`, `stale` or `unwatched`.
+    pub state: String,
+    /// The git door: `cli`, or `gix` for a tree an agent's sandbox touched.
+    pub door: String,
+    pub differing_files: u32,
+    /// Whether the project's watcher serves it (else a query checks it, at most every 5 s).
+    pub watched: bool,
+}
+
+/// The project's file watches.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchWatch {
+    /// Directories under watch.
+    pub used: u64,
+    /// What Hrafn allows itself: half of `limit`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<u64>,
+    /// `fs.inotify.max_user_watches`, where there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    /// Trees that run unwatched.
+    pub unwatched: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
