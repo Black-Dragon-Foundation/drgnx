@@ -142,3 +142,33 @@ fn rebased_work_falls_back_to_provenance() {
         "the rebased line is traced to the source: {prov:?}"
     );
 }
+
+#[test]
+fn a_file_only_the_source_has_comes_over_whole() {
+    let mut f = fx();
+    let g = f.h.doc_for("g.txt").unwrap();
+    f.h.activate(g, f.b, || Ok("gee\n".into())).unwrap();
+    let m = HashMap::from([("g.txt".to_string(), "gee\n".to_string())]);
+    let op = f.h.record_merge(f.a, f.b, &m, f.merger, 7.0).unwrap();
+    assert_eq!(f.h.text(g, f.a).unwrap(), "gee\n");
+    assert_eq!(f.h.op(op).unwrap().summary, "merge, 0 files corrected");
+}
+
+#[test]
+fn the_summary_counts_the_corrected_files() {
+    let mut f = fx();
+    f.edit(f.a, f.pa, 4, 3, "TWO-A");
+    f.edit(f.b, f.pb, 4, 3, "TWO-B");
+    let g = f.h.doc_for("g.txt").unwrap();
+    f.h.activate(g, f.b, || Ok("gee\n".into())).unwrap();
+    let m = HashMap::from([
+        (
+            "f.txt".to_string(),
+            "one\nTWO-A and TWO-B\nthree\nfour\n".to_string(),
+        ),
+        ("g.txt".to_string(), "GEE\n".to_string()),
+    ]);
+    let op = f.h.record_merge(f.a, f.b, &m, f.merger, 7.0).unwrap();
+    assert_eq!(f.h.op(op).unwrap().summary, "merge, 2 files corrected");
+    assert_eq!(f.h.text(g, f.a).unwrap(), "GEE\n");
+}
