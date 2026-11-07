@@ -1665,7 +1665,10 @@ own.
   - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
     listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
     (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
-    HOME; the line with the key is never read).
+    HOME; the line with the key is never read). On a Mac also podman machine's control ports (B4): its SSH port and
+    its hypervisor's REST port (`machine_ports` over `podman machine inspect` and the machine's config file,
+    `AppleHypervisor.Vfkit.Endpoint` or `LibKrunHypervisor.KRun.Endpoint`), read on the same 30 s tick and before
+    each networked container job; a restart that moves a port swaps the held pair (`set_machine_ports`).
 - **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
   whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
   broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the

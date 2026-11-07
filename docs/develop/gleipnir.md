@@ -1005,6 +1005,11 @@ policy, `ProxyConfig::policy`:
   `set_web(bool)`, `set_grants(Vec<PrivateGrant>)` and `set_deny_hosts(Vec<String>)`; `WebState::new(host_addrs,
   never)` takes the host's addresses and the hub's endpoints as `Arc<RwLock<…>>`s the hub shares and keeps live. Each
   request reads the state as it is then.
+- `Policy::Job(Arc<WebState>)`, a container job's proxy (the hub's, on its relay's streams): every target is the
+  allow-list's (`allow`, `pinned`, CONNECT only) except `host.drgnx.internal:PORT`, which goes through the web
+  policy's `pre_resolve`/`judge` on the state: open only by a `browser.private` grant of that `host:port` and never
+  to a port in the never-set; `browser.web` stays off and the state has no web hosts or deny list. Absolute-form only
+  to that name (a listed target's absolute GET is a 400); `localhost` and `127.0.0.1` are the allow-list's, so refused.
 
 `close(tag)` drops a session's listener and every connection it accepted; `shutdown()` (or dropping the handle) ends
 them all. `start_for_tests` (feature `test-hooks`, or `escape-fixture`, which exposes nothing else and changes no

@@ -126,6 +126,8 @@ pub struct NeverSetWatch {
     emacs: Arc<Mutex<BTreeSet<u16>>>,
     /// Where the Emacs server files are.
     dirs: Arc<Mutex<Vec<PathBuf>>>,
+    /// On a Mac, podman machine's control ports (its SSH port and its hypervisor's REST port), as last read (B4).
+    machine: Arc<Mutex<BTreeSet<u16>>>,
 }
 
 impl NeverSetWatch {
@@ -159,10 +161,27 @@ impl NeverSetWatch {
         self.publish();
     }
 
+    /// Podman machine's control ports are PORTS from now on, replacing the last ones (a restart that moved a port
+    /// releases the old one).
+    pub fn set_machine_ports(&self, ports: impl IntoIterator<Item = u16>) {
+        *lock(&self.machine) = ports.into_iter().collect();
+        self.publish();
+    }
+
+    /// On a Mac, reads podman machine's control ports again ([`machine_ports`] over `podman machine inspect` and the
+    /// machine's config file); a failed read keeps the last ports.  Elsewhere nothing.
+    pub fn read_machine(&self) {
+        #[cfg(target_os = "macos")]
+        if let Ok(ports) = read_machine_ports() {
+            self.set_machine_ports(ports);
+        }
+    }
+
     fn publish(&self) {
         let loopback_ports: BTreeSet<u16> = lock(&self.held)
             .iter()
             .chain(lock(&self.emacs).iter())
+            .chain(lock(&self.machine).iter())
             .copied()
             .collect();
         let mut never = write(&self.never);
@@ -171,13 +190,65 @@ impl NeverSetWatch {
         }
     }
 
-    /// [`Self::read_emacs`] every [`EMACS_EVERY`], for good.
+    /// [`Self::read_emacs`] (and on a Mac [`Self::read_machine`]) every [`EMACS_EVERY`], for good.
     pub async fn run(self) {
         loop {
             self.read_emacs();
+            self.read_machine();
             crate::clock::sleep(EMACS_EVERY).await;
         }
     }
+}
+
+/// Podman machine's control ports on the Mac's loopback (B4; S0 Step 8): the SSH port (`SSHConfig.Port` in INSPECT,
+/// one machine's `podman machine inspect` entry, else `SSH.Port` in CONFIG) and the hypervisor's REST port, only in
+/// the machine's config file CONFIG (`AppleHypervisor.Vfkit.Endpoint` for applehv, `LibKrunHypervisor.KRun.Endpoint`
+/// for libkrun: `http://localhost:<port>`).
+pub fn machine_ports(
+    inspect: &serde_json::Value,
+    config: Option<&serde_json::Value>,
+) -> Result<Vec<u16>, String> {
+    let port = |v: &serde_json::Value| v.as_u64().and_then(|p| u16::try_from(p).ok());
+    let ssh = port(&inspect["SSHConfig"]["Port"])
+        .or_else(|| config.and_then(|c| port(&c["SSH"]["Port"])))
+        .ok_or("podman machine inspect names no SSH port")?;
+    let mut out = vec![ssh];
+    if let Some(c) = config {
+        for e in [
+            &c["AppleHypervisor"]["Vfkit"]["Endpoint"],
+            &c["LibKrunHypervisor"]["KRun"]["Endpoint"],
+        ] {
+            if let Some(p) = e
+                .as_str()
+                .and_then(|u| u.rsplit(':').next())
+                .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
+            {
+                out.push(p);
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+/// `podman machine inspect` of the default machine and its config file (`<ConfigDir.Path>/<Name>.json`), read now.
+#[cfg(target_os = "macos")]
+fn read_machine_ports() -> Result<Vec<u16>, String> {
+    let out = std::process::Command::new("podman")
+        .args(["machine", "inspect"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("podman machine inspect: {e}"))?;
+    let all: serde_json::Value =
+        serde_json::from_slice(&out.stdout).map_err(|e| format!("podman machine inspect: {e}"))?;
+    let m = all.get(0).unwrap_or(&all);
+    let config = m["ConfigDir"]["Path"]
+        .as_str()
+        .zip(m["Name"].as_str())
+        .and_then(|(d, n)| std::fs::read(Path::new(d).join(format!("{n}.json"))).ok())
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+    machine_ports(m, config.as_ref())
 }
 
 /// Where Emacs keeps the files of its TCP servers (`server-auth-dir`) under HOME, the hub's HOME: Emacs's default
@@ -220,6 +291,53 @@ fn server_file_port(path: &Path) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn machine_ports_reads_ssh_and_rest() {
+        let inspect = serde_json::json!({"Name": "podman-machine-default", "SSHConfig": {"Port": 53211},
+            "ConfigDir": {"Path": "/machine/applehv"}});
+        let applehv = serde_json::json!({"SSH": {"Port": 53211},
+            "AppleHypervisor": {"Vfkit": {"Endpoint": "http://localhost:61234"}}});
+        assert_eq!(
+            machine_ports(&inspect, Some(&applehv)).unwrap(),
+            [53211, 61234]
+        );
+        let libkrun = serde_json::json!({"SSH": {"Port": 53211},
+            "LibKrunHypervisor": {"KRun": {"Endpoint": "http://localhost:61999"}}});
+        assert_eq!(
+            machine_ports(&inspect, Some(&libkrun)).unwrap(),
+            [53211, 61999]
+        );
+        // no inspect port: the config's; no file: the SSH port alone; neither: refused
+        assert_eq!(
+            machine_ports(&serde_json::json!({}), Some(&applehv)).unwrap(),
+            [53211, 61234]
+        );
+        assert_eq!(machine_ports(&inspect, None).unwrap(), [53211]);
+        assert!(machine_ports(&serde_json::json!({}), None).is_err());
+    }
+
+    #[test]
+    fn a_restart_swaps_the_held_ports() {
+        let w = NeverSetWatch::default();
+        w.hold(4100);
+        w.set_machine_ports([53211, 61234]);
+        let ports = |w: &NeverSetWatch| w.shared().read().unwrap().loopback_ports.clone();
+        assert_eq!(ports(&w), BTreeSet::from([4100, 53211, 61234]));
+        // the machine restarted with a new SSH port: the new pair is held, the old SSH port released
+        w.set_machine_ports([53999, 61234]);
+        assert_eq!(ports(&w), BTreeSet::from([4100, 53999, 61234]));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "a Mac with podman machine"]
+    fn the_machines_ports_are_held() {
+        let w = NeverSetWatch::default();
+        w.read_machine();
+        let held = w.shared().read().unwrap().loopback_ports.clone();
+        assert!(held.len() >= 2, "{held:?}");
+    }
     use gleipnir::net::host::parse_target;
     use gleipnir::net::policy::{Judgement, PrivateGrant, PrivateTarget, RefuseWhy, WebCtx, judge};
 

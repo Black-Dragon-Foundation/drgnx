@@ -39,18 +39,40 @@ fn setup(message: impl Into<String>) -> Refusal {
 
 pub use drgnx_px::owner::{end_reason, exit_meaning};
 
-/// The job's proxy: the allow-list ALLOW and the pins PINS, and at most twice the relay's streams open at once (S4's
-/// backstop; the sidecar holds the 65th connection until one closes).
+/// The job's proxy: the allow-list ALLOW and the pins PINS under the job policy on WEB (`host.drgnx.internal:PORT`
+/// by its `browser.private` grants and the never-set, everything else by the list), and at most twice the relay's
+/// streams open at once (S4's backstop; the sidecar holds the 65th connection until one closes).
 pub fn proxy_config(
     allow: Vec<gleipnir::net::host::Target>,
     pins: &[(String, IpAddr)],
+    web: std::sync::Arc<gleipnir::net::proxy::WebState>,
 ) -> gleipnir::net::proxy::ProxyConfig {
     gleipnir::net::proxy::ProxyConfig {
         allow,
         pinned: pins.to_vec(),
         max_conns: 2 * drgnx_px::frame::MAX_STREAMS,
+        policy: gleipnir::net::proxy::Policy::Job(web),
         ..Default::default()
     }
+}
+
+/// The job's web state: the hub's host addresses and never-set (NEVERS; fresh empty ones without), no grants yet
+/// (`browser.web` stays off).  On a Mac the machine's control ports are read into the never-set first (B4).
+pub fn job_web(
+    nevers: Option<&crate::browser::nevers::Nevers>,
+) -> std::sync::Arc<gleipnir::net::proxy::WebState> {
+    use std::sync::{Arc, RwLock};
+    let (host_addrs, never) = match nevers {
+        Some(n) => {
+            n.never.read_machine();
+            (n.host_addrs.shared(), n.never.shared())
+        }
+        None => (
+            Arc::new(RwLock::new(Default::default())),
+            Arc::new(RwLock::new(Default::default())),
+        ),
+    };
+    Arc::new(gleipnir::net::proxy::WebState::new(host_addrs, never))
 }
 
 /// The podman machine connection drgnx names on a Mac (S8): from `podman system connection list --format json`, the
@@ -102,6 +124,8 @@ pub fn px_image_ref(px_dir: &Path) -> Option<String> {
 /// A networked job's relay while it runs: its proxy, its sidecar and the channel between them.
 pub struct JobNetwork {
     _proxy: gleipnir::net::proxy::ProxyHandle,
+    /// The job policy's state: the grants a host-port card opens go here (`set_grants`).
+    web: std::sync::Arc<gleipnir::net::proxy::WebState>,
     sidecar: Option<Sidecar>,
     names: NetNames,
     job: String,
@@ -115,6 +139,11 @@ impl JobNetwork {
     /// How the channel ended; waits while it runs (cancel-safe, so a `select!` arm; await it once).
     pub async fn ended(&mut self) -> End {
         (&mut self.channel).await.unwrap_or(End::Eof)
+    }
+
+    /// The job policy's state, for live grants.
+    pub fn web(&self) -> &std::sync::Arc<gleipnir::net::proxy::WebState> {
+        &self.web
     }
 
     /// The sidecar's container name (the job's meta records it as `relay`).
@@ -168,6 +197,7 @@ pub async fn prepare_net(
     pins: &[(String, IpAddr)],
     reference: &str,
     log: &Path,
+    web: std::sync::Arc<gleipnir::net::proxy::WebState>,
 ) -> Result<(JobNetwork, container::JobNet), Refusal> {
     use gleipnir::net::{host, proxy};
     let allow = crate::sandbox::allowed_hosts(net, hosts)
@@ -241,7 +271,7 @@ pub async fn prepare_net(
     // nobody is asked about a denied host here; the channel only has to stay drained
     tokio::spawn(async move { while prx.recv().await.is_some() {} });
     let handle = proxy::start(
-        proxy_config(allow, pins),
+        proxy_config(allow, pins, web.clone()),
         std::sync::Arc::new(proxy::SystemResolver),
         ptx,
     );
@@ -273,6 +303,7 @@ pub async fn prepare_net(
     Ok((
         JobNetwork {
             _proxy: handle,
+            web,
             sidecar: Some(sidecar),
             names,
             job: container::name_of(id)?,
@@ -308,7 +339,9 @@ mod tests {
 
     #[test]
     fn the_jobs_proxy_cap_is_twice_the_streams() {
-        assert_eq!(proxy_config(vec![], &[]).max_conns, 128);
+        let c = proxy_config(vec![], &[], job_web(None));
+        assert_eq!(c.max_conns, 128);
+        assert!(matches!(c.policy, gleipnir::net::proxy::Policy::Job(_)));
     }
 
     #[test]

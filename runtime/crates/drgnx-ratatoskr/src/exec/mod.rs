@@ -196,6 +196,9 @@ pub struct Hooks {
     pub runtime: Option<urdr::Handle>,
     /// The login shell's variables (`env/set`): the base environment of every job and podman the hub starts.
     pub shell_env: crate::shell_env::ShellEnv,
+    /// The hub's host addresses and never-set (the browser's watches), which a networked job's proxy judges
+    /// `host.drgnx.internal` by; none: fresh empty sets (tests).
+    pub nevers: Option<crate::browser::nevers::Nevers>,
     /// The providers' key variables (`key_env`) as the settings say now: never in a user's job's environment.
     pub key_envs: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Unit tests: a session's job runs as the user's do (they have no sandbox helper).
@@ -222,6 +225,7 @@ impl Default for Hooks {
             },
             runtime: None,
             shell_env: crate::shell_env::ShellEnv::default(),
+            nevers: None,
             key_envs: Arc::new(Vec::new),
             #[cfg(test)]
             plain_sessions: false,
@@ -1087,6 +1091,7 @@ impl Inner {
                 &caps.pins,
                 &reference,
                 &dir.join("log"),
+                net::job_web(self.hooks.nevers.as_ref()),
             )
             .await?;
             caps.proxy = Some(job_net);
@@ -1782,6 +1787,7 @@ fn runner(f: &Front) -> Result<&Runner, Error> {
             writer: Some(f.writer.clone()),
             editors: Some(f.editors.clone()),
             shell_env: f.shell_env.clone(),
+            nevers: Some(f.browser_nevers.clone()),
             // read at each start, so a provider added since is left out too (as `Front::provider_key_envs`)
             key_envs: Arc::new(move || {
                 crate::settings::providers::effective(

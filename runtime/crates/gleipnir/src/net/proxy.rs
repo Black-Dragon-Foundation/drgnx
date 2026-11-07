@@ -3,7 +3,8 @@
 //! One proxy per job, listening on every session socket of that job ([`ProxyHandle::listen`], each with a tag), or on
 //! the streams a container's relay channel hands over ([`Listener::Streams`]), with one policy they share. Under [`Policy::Allowlist`] (the provider proxy) it answers `CONNECT host:port` only, to exact
 //! listed targets. Under [`Policy::Web`] (a browser session's web proxy) it judges by `net::policy` and also forwards
-//! plain-HTTP absolute-form requests in origin-form. An allowed target's bytes are spliced both ways as they are.
+//! plain-HTTP absolute-form requests in origin-form. Under [`Policy::Job`] (a container job's) only
+//! `host.drgnx.internal:PORT` goes to the web rules; everything else is the allow-list's. An allowed target's bytes are spliced both ways as they are.
 //! Everything else is refused, and the caller hears of it through [`ProxyEvent`]. See docs/develop/gleipnir.md, "The
 //! proxy".
 
@@ -36,6 +37,21 @@ pub enum Policy {
     /// The web policy (`net::policy`) on the state the caller keeps changing; CONNECT and plain-HTTP absolute-form.
     /// `allow` and `pinned` are not read.
     Web(Arc<WebState>),
+    /// A container job's proxy: [`Policy::Allowlist`] for every target but `host.drgnx.internal:PORT`, which the web
+    /// rules judge on the state (its `browser.private` grants of that name, the never-set; `browser.web` stays off and
+    /// no web hosts or deny list are set). Absolute-form only for that name; every listed target stays CONNECT only.
+    Job(Arc<WebState>),
+}
+
+/// Whether TARGET goes to the web rules under POLICY (else to the allow-list).
+pub(crate) fn by_web_rules(policy: &Policy, target: &Target) -> bool {
+    match policy {
+        Policy::Allowlist => false,
+        Policy::Web(_) => true,
+        Policy::Job(_) => {
+            matches!(&target.host, Host::Name(n) if n == crate::net::policy::RESERVED_HOST)
+        }
+    }
 }
 
 /// What the web policy is judged on, read afresh at each request; the setters take effect on the next one.
@@ -764,6 +780,13 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     let connect = connect_request(head);
     let absolute = match (connect, &sh.policy) {
         (None, Policy::Web(_)) => absolute_request(head),
+        // a job's absolute-form only to the reserved name: a listed target stays CONNECT only (400 below)
+        (None, p @ Policy::Job(_)) => absolute_request(head).filter(|a| {
+            std::str::from_utf8(&a.target)
+                .ok()
+                .and_then(|t| parse_target(t).ok())
+                .is_some_and(|t| by_web_rules(p, &t))
+        }),
         _ => None,
     };
     let raw: &[u8] = match (&absolute, connect) {
@@ -825,8 +848,10 @@ async fn handle(sh: Arc<Shared>, mut client: Box<dyn Client>, tag: u64, _slot: S
     };
 
     let addrs = match &sh.policy {
-        Policy::Allowlist => allowlisted(&sh, tag, &target).await,
-        Policy::Web(w) => web(&sh, w, tag, &target).await,
+        Policy::Web(w) | Policy::Job(w) if by_web_rules(&sh.policy, &target) => {
+            web(&sh, w, tag, &target).await
+        }
+        _ => allowlisted(&sh, tag, &target).await,
     };
     let addrs = match addrs {
         Ok(a) => a,
@@ -2518,5 +2543,191 @@ mod tests {
             ]
         );
         assert_eq!(r.attempts(), vec![public]);
+    }
+
+    // ---- Policy::Job: a container job's proxy (container-net Task 11) ----
+
+    fn job_state(never: &[u16]) -> (Arc<WebState>, Arc<RwLock<NeverSet>>) {
+        let set = Arc::new(RwLock::new(NeverSet {
+            loopback_ports: never.iter().copied().collect(),
+        }));
+        let w = Arc::new(WebState::new(
+            Arc::new(RwLock::new(HostAddrs::default())),
+            set.clone(),
+        ));
+        (w, set)
+    }
+
+    fn job_cfg(w: &Arc<WebState>, allow: &[&str]) -> ProxyConfig {
+        ProxyConfig {
+            policy: Policy::Job(w.clone()),
+            allow: allow.iter().map(|a| t(a)).collect(),
+            ..ProxyConfig::default()
+        }
+    }
+
+    fn host_grant(port: u16) -> PrivateGrant {
+        PrivateGrant {
+            target: PrivateTarget::HostPort(t(&format!(
+                "{}:{port}",
+                crate::net::policy::RESERVED_HOST
+            ))),
+            expires: None,
+        }
+    }
+
+    #[test]
+    fn job_policy_sends_only_the_reserved_name_to_the_web_rules() {
+        let (w, _) = job_state(&[]);
+        let job = Policy::Job(w.clone());
+        assert!(by_web_rules(&job, &t("host.drgnx.internal:8080")));
+        for other in [
+            "localhost:8080",
+            "127.0.0.1:8080",
+            "crates.io:443",
+            "192.168.1.20:8080",
+        ] {
+            assert!(!by_web_rules(&job, &t(other)), "{other}");
+        }
+        assert!(by_web_rules(&Policy::Web(w), &t("crates.io:443")));
+        assert!(!by_web_rules(
+            &Policy::Allowlist,
+            &t("host.drgnx.internal:8080")
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_granted_host_port_connects_to_loopback() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(5);
+        let (mut s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 200);
+        assert!(echoes(&mut s, b"to the host").await);
+        assert!(
+            r.attempts()
+                .iter()
+                .all(|a| a.ip().is_loopback() && a.port() == up.port())
+        );
+        // absolute-form to the reserved name is forwarded in origin-form
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".to_vec();
+        let (rec, got) = recorder(answer).await;
+        w.set_grants(vec![host_grant(rec.port())]);
+        let back = send_all(
+            &p,
+            format!(
+                "GET http://host.drgnx.internal:{0}/x HTTP/1.1\r\nHost: host.drgnx.internal:{0}\r\n\r\n",
+                rec.port()
+            )
+            .as_bytes(),
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        let sent = timeout(WAIT, got).await.unwrap().unwrap();
+        assert!(
+            sent.starts_with(b"GET /x HTTP/1.1"),
+            "{}",
+            String::from_utf8_lossy(&sent)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ungranted_port_is_a_private_event() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(6);
+        let (_s, code) = connect_to(&p, "host.drgnx.internal:8080").await;
+        assert_eq!(code, 403);
+        let said = r.said();
+        assert!(
+            matches!(said.as_slice(), [ProxyEvent::Private { tag: 6, asked, .. }] if *asked == t("host.drgnx.internal:8080")),
+            "{said:?}"
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn localhost_and_127_are_refused_under_a_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[("localhost", vec![vec![up]])], &[]);
+        let p = r.listen(7);
+        for target in [
+            format!("localhost:{}", up.port()),
+            format!("127.0.0.1:{}", up.port()),
+            format!("[::1]:{}", up.port()),
+        ] {
+            let (_s, code) = connect_to(&p, &target).await;
+            assert_eq!(code, 403, "{target}");
+        }
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_never_port_is_refused_under_any_grant() {
+        let up = echo().await;
+        let (w, _) = job_state(&[up.port()]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(8);
+        let (_s, code) = connect_to(&p, &format!("host.drgnx.internal:{}", up.port())).await;
+        assert_eq!(code, 403);
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_port_added_to_the_never_set_after_the_grant_is_refused_at_the_next_dial() {
+        let up = echo().await;
+        let (w, never) = job_state(&[]);
+        w.set_grants(vec![host_grant(up.port())]);
+        let r = rig(job_cfg(&w, &[]), &[], &[]);
+        let p = r.listen(9);
+        let target = format!("host.drgnx.internal:{}", up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 200);
+        never.write().unwrap().loopback_ports.insert(up.port());
+        let (_s, code) = connect_to(&p, &target).await;
+        assert_eq!(code, 403);
+    }
+
+    #[tokio::test]
+    async fn allowed_targets_stay_connect_only() {
+        let (w, _) = job_state(&[]);
+        let r = rig(job_cfg(&w, &["listed.test:80"]), &[], &[]);
+        let p = r.listen(10);
+        let back = send_all(
+            &p,
+            b"GET http://listed.test:80/ HTTP/1.1\r\nHost: listed.test\r\n\r\n",
+        )
+        .await;
+        assert!(
+            back.starts_with(b"HTTP/1.1 400"),
+            "{}",
+            String::from_utf8_lossy(&back)
+        );
+        assert!(r.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn web_stays_off_under_the_job_policy() {
+        let (w, _) = job_state(&[]);
+        let mut r = rig(job_cfg(&w, &["crates.io:443"]), &[], &[]);
+        let p = r.listen(11);
+        let (_s, code) = connect_to(&p, "pub.test:443").await;
+        assert_eq!(code, 403);
+        assert_eq!(
+            r.said(),
+            vec![ProxyEvent::Denied {
+                tag: 11,
+                target: t("pub.test:443")
+            }]
+        );
     }
 }
