@@ -85,10 +85,21 @@ their roots and their entries as last synced.  Emptied with `drgnx-settings-work
   "The folder of your private workspace files: <config>/workspaces/."
   (expand-file-name "workspaces/" (drgnx-user-dir)))
 
+(defvar drgnx-settings-workspace--private-list nil
+  "(DIR STAMP . FILES): the private workspace folder DIR as last listed, kept while its stamp is STAMP.  A stamp
+less than a second old is not kept: a file added within the same mtime tick would leave it the same.")
+
 (defun drgnx-settings-workspace--private-files ()
-  "Your private workspace files, sorted."
-  (let ((dir (drgnx-settings-workspace-private-dir)))
-    (and (file-directory-p dir) (directory-files dir t "\\`[^.].*\\.el\\'"))))
+  "Your private workspace files, sorted; listed again only when their folder changed."
+  (let* ((dir (drgnx-settings-workspace-private-dir))
+         (stamp (and (file-directory-p dir) (drgnx-file-stamp dir)))
+         (hit drgnx-settings-workspace--private-list))
+    (cond ((null stamp) (setq drgnx-settings-workspace--private-list nil))
+          ((and hit (equal (car hit) dir) (equal (cadr hit) stamp)) (cddr hit))
+          (t (let ((files (directory-files dir t "\\`[^.].*\\.el\\'")))
+               (setq drgnx-settings-workspace--private-list
+                     (and (time-less-p (nth 1 stamp) (time-subtract nil 1)) (cons dir (cons stamp files))))
+               files)))))
 
 (defun drgnx-settings-workspace-file-p (file)
   "Non-nil when FILE is a workspace settings file: a private one (W2) or a shared .drgnx/settings.el (W1)."
@@ -139,11 +150,22 @@ The first read of a file records it for live changes and says its problems; a la
                (drgnx-settings-workspace--say file)
                doc)))))
 
+(defvar drgnx-settings-workspace--roots-memo (make-hash-table :test 'eq :weakness 'key)
+  "DOC -> its roots resolved (`drgnx-settings-workspace--roots'): once per read of the file (weak: a doc replaced
+by a new read is forgotten).")
+
 (defun drgnx-settings-workspace--roots (doc)
-  "The roots DOC's `:roots' names, as `drgnx-settings-workspace--norm' gives them."
-  (let ((roots (and doc (plist-get (drgnx-settings-doc-meta doc) :roots))))
-    (and (proper-list-p roots)
-         (mapcar #'drgnx-settings-workspace--norm (cl-remove-if-not #'stringp roots)))))
+  "The roots DOC's `:roots' names, as `drgnx-settings-workspace--norm' gives them; resolved once per read of DOC's
+file."
+  (when doc
+    (let ((hit (gethash doc drgnx-settings-workspace--roots-memo 'none)))
+      (if (not (eq hit 'none))
+          hit
+        (let* ((roots (plist-get (drgnx-settings-doc-meta doc) :roots))
+               (result (and (proper-list-p roots)
+                            (mapcar #'drgnx-settings-workspace--norm (cl-remove-if-not #'stringp roots)))))
+          (puthash doc result drgnx-settings-workspace--roots-memo)
+          result)))))
 
 ;;;; Refusals and problems
 
