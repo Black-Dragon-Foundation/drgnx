@@ -363,6 +363,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
         ),
         event!(
+            "search-grep-done",
+            crate::methods::search::GrepDone,
+            "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing"
+        ),
+        event!(
             "agent-follow",
             crate::methods::editor::AgentFollow,
             "where the session a follow view follows is now, to that view's connection only (agents/follow): at most one move per 200 ms, a read's file switch after a 500 ms dwell, a search never switches; the line is the agent's own plan entry or step title"
@@ -453,6 +458,7 @@ mod tests {
                     // hub-built rows (the render offload)
                     "view-patch",
                     "view-glyphs",
+                    "search-grep-done",
                 ]
                 .contains(&n.as_str())
             })
@@ -467,7 +473,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 40);
+        assert_eq!(events().len(), 41);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

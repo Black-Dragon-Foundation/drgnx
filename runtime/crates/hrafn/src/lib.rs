@@ -9,6 +9,7 @@ pub mod coverage;
 pub mod eval;
 pub mod files;
 pub mod fresh;
+pub mod grep;
 pub mod index;
 pub mod query;
 pub mod schema;

@@ -13,6 +13,8 @@
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
 pub mod fonts;
+pub mod git;
+pub mod grep;
 #[cfg(test)]
 mod tests;
 
@@ -26,7 +28,7 @@ use runstav::methods::view::{
 use runstav::wire::Error;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use crate::dispatch::Caller;
 use crate::front::Front;
@@ -218,6 +220,12 @@ pub struct Views {
     fonts: Mutex<Fonts>,
     /// `__test_view_rows`: the rows and images of a fixture view per (connection, view), the same in every class.
     fixtures: Mutex<BTreeMap<(u64, String), Fixture>>,
+    /// The text searches streaming rows (`search/grep`).
+    greps: grep::Greps,
+    /// The git letters streaming rows (`git/letters`).
+    letters: git::Letters,
+    /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
+    front: OnceLock<Weak<Front>>,
 }
 
 impl Default for Views {
@@ -226,6 +234,9 @@ impl Default for Views {
             store: Mutex::new(Store::new(instance_id())),
             fonts: Mutex::new(Fonts::default()),
             fixtures: Mutex::new(BTreeMap::new()),
+            greps: grep::Greps::default(),
+            letters: git::Letters::default(),
+            front: OnceLock::new(),
         }
     }
 }
@@ -238,6 +249,9 @@ impl Views {
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
     /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
+        if self.grep_build(f, key) || self.git_build(f, key) {
+            return;
+        }
         let Some((mut rows, images, labels)) =
             lock(&self.fixtures).get(&(key.0, key.1.clone())).cloned()
         else {
@@ -315,7 +329,14 @@ impl Views {
         }
     }
 
+    /// Keep the front once; the searches' threads send through it.
+    pub fn bind(&self, front: &Arc<Front>) {
+        let _ = self.front.set(Arc::downgrade(front));
+    }
+
     pub fn gone(&self, conn: u64) {
+        self.greps.gone(conn);
+        self.letters.gone(conn);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
@@ -388,6 +409,8 @@ pub fn measured(f: &Front, c: &Caller, p: ViewMeasured) -> Result<bool, Error> {
 pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     let views = &f.core.views;
     lock(&views.fixtures).remove(&(c.conn_id, p.view.clone()));
+    views.greps.stop(c.conn_id, &p.view);
+    views.letters.stop(c.conn_id, &p.view);
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
     Ok(closed)

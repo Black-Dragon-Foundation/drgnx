@@ -1377,6 +1377,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1469,6 +1470,8 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
+| `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/query` | user | `{k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `{hits: [Hit], lag: Lag, lag_line: string, model?: string, notice?: string}` | no |
@@ -2161,6 +2164,29 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
+
+### Text search as rows (`search/grep`)
+
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/grep.rs`;
+the search itself is `hrafn::grep`).
+
+- `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
+  view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
+  runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match. A class whose
+  env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
+  matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
+  an old query never reaches the view (and the editor drops one by `base` as well).
+- **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
+  (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
+  `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
+  `before`, `after`; positions in characters, `line` from 1) on a match row. The tick state is the editor's.
+- `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
+  change (`replace` ops) and searches nothing again.
+- `ignore` is `index` (default: no dot paths, no secret-looking names, the filters of the index) or `real` (only what
+  `.gitignore` files and the globs name).
 
 ## Sessions and their sockets
 

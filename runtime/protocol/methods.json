@@ -3028,6 +3028,49 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun. A search a newer one stopped says nothing.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "matches": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "query",
+          "files",
+          "matches"
+        ],
+        "title": "GrepDone",
+        "type": "object"
+      },
+      "doc": "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing",
+      "name": "search-grep-done"
+    },
+    {
+      "data": {
         "$defs": {
           "SettingScope": {
             "description": "Which file an agent's setting is in: `settings.el` (global), the private workspace file or the shared\n`.drgnx/settings.el` of the session's project.",
@@ -14176,6 +14219,57 @@
           "token"
         ],
         "title": "UnregisterParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "read a repository's git status on a thread and give a hub-fed view its rows (a letter per changed path, a mark per shown folder with a change, the branch): the view-patch follows, only what changed after the first",
+      "name": "git/letters",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`git/letters`: read ROOT's git status and give VIEW its rows (the event `view-patch`): `f:<path>` per changed\npath (a letter in its git face), `d:<folder>` per folder in SHOWN that holds a change (and the repository's own,\n`.`), and `branch`. A later call patches only what changed.",
+        "properties": {
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "shown": {
+            "description": "The folders the view shows (relative to the root); no other folder gets a row.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root"
+        ],
+        "title": "LettersParams",
         "type": "object"
       },
       "result": {
@@ -25778,6 +25872,179 @@
         ],
         "title": "EmbeddersAnswer",
         "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+      "name": "search/grep",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search looks in (the `search.ignore-rules` setting).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset\nat once, then each file's header and matches as it is complete. A newer search of the same view stops this one.",
+        "properties": {
+          "case": {
+            "description": "Match case; default off.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "exclude": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AbsPath"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Search this one file only (globs then do not apply)."
+          },
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `index`."
+          },
+          "include": {
+            "description": "Globs; each string may hold several, comma-separated.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "regexp": {
+            "description": "TEXT is a regular expression.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "replace": {
+            "description": "The replacement the rows preview (old struck out, new beside it); a regexp search's `\\1` are the groups.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "text": {
+            "type": "string"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          },
+          "word": {
+            "description": "Whole words only.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "text"
+        ],
+        "title": "GrepParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).",
+        "properties": {
+          "query": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "GrepStarted",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+      "name": "search/grep-replace",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/grep-replace`: VIEW's rows preview REPLACE now (no new search).",
+        "properties": {
+          "replace": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "replace"
+        ],
+        "title": "GrepReplaceParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "boolean",
+        "type": "boolean"
       },
       "writes": false
     },

@@ -18,6 +18,7 @@ notify = { workspace = true, optional = true }
 urdr = { path = "../urdr", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 rusqlite.workspace = true
 sha2.workspace = true
 tree-sitter.workspace = true
