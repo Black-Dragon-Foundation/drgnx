@@ -215,7 +215,7 @@ included) and the steps live in one place. Inputs:
 | Input | Values | Meaning |
 |---|---|---|
 | `drgnx_ref` | commit, branch or tag; empty | the drgnx commit to test; empty: the caller's own commit |
-| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)) |
+| `nidhogg` | `release`, `artifact`, `line` | `release`: the images as built (the pinned release, `test/container/nidhogg.sh`); `artifact`: the run's `tarball-fedora-45` and `tarball-macos`; `line`: those of Nidhogg's green build of its integration branch's head ([below](#nidhoggs-integration-line)); on `artifact` and `line` the test jobs also run with `DRGNX_NIDHOGG_STRICT=1`, so a test whose Nidhogg primitive is missing fails instead of skipping |
 | `tiers` | any of `unit no-lisp-writes hub-chaos ui scenario perf tty macos` | the jobs that run; the others are skipped |
 | `selector` | an ERT selector; empty | `DRGNX_TEST_SELECTOR` of the test jobs (not `hub-chaos`, `perf` or `timing`): a narrowed run |
 
