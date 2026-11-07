@@ -179,6 +179,28 @@ light and high contrast, one shot each at the session's scale) both use it. What
 files, edits and prompts (plans, specs, shared files, machines) is what the map shows; the description's cards and
 machines are not injected.
 
+### The rows (`vegvisir::render`)
+
+The map's rows are built in the hub (`docs/develop/hub.md`, "Rows") from a layout, the items and edges it shows, the
+view's env and a `drgnx_rows::fit::Measure`; no I/O, no clock (a job chip's elapsed time takes `Scene::now`).
+`render::Index::of` sorts once per layout (each row's items by x, the rows by y with each band above its row, each
+layer's first row, each layer's count); `render::rows` only reads it. One row per text line:
+
+- `row:LAYER:BLOCK-LINE:SUB:LINE`: a layout row's line N (five for a rich agent row, two for a compact one, else one),
+  its height the row's px over its lines, minus one. The layer's name starts its first row's first line (a collapsed
+  layer's: "Name · count"), fitted to the margin less 8 px. Each card's line is a stop at the card's left, its text
+  fitted to the card's width less 10 px, and a stop at its right; the card's box face (`drgnx-card-*`) is a run under
+  the text's own faces, and `drgnx-work-id` names the item over the text and the right stop.
+- `band:LAYER:BLOCK-LINE:SUB`: the band above that row, as high as the band.
+- On a terminal, a layout that does not fit, or the user's `O`: `notice` (the layout did not fit), then
+  `outline:ID:LINE` per agent in plan order (its line, why, touches and conclusion, each within the columns), or
+  `outline-none`.
+
+The card text is the editor's (`drgnx-work-map-row-text`), so the rows of the fixture frame equal
+`test/fixtures/work-space/rows-golden.eld` under a fixed 8 px advance (`tests/render.rs`). Selection, dimming and
+search stay the editor's: the inserter puts them over the rows by `drgnx-work-id`. The runner icons are the default
+glyphs of `drgnx-face-glyphs`.
+
 ## The hub's facts
 
 The hub's code for the Work space lives in `runtime/crates/drgnx-ratatoskr/src/work/`. The pure parts take no clock and

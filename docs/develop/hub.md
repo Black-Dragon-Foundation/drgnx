@@ -2081,7 +2081,8 @@ it builds for Android too).
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
   [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
-  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out.
+  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out. Runs may
+  overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no

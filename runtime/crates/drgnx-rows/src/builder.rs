@@ -40,6 +40,13 @@ impl RowBuilder {
         self
     }
 
+    /// FACE over `[start, end)` too, under the runs before it: runs may overlap, and an earlier run's face is above a
+    /// later one's (the editor adds them in order, each appended below; a card's box under its text's faces).
+    pub fn face(&mut self, start: u32, end: u32, face: &str) -> &mut Self {
+        self.row.runs.push((start, end, face.to_owned()));
+        self
+    }
+
     /// The text property NAME = VALUE over `[start, end)`.
     pub fn prop(&mut self, start: u32, end: u32, name: &str, value: Value) -> &mut Self {
         self.row.props.push((start, end, name.to_owned(), value));

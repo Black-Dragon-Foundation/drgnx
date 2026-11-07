@@ -14,6 +14,7 @@ pub mod fixture;
 pub mod layout;
 pub mod model;
 mod overlap;
+pub mod render;
 mod view;
 
 use std::collections::BTreeMap;
