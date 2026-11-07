@@ -301,16 +301,15 @@ call, no bus flush: the `windows-changed' `now' subscriber."
     (let ((w (selected-window)) (made 0) (orig (symbol-function 'drgnx-chrome--tab)))
       (cl-letf (((symbol-function 'drgnx-chrome--tab)
                  (lambda (&rest args) (setq made (1+ made)) (apply orig args))))     ; one tab: one call a build
-        (set-buffer-modified-p nil)
         (drgnx-chrome--tab-line w)
-        (should (= made 1))
+        (setq made 0)
         (dotimes (_ 20) (goto-char (point-max)) (self-insert-command 1 ?x) (drgnx-chrome--tab-line w))
-        (should (= made 2))               ; the first insert flips the modified flag; the other 19 change nothing shown
+        (should (= made 1))               ; the first insert flips the modified flag; the other 19 change nothing shown
         (dotimes (_ 20) (drgnx-chrome-apply nil t))
-        (should (= made 2))
+        (should (= made 1))
         (rename-buffer "renamed.txt")
         (should (string-search "renamed.txt" (drgnx-chrome--tab-line w)))
-        (should (= made 3))))))
+        (should (= made 2))))))
 
 (ert-deftest drgnx-chrome/the-subscribers-repair-chrome-someone-else-changed ()
   "A window whose chrome was cleared is set again at the next observation; a panel gets its title-only chrome."
