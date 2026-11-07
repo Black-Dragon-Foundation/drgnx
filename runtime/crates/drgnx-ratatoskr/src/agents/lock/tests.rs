@@ -462,6 +462,28 @@ fn kimi_plan_mode_is_refused_under_its_lock() {
     assert!(refused_mode_switch(k, true, &chunk).is_none());
 }
 
+// [D] pure: a Kimi project chat has its native Write and Edit tools denied by user rules of the lock's config, beside
+// the ask rules; a chat that is not a project chat gets no deny rule.
+#[test]
+fn kimi_project_chat_denies_its_write_tools() {
+    let d = tempfile::tempdir().unwrap();
+    let k = profile(&["kimi", "acp"], None, &[], None);
+    let paired = locked(&k, &["read"], d.path()).with_project_chat();
+    let home = paired.login_dir.clone().expect("a hub-owned home");
+    let config = file_of(&paired, &home.join("config.toml")).unwrap();
+    for tool in ["Write", "Edit"] {
+        let rule = format!("tool = \"{tool}\"\ndecision = \"deny\"");
+        assert!(config.contains(&rule), "{rule} in {config}");
+    }
+    assert!(
+        config.contains("tool = \"Read\"\ndecision = \"ask\""),
+        "{config}"
+    );
+    let plain = locked(&k, &["read"], d.path());
+    let config = file_of(&plain, &home.join("config.toml")).unwrap();
+    assert!(!config.contains("deny"), "{config}");
+}
+
 // [D] pure: DeepSeek Harness gets an overlay that keeps `approval.policy: ask` beside the full-access sandbox mode
 // (the base bundle ties `never` to that mode) and mounts the drgnx ask plugin for the subscribed kinds, written as
 // `--patch` reads it: a top-level YAML array of loader patches (`packages/boot/app-boot/src/index.ts:571-589`), the
