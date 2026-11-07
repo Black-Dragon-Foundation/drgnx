@@ -1,3 +1,4 @@
+Target: test drgnx-px both_directions_saturated_through_small_pipes_finish
 The relay shell's reader waits for the channel's output before it reads on: everything waiting for the writer (the
 CREDITs its frames led to among it) must be written first, as if the reader wrote its CREDIT with an awaited write
 (the relay review's first shape). Reading then depends on the other end reading, and through conmon's one thread,

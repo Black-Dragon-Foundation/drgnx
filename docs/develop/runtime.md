@@ -601,7 +601,8 @@ Every other line is a step `{"do": VERB, ...}`. Steps are numbered from 1 in fai
 
 **Tags** (`requires`): `v1` (hello v1: every row), `sudo` (euid 0, or `sudo -n true` succeeds), `test-hooks` (the
 binary's `version --json` says `"test_hooks": true`), `linux`, `macos`, `perf`, `agent-locks`, `podman` (`podman` is on
-the PATH; an excused skip otherwise), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
+the PATH; an excused skip otherwise), `rootless` (`podman info` says the podman is rootless, as the networked container
+jobs need; an excused skip otherwise, with the reason), `real-sandbox` (the binary has **no** test hooks and its `sandbox check --json`
 says `ok`; an excused skip otherwise, with the reason: [the real-start rows](#the-real-start-rows)), `chromium` (the hub
 gives sessions a browser here: its `sandbox check` reports Landlock ABI 9 or later, and `browser list --json` resolves a
 Chromium), `playwright-mcp` (`node` on the PATH and Playwright MCP in `/opt/pw-mcp`, as the browser test image has them),

@@ -1,0 +1,31 @@
+{"scenario": "container-escape/host-grant-one-port", "requires": ["v1", "podman", "linux", "rootless"], "doc": "Design \u00a711 row 4: an MCP session's networked job asks for host.drgnx.internal:P1 and :P2 on cards; once the user allows P1 for the session, a CONNECT to P1 reaches the host fixture on 127.0.0.1:P1, P2 (not allowed) still gets 403, and 127.0.0.1:P1, localhost:P1 and the host's own addresses :P1 never get through. A listed or granted target stays CONNECT only. The session's Network cell must allow a network (the autonomous preset). Needs rootless podman 5+, the relay binary `drgnx-px-<arch>-linux-musl` next to the hub binary, and a host lane; fixtures are busybox httpd on the host's loopback (host network). Unverified until the combined pass (CI rootless Ubuntu; the Fedora 45 VM gate with `ausearch -m avc` empty)."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; podman pull -q docker.io/library/busybox:1.36 >/dev/null; d=$(podman image inspect --format '{{.Digest}}' docker.io/library/busybox:1.36); mkdir -p $ROOT/work/www; echo fixture-ok > $ROOT/work/www/index.html; printf '(drgnx-settings :version 1 (drgnx-agents-matrix (:preset \"autonomous\")) (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@%s\"))))\\n' \"$d\" > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; podman rm -f cn-host-p1 >/dev/null 2>&1 || true; podman run -d --rm --network=host --name cn-host-p1 -v $ROOT/work/www:/www:ro docker.io/library/busybox:1.36 httpd -f -p 127.0.0.1:18091 -h /www >/dev/null"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "set -e; podman rm -f cn-host-p2 >/dev/null 2>&1 || true; podman run -d --rm --network=host --name cn-host-p2 -v $ROOT/work/www:/www:ro docker.io/library/busybox:1.36 httpd -f -p 127.0.0.1:18092 -h /www >/dev/null"], "expect_code": 0}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1 > $ROOT/work/hostips"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 20, "method": "mcp/session", "params": {"agent": "s-0000000a", "job": "j1", "cwd": "$ROOT/work", "owner": "$HARNESS_PID"}}}
+{"do": "expect", "conn": "c", "json": {"id": 20, "result": {"sid": "$capture:sid", "socket": "$capture:sock"}}}
+{"do": "connect", "conn": "m", "hub": "h", "socket": "path:$sock", "as": "raw"}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}}}
+{"do": "send", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "job_start", "arguments": {"argv": ["sh", "-c", "hp() { { printf 'CONNECT host.drgnx.internal:%s HTTP/1.1\\r\\nHost: host.drgnx.internal:%s\\r\\n\\r\\n' $1 $1; sleep 1; printf 'GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n'; sleep 2; } | nc -w 5 127.0.0.1 3128; }; code() { printf 'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n' $1 $1 | nc -w 3 127.0.0.1 3128 | head -1; }; i=0; while [ $i -lt 90 ]; do echo \"p1 $(hp 18091 | grep -c fixture-ok)\"; echo \"p2 $(code host.drgnx.internal:18092)\"; for t in 127.0.0.1:18091 localhost:18091 $(sed 's/$/:18091/' hostips); do echo \"direct $t $(code $t)\"; done; sleep 1; i=$((i+1)); done"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox"}}}}
+{"do": "expect", "conn": "m", "json": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "$string"}]}}, "within_ms": 120000}
+{"do": "poll", "conn": "c", "json": {"id": 32, "method": "exec/list", "params": {"running": true}}, "expect": {"id": 32, "result": {"jobs": [{"id": "$capture:job"}]}}, "within_ms": 60000, "every_ms": 200}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:c1", "kind": "matrix", "title": "$string"}}, "within_ms": 30000}
+{"do": "expect", "conn": "e", "json": {"event": "card", "data": {"id": "$capture:c2", "kind": "matrix", "title": "$string"}}, "within_ms": 30000}
+{"do": "send", "conn": "c", "json": {"id": 40, "method": "cards/settle", "params": {"card": "$c1", "choice": "session"}}}
+{"do": "expect", "conn": "c", "json": {"id": 40, "result": "$any"}}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "L=$STATE/hub/exec/$job/log; grep -q '^p1 1' $L"], "expect_code": 0, "retry_ms": 40000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "L=$STATE/hub/exec/$job/log; tail -n 20 $L | grep -q '^p2 HTTP/1.1 403'"], "expect_code": 0, "retry_ms": 40000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "L=$STATE/hub/exec/$job/log; ! grep -q '^direct .* HTTP/1.1 200' $L"], "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 43, "method": "exec/stop", "params": {"id": "$job"}}}
+{"do": "expect", "conn": "c", "json": {"id": 43, "result": {"id": "$job"}}}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job"}}, "within_ms": 30000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "test -z \"$(podman ps -a -q --filter label=drgnx.job=$job)\"; podman rm -f cn-host-p1 cn-host-p2 >/dev/null 2>&1; true"], "expect_code": 0}

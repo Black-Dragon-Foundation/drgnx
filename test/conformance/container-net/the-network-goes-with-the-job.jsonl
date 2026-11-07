@@ -7,7 +7,7 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "wget -q -O- http://fixture.drgnx.test:18080/ && echo fetched"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox", "network": true}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "{ printf 'CONNECT fixture.drgnx.test:18080 HTTP/1.1\\r\\nHost: fixture.drgnx.test:18080\\r\\n\\r\\n'; sleep 1; printf 'GET / HTTP/1.1\\r\\nHost: fixture.drgnx.test\\r\\nConnection: close\\r\\n\\r\\n'; sleep 2; } | nc -w 5 127.0.0.1 3128 | grep fixture-ok && echo fetched"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox", "network": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
 {"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["fixture-ok", "fetched"]}}}}, "within_ms": 60000}
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "test -z \"$(podman ps -a -q --filter label=drgnx.job=$job)\"; podman rm -f cn-fixture-http >/dev/null 2>&1; true"], "expect_code": 0}

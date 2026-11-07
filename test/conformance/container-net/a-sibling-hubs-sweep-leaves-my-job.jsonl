@@ -7,7 +7,7 @@
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
 {"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
-{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "sleep 10; wget -q -O- http://fixture.drgnx.test:18080/ && echo fetched"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox", "network": true}}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "sleep 10; { printf 'CONNECT fixture.drgnx.test:18080 HTTP/1.1\\r\\nHost: fixture.drgnx.test:18080\\r\\n\\r\\n'; sleep 1; printf 'GET / HTTP/1.1\\r\\nHost: fixture.drgnx.test\\r\\nConnection: close\\r\\n\\r\\n'; sleep 2; } | nc -w 5 127.0.0.1 3128 | grep fixture-ok && echo fetched"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox", "network": true}}}
 {"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 120000}
 {"do": "start", "hub": "b"}
 {"do": "connect", "conn": "cb", "hub": "b"}
