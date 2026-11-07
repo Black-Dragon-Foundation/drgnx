@@ -222,7 +222,9 @@ The `before-tool` point runs where the hub sees an agent's tool call:
   with no hook run. On `allow` or `ask` the hooks run first: a deny refuses the step with no card made, and only when
   none denied does the matrix ask you (a card) or let it run. A hook's `allow` never answers a card for you.
 - **At the hub's own tools** (the coordination tools, and the plugins' abilities): once, at the hub's server, with
-  the kind `drgnx` and the tool's full name (`mcp__drgnx__record_decision`). This is the one place a hook may
+  the kind `drgnx` and the tool's full name (`mcp__drgnx__record_decision`). The pair tools a chat in your project
+  uses on your checkout are the exception: they have the kind of what they do (`read_file` is `read`, `edit_file` and
+  `write_file` are `edit`), so a rule on edits sees a paired chat's edits as well. This is the one place a hook may
   `change` a call, and only for the tools its manifest names: the tool checks the changed arguments against its
   schema again, and a tool whose matrix checks are in its body (the manager's `merge`) checks what will run. The
   seam does not run the hooks again for such a step, but it still checks the step against the matrix, as it always
@@ -256,8 +258,10 @@ session goes on.
 The `after-edit` point runs off the agent's turn, in its own task: it never holds up the editor or the agent's other
 requests, and it shares one 5 s budget. What it can do depends on who made the edit.
 
-- **An edit the hub writes** (the agent's `fs/write_text_file` request): a hook may **annotate**, **deny** or
-  **change** the content before it reaches the disk.
+- **An edit the hub writes** (the agent's `fs/write_text_file` request, and a chat's `write_file` in your project,
+  to the disk or to the buffer you have open): a hook may **annotate**, **deny** or **change** the content before it
+  is written. A chat's `edit_file` is shown to the hook as its diff: a hook may annotate or deny it, and a change is
+  a failure of that hook (your buffer decides the text).
   - *Deny* answers the agent's request with the error `drgnx refused the write: REASON` and writes nothing.
   - *Change* writes the changed content, and the agent is told: "drgnx's hook NAME changed your write to PATH; read
     the file before editing it again".

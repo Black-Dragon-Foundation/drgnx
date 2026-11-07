@@ -161,10 +161,11 @@ impl ToolCallInfo {
         }
     }
 
-    /// The call of TOOL on the hub's server SERVER with ARGS.
+    /// The call of TOOL on the hub's server SERVER with ARGS: kind `drgnx`, but the pair tools are what they do
+    /// ([`hub_kind`]).
     pub fn hub_tool(server: &str, tool: &str, args: Value) -> ToolCallInfo {
         ToolCallInfo {
-            kind: "drgnx".into(),
+            kind: hub_kind(server, tool).into(),
             name: Some(format!("mcp__{server}__{tool}")),
             title: None,
             paths: input_paths(&args),
@@ -183,6 +184,17 @@ impl ToolCallInfo {
             .as_deref()
             .or(self.title.as_deref())
             .unwrap_or(&self.kind)
+    }
+}
+
+/// The kind a before-tool hook sees for TOOL on the hub's server SERVER: `drgnx`, except the pair tools, which read
+/// and write the user's checkout as the agent's own tools would (`read_file` is `read`; `edit_file` and `write_file`
+/// are `edit`), so a rule on edits sees a paired chat's edits too.
+pub fn hub_kind(server: &str, tool: &str) -> &'static str {
+    match (server, tool) {
+        ("drgnx", "read_file") => "read",
+        ("drgnx", "edit_file" | "write_file") => "edit",
+        _ => "drgnx",
     }
 }
 
@@ -520,7 +532,13 @@ pub async fn hub_tool_at_the_seam(front: &Front, site: &Site, call: &ToolCallInf
         ..site.clone()
     };
     let server_call = ToolCallInfo {
-        kind: "drgnx".into(),
+        kind: call
+            .name
+            .as_deref()
+            .and_then(|n| n.strip_prefix("mcp__"))
+            .and_then(|n| n.split_once("__"))
+            .map_or("drgnx", |(server, tool)| hub_kind(server, tool))
+            .into(),
         ..call.clone()
     };
     if prepare(&front.core.plugins, &at_server, &server_call).is_none() {
