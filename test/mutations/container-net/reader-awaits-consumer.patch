@@ -1,4 +1,4 @@
-Target: test drgnx-px both_directions_saturated_through_small_pipes_finish
+Target: test drgnx-px both_directions_saturated_through_small_pipes_finish test-hooks
 The relay shell's reader awaits each stream's consumer inline (it reads on only once every delivered byte was taken)
 instead of queueing: one stream whose consumer stops reading stops the whole channel. Both small-pipe tests
 (runtime/crates/drgnx-px/tests/small_pipes.rs) time out under it.

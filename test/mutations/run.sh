@@ -5,7 +5,8 @@
 #   test/mutations/run.sh --list           print every patch and its target
 #
 # A patch's target is its `Target:` line (TARGET overrides it): `row GROUP/NAME` runs that conformance row with domr
-# (`--require-all`, so a skip is not a red), `test CRATE NAME` runs that cargo test.  A green under the patch fails the
+# (`--require-all`, so a skip is not a red), `test CRATE NAME [FEATURES]` runs that cargo test (with FEATURES, for a test
+# behind one).  A green under the patch fails the
 # check: the guard is not tested.  The patch is reverted whatever happens.  Run from the checkout's root, on a host
 # that can run the target (the container-escape rows need rootless podman: CI's Ubuntu lane, the Fedora VM gate).
 set -euo pipefail
@@ -45,7 +46,7 @@ case $kind in
             --scenarios test/conformance --only "$1" --require-all || status=$?
         ;;
     test)
-        cargo test --manifest-path runtime/Cargo.toml --locked -p "$1" -- --exact "$2" || status=$?
+        cargo test --manifest-path runtime/Cargo.toml --locked -p "$1" ${3:+--features "$3"} -- --exact "$2" || status=$?
         ;;
     *)
         echo "run.sh: unknown target kind: $kind" >&2
