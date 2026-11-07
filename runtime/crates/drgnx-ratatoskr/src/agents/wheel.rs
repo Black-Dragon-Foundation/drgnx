@@ -10,8 +10,9 @@
 //! - **Give** (`agents/wheel/give`): refused until held.  A session in a worktree of its own (a worker, a manager)
 //!   first asks the editor to save its buffers there (`wheel-save`, answered `agents/wheel/saved`); a buffer left
 //!   unsaved refuses the give with its file.  A chat saves nothing (its worktree is the user's checkout).  Then the
-//!   user's changes since the held snapshot go to the agent as the first prompt ([`give_text`]), the queued ones
-//!   after it, and the hold lifts.
+//!   user's changes since the hold go to the agent as the first prompt ([`give_text`]), the queued ones after it, and
+//!   the hold lifts.  Where they are read from is the boundary kept at held ([`HeldAt`]): the edit history's, for
+//!   the files the editor tracks (its documents hold the user's unsaved typing), and the step snapshot's for the rest.
 //! - The hold survives an editor's disconnect and a hub restart (kept beside the queue on disk).
 //!
 //! The order logic is here, without I/O: [`take`], [`turn_ended`] and [`give`] step the wheel and the session's turn
@@ -62,6 +63,61 @@ pub(crate) const CONTINUE: &str = "Continue.";
 
 /// The most lines of the user's diff the give's prompt carries; above it, the files and hunk headers only.
 pub(crate) const MAX_DIFF_LINES: usize = 200;
+
+/// Where the give measures the user's changes from, kept when the wheel became held (never at the take: the tool call
+/// in flight may still write): the edit history's newest record after the waiting typing was settled (OP), and the
+/// step snapshot of the worktree (TREE), for the files the history does not track.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HeldAt {
+    pub tree: Option<String>,
+    pub op: Option<i64>,
+}
+
+/// How [`HeldAt`] is kept beside the hold: the snapshot's tree, then `\top:N` when there is a record.
+const OP_MARK: &str = "\top:";
+
+impl HeldAt {
+    /// As kept on disk (none: nothing to keep).
+    pub(crate) fn to_store(&self) -> Option<String> {
+        match (&self.tree, self.op) {
+            (None, None) => None,
+            (t, None) => t.clone(),
+            (t, Some(op)) => Some(format!("{}{OP_MARK}{op}", t.as_deref().unwrap_or(""))),
+        }
+    }
+
+    /// As read back; a hold kept before the history's boundary has the tree only.
+    pub(crate) fn from_store(s: Option<&str>) -> HeldAt {
+        let Some(s) = s else {
+            return HeldAt::default();
+        };
+        let (tree, op) = match s.split_once(OP_MARK) {
+            Some((t, n)) => (t, n.parse().ok()),
+            None => (s, None),
+        };
+        HeldAt {
+            tree: (!tree.is_empty()).then(|| tree.to_owned()),
+            op,
+        }
+    }
+}
+
+/// The parts of DIFF (a unified diff, `diff --git a/P b/P` per file) about files not in TRACKED: the step snapshot's
+/// share of the give, where the edit history's diff covers TRACKED.
+pub(crate) fn untracked_only(diff: &str, tracked: &[String]) -> String {
+    let mut out = String::new();
+    let mut keep = true;
+    for line in diff.split_inclusive('\n') {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            let path = rest.split(" b/").next().unwrap_or("");
+            keep = !tracked.iter().any(|t| t == path);
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    out
+}
 
 /// The user takes the wheel: the turn running is paused after its tool call (`Stop` with `after_tool`) and no turn
 /// starts until the give.  Refused when the session has exited.
@@ -516,5 +572,144 @@ mod tests {
         assert!(!saves_on_give(Role::Chat));
         assert!(saves_on_give(Role::Worker));
         assert!(saves_on_give(Role::Manager));
+    }
+
+    /// The boundary test's events: the wheel's own, and the user's edit while held.
+    #[derive(Clone, Debug)]
+    enum Bv {
+        Send(&'static str),
+        Take,
+        UserEdit,
+        Give,
+        ToolDone,
+        Answer,
+    }
+    skuld::events!(Bv {
+        Send,
+        Take,
+        UserEdit,
+        Give,
+        ToolDone,
+        Answer
+    });
+
+    /// The wheel's shell with an edit history: each write is a record by its author, and the boundary is the
+    /// history's length when the shell hears the wheel is held (where `Session::wheel_held` records it).
+    struct Hist {
+        s: Shell,
+        records: Vec<&'static str>,
+        boundary: Option<usize>,
+        /// What the give sent: the records after the boundary.
+        given: Option<Vec<&'static str>>,
+    }
+
+    impl Core for Hist {
+        type Event = Bv;
+
+        fn step(&mut self, ev: Bv) -> Vec<Bv> {
+            let held_before = self.s.held_sent;
+            let ev = match ev {
+                Bv::Send(t) => Ev::Send(t),
+                Bv::Take => Ev::Take,
+                Bv::UserEdit => {
+                    self.records.push("user");
+                    return Vec::new();
+                }
+                Bv::Give => {
+                    if self.s.wheel == Wheel::Held
+                        && let Some(b) = self.boundary
+                    {
+                        self.given = Some(self.records[b..].to_vec());
+                    }
+                    Ev::Give
+                }
+                Bv::ToolDone => {
+                    // the tool call in flight writes before it completes
+                    if self.s.running && !self.s.tool_done {
+                        self.records.push("agent");
+                    }
+                    Ev::ToolDone
+                }
+                Bv::Answer => Ev::Answer,
+            };
+            self.s.step(ev);
+            if self.s.held_sent > held_before {
+                self.boundary = Some(self.records.len());
+            }
+            Vec::new()
+        }
+    }
+
+    /// [A] The user takes the wheel while the agent's tool call runs, before it writes or after; then edits and gives
+    /// it back. The boundary is recorded when the wheel is held, not when the take is asked: the give sends exactly
+    /// the user's edit, never the write of the tool call that was in flight at the take.
+    #[test]
+    fn every_order_boundary_is_recorded_when_held_not_when_asked() {
+        let mut p = Partial::new();
+        let user = p.source(
+            "user",
+            vec![Bv::Send("a"), Bv::Take, Bv::UserEdit, Bv::Give],
+        );
+        let agent = p.source("agent", vec![Bv::ToolDone, Bv::Answer]);
+        // the turn runs before the take may come; the user edits once the agent has stopped (held)
+        p.before((user, 0), (agent, 0));
+        p.before((agent, 1), (user, 2));
+        let r = every_order(
+            &p,
+            Bound::default(),
+            || Hist {
+                s: Shell::new(),
+                records: Vec::new(),
+                boundary: None,
+                given: None,
+            },
+            |h, _| {
+                settled(&h.s)?;
+                if h.given.as_deref() != Some(&["user"][..]) {
+                    return Err(format!(
+                        "the give sent {:?} (records {:?}, boundary {:?})",
+                        h.given, h.records, h.boundary
+                    ));
+                }
+                Ok(())
+            },
+        );
+        assert_eq!(r.mode, Mode::Exhaustive);
+        assert!(r.orders > 2, "{} orders", r.orders);
+    }
+
+    /// [D] The boundary as kept beside the hold, and read back (a hold kept before it: the tree only); the snapshot's
+    /// share of a give leaves out the files the history's diff covers.
+    #[test]
+    fn held_at_is_kept_and_the_snapshot_keeps_untracked_files() {
+        for h in [
+            HeldAt::default(),
+            HeldAt {
+                tree: Some("abc".into()),
+                op: None,
+            },
+            HeldAt {
+                tree: Some("abc".into()),
+                op: Some(42),
+            },
+            HeldAt {
+                tree: None,
+                op: Some(7),
+            },
+        ] {
+            assert_eq!(HeldAt::from_store(h.to_store().as_deref()), h);
+        }
+        assert_eq!(
+            HeldAt::from_store(Some("abc")),
+            HeldAt {
+                tree: Some("abc".into()),
+                op: None
+            }
+        );
+        let diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n\
+                    diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-x\n+y\n";
+        let kept = untracked_only(diff, &["a.txt".to_string()]);
+        assert!(kept.starts_with("diff --git a/b.txt b/b.txt\n"), "{kept}");
+        assert!(!kept.contains("a.txt"), "{kept}");
     }
 }

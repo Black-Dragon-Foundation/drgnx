@@ -200,6 +200,14 @@ impl History {
         Ok(PeerId(self.conn.last_insert_rowid() as u64))
     }
 
+    /// The newest record; none before the first.
+    pub fn last_op(&self) -> Result<Option<OpId>> {
+        Ok(self
+            .conn
+            .query_row("select max(id) from op", [], |r| r.get::<_, Option<i64>>(0))?
+            .map(OpId))
+    }
+
     /// The document of the file at PATH (relative to the project), when there is one (none is made).
     pub fn find_doc(&self, path: &str) -> Result<Option<DocId>> {
         Ok(self

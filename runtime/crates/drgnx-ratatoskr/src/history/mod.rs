@@ -298,6 +298,58 @@ impl Hub {
         ))
     }
 
+    /// The boundary of a hold on an agent's wheel (docs/develop/coordination.md, "Take the wheel"): typing waiting for
+    /// its record is settled into one now, and the newest record is where the give's changes start (0 while the
+    /// history has none: from each document as first stored).
+    pub fn boundary(&self, now: f64) -> verdandi::Result<i64> {
+        let mut g = self.lock();
+        let g = &mut *g;
+        g.settler
+            .flush(&mut g.h, verdandi::FlushReason::StepBoundary, now)?;
+        Ok(g.h.last_op()?.map_or(0, |o| o.0))
+    }
+
+    /// What changed since record SINCE in the files of TREE the editor tracks (a buffer registered: its document is
+    /// the truth, unsaved typing included), as a unified diff per file (`diff --git a/REL b/REL`), and those files.
+    /// A file no buffer tracks is left to the step snapshot.
+    pub fn changes_since(
+        &self,
+        tree: &Tree,
+        since: i64,
+    ) -> verdandi::Result<(String, Vec<String>)> {
+        let mut g = self.lock();
+        let Some(branch) = g.h.find_branch(&tree.branch_name())? else {
+            return Ok((String::new(), Vec::new()));
+        };
+        let mut docs: Vec<DocId> = g
+            .buffers
+            .values()
+            .filter(|b| b.branch == branch)
+            .map(|b| b.doc)
+            .collect();
+        docs.sort();
+        docs.dedup();
+        let mut diff = String::new();
+        let mut tracked = Vec::new();
+        for doc in docs {
+            let rel = g.h.path_of(doc)?;
+            let old = g.h.text_after(doc, branch, verdandi::OpId(since))?;
+            let new = g.h.text(doc, branch)?;
+            if old != new {
+                let (a, b) = (format!("a/{rel}"), format!("b/{rel}"));
+                diff.push_str(&format!("diff --git {a} {b}\n"));
+                diff.push_str(
+                    &similar::TextDiff::from_lines(&old, &new)
+                        .unified_diff()
+                        .header(&a, &b)
+                        .to_string(),
+                );
+            }
+            tracked.push(rel);
+        }
+        Ok((diff, tracked))
+    }
+
     /// The file of the tracked buffer BUFFER_ID.
     pub fn buffer_file(&self, buffer_id: &str) -> Option<PathBuf> {
         self.lock().buffers.get(buffer_id).map(|b| b.file.clone())

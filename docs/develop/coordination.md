@@ -881,8 +881,10 @@ and the UI says "stops after its current step", never "pauses".
    turn starts until the give (prompts sent or delivered meanwhile wait in the queue). The snapshot says
    `paused: true` and `held_by: "user"` at once. A second take changes nothing.
 2. **Held:** when that turn has ended (the tool call completed, the cancel answered) — at once when no turn ran — the
-   hub takes a step snapshot of the worktree (`refs/drgnx/s/<sid>/wheel` in its shadow repository) and then sends
-   `agent-wheel {id, state: held}`. From then the session's fence refuses every write (`Fence::check`, through
+   hub records the boundary and then sends `agent-wheel {id, state: held}`: in the edit history, the typing still
+   waiting for its record is settled into one (`step boundary`) and the newest record is kept (`history::Hub::boundary`);
+   for the files the history does not track, a step snapshot of the worktree (`refs/drgnx/s/<sid>/wheel` in its shadow
+   repository). It is taken at held, never at the take: the tool call in flight then may still write. From then the session's fence refuses every write (`Fence::check`, through
    `Fence::held(session)`, the one test the pair door calls too), so nothing of the agent's lands under the user's
    edits.
 3. **Give** (`agents/wheel/give {id}`): refused until held ("it stops after its current step"). A session in a
@@ -890,14 +892,16 @@ and the UI says "stops after its current step", never "pauses".
    buffers there, never asking, and answers `agents/wheel/saved {req, unsaved: [path]}`. A file left unsaved refuses
    the give with its name, and the wheel stays held; no editor connected, or none answering within 5 s, is nothing
    unsaved. A chat gets no `wheel-save`: its worktree is the user's checkout, so the give saves nothing there.
-4. **What the agent is sent:** the worktree's diff against the snapshot at held (the interim base until the edit
-   history's boundary replaces it), as the first prompt, a user message keyed `wheel:edits` and headed "Edits by you
+4. **What the agent is sent:** for each file the editor tracks in the worktree (a registered buffer: its document holds
+   the user's unsaved typing), the edit history's diff since the boundary (`history::Hub::changes_since`), so an agent
+   change made before it is never in it; for every other file, the worktree's diff against the snapshot at held. As
+   the first prompt, a user message keyed `wheel:edits` and headed "Edits by you
    while you held the wheel": the unified diff up to 200 lines, else only its `diff --git` and `@@` lines with "Read
-   these files again before you change them". Nothing changed (and, until the edit history is wired, every chat's
-   give) sends "Continue." keyed `wheel:resumed` ("resumed by you"). The messages queued while held follow in order,
+   these files again before you change them". Nothing changed (a chat's give reads only the edit history: its
+   worktree is the user's checkout) sends "Continue." keyed `wheel:resumed` ("resumed by you"). The messages queued while held follow in order,
    and `agent-wheel {id, state: free}` goes out.
 5. **It lasts:** the hold survives an editor's disconnect and a hub restart (`<sid>.wheel.json` beside the queue,
-   with the snapshot's tree); the hub never gives the wheel back on its own. While held the supervisor's rules
+   with the snapshot's tree and the boundary's record); the hub never gives the wheel back on its own. While held the supervisor's rules
    (`silent`, `repeat`, …) and the plan run's `stale` rule pass the session by.
 
 The order logic is pure (`wheel::{take, turn_ended, give}` over the wheel and the session's turn core, under the

@@ -204,7 +204,7 @@ impl History {
 
     /// The text of DOC on BRANCH as it was after record SINCE: that record's version when it holds the document, else
     /// the newest earlier record's, else the document as first stored.
-    fn text_after(&mut self, doc: DocId, branch: BranchId, since: OpId) -> Result<String> {
+    pub fn text_after(&mut self, doc: DocId, branch: BranchId, since: OpId) -> Result<String> {
         let mut st = self
             .conn
             .prepare("select view_blob from op where id <= ?1 order by id desc")?;
