@@ -170,7 +170,7 @@ fn parse_history(text: &str) -> Vec<Commit> {
 pub use cli::GitCli;
 
 #[cfg(feature = "host")]
-mod cli {
+pub(crate) mod cli {
     use super::Git;
     use std::io::{self, Write};
     use std::path::Path;
@@ -179,7 +179,27 @@ mod cli {
     /// The `git` executable.
     pub struct GitCli;
 
-    fn run(root: &Path, args: &[&str], input: Vec<u8>) -> io::Result<Vec<u8>> {
+    /// `git` with no input whose exit 1 means "no answer" (`symbolic-ref -q`, `rev-parse -q --verify`, `config`).
+    pub(crate) fn try_run(root: &Path, args: &[&str]) -> io::Result<Option<Vec<u8>>> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(Stdio::null())
+            .output()?;
+        match out.status.code() {
+            Some(0) => Ok(Some(out.stdout)),
+            Some(1) => Ok(None),
+            _ => Err(io::Error::other(format!(
+                "git {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))),
+        }
+    }
+
+    pub(crate) fn run(root: &Path, args: &[&str], input: Vec<u8>) -> io::Result<Vec<u8>> {
         let mut child = Command::new("git")
             .arg("-C")
             .arg(root)
@@ -206,7 +226,7 @@ mod cli {
         Ok(out.stdout)
     }
 
-    fn nul_list(bytes: &[u8]) -> Vec<String> {
+    pub(crate) fn nul_list(bytes: &[u8]) -> Vec<String> {
         bytes
             .split(|b| *b == 0)
             .filter(|s| !s.is_empty())

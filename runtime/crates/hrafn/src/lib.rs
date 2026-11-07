@@ -6,6 +6,7 @@
 
 pub mod chunk;
 pub mod coverage;
+pub mod door;
 pub mod eval;
 pub mod files;
 pub mod fresh;
@@ -17,6 +18,9 @@ pub mod tree;
 pub mod watch;
 
 pub use coverage::{CoverageError, coverage};
+pub use door::{Blob, DoorKind, Head, Obj, Status, TreeChange, TreeEntry, TreeGit};
+#[cfg(feature = "host")]
+pub use door::{GixDoor, door};
 #[cfg(feature = "host")]
 pub use files::GitCli;
 pub use files::{Change, Class, Commit, Config, Git, Lang, Listed, classify, list};
