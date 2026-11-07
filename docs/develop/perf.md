@@ -122,6 +122,14 @@ or `q` there ended the followed agent's turn (the premise's timeline showed exac
 chat of `pair-typing` also writes the whole file from a read the hub never served every 5 s; the hub refuses it whole
 (the plan's U1), so it is no applied write.
 
+`panel-replay` (no keys; session side `test/fixtures/panel-replay-fixture.el`) measures what one update of an agent's
+transcript costs the editor while its panel is shown. A hub of the workload's own runs one mock agent whose first turn
+makes about 1,900 entries at once (an answer and a read, 950 times); its second, sent when the measure starts, streams the
+synthetic day's recording (`test/fixtures/day/transcript.eld`) at 20 updates a second, a read every tenth chunk, so the
+transcript ends near 2,000 entries. The panel shows the session and the mirror holds its transcript. Over 400 updates (at most 40 s) it reports
+`:alloc` (objects the update's event handlers made: the mirror's and the panel's), `:draw_kb` (kB each draw of the panel
+made), `:updates`, `:entries` and `:rows` (the panel's lines). Report-only until the render offload's combined pass.
+
 The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
 `pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the
 GUI scenes `agents-editor-gui/p3-drawn-frame` (agents in the editor) and `p3-agent-panel-scene` (the panel) draw each look

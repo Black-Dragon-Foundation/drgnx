@@ -48,8 +48,8 @@ a function called once the agents run (a follow window, a panel)."
 (defun drgnx-perf-agents-workloads ()
   "The agents-in-the-editor workloads (specs like `drgnx-perf-run--workloads'): `agents-typing' (the module on, a
 follow window), `agents-typing-none' (the same agents, the module off: the paired baseline), `agents-follow' (a follow
-window moving with the first agent), `agent-panel-stream' (the first agent's panel open, streaming) and `pair-typing'
-\(the fifth a paired chat)."
+window moving with the first agent), `agent-panel-stream' (the first agent's panel open, streaming), `pair-typing'
+\(the fifth a paired chat) and `panel-replay' (one agent's long transcript streaming into its panel, no keys)."
   (let* ((lib (drgnx-perf-agents--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -71,7 +71,18 @@ window moving with the first agent), `agent-panel-stream' (the first agent's pan
       (pair-typing :setup ,(funcall up "t" "t" "nil")
                    :each ,each :actions ,typing
                    :measure "(list :pair_applied_ratio (drgnx-agents-five-pair-applied-ratio))"
-                   :check ,check :teardown ,down))))
+                   :check ,check :teardown ,down)
+      ;; one agent's transcript of about 2,000 entries streaming into its panel at 20 updates a second: what an update
+      ;; costs the editor (report-only; docs/develop/perf.md)
+      (panel-replay :setup ,(drgnx-perf-agents--replay-form "(drgnx-panel-replay-up drgnx-perf--hub-bin)")
+                    :measure "(drgnx-panel-replay-measure)" :repeat 1   ; one stream: 400 updates are the samples
+                    :teardown "(drgnx-panel-replay-down)"))))
+
+(defun drgnx-perf-agents--replay-form (form)
+  "The panel-replay session side (test/fixtures/panel-replay-fixture.el) loaded, then FORM (a string), ending in t."
+  (concat "(progn (defvar drgnx-perf--hub-bin nil) (setq drgnx-perf--hub-bin " (prin1-to-string (getenv "DRGNX_RATATOSKR_BIN")) ") "
+          (prin1-to-string `(load ,(expand-file-name "test/fixtures/panel-replay-fixture" drgnx-ui-repo-dir) nil t))
+          " " form " t)"))
 
 (provide 'drgnx-perf-agents)
 ;;; drgnx-perf-agents.el ends here

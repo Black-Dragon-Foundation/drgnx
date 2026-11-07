@@ -159,6 +159,10 @@
  (agents-line-motion (:rows) 0 :report-only ot5)
  (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)
  (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
+ ;; panel-replay (the panel drawing every row in Lisp, the mirror copying its transcript per update), 2026-11-08, pinned
+ ;; to 4 CPUs: alloc p50 20292 (p90 24118) per update, a draw 14.75 kB p50 (63.03 p90), 305 updates over 2024 entries,
+ ;; 2560 lines.  The hub-built rows cut it (the render offload's proof rows replace these).
+ (panel-replay (:alloc :p50) 25365 :report-only ot5) (panel-replay (:draw_kb :p50) 18.5 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
