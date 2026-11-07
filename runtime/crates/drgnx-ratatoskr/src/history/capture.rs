@@ -65,8 +65,8 @@ pub(crate) enum Seen {
     /// A link: its target's name.
     Link(String),
     Bytes(Vec<u8>),
-    /// More than [`TEXT_CAP`] bytes.
-    Big,
+    /// More than [`TEXT_CAP`] bytes: not read; the key says which version of it this is (its size and time).
+    Big(String),
     /// Not to be recorded: a FIFO, a directory, a link above the file, the tree itself unreadable.
     Skip,
 }
@@ -83,10 +83,20 @@ pub(crate) fn read(tree: &Tree, rel: &str) -> Seen {
     };
     match eitri::read_regular(dir.as_fd(), Path::new(rel), TEXT_CAP) {
         Ok(b) => Seen::Bytes(b),
-        Err(eitri::FsError::TooLarge { .. }) => Seen::Big,
+        Err(eitri::FsError::TooLarge { .. }) => Seen::Big(big_key(tree, rel)),
         Err(eitri::FsError::Link { .. }) => link_target(&dir, rel).map_or(Seen::Skip, Seen::Link),
         Err(eitri::FsError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Seen::Gone,
         Err(_) => Seen::Skip,
+    }
+}
+
+/// What tells one version of an unread big file from the next: its size and change time (reading it to hash it would
+/// stall the hub for as long as the read takes).  Two writes of the same size inside one file-time tick share a key.
+fn big_key(tree: &Tree, rel: &str) -> String {
+    use std::os::unix::fs::MetadataExt;
+    match std::fs::symlink_metadata(tree.root.join(rel)) {
+        Ok(m) => format!("big-{}-{}-{}", m.len(), m.mtime(), m.mtime_nsec()),
+        Err(_) => "big".to_owned(),
     }
 }
 
@@ -205,7 +215,7 @@ impl Inner {
                 }
                 (None, Plan::Text(String::new()), "gone".to_owned())
             }
-            Seen::Big => (None, Plan::Snapshot, "big".to_owned()),
+            Seen::Big(key) => (None, Plan::Snapshot, key),
             Seen::Link(target) => {
                 let b = blob::hash_raw(&tree.git_dir, &tree.root, target.as_bytes())
                     .map_err(refused)?;
@@ -216,6 +226,7 @@ impl Inner {
                     blob::hash_object(&tree.git_dir, &tree.root, rel, &bytes).map_err(refused)?;
                 let name = name_of(rel);
                 let plan = if LOCKS.contains(&name)
+                    || bytes.len() as u64 > TEXT_CAP
                     || blob::is_generated(&tree.git_dir, &tree.root, rel)
                 {
                     Plan::Snapshot
@@ -324,10 +335,6 @@ impl Inner {
         rel: &str,
         seen: Seen,
     ) -> Result<Option<Staged>> {
-        let seen = match seen {
-            Seen::Bytes(b) if b.len() as u64 > TEXT_CAP => Seen::Big,
-            s => s,
-        };
         let (key, author) = user();
         self.stage(tree, rel, seen, Src::Hub, &key, &author)
     }
