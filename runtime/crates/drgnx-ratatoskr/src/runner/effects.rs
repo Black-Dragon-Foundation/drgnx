@@ -1075,7 +1075,18 @@ fn session_base(conn: &Tx, session: &str) -> Result<Option<String>, CoordError> 
 
 /// After a tool step of SESSION in CWD: link the commits gained since the job branch (a task's tree), or since the
 /// session's first recorded head (a session with no job task: a chat).  Best effort; git runs in a blocking task.
-pub async fn link_new_commits(writer: &Writer, session: &str, task: Option<&str>, cwd: &Path) {
+/// PLAIN_GIT says plain git may run in CWD (no sandboxed agent worked there: [`crate::runner::RunGit::is_touched`]);
+/// where it may not, nothing is linked.
+pub async fn link_new_commits(
+    writer: &Writer,
+    session: &str,
+    task: Option<&str>,
+    cwd: &Path,
+    plain_git: bool,
+) {
+    if !plain_git {
+        return;
+    }
     let job = task.and_then(|t| t.strip_prefix("task:").unwrap_or(t).split_once('#'));
     let base = match job {
         Some((job, _)) => format!("job/{job}"),
@@ -1489,6 +1500,52 @@ mod tests {
         assert_eq!(made, vec![format!("commit:{first}")]);
         assert!(again.is_empty());
         assert_eq!(linked, vec!["by a1".to_owned()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn new_commits_are_not_read_in_a_touched_tree() {
+        let d = repo();
+        commit(d.path(), "a.txt", "x\n", "base");
+        sh(d.path(), &["branch", "job/j"]);
+        commit(d.path(), "a.txt", "y\n", "first");
+        let dir = tempfile::tempdir().unwrap();
+        let w = Writer {
+            db: CoordDb::spawn(dir.path().join("work.db")),
+            signals: Default::default(),
+        };
+        let commits = || {
+            w.db.read(|c| {
+                Ok(c.query_row(
+                    "select count(*) from entity where kind = 'commit'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+        };
+        // a decision of the session, so a linked commit has something to implement
+        w.db.write(meta(), |tx| {
+            decide(
+                tx,
+                Decide {
+                    kind: "build".into(),
+                    subject: "s".into(),
+                    author: "a".into(),
+                    ..Decide::default()
+                },
+                1.0,
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), false).await;
+        assert_eq!(
+            commits().await.unwrap(),
+            0,
+            "plain git ran in a touched tree"
+        );
+        link_new_commits(&w, "s1", Some("task:j#1"), d.path(), true).await;
+        assert_eq!(commits().await.unwrap(), 1);
     }
 
     fn write_task(number: &str, blocks: &[&str]) -> TaskWrite {

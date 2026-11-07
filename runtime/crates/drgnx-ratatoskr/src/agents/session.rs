@@ -2312,6 +2312,7 @@ fn assemble(
                 predict: Some(front.core.predict.clone()),
             },
             ctx,
+            Some(front.core.runs.git()),
         ),
     );
     // a folder the hub made no tree for is measured from its head now (a docs agent in the org folder)
@@ -3022,6 +3023,7 @@ async fn write_steps(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<ClosedStep>,
     sink: StepSink,
     ctx: StepCtx,
+    git: Option<Arc<dyn crate::runner::RunGit>>,
 ) {
     let caller = Caller {
         class: Class::Service,
@@ -3241,11 +3243,17 @@ async fn write_steps(
             if step.class == StepClass::Tool
                 && matches!(step.tool_kind.as_deref(), None | Some("execute"))
             {
+                // plain git never runs in a tree a sandboxed agent touched
+                let plain_git = match &git {
+                    Some(g) => !g.is_touched(&ctx.cwd).await.unwrap_or(true),
+                    None => false,
+                };
                 crate::runner::effects::link_new_commits(
                     &sink.writer,
                     &ctx.session,
                     ctx.task.as_deref(),
                     &ctx.cwd,
+                    plain_git,
                 )
                 .await;
             }
@@ -6690,7 +6698,7 @@ mod tests {
             traces: None,
             predict: None,
         };
-        tokio::spawn(write_steps(rx, sink, ctx));
+        tokio::spawn(write_steps(rx, sink, ctx, None));
         let open = |class, tool: Option<&str>| OpenStep {
             class,
             start: 10.0,
@@ -6830,7 +6838,7 @@ mod tests {
             .unwrap();
         }
         let before = writer.signals.writes();
-        tokio::spawn(write_steps(rx, sink, ctx));
+        tokio::spawn(write_steps(rx, sink, ctx, None));
         let mut seqs = Vec::new();
         for _ in 0..50 {
             seqs.push(seen.recv().await.unwrap().step.seq);
@@ -6878,7 +6886,7 @@ mod tests {
             traces: None,
             predict: None,
         };
-        tokio::spawn(write_steps(rx, sink, ctx));
+        tokio::spawn(write_steps(rx, sink, ctx, None));
         for cost in [Some(0.15), None] {
             tx.send(ClosedStep {
                 open: OpenStep {
@@ -6980,7 +6988,7 @@ mod tests {
             traces: None,
             predict: None,
         };
-        tokio::spawn(write_steps(rx, sink, ctx));
+        tokio::spawn(write_steps(rx, sink, ctx, None));
         for (kind, end) in [("edit", 11.0), ("read", 12.0)] {
             tx.send(ClosedStep {
                 open: OpenStep {
@@ -7088,7 +7096,7 @@ mod tests {
         };
         let (claimed, rx_claimed) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(claim_steps(rx, claimed, ctx.clone(), None));
-        tokio::spawn(write_steps(rx_claimed, sink, ctx));
+        tokio::spawn(write_steps(rx_claimed, sink, ctx, None));
         // the step names note.txt as the mock does (relative) and a.txt as Claude does (absolute, in a diff)
         let abs = work.join("a.txt").to_string_lossy().into_owned();
         tx.send(ClosedStep {
@@ -7179,7 +7187,7 @@ mod tests {
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(write_steps(rx, sink, ctx));
+        tokio::spawn(write_steps(rx, sink, ctx, None));
         let cell = crate::timeline::EditCell::default();
         tx.send(ClosedStep {
             open: OpenStep {
@@ -7267,7 +7275,7 @@ mod tests {
             history: None,
         };
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let done = tokio::spawn(write_steps(rx, sink, ctx));
+        let done = tokio::spawn(write_steps(rx, sink, ctx, None));
         let open = |class, kind: Option<&str>, start| OpenStep {
             class,
             start,
