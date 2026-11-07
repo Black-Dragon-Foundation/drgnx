@@ -21,6 +21,7 @@ use hrafn::fresh::{Due, Fresh, Settle};
 use hrafn::{CodeStore, Config, Git, GitCli, Lag, Listed, Refresh, StoreError, WatchEvent};
 use norn::deny::{DenyList, RootVerdict, Verdict};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io;
 use std::os::fd::AsFd;
 use std::os::unix::ffi::OsStrExt;
@@ -43,6 +44,45 @@ pub const GIT_QUIET: Duration = Duration::from_secs(2);
 pub const SAVE_DEBOUNCE: Duration = Duration::from_secs(30);
 /// The most differences the query-time diff names before it refreshes everything.
 pub const DIFF_LIMIT: usize = 2000;
+/// Worktree overlays a project holds rows for (resident trees); the least recently used one goes first.
+pub const RESIDENT_CAP: usize = 16;
+/// A stale or unwatched tree is checked at most this often.
+pub const CHECK_TTL: Duration = Duration::from_secs(5);
+/// A tree unused this long loses its rows (it seeds again on its next use).
+pub const TREE_IDLE: Duration = Duration::from_secs(14 * 24 * 3600);
+/// How often removed and idle trees are swept.
+pub const TREE_SWEEP: Duration = Duration::from_secs(3600);
+
+/// Which view answers a query about a root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewOf {
+    pub view: hrafn::View,
+    /// The linked worktree's key (history's `WorktreeId`); none for the main checkout.
+    pub worktree: Option<String>,
+    /// Where the view's files are read (`now`): the tree's root, or the main checkout's.
+    pub root: PathBuf,
+    /// The tree's state; none for the main checkout. While `seeding`, `view` is the base.
+    pub state: Option<hrafn::TreeState>,
+    /// A seed or check of the tree runs now.
+    pub checking: bool,
+}
+
+/// One worktree overlay, for the status and the tests.
+#[derive(Clone, Debug)]
+pub struct TreeLive {
+    pub id: hrafn::TreeId,
+    pub key: String,
+    pub root: String,
+    pub door: hrafn::DoorKind,
+    pub state: hrafn::TreeState,
+    pub watched: bool,
+    /// Its `file` rows: the paths where it differs from the base.
+    pub rows: u32,
+    /// Checks (re-diffs) run since the project opened.
+    pub checks: u64,
+    /// What its last seed, check or re-check did.
+    pub last: Option<hrafn::overlay::Seed>,
+}
 
 /// The project of ROOT: its main checkout's real path and its id.
 pub fn project_id(root: &Path) -> io::Result<(PathBuf, String)> {
@@ -149,6 +189,32 @@ pub struct Status {
     pub embedded: u64,
 }
 
+/// A tree's work in the hub.
+#[derive(Clone)]
+enum Job {
+    Seed,
+    /// A re-diff: a git event, a lost event, a restart, or a query in a stale or unwatched tree.
+    Check,
+    /// Re-check these paths (watcher and feed hints).
+    Recheck(Vec<String>),
+}
+
+/// What the hub knows of a tree beyond its registry row.
+#[derive(Default)]
+struct Live {
+    /// The project's watcher serves it.
+    watched: bool,
+    /// Its watch was asked for (once per open: an unwatched tree is not retried on every query).
+    tried: bool,
+    /// A seed or check runs.
+    busy: bool,
+    /// A check was asked for while one ran: it runs again after.
+    again: bool,
+    checked: Option<tokio::time::Instant>,
+    checks: u64,
+    last: Option<hrafn::overlay::Seed>,
+}
+
 #[derive(Default)]
 struct Gate {
     hold_until: Option<tokio::time::Instant>,
@@ -177,6 +243,16 @@ struct Inner {
     /// Others reading the same events (the edit history): each event is copied to them as `tick` takes it.
     taps: Mutex<Vec<std::sync::mpsc::Sender<WatchEvent>>>,
     opened: tokio::time::Instant,
+    /// The worktree overlays' state in the hub, by tree.
+    trees: Mutex<HashMap<hrafn::TreeId, Live>>,
+    /// The trees' running work (seeds, checks, re-checks, sweeps).
+    jobs: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// The history feed is attached.
+    fed: std::sync::atomic::AtomicBool,
+    /// When the trees were last swept.
+    swept: Mutex<Option<tokio::time::Instant>>,
+    /// Directories Hrafn watches at most: half of `max_user_watches`.
+    watch_budget: Mutex<Option<usize>>,
     #[cfg(feature = "test-hooks")]
     permits: Option<Arc<tokio::sync::Semaphore>>,
 }
@@ -216,6 +292,8 @@ impl Project {
             std::fs::create_dir_all(dir)?;
         }
         let store = CodeStore::open(&path)?;
+        // edits may have happened while the hub was down: every tree is checked on its next use
+        store.trees_reopened().await?;
         let (status, _) = watch::channel(Status {
             tier2: Tier2::Stopped,
             embedded: 0,
@@ -238,6 +316,11 @@ impl Project {
                 watcher: Mutex::new(None),
                 taps: Mutex::new(Vec::new()),
                 opened: clock::now(),
+                trees: Mutex::new(HashMap::new()),
+                jobs: Mutex::new(Vec::new()),
+                fed: false.into(),
+                swept: Mutex::new(None),
+                watch_budget: Mutex::new(None),
                 #[cfg(feature = "test-hooks")]
                 permits: spec.test_permits,
             }),
@@ -269,6 +352,12 @@ impl Project {
         }
         if let Ok(mut h) = self.inner.watcher.lock() {
             *h = Some(w);
+        }
+        if let Ok(mut b) = self.inner.watch_budget.lock() {
+            *b = std::fs::read_to_string(MAX_USER_WATCHES)
+                .ok()
+                .and_then(|t| t.trim().parse::<usize>().ok())
+                .map(|n| n / 2);
         }
     }
 
@@ -310,6 +399,8 @@ impl Project {
 
     /// Tier 1 when the watcher's events are due (or the index was never built).
     pub async fn tick(&self) -> Result<Option<Refresh>, ProjectError> {
+        let mut hints: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let (mut gits, mut overflow) = (HashSet::new(), false);
         let due = {
             let events: Vec<WatchEvent> = match self.inner.events.lock() {
                 Ok(g) => g
@@ -326,6 +417,18 @@ impl Project {
                 .settle
                 .lock()
                 .map_err(|_| io::Error::other("settle"))?;
+            for e in &events {
+                match e {
+                    WatchEvent::File { tree, rel } if tree != hrafn::MAIN_TREE => {
+                        hints.entry(tree.clone()).or_default().insert(rel.clone());
+                    }
+                    WatchEvent::Git { tree } if tree != hrafn::MAIN_TREE => {
+                        gits.insert(tree.clone());
+                    }
+                    WatchEvent::Overflow => overflow = true,
+                    _ => {}
+                }
+            }
             let mut due = None;
             for e in events {
                 // only the main checkout's own events arm its tier 1: a save in a worktree wakes nothing here
@@ -335,6 +438,33 @@ impl Project {
             }
             due.or(settle.feed(Fresh::At(now)))
         };
+        // the worktrees' events go to their overlays; an overflow lost events of every tree
+        self.inner.hints(hints, gits, overflow).await?;
+        let sweep = match self.inner.swept.lock() {
+            Ok(mut s) => {
+                let now = clock::now();
+                let due = s.is_none_or(|t| now - t >= TREE_SWEEP);
+                if due {
+                    *s = Some(now);
+                }
+                due
+            }
+            Err(_) => false,
+        };
+        if sweep {
+            let inner = self.inner.clone();
+            let h = clock::spawn("search:tree-sweep", async move {
+                if let Err(e) = inner.sweep().await {
+                    tracing::warn!(
+                        "search: the worktree sweep of {}: {e}",
+                        inner.root.display()
+                    );
+                }
+            });
+            if let Ok(mut j) = self.inner.jobs.lock() {
+                j.push(h);
+            }
+        }
         let built = self
             .inner
             .store
@@ -422,13 +552,187 @@ impl Project {
     }
 
     pub async fn lag(&self, model: Option<&str>) -> Result<Lag, ProjectError> {
-        Ok(hrafn::lag(&self.inner.store, model, hrafn::View::Base).await?)
+        self.lag_in(model, hrafn::View::Base).await
     }
 
-    /// The file REL as it is now (read through the root's descriptor, at most [`hrafn::files::MAX_FILE_BYTES`]); none
-    /// when it cannot be read or is not text.
-    pub fn read_now(&self, rel: &str) -> Option<String> {
-        let root = eitri::open_path(&self.inner.root, eitri::Kind::Dir).ok()?;
+    /// The lag of VIEW.
+    pub async fn lag_in(
+        &self,
+        model: Option<&str>,
+        view: hrafn::View,
+    ) -> Result<Lag, ProjectError> {
+        Ok(hrafn::lag(&self.inner.store, model, view).await?)
+    }
+
+    /// The view a query about ROOT answers from: the base for the main checkout (or a folder in it); for a linked
+    /// worktree its overlay, registered, watched and seeded on first use (H16 overlay design §6). A tree being seeded
+    /// answers from the base; a stale or unwatched one answers at once from its rows and starts a check (at most one
+    /// per [`CHECK_TTL`]). TOUCHED: an agent's sandbox worked in the tree, so its git door is gix, never the CLI.
+    pub async fn view_for(&self, root: &Path, touched: bool) -> Result<ViewOf, ProjectError> {
+        let (given, main) = (root.to_path_buf(), self.inner.root.clone());
+        let found = clock::blocking(move || tree_of(&given, &main))
+            .await
+            .map_err(io::Error::other)??;
+        let Some((troot, git_dir)) = found else {
+            return Ok(ViewOf {
+                view: hrafn::View::Base,
+                worktree: None,
+                root: self.inner.root.clone(),
+                state: None,
+                checking: false,
+            });
+        };
+        // the key is history's: the watcher tags the tree's events with it, and the feed names it
+        let key = verdandi::WorktreeId::of(&troot, &git_dir).0;
+        let inner = &self.inner;
+        let t = inner
+            .open_tree(&key, &troot, &git_dir, hrafn::DoorKind::for_tree(touched))
+            .await?;
+        let state = inner.state_of(t).await?;
+        let now = clock::now();
+        let checking = match state {
+            hrafn::TreeState::Seeding => inner.start(t, Job::Seed) || inner.live(t, |l| l.busy),
+            hrafn::TreeState::Live if inner.live(t, |l| l.watched) => false,
+            _ => {
+                let due = inner.live(t, |l| {
+                    let due = !l.busy && l.checked.is_none_or(|c| now - c >= CHECK_TTL);
+                    if due {
+                        l.checked = Some(now);
+                    }
+                    due
+                });
+                (due && inner.start(t, Job::Check)) || inner.live(t, |l| l.busy)
+            }
+        };
+        let seeding = state == hrafn::TreeState::Seeding;
+        Ok(ViewOf {
+            view: if seeding {
+                hrafn::View::Base
+            } else {
+                hrafn::View::Tree(t)
+            },
+            worktree: Some(key),
+            root: if seeding {
+                self.inner.root.clone()
+            } else {
+                troot
+            },
+            state: Some(state),
+            checking,
+        })
+    }
+
+    /// Every worktree overlay of the project.
+    pub async fn tree_status(&self) -> Result<Vec<TreeLive>, ProjectError> {
+        let rows = self.inner.store.trees().await?;
+        let counts: HashMap<i64, u32> = self
+            .inner
+            .store
+            .handle()
+            .read(|c| {
+                let mut st =
+                    c.prepare("select tree, count(*) from file where tree > 0 group by tree")?;
+                let rows = st
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<Result<_, _>>()?;
+                Ok(rows)
+            })
+            .await
+            .map_err(StoreError::from)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                let (watched, checks, last) =
+                    self.inner.live(r.id, |l| (l.watched, l.checks, l.last));
+                TreeLive {
+                    rows: counts.get(&r.id.0).copied().unwrap_or(0),
+                    id: r.id,
+                    key: r.key,
+                    root: r.root,
+                    door: r.door,
+                    state: r.state,
+                    watched,
+                    checks,
+                    last,
+                }
+            })
+            .collect())
+    }
+
+    /// Waits until no seed, check, re-check or sweep of the trees runs.
+    pub async fn settle_trees(&self) {
+        loop {
+            let jobs: Vec<tokio::task::JoinHandle<()>> = match self.inner.jobs.lock() {
+                Ok(mut j) => j.drain(..).collect(),
+                Err(_) => return,
+            };
+            if jobs.is_empty() {
+                return;
+            }
+            for j in jobs {
+                let _ = j.await;
+            }
+        }
+    }
+
+    /// The history's `file-version` feed reaches the overlays (once per project): the versions waiting are taken
+    /// together, and each tree re-checks its paths; a lag (the channel dropped versions) marks every tree stale and
+    /// re-diffs it. The task ends when the feed closes. None: the project has its feed already.
+    pub fn feed(
+        &self,
+        mut rx: tokio::sync::broadcast::Receiver<crate::history::FileVersion>,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        if self
+            .inner
+            .fed
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return None;
+        }
+        // the project is not kept open by its feed: a closed project's feed ends at its next version
+        let weak = Arc::downgrade(&self.inner);
+        Some(clock::spawn("search:feed", async move {
+            loop {
+                let mut hints: HashMap<String, BTreeSet<String>> = HashMap::new();
+                let (mut lagged, mut closed) = (false, false);
+                match rx.recv().await {
+                    Ok(v) => {
+                        hints.entry(v.worktree).or_default().insert(v.path);
+                    }
+                    Err(RecvError::Lagged(_)) => lagged = true,
+                    Err(RecvError::Closed) => closed = true,
+                }
+                while !closed {
+                    match rx.try_recv() {
+                        Ok(v) => {
+                            hints.entry(v.worktree).or_default().insert(v.path);
+                        }
+                        Err(TryRecvError::Lagged(_)) => lagged = true,
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Closed) => closed = true,
+                    }
+                }
+                let Some(inner) = weak.upgrade() else { return };
+                if let Err(e) = inner.hints(hints, HashSet::new(), lagged).await {
+                    tracing::warn!("search: the history feed of {}: {e}", inner.root.display());
+                }
+                if closed {
+                    return;
+                }
+            }
+        }))
+    }
+
+    /// Drops the overlays of removed worktrees (not those `git worktree list` shows `locked`) and of trees unused
+    /// for [`TREE_IDLE`]. How many.
+    pub async fn sweep_trees(&self) -> Result<u32, ProjectError> {
+        self.inner.sweep().await
+    }
+
+    /// The file REL of the checkout at ROOT as it is now (as [`Project::read_now`]).
+    pub fn read_now_in(&self, root: &Path, rel: &str) -> Option<String> {
+        let root = eitri::open_path(root, eitri::Kind::Dir).ok()?;
         let bytes = eitri::read_regular(
             root.fd.as_fd(),
             Path::new(rel),
@@ -436,6 +740,12 @@ impl Project {
         )
         .ok()?;
         String::from_utf8(bytes).ok()
+    }
+
+    /// The file REL as it is now (read through the root's descriptor, at most [`hrafn::files::MAX_FILE_BYTES`]); none
+    /// when it cannot be read or is not text.
+    pub fn read_now(&self, rel: &str) -> Option<String> {
+        self.read_now_in(&self.inner.root, rel)
     }
 
     /// What is wrong with the index's coverage of the listed files (storage design §12A.3 item 9), one line each.
@@ -482,7 +792,340 @@ impl Project {
     }
 }
 
+/// `max_user_watches`: the user's inotify budget.
+const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
+
+/// The checkout GIVEN is in, when it is a linked worktree of the project whose main checkout is MAIN: its root and
+/// its own git directory (read with no link followed, and no git run in it). None: the main checkout, or no checkout.
+fn tree_of(given: &Path, main: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> {
+    let mut at = Some(given);
+    while let Some(d) = at {
+        if std::fs::symlink_metadata(d.join(".git")).is_ok() {
+            if std::fs::canonicalize(d)? == main {
+                return Ok(None);
+            }
+            return Ok(crate::history::wire::git_dirs(d).map(|(g, _)| (d.to_path_buf(), g)));
+        }
+        at = d.parent();
+    }
+    Ok(None)
+}
+
+/// The worktrees `git worktree list --porcelain` names in the project at MAIN, and whether each is `locked`.
+fn worktree_list(main: &Path) -> io::Result<Vec<(PathBuf, bool)>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(main)
+        .args(["worktree", "list", "--porcelain"])
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output()?;
+    if !out.status.success() {
+        return Err(io::Error::other(format!(
+            "git worktree list: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let mut trees: Vec<(PathBuf, bool)> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            trees.push((PathBuf::from(p), false));
+        } else if (line == "locked" || line.starts_with("locked "))
+            && let Some(last) = trees.last_mut()
+        {
+            last.1 = true;
+        }
+    }
+    Ok(trees)
+}
+
+/// A and B name one folder.
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(x), Ok(y)) if x == y
+        )
+}
+
 impl Inner {
+    fn live<R>(&self, t: hrafn::TreeId, f: impl FnOnce(&mut Live) -> R) -> R {
+        let mut g = self
+            .trees
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(g.entry(t).or_default())
+    }
+
+    fn watcher(&self) -> Option<Arc<hrafn::ProjectWatch>> {
+        self.watcher.lock().ok().and_then(|h| h.clone())
+    }
+
+    async fn state_of(&self, t: hrafn::TreeId) -> Result<hrafn::TreeState, ProjectError> {
+        Ok(self
+            .store
+            .trees()
+            .await?
+            .into_iter()
+            .find(|r| r.id == t)
+            .map_or(hrafn::TreeState::Seeding, |r| r.state))
+    }
+
+    /// The tree KEY registered (evicting the least recently used tree past [`RESIDENT_CAP`]), its use noted, and its
+    /// watch asked for once.
+    async fn open_tree(
+        self: &Arc<Self>,
+        key: &str,
+        root: &Path,
+        git_dir: &Path,
+        door: hrafn::DoorKind,
+    ) -> Result<hrafn::TreeId, ProjectError> {
+        let rows = self.store.trees().await?;
+        if !rows.iter().any(|r| r.key == key)
+            && rows.len() >= RESIDENT_CAP
+            && let Some(lru) = rows.iter().min_by_key(|r| (r.last_used, r.id))
+        {
+            self.drop_tree(lru).await?;
+        }
+        let t = self
+            .store
+            .tree_open(
+                key,
+                &root.to_string_lossy(),
+                &git_dir.to_string_lossy(),
+                door,
+            )
+            .await?;
+        self.store
+            .tree_touch(t, (clock::wall_secs() * 1000.0) as i64)
+            .await?;
+        if !self.live(t, |l| std::mem::replace(&mut l.tried, true)) {
+            self.watch_tree(t, key, root, git_dir).await;
+        }
+        Ok(t)
+    }
+
+    /// The tree joins the project's watcher. Past the budget (or on `ENOSPC`) the least recently used other tree
+    /// gives its watch up and is checked at query time instead; a tree that still finds no room runs unwatched.
+    async fn watch_tree(
+        self: &Arc<Self>,
+        t: hrafn::TreeId,
+        key: &str,
+        root: &Path,
+        git_dir: &Path,
+    ) {
+        let Some(w) = self.watcher() else { return };
+        let spec = hrafn::TreeSpec {
+            key: key.to_string(),
+            root: root.to_path_buf(),
+            gitdir: git_dir.to_path_buf(),
+        };
+        let add = |w: Arc<hrafn::ProjectWatch>, spec: hrafn::TreeSpec| async move {
+            clock::blocking(move || w.add_tree(spec))
+                .await
+                .unwrap_or_else(|e| Err(hrafn::AddError::Other(e.to_string())))
+        };
+        let mut added = add(w.clone(), spec.clone()).await;
+        if matches!(added, Err(hrafn::AddError::NoSpace(_))) && self.unwatch_lru(t).await {
+            added = add(w.clone(), spec).await;
+        }
+        match added {
+            Ok(()) => {
+                self.live(t, |l| l.watched = true);
+                let state = hrafn::Watch::shared_state(&*w);
+                let over = || {
+                    let budget = self.watch_budget.lock().ok().and_then(|b| *b);
+                    let used = state.lock().map(|s| s.watched).unwrap_or(0);
+                    budget.is_some_and(|b| used > b)
+                };
+                while over() && self.unwatch_lru(t).await {}
+            }
+            Err(e) => {
+                tracing::warn!("search: worktree {} runs unwatched: {e}", root.display());
+            }
+        }
+    }
+
+    /// The least recently used watched tree other than KEEP gives its watch up. Whether there was one.
+    async fn unwatch_lru(&self, keep: hrafn::TreeId) -> bool {
+        let Ok(rows) = self.store.trees().await else {
+            return false;
+        };
+        let Some(lru) = rows
+            .iter()
+            .filter(|r| r.id != keep && self.live(r.id, |l| l.watched))
+            .min_by_key(|r| (r.last_used, r.id))
+        else {
+            return false;
+        };
+        if let Some(w) = self.watcher() {
+            let (w2, k) = (w.clone(), lru.key.clone());
+            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
+            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+                s.unwatched.retain(|(k, _)| *k != lru.key);
+                s.unwatched.push((
+                    lru.key.clone(),
+                    "the watch budget is spent: the least recently used worktree is checked at query time".into(),
+                ));
+            }
+        }
+        self.live(lru.id, |l| l.watched = false);
+        if lru.state != hrafn::TreeState::Seeding {
+            let _ = self
+                .store
+                .tree_mark(lru.id, hrafn::TreeState::Unwatched)
+                .await;
+        }
+        true
+    }
+
+    /// The tree's rows and registry row go, and its watch.
+    async fn drop_tree(&self, r: &hrafn::TreeRow) -> Result<(), ProjectError> {
+        // not under a seed or check of it, nor under a base batch
+        let _one = self.tier1.lock().await;
+        if let Some(w) = self.watcher() {
+            let (w2, k) = (w.clone(), r.key.clone());
+            let _ = clock::blocking(move || w2.remove_tree(&k)).await;
+            if let Ok(mut s) = hrafn::Watch::shared_state(&*w).lock() {
+                s.unwatched.retain(|(k, _)| *k != r.key);
+            }
+        }
+        self.store.tree_drop(r.id).await?;
+        if let Ok(mut t) = self.trees.lock() {
+            t.remove(&r.id);
+        }
+        Ok(())
+    }
+
+    /// Starts JOB on tree T. A seed or check does not start while one runs (a check asked for meanwhile runs after
+    /// it); re-checks queue. Whether it started.
+    fn start(self: &Arc<Self>, t: hrafn::TreeId, job: Job) -> bool {
+        if !matches!(job, Job::Recheck(_)) {
+            let go = self.live(t, |l| {
+                if l.busy {
+                    l.again |= matches!(job, Job::Check);
+                    return false;
+                }
+                l.busy = true;
+                true
+            });
+            if !go {
+                return false;
+            }
+        }
+        let inner = self.clone();
+        let h = clock::spawn("search:tree", async move {
+            let (i2, j2) = (inner.clone(), job.clone());
+            let rt = tokio::runtime::Handle::current();
+            let r = {
+                // after any base batch: a base change moves the trees in its own transaction
+                let _one = inner.tier1.lock().await;
+                clock::blocking(move || rt.block_on(i2.run(t, &j2))).await
+            };
+            match r {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::warn!("search: worktree overlay {}: {e}", t.0),
+                Err(e) => tracing::warn!("search: worktree overlay {}: {e}", t.0),
+            }
+            if !matches!(job, Job::Recheck(_)) {
+                let again = inner.live(t, |l| {
+                    l.busy = false;
+                    std::mem::take(&mut l.again)
+                });
+                if again {
+                    inner.start(t, Job::Check);
+                }
+            }
+        });
+        if let Ok(mut j) = self.jobs.lock() {
+            j.retain(|h| !h.is_finished());
+            j.push(h);
+        }
+        true
+    }
+
+    /// JOB on tree T, on the blocking pool: the tree's git door, its root, the base's rules.
+    async fn run(&self, t: hrafn::TreeId, job: &Job) -> Result<(), ProjectError> {
+        let Some(row) = self.store.trees().await?.into_iter().find(|r| r.id == t) else {
+            return Ok(());
+        };
+        let root = PathBuf::from(&row.root);
+        let door = hrafn::door(row.door);
+        let allow = |p: &str| self.deny.check(&root.join(p)) == Verdict::Allowed;
+        let cx = hrafn::overlay::Cx {
+            store: &self.store,
+            tree: t,
+            root: &root,
+            door: &*door,
+            config: &self.config,
+            allow: &allow,
+        };
+        let s = match job {
+            Job::Seed => hrafn::overlay::seed(&cx).await?,
+            Job::Check => hrafn::overlay::rediff(&cx).await?,
+            Job::Recheck(paths) => hrafn::overlay::recheck(&cx, paths).await?,
+        };
+        let watched = self.live(t, |l| {
+            l.last = Some(s);
+            if matches!(job, Job::Check) {
+                l.checks += 1;
+            }
+            l.watched
+        });
+        // a seed or re-diff leaves the tree live: one the watcher does not serve is checked at query time
+        if !watched && !matches!(job, Job::Recheck(_)) {
+            self.store.tree_mark(t, hrafn::TreeState::Unwatched).await?;
+        }
+        Ok(())
+    }
+
+    /// Watcher and feed hints, by tree key: PATHS re-checked, GITS re-diffed; with STALE every tree is marked stale
+    /// and re-diffed (events were lost). Keys of trees not registered are not this project's overlays (yet).
+    async fn hints(
+        self: &Arc<Self>,
+        paths: HashMap<String, BTreeSet<String>>,
+        gits: HashSet<String>,
+        stale: bool,
+    ) -> Result<(), ProjectError> {
+        if paths.is_empty() && gits.is_empty() && !stale {
+            return Ok(());
+        }
+        for r in self.store.trees().await? {
+            if stale && r.state != hrafn::TreeState::Seeding {
+                self.store.tree_mark(r.id, hrafn::TreeState::Stale).await?;
+            }
+            if stale || gits.contains(&r.key) {
+                self.start(r.id, Job::Check);
+            } else if let Some(p) = paths.get(&r.key) {
+                self.start(r.id, Job::Recheck(p.iter().cloned().collect()));
+            }
+        }
+        Ok(())
+    }
+
+    async fn sweep(self: &Arc<Self>) -> Result<u32, ProjectError> {
+        let main = self.root.clone();
+        let listed = clock::blocking(move || worktree_list(&main))
+            .await
+            .map_err(io::Error::other)??;
+        let now = (clock::wall_secs() * 1000.0) as i64;
+        let idle = TREE_IDLE.as_millis() as i64;
+        let mut dropped = 0;
+        for r in self.store.trees().await? {
+            let root = Path::new(&r.root);
+            let keep = match listed.iter().find(|(p, _)| same_path(p, root)) {
+                None => false,
+                // a locked worktree is never dropped, even with its folder gone (a removable disk)
+                Some((_, true)) => true,
+                Some((_, false)) => root.is_dir() && now - r.last_used < idle,
+            };
+            if !keep {
+                self.drop_tree(&r).await?;
+                dropped += 1;
+            }
+        }
+        Ok(dropped)
+    }
+
     fn allowed(&self, rel: &str) -> bool {
         self.deny.check(&self.root.join(rel)) == Verdict::Allowed
     }

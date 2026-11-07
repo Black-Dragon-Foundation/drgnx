@@ -1069,8 +1069,23 @@ the first chunk of a key the view sees. A tombstone hides the base's file; a tre
 `now` reads the view's root (the caller builds it), so a hit is found again in T's file. The lag is the view's: the
 base's counts the base's content only, and a tree's adds its rows' chunks and takes away the base chunks it
 shadows, read through `chunk_path_blob (path, blob, embed, key)`; its line starts "worktree: N files differ from the
-base". `tests/view_query.rs` holds the plan rows: no route scans `chunk`, `symbol` or `file`. The hub asks the base
-view until it resolves a worktree's root to its tree.
+base". `tests/view_query.rs` holds the plan rows: no route scans `chunk`, `symbol` or `file`.
+
+**Worktrees in the hub** (`search::project`). `Project::view_for(root, touched)` resolves a query's root: the main
+checkout (or a folder in it) is the base; a linked worktree is registered under history's `WorktreeId` (the same key
+its watcher events and `file-version` records carry, and `tree.key` in the store), joins the project's one watcher,
+and is seeded on first use, on the blocking pool under tier 1's lock. While it seeds the base answers ("worktree
+being indexed"). A `stale` or `unwatched` tree answers at once from its rows and starts a check (a re-diff: HEAD,
+the stat-based status, its overlay paths), at most one per `CHECK_TTL` (5 s). At most `RESIDENT_CAP` (16) trees hold
+rows; the least recently used goes first (`tree.last_used` is strictly increasing). On `ENOSPC`, or past the budget
+(half of `max_user_watches`), the least recently used other tree gives its watch up and is checked at query time;
+doctor names it. Watcher events of a tree re-check its paths, its git events re-diff it, and an overflow marks every
+tree stale and re-diffs it. The history feed (`Project::feed`, attached when history first watches a tree of the
+project) re-checks each version's path; a lagged receiver marks the trees stale and re-diffs them. The hourly sweep
+drops the overlay of a worktree `git worktree list` no longer shows, or whose folder is gone, and of one unused for
+14 days, but never a `locked` one. Opening the store marks every tree that is not seeding `stale`. `search/query`
+answers from the root's view (`base: true` asks for the base) with `view: {worktree?, differing_files, state}`, and
+`search/status` lists `trees` and the `watch` budget.
 
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.

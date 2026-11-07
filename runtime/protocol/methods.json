@@ -25202,6 +25202,13 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "properties": {
+          "base": {
+            "description": "True: answer from the base (the main checkout's rows) even when `root` is a linked worktree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "k": {
             "description": "How many hits, 1 to 100; default 10.",
             "format": "uint32",
@@ -25334,6 +25341,34 @@
               "built_from"
             ],
             "type": "object"
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -25365,12 +25400,16 @@
               "string",
               "null"
             ]
+          },
+          "view": {
+            "$ref": "#/$defs/QueryView"
           }
         },
         "required": [
           "hits",
           "lag",
-          "lag_line"
+          "lag_line",
+          "view"
         ],
         "title": "QueryAnswer",
         "type": "object"
@@ -25752,6 +25791,86 @@
             ],
             "type": "object"
           },
+          "SearchWatch": {
+            "additionalProperties": false,
+            "description": "The project's file watches.",
+            "properties": {
+              "budget": {
+                "description": "What Hrafn allows itself: half of `limit`.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "limit": {
+                "description": "`fs.inotify.max_user_watches`, where there is one.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "unwatched": {
+                "description": "Trees that run unwatched.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "used": {
+                "description": "Directories under watch.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "used",
+              "unwatched"
+            ],
+            "type": "object"
+          },
+          "TreeInfo": {
+            "additionalProperties": false,
+            "description": "One worktree overlay.",
+            "properties": {
+              "differing_files": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "door": {
+                "description": "The git door: `cli`, or `gix` for a tree an agent's sandbox touched.",
+                "type": "string"
+              },
+              "root": {
+                "type": "string"
+              },
+              "state": {
+                "description": "`seeding`, `live`, `stale` or `unwatched`.",
+                "type": "string"
+              },
+              "watched": {
+                "description": "Whether the project's watcher serves it (else a query checks it, at most every 5 s).",
+                "type": "boolean"
+              },
+              "worktree": {
+                "description": "History's worktree id.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "worktree",
+              "root",
+              "state",
+              "door",
+              "differing_files",
+              "watched"
+            ],
+            "type": "object"
+          },
           "WorkerStatus": {
             "additionalProperties": false,
             "properties": {
@@ -25836,6 +25955,16 @@
             "description": "`stopped`, `idle`, `running`, `typing`, `battery` or `failed`.",
             "type": "string"
           },
+          "trees": {
+            "description": "The project's worktree overlays.",
+            "items": {
+              "$ref": "#/$defs/TreeInfo"
+            },
+            "type": "array"
+          },
+          "watch": {
+            "$ref": "#/$defs/SearchWatch"
+          },
           "worker": {
             "$ref": "#/$defs/WorkerStatus"
           }
@@ -25849,7 +25978,9 @@
           "models",
           "worker",
           "tier2",
-          "embedded"
+          "embedded",
+          "trees",
+          "watch"
         ],
         "title": "StatusAnswer",
         "type": "object"

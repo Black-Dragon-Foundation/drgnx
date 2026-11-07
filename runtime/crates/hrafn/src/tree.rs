@@ -209,9 +209,26 @@ impl CodeStore {
         Ok(self
             .handle()
             .write(move |c| {
+                // strictly after every earlier use, so the least recently used tree is one even within a tick
                 c.execute(
-                    "update tree set last_used = ?2 where id = ?1",
+                    "update tree set last_used = max(?2, (select coalesce(max(last_used), 0) + 1 from tree))
+                     where id = ?1",
                     params![t.0, at],
+                )?;
+                Ok(())
+            })
+            .await?)
+    }
+
+    /// The store opened again: every tree that is not seeding becomes `stale` (edits may have happened while no one
+    /// watched); a seeding one seeds again on its next use.
+    pub async fn trees_reopened(&self) -> Result<(), StoreError> {
+        Ok(self
+            .handle()
+            .write(|c| {
+                c.execute(
+                    "update tree set state = 'stale' where state != 'seeding'",
+                    [],
                 )?;
                 Ok(())
             })

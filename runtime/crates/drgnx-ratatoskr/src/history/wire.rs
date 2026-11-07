@@ -206,6 +206,8 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
         lock(&WATCHED).retain(|i| *i != tree.id.0);
         return;
     };
+    // the versions reach the project's worktree overlays (once per project)
+    project.feed(hub.subscribe());
     // the tree's key among the project's watcher: main is `MAIN_TREE`, a worktree joins the one watcher under its id
     let key = {
         let (t, p) = (tree.clone(), project.clone());

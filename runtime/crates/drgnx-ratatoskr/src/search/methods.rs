@@ -12,7 +12,7 @@
 //! - **The embedders** of a project are the built-in model's worker (when `drgnx-search-builtin` is on and the model is
 //!   `Ready`) and the servers the gateway has. A change in that set opens the project again.
 
-use super::project::{Project, ProjectError, ProjectSpec, Tier2, project_id};
+use super::project::{Project, ProjectError, ProjectSpec, Tier2, ViewOf, project_id};
 use super::worker::WorkerEmbedder;
 use super::{DocEmbedder, Search, download, power, prefer, servers};
 use crate::clock;
@@ -114,8 +114,26 @@ fn wire_lag(l: &Lag) -> w::Lag {
     }
 }
 
-/// An answer as the wire has it.
-pub fn wire_answer(a: &hrafn::Answer) -> w::QueryAnswer {
+/// Which view answered, as the wire has it.
+fn wire_view(of: &ViewOf, a: &hrafn::Answer) -> w::QueryView {
+    w::QueryView {
+        worktree: of.worktree.clone(),
+        differing_files: a.lag.differing_files.unwrap_or(0),
+        state: of
+            .state
+            .map_or("base", hrafn::TreeState::as_str)
+            .to_string(),
+    }
+}
+
+/// An answer as the wire has it, with the view VIEW that answered.
+pub fn wire_answer(a: &hrafn::Answer, view: w::QueryView) -> w::QueryAnswer {
+    // a worktree's view says when its rows are being built or checked
+    let note = match view.state.as_str() {
+        "seeding" => "worktree being indexed (the base answered); ",
+        "stale" | "unwatched" if view.worktree.is_some() => "worktree being checked; ",
+        _ => "",
+    };
     w::QueryAnswer {
         hits: a
             .hits
@@ -134,7 +152,8 @@ pub fn wire_answer(a: &hrafn::Answer) -> w::QueryAnswer {
         lag: wire_lag(&a.lag),
         model: a.model.clone(),
         notice: a.notice.clone(),
-        lag_line: a.lag_line(),
+        lag_line: format!("{note}{}", a.lag_line()),
+        view,
     }
 }
 
@@ -450,7 +469,8 @@ impl Hub {
         }
     }
 
-    /// The answer to a question about ROOT's code (the MCP tool's and `search/query`'s).
+    /// The answer to a question about ROOT's code (the MCP tool's and `search/query`'s), from ROOT's view (a linked
+    /// worktree's rows over the base), or from the base with BASE.
     pub async fn query(
         &self,
         front: &Front,
@@ -458,9 +478,23 @@ impl Hub {
         text: &str,
         scope: Scope,
         k: u32,
-    ) -> Result<hrafn::Answer, Error> {
+        base: bool,
+    ) -> Result<w::QueryAnswer, Error> {
         let p = self.project(front, root).await?;
         p.fresh_for_query().await.map_err(project_error)?;
+        let of = if base {
+            ViewOf {
+                view: hrafn::View::Base,
+                worktree: None,
+                root: p.root().to_path_buf(),
+                state: None,
+                checking: false,
+            }
+        } else {
+            // plain git never runs where a sandboxed agent worked: such a tree gets the gix door
+            let touched = front.core.runs.git().is_touched(root).await.unwrap_or(true);
+            p.view_for(root, touched).await.map_err(project_error)?
+        };
         let builtin = if Self::builtin_on(front) {
             self.builtin()
         } else {
@@ -530,20 +564,21 @@ impl Hub {
             scope,
             k: k.clamp(1, 100),
         };
-        let pr = p.clone();
+        let (pr, at) = (p.clone(), of.root.clone());
         let mut a = hrafn::search(
             p.store(),
             &q,
-            hrafn::View::Base,
+            of.view,
             qvec.as_ref().map(|(m, v)| (m.as_str(), v.as_slice())),
-            &move |rel: &str| pr.read_now(rel),
+            &move |rel: &str| pr.read_now_in(&at, rel),
         )
         .await
         .map_err(internal)?;
         if a.model.is_none() {
             a.notice = notice.or(a.notice);
         }
-        Ok(a)
+        let view = wire_view(&of, &a);
+        Ok(wire_answer(&a, view))
     }
 
     async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
@@ -588,6 +623,40 @@ impl Hub {
             .map_err(project_error)?;
         let coverage_errors = p.coverage_errors().await.map_err(project_error)?;
         let st = p.status().borrow().clone();
+        let trees: Vec<w::TreeInfo> = p
+            .tree_status()
+            .await
+            .map_err(project_error)?
+            .into_iter()
+            .map(|t| w::TreeInfo {
+                worktree: t.key,
+                root: t.root,
+                state: t.state.as_str().to_string(),
+                door: t.door.as_str().to_string(),
+                differing_files: t.rows,
+                watched: t.watched,
+            })
+            .collect();
+        let used = self
+            .watches
+            .lock()
+            .ok()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|(r, _)| r == p.root())
+                    .and_then(|(_, w)| w.upgrade())
+                    .and_then(|s| s.lock().ok().map(|s| s.watched as u64))
+            })
+            .unwrap_or(0);
+        let limit: Option<u64> = std::fs::read_to_string(MAX_USER_WATCHES)
+            .ok()
+            .and_then(|t| t.trim().parse().ok());
+        let watch = w::SearchWatch {
+            used,
+            budget: limit.map(|l| l / 2),
+            limit,
+            unwatched: trees.iter().filter(|t| !t.watched).count() as u64,
+        };
         Ok(w::StatusAnswer {
             files: per_class.iter().map(|c| c.files).sum(),
             chunks: per_class.iter().map(|c| c.chunks).sum(),
@@ -598,6 +667,8 @@ impl Hub {
             worker: worker_status(builtin.as_deref()),
             tier2: tier2_name(&st.tier2).to_string(),
             embedded: st.embedded,
+            trees,
+            watch,
         })
     }
 
@@ -848,9 +919,17 @@ pub async fn serve(
         Params::SearchQuery(q) => {
             let scope = scope_of(q.scope);
             let k = q.k.unwrap_or(10);
-            hub.query(front, Path::new(q.root.as_str()), q.text.as_str(), scope, k)
-                .await
-                .map(|a| json!(wire_answer(&a)))
+            let base = q.base == Some(true);
+            hub.query(
+                front,
+                Path::new(q.root.as_str()),
+                q.text.as_str(),
+                scope,
+                k,
+                base,
+            )
+            .await
+            .map(|a| json!(a))
         }
         Params::SearchStatus(r) => hub
             .status(front, Path::new(r.root.as_str()))
