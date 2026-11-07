@@ -8,6 +8,7 @@
 
 use crate::chunk::{BUDGET, CHUNKER_VERSION, chunk_file};
 use crate::files::Listed;
+use crate::memo;
 use crate::store::{
     ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, content_ids, remove_file_row, sweep_all,
     vec_key, write_version,
@@ -451,56 +452,77 @@ pub const LAG_TREE_SQL: &str = "select coalesce(sum(n.sign * n.total), 0), coale
        from file t join file b on b.tree = 0 and b.path = t.path where t.tree = ?2) n";
 
 /// How far behind VIEW's index is for MODEL (none: no model fills tier 2, so nothing is behind on vectors). A
-/// worktree's view is the base's lag plus the delta of its rows, both read through indexes.
+/// worktree's view is the base's lag plus the delta of its rows, both read through indexes. The counts are kept until
+/// the store changes (`memo.rs`): a query between two index writes counts nothing again.
 pub async fn lag(store: &CodeStore, model: Option<&str>, view: View) -> Result<Lag, StoreError> {
     let model = model.map(str::to_string);
+    let memo = store.memo();
     Ok(store
         .handle()
         .read(move |c| {
-            let (mut chunks_behind, mut files_behind) = match &model {
-                None => (0, 0),
-                Some(m) => {
-                    let chunks = count(c, LAG_BEHIND_SQL, m)?;
-                    // the files are counted only when something is behind
-                    (
-                        chunks,
-                        if chunks == 0 {
-                            0
-                        } else {
-                            count(c, LAG_FILES_SQL, m)?
-                        },
-                    )
+            let mut m = memo::lock(&memo);
+            let m = m.at(c)?;
+            let key = (model.clone(), view);
+            let n = match m.lag.get(&key) {
+                Some(n) => *n,
+                None => {
+                    let n = lag_counts(c, model.as_deref(), view)?;
+                    m.lag.insert(key, n);
+                    n
                 }
             };
-            let total: i64 = c.query_row(LAG_TOTAL_SQL, [], |r| r.get(0))?;
-            let mut chunks_total = u32::try_from(total).unwrap_or(u32::MAX);
-            let mut differing_files = None;
-            if let View::Tree(t) = view {
-                let m = model.as_deref().unwrap_or_default();
-                let (dt, db, df, rows): (i64, i64, i64, i64) =
-                    c.query_row(LAG_TREE_SQL, params![m, t.0], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-                    })?;
-                let add =
-                    |n: u32, d: i64| u32::try_from((i64::from(n) + d).max(0)).unwrap_or(u32::MAX);
-                chunks_total = add(chunks_total, dt);
-                if model.is_some() {
-                    chunks_behind = add(chunks_behind, db);
-                    files_behind = add(files_behind, df);
-                }
-                differing_files = Some(u32::try_from(rows).unwrap_or(u32::MAX));
-            }
             Ok(Lag {
-                chunks_total,
-                chunks_behind,
-                files_behind,
+                chunks_total: n.chunks_total,
+                chunks_behind: n.chunks_behind,
+                files_behind: n.files_behind,
                 dirty_files: urdr::meta(c, META_DIRTY)?
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0),
                 built_from: urdr::meta(c, META_BUILT_FROM)?.unwrap_or_default(),
-                differing_files,
+                differing_files: n.differing_files,
                 model,
             })
         })
         .await?)
+}
+
+fn lag_counts(c: &Connection, model: Option<&str>, view: View) -> urdr::Result<memo::Counts> {
+    let (mut chunks_behind, mut files_behind) = match model {
+        None => (0, 0),
+        Some(m) => {
+            let chunks = count(c, LAG_BEHIND_SQL, m)?;
+            // the files are counted only when something is behind
+            (
+                chunks,
+                if chunks == 0 {
+                    0
+                } else {
+                    count(c, LAG_FILES_SQL, m)?
+                },
+            )
+        }
+    };
+    let total: i64 = c.query_row(LAG_TOTAL_SQL, [], |r| r.get(0))?;
+    let mut chunks_total = u32::try_from(total).unwrap_or(u32::MAX);
+    let mut differing_files = None;
+    if let View::Tree(t) = view {
+        let m = model.unwrap_or_default();
+        let (dt, db, df, rows): (i64, i64, i64, i64) =
+            c.query_row(LAG_TREE_SQL, params![m, t.0], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?;
+        let add = |n: u32, d: i64| u32::try_from((i64::from(n) + d).max(0)).unwrap_or(u32::MAX);
+        chunks_total = add(chunks_total, dt);
+        if model.is_some() {
+            chunks_behind = add(chunks_behind, db);
+            files_behind = add(files_behind, df);
+        }
+        differing_files = Some(u32::try_from(rows).unwrap_or(u32::MAX));
+    }
+    Ok(memo::Counts {
+        chunks_total,
+        chunks_behind,
+        files_behind,
+        differing_files,
+    })
 }
