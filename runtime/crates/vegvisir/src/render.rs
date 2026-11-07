@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use drgnx_rows::fit::{self, Measure};
 use drgnx_rows::fit_tty;
-use drgnx_rows::svg::Palette;
+use drgnx_rows::svg::{Palette, Svg};
 use drgnx_rows::{ImageId, Row, RowBuilder};
 use serde_json::Value;
 
@@ -90,6 +90,8 @@ pub struct Index {
     first: [Option<usize>; 7],
     /// Per layer, how many items it holds.
     count: [usize; 7],
+    /// Each placed item's first row (a port's chip sits in the band above it).
+    first_row: BTreeMap<ItemId, usize>,
 }
 
 impl Index {
@@ -109,6 +111,12 @@ impl Index {
                 if r.layer == layer && inside {
                     items[i].push((rect.map_or(0, |rc| rc.x), id.clone()));
                 }
+            }
+        }
+        let mut first_row = BTreeMap::new();
+        for (i, v) in items.iter().enumerate() {
+            for (_, id) in v {
+                first_row.entry(id.clone()).or_insert(i);
             }
         }
         let items = items
@@ -134,6 +142,7 @@ impl Index {
             order,
             first,
             count,
+            first_row,
         }
     }
 }
@@ -152,15 +161,20 @@ pub fn rows(s: &Scene, index: &Index, env: &Env, m: &dyn Measure) -> Drawn {
         };
     }
     let g = Geo::new(env);
-    let mut out = Drawn::default();
+    let e = Edges::new(s, env, &g);
+    let mut images = BTreeMap::new();
+    let mut rows = Vec::new();
     for &(band, i) in &index.order {
         if band {
-            out.rows.push(band_row(s, i, &g));
+            rows.push(band_row(s, index, i, &g, &e, &mut images));
         } else {
-            out.rows.extend(card_rows(s, index, i, &g, m));
+            rows.extend(card_rows(s, index, i, &g, m, &e, &mut images));
         }
     }
-    out
+    Drawn {
+        rows,
+        images: images.into_iter().collect(),
+    }
 }
 
 /// Units and px at one scale.
@@ -189,8 +203,16 @@ fn row_key(s: &Scene, i: usize) -> String {
     format!("{}:{}:{}", r.layer, r.block_line, r.sub)
 }
 
-/// The band above layout row I: blank, as high as the band (its tiles come with the lanes).
-fn band_row(s: &Scene, i: usize, g: &Geo) -> Row {
+/// The band above layout row I, as high as the band: each tile a curve or a port crosses, an image at its column,
+/// else blank.
+fn band_row(
+    s: &Scene,
+    index: &Index,
+    i: usize,
+    g: &Geo,
+    e: &Edges,
+    images: &mut BTreeMap<ImageId, String>,
+) -> Row {
     let units = s
         .layout
         .bands
@@ -198,8 +220,19 @@ fn band_row(s: &Scene, i: usize, g: &Geo) -> Row {
         .find(|b| b.row as usize == i)
         .map_or(1, |b| b.height_units);
     let mut b = RowBuilder::new(format!("band:{}", row_key(s, i)));
-    b.push(" ", Some("drgnx-work-band"))
-        .height(1, g.px(units).saturating_sub(1));
+    let tiles = e.tiles(index, i, g);
+    if tiles.is_empty() {
+        b.push(" ", Some("drgnx-work-band"));
+    }
+    for (t, svg, alt) in tiles {
+        let id = e.id(&svg);
+        images.entry(id).or_insert(svg);
+        let start = b.pos();
+        b.stop(t * e.tile).image(id, &alt);
+        let end = b.pos();
+        b.face(start, end, "drgnx-work-band");
+    }
+    b.height(1, g.px(units).saturating_sub(1));
     b.finish()
 }
 
@@ -212,8 +245,16 @@ fn row_lines(r: &crate::layout::Row) -> u32 {
     }
 }
 
-/// The lines of layout row I, one row each.
-fn card_rows(s: &Scene, index: &Index, i: usize, g: &Geo, m: &dyn Measure) -> Vec<Row> {
+/// The lines of layout row I, one row each: its cards and the lanes that pass through it, by their columns.
+fn card_rows(
+    s: &Scene,
+    index: &Index,
+    i: usize,
+    g: &Geo,
+    m: &dyn Measure,
+    e: &Edges,
+    images: &mut BTreeMap<ImageId, String>,
+) -> Vec<Row> {
     let r = &s.layout.rows[i];
     let n = row_lines(r);
     let line_px = g.px(r.height_units) / n;
@@ -223,6 +264,26 @@ fn card_rows(s: &Scene, index: &Index, i: usize, g: &Geo, m: &dyn Measure) -> Ve
         .iter()
         .filter_map(|id| s.items.get(id).map(|it| (id, card_lines(s, it))))
         .collect();
+    let lanes: Vec<(u32, ImageId, String)> = e
+        .lanes(i, g)
+        .into_iter()
+        .map(|(col, svg, alt)| {
+            let id = e.id(&svg);
+            images.entry(id).or_insert(svg);
+            (col, id, alt)
+        })
+        .collect();
+    // the cards then the lanes, by column (a stable sort: a card before a lane at its column)
+    let mut parts: Vec<(u32, Part)> = cards
+        .iter()
+        .enumerate()
+        .map(|(k, (id, _))| {
+            let x = s.layout.at.get(*id).map_or(0, |r| r.x);
+            (g.margin + g.px(x), Part::Card(k))
+        })
+        .chain(lanes.iter().enumerate().map(|(k, l)| (l.0, Part::Lane(k))))
+        .collect();
+    parts.sort_by_key(|p| p.0);
     (0..n)
         .map(|line| {
             let mut b = RowBuilder::new(format!("row:{}:{line}", row_key(s, i)));
@@ -230,13 +291,29 @@ fn card_rows(s: &Scene, index: &Index, i: usize, g: &Geo, m: &dyn Measure) -> Ve
                 let text = fit_px(m, &label, g.margin.saturating_sub(8));
                 b.push(&text, Some("drgnx-work-label"));
             }
-            for (id, lines) in &cards {
-                segment(&mut b, s, id, lines, line as usize, g, m);
+            for (_, part) in &parts {
+                match *part {
+                    Part::Card(k) => {
+                        let (id, lines) = &cards[k];
+                        segment(&mut b, s, id, lines, line as usize, g, m);
+                    }
+                    Part::Lane(k) => {
+                        let (col, id, alt) = &lanes[k];
+                        b.stop(*col).image(*id, alt);
+                    }
+                }
             }
             b.height(1, line_px.saturating_sub(1));
             b.finish()
         })
         .collect()
+}
+
+/// What a card row's line holds at a column: a card or a lane (by its index).
+#[derive(Clone, Copy)]
+enum Part {
+    Card(usize),
+    Lane(usize),
 }
 
 /// The label of layout row I's first line: the layer's name on its first row, a collapsed layer's with its count.
@@ -609,6 +686,362 @@ fn chip_line(it: &Item) -> Line {
         l.push(" ⚠", Some("drgnx-work-overlap"));
     }
     l
+}
+
+// ---- the edges: band tiles and lanes -----------------------------------------------------------------------------
+
+/// The width of an edge tile, logical px: any width from 128 to 256 costs the same to raster, so it is a layout
+/// choice.
+pub const TILE: u32 = 192;
+
+/// An edge on the selection's chain: drawn in the accent, or (an edit) in its agent's colour, one px wider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    Accent,
+    Agent(u8),
+}
+
+/// What the edges are drawn from: the chain's marks, each agent's colour number, the labels.
+struct Edges<'a> {
+    s: &'a Scene<'a>,
+    chain: BTreeMap<(&'a ItemId, &'a ItemId, EdgeKind), Mark>,
+    palette: &'a Palette,
+    epoch: u64,
+    /// A card line's text height and ascent percent.
+    line: (u32, u32),
+    tile: u32,
+}
+
+/// An edge kind's look off the chain: (palette role, width, dash), logical px. Every kind differs from every other
+/// in width or dash, so colour is never the only difference; `agent` is the agent's own colour.
+fn stroke(kind: EdgeKind) -> (&'static str, f32, &'static [f32]) {
+    match kind {
+        EdgeKind::Edits => ("edit", 2.0, &[]),
+        EdgeKind::Reads => ("agent", 1.5, &[1.5, 4.0]),
+        EdgeKind::RunsOn => ("edge", 1.0, &[6.0, 3.0, 1.0, 3.0]),
+        EdgeKind::BasedOn => ("edge", 1.0, &[4.0, 2.0]),
+        EdgeKind::Overlap => ("warn", 2.0, &[6.0, 4.0]),
+        EdgeKind::ReadVsEdit => ("warn", 1.0, &[2.0, 2.0]),
+        EdgeKind::CameFrom | EdgeKind::Manages => ("edge", 1.0, &[]),
+    }
+}
+
+/// An edge kind in words, for an image's alternative text.
+fn kind_words(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::CameFrom => "came from",
+        EdgeKind::Edits => "edits",
+        EdgeKind::Reads => "reads",
+        EdgeKind::RunsOn => "runs on",
+        EdgeKind::BasedOn => "based on",
+        EdgeKind::Overlap => "overlaps",
+        EdgeKind::ReadVsEdit => "reads what another edits",
+        EdgeKind::Manages => "manages",
+    }
+}
+
+const AGENT_ROLES: [&str; 6] = [
+    "agent-1", "agent-2", "agent-3", "agent-4", "agent-5", "agent-6",
+];
+
+impl<'a> Edges<'a> {
+    fn new(s: &'a Scene<'a>, env: &'a Env, g: &Geo) -> Self {
+        let mut chain = BTreeMap::new();
+        for e in s.chain {
+            let owner = (e.kind == EdgeKind::Edits)
+                .then(|| {
+                    s.edges
+                        .iter()
+                        .find(|c| c.kind == EdgeKind::CameFrom && c.to == e.from)
+                        .and_then(|c| s.items.get(&c.from))
+                        .filter(|it| matches!(it.kind, Kind::Agent | Kind::Subagent))
+                        .map(agent_number)
+                })
+                .flatten();
+            chain.insert(
+                (&e.from, &e.to, e.kind),
+                owner.map_or(Mark::Accent, Mark::Agent),
+            );
+        }
+        Edges {
+            s,
+            chain,
+            palette: env.palette,
+            epoch: env.epoch,
+            line: env.line,
+            tile: (TILE as f32 * g.scale).round() as u32,
+        }
+    }
+
+    fn label(&self, id: &ItemId) -> String {
+        self.s
+            .items
+            .get(id)
+            .map_or_else(|| id.0.clone(), |it| it.label.clone())
+    }
+
+    /// An edge's stroke: (palette role, width, dash) in logical px; on the chain the accent (an edit: its agent's
+    /// colour), one px wider.
+    fn look(
+        &self,
+        from: &ItemId,
+        to: &ItemId,
+        kind: EdgeKind,
+    ) -> (&'static str, f32, &'static [f32]) {
+        let (role, width, dash) = stroke(kind);
+        let mark = self.chain.get(&(from, to, kind)).copied();
+        let agent = match mark {
+            Some(Mark::Agent(n)) => Some(n),
+            _ => self
+                .s
+                .items
+                .get(from)
+                .filter(|it| matches!(it.kind, Kind::Agent | Kind::Subagent))
+                .map(agent_number),
+        };
+        let role = match mark {
+            Some(Mark::Agent(n)) => AGENT_ROLES[usize::from(n) - 1],
+            Some(Mark::Accent) => "accent",
+            None if role == "agent" => agent.map_or("edit", |n| AGENT_ROLES[usize::from(n) - 1]),
+            None => role,
+        };
+        (role, width + if mark.is_some() { 1.0 } else { 0.0 }, dash)
+    }
+
+    fn on_chain(&self, seg: &crate::layout::Seg) -> bool {
+        self.chain.contains_key(&(&seg.from, &seg.to, seg.kind))
+    }
+
+    /// The band above layout row I's tiles: (tile index, svg, alt) for each tile a curve or a port crosses.
+    fn tiles(&self, index: &Index, i: usize, g: &Geo) -> Vec<(u32, String, String)> {
+        let l = self.s.layout;
+        let Some(band) = l.bands.iter().find(|b| b.row as usize == i) else {
+            return Vec::new();
+        };
+        // the ports whose target sits in this row: (centre units, parents)
+        let ports: Vec<(u32, usize)> = l
+            .ports
+            .iter()
+            .filter(|p| index.first_row.get(&p.target) == Some(&i))
+            .filter_map(|p| {
+                l.at.get(&p.target)
+                    .map(|r| (r.x + r.w / 2, p.parents.len()))
+            })
+            .collect();
+        let w = i64::from(self.tile);
+        let edge_px = |u: u32| i64::from(g.margin + g.px(u));
+        let chip_w = i64::from((30.0 * g.scale).round() as u32);
+        let seg_in = |s: &crate::layout::Seg, t: i64| {
+            let (a, b) = (edge_px(s.x0), edge_px(s.x1));
+            a.min(b) < (t + 1) * w + 2 && a.max(b) > t * w - 2
+        };
+        let port_in = |c: u32, t: i64| {
+            let c = edge_px(c);
+            c - chip_w / 2 < (t + 1) * w && c + chip_w / 2 > t * w
+        };
+        let far = band
+            .segs
+            .iter()
+            .flat_map(|s| [edge_px(s.x0), edge_px(s.x1)])
+            .chain(ports.iter().map(|(c, _)| edge_px(*c) + chip_w / 2))
+            .max()
+            .unwrap_or(0);
+        let height = g.px(band.height_units);
+        let mut out = Vec::new();
+        for t in 0..=(far / w) {
+            let segs: Vec<&crate::layout::Seg> =
+                band.segs.iter().filter(|s| seg_in(s, t)).collect();
+            let here: Vec<(u32, usize)> = ports
+                .iter()
+                .copied()
+                .filter(|(c, _)| port_in(*c, t))
+                .collect();
+            if segs.is_empty() && here.is_empty() {
+                continue;
+            }
+            let mut svg = Svg::new(self.palette, self.tile, height);
+            // the chain's curves last: they draw on top
+            let (on, off): (Vec<&crate::layout::Seg>, Vec<&crate::layout::Seg>) =
+                segs.iter().copied().partition(|s| self.on_chain(s));
+            for s in off.iter().chain(on.iter()) {
+                let x0 = edge_px(s.x0) - t * w;
+                let x1 = edge_px(s.x1) - t * w;
+                let h = i64::from(height);
+                let d = if s.arc {
+                    let c = (0.4 * height as f32).round() as i64;
+                    format!("M{x0} {h}C{x0} {c} {x1} {c} {x1} {h}")
+                } else {
+                    let m = (height as f32 / 2.0).round() as i64;
+                    format!("M{x0} 0C{x0} {m} {x1} {m} {x1} {h}")
+                };
+                let (role, width, dash) = self.look(&s.from, &s.to, s.kind);
+                let dash: Vec<f32> = dash.iter().map(|d| d * g.scale).collect();
+                svg.path_dashed(&d, width * g.scale, role, &dash);
+            }
+            for (c, n) in &here {
+                let cw = chip_w;
+                let ch = i64::from(height.min((12.0 * g.scale).round() as u32));
+                let cx = edge_px(*c) - t * w;
+                let h = i64::from(height);
+                svg.rect(
+                    (cx - cw / 2) as f32,
+                    (h - ch) as f32,
+                    cw as f32,
+                    ch as f32,
+                    (ch / 2) as f32,
+                    "chip-bg",
+                );
+                svg.label(
+                    cx as f32,
+                    (h - (ch as f32 * 0.22).round() as i64) as f32,
+                    (ch as f32 * 0.75).round().max(6.0),
+                    "chip-fg",
+                    &format!("↑ {n}"),
+                );
+            }
+            let words: Vec<String> = segs
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{} → {} ({})",
+                        self.label(&s.from),
+                        self.label(&s.to),
+                        kind_words(s.kind)
+                    )
+                })
+                .chain(
+                    here.iter()
+                        .map(|(_, n)| format!("{n} more arrive by a port")),
+                )
+                .collect();
+            out.push((
+                u32::try_from(t).unwrap_or(0),
+                svg.finish(),
+                format!("Edges: {}", words.join(", ")),
+            ));
+        }
+        out
+    }
+
+    /// The lanes of layout row I: (column px, svg, alt), one image per column: the widest stroke's (the chain's,
+    /// when one is on it), its words naming every lane there.
+    fn lanes(&self, i: usize, g: &Geo) -> Vec<(u32, String, String)> {
+        let mut by_x: Vec<(u32, Vec<&crate::layout::Lane>)> = Vec::new();
+        for lane in self.s.layout.lanes.iter().filter(|l| l.row as usize == i) {
+            match by_x.iter_mut().find(|(x, _)| *x == lane.x) {
+                Some((_, v)) => v.push(lane),
+                None => by_x.push((lane.x, vec![lane])),
+            }
+        }
+        let (height, _) = self.line;
+        by_x.into_iter()
+            .map(|(x, at)| {
+                let width = |l: &crate::layout::Lane| self.look(&l.from, &l.to, l.kind).1;
+                let lane =
+                    at.iter().skip(1).fold(
+                        at[0],
+                        |best, l| if width(l) > width(best) { l } else { best },
+                    );
+                let (role, w, dash) = self.look(&lane.from, &lane.to, lane.kind);
+                let px = (w.max(2.0) * g.scale).round() as u32;
+                let mut svg = Svg::new(self.palette, px, height);
+                let dash: Vec<f32> = dash.iter().map(|d| d * g.scale).collect();
+                svg.path_dashed(
+                    &format!("M{} 0V{height}", px as f32 / 2.0),
+                    w * g.scale,
+                    role,
+                    &dash,
+                );
+                let alt = at
+                    .iter()
+                    .map(|l| {
+                        format!(
+                            "Edge {} → {} ({})",
+                            self.label(&l.from),
+                            self.label(&l.to),
+                            kind_words(l.kind)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                (
+                    (g.margin + g.px(x)).saturating_sub(px / 2),
+                    svg.finish(),
+                    alt,
+                )
+            })
+            .collect()
+    }
+
+    fn id(&self, svg: &str) -> ImageId {
+        ImageId::of(svg.as_bytes(), self.epoch)
+    }
+}
+
+// ---- the strip ---------------------------------------------------------------------------------------------------
+
+/// The needs-you strip (the header line), one row `strip`: a chip with its jump key for each of the first nine
+/// entries (the cards, then the agents that need you with no card), +N for the rest, and the MACHINES' load at the
+/// right edge of the view's width.
+pub fn strip(
+    s: &Scene,
+    needs: &[crate::NeedsYou],
+    machines: &[Item],
+    env: &Env,
+    m: &dyn Measure,
+) -> Row {
+    let covered: BTreeSet<&ItemId> = needs.iter().flat_map(|n| n.about.iter()).collect();
+    let mut entries: Vec<String> = needs.iter().map(|n| n.text.clone()).collect();
+    entries.extend(
+        s.items
+            .values()
+            .filter(|it| {
+                it.kind == Kind::Agent
+                    && it.fields.state == Some(State::NeedsYou)
+                    && !covered.contains(&it.id)
+            })
+            .map(|it| format!("{} needs you", it.label)),
+    );
+    let mut b = RowBuilder::new("strip");
+    for (i, e) in entries.iter().take(9).enumerate() {
+        if i > 0 {
+            b.push(" ", None);
+        }
+        b.push(
+            &format!(" ⚑ {e}  g{} ", i + 1),
+            Some("drgnx-work-needs-you"),
+        );
+    }
+    if entries.len() > 9 {
+        b.push(
+            &format!(" +{} ", entries.len() - 9),
+            Some("drgnx-work-needs-you"),
+        );
+    }
+    let chips: Vec<String> = machines
+        .iter()
+        .filter(|it| it.kind == Kind::Machine)
+        .map(|it| {
+            let (used, total) = it.fields.slots.unwrap_or((0, 0));
+            let cost = it
+                .fields
+                .runner
+                .as_ref()
+                .and_then(|r| r.cost.as_ref())
+                .map_or(String::new(), |c| format!(" · cloud {c}"));
+            format!(" {} {used}/{total}{cost} ", it.label)
+        })
+        .collect();
+    let tail = chips.join(" ");
+    let w = fit::width(m, ROLE, &tail).ceil() as u32;
+    b.stop(env.width_px.saturating_sub(w));
+    for (i, c) in chips.iter().enumerate() {
+        if i > 0 {
+            b.push(" ", None);
+        }
+        b.push(c, Some("drgnx-work-chip"));
+    }
+    b.finish()
 }
 
 // ---- the outline -------------------------------------------------------------------------------------------------

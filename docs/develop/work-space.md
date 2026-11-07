@@ -191,7 +191,20 @@ layer's first row, each layer's count); `render::rows` only reads it. One row pe
   layer's: "Name · count"), fitted to the margin less 8 px. Each card's line is a stop at the card's left, its text
   fitted to the card's width less 10 px, and a stop at its right; the card's box face (`drgnx-card-*`) is a run under
   the text's own faces, and `drgnx-work-id` names the item over the text and the right stop.
-- `band:LAYER:BLOCK-LINE:SUB`: the band above that row, as high as the band.
+- `band:LAYER:BLOCK-LINE:SUB`: the band above that row, as high as the band: each 192 px tile (at the scale) that a
+  curve or a port chip crosses is an image at its column, else the row is blank.
+- Lanes: each line of a card row carries the row's lanes as images among its cards, by column; lanes at one x are one
+  image (the widest stroke's: the chain's when one is on it) whose words name them all, so an image never takes the
+  gap and pushes the next card right.
+- `strip` (`render::strip`, the header line): a chip with its jump key per needs-you entry (the cards, then the agents
+  that need you with no card), the first nine and `+N`, then a stop that puts the machines' load at the view's right
+  edge.
+
+Edge strokes follow `drgnx-work-edges.el`'s table (a width or a dash per kind, never colour alone); the selection's
+chain (`Scene::chain`) draws in the accent, an edit on it in its agent's colour, one px wider and on top. The SVG comes
+from `drgnx_rows::svg` in palette roles only (`edge`, `edit`, `accent`, `warn`, `chip-bg`, `chip-fg`, `agent-1..6`);
+an image's id is its content hash and the env epoch, so the same strokes are the same image across draws (sent once)
+and a theme change draws them all again.
 - On a terminal, a layout that does not fit, or the user's `O`: `notice` (the layout did not fit), then
   `outline:ID:LINE` per agent in plan order (its line, why, touches and conclusion, each within the columns), or
   `outline-none`.

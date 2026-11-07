@@ -10,7 +10,7 @@ use drgnx_rows::{Op, Row};
 use serde::Deserialize;
 use vegvisir::layout::Layout;
 use vegvisir::render::{self, Env, Index, Outline, Scene};
-use vegvisir::{Edge, Item, ItemId};
+use vegvisir::{Edge, EdgeKind, Item, ItemId, NeedsYou};
 
 /// 8 px a column, as a batch Emacs measures (`drgnx-view-text-width` on a terminal frame).
 struct Cols;
@@ -29,6 +29,8 @@ struct Frame {
     items: Vec<Item>,
     edges: Vec<Edge>,
     layout: Layout,
+    #[serde(default)]
+    needs_you: Vec<NeedsYou>,
 }
 
 fn frame() -> (BTreeMap<ItemId, Item>, Vec<Edge>, Layout) {
@@ -284,4 +286,229 @@ fn tty_outline_rows() {
         );
         assert!(drawn.images.is_empty());
     }
+}
+
+/// The palette a test draws with: one distinct colour per role.
+fn palette() -> Palette {
+    let roles = [
+        "edge", "edit", "accent", "warn", "chip-bg", "chip-fg", "agent-1", "agent-2", "agent-3",
+        "agent-4", "agent-5", "agent-6",
+    ];
+    Palette(
+        roles
+            .iter()
+            .enumerate()
+            .map(|(i, r)| ((*r).to_owned(), format!("#00{i:02}00")))
+            .collect(),
+    )
+}
+
+/// [D] Every row of the fixture frame, bands and lanes included, is the editor's; lanes at one column of a row are
+/// one image whose words name them all.
+#[test]
+fn lanes_on_one_column_are_one_image() {
+    let (items, edges, mut layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    let golden = [
+        ("band:2:0:0", "<384><img>"),
+        ("band:3:0:0", "<192><img><384><img>"),
+        ("band:4:0:0", "<192><img><384><img>"),
+        ("band:5:0:0", "<0><img><192><img><384><img>"),
+        ("band:4:0:1", "<0><img><192><img><384><img>"),
+        ("band:6:0:0", "<192><img><384><img>"),
+    ];
+    for (key, want) in golden {
+        let r = drawn
+            .rows
+            .iter()
+            .find(|r| r.key == key)
+            .unwrap_or_else(|| panic!("{key}"));
+        assert_eq!(flat(r), want, "{key}");
+    }
+    assert_eq!(
+        layout_row(&drawn.rows, "row:5:0:0"),
+        "Branches<99><img><120>⑂ rp-df-hub · edi…<280><364>⑂ rp-fx-sess · ed…<524>\n"
+    );
+    assert_eq!(
+        layout_row(&drawn.rows, "row:4:0:1"),
+        "<116>● O explore<284><291><img><403><img>\n<116>running 2m<284><291><img><403><img>\n"
+    );
+    // every image a row names is drawn
+    for r in &drawn.rows {
+        for (_, id, _) in &r.images {
+            assert!(
+                drawn.images.iter().any(|(i, _)| i == id),
+                "{id:?} of {}",
+                r.key
+            );
+        }
+    }
+    // a second lane at the first one's column: still one image a line, naming both
+    let mut extra = layout.lanes[1].clone();
+    extra.kind = EdgeKind::Reads;
+    extra.from = ItemId("agent:a1".into());
+    layout.lanes.push(extra);
+    let s = scene(&items, &edges, &layout, &new);
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    let line = drawn
+        .rows
+        .iter()
+        .find(|r| r.key == "row:4:0:1:0")
+        .expect("the subagent's line");
+    assert_eq!(
+        line.images.len(),
+        2,
+        "two columns, one image each: {line:?}"
+    );
+    let alt = &line.images[0].2;
+    assert!(
+        alt.contains("(edits)") && alt.contains("(reads)") && alt.contains("; "),
+        "{alt}"
+    );
+}
+
+/// [D] A tile that draws the same strokes is the same image: the same id across draws, sent once.
+#[test]
+fn tiles_are_image_ids_reused_across_draws() {
+    let (items, edges, mut layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let a = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    let b = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    assert!(!a.images.is_empty());
+    assert_eq!(a.images, b.images, "the same draw, the same images");
+    let ids = |d: &render::Drawn| d.images.iter().map(|i| i.0).collect::<BTreeSet<_>>();
+    let mut uniq = ids(&a);
+    assert_eq!(uniq.len(), a.images.len(), "each image once");
+    // a card's field changes: no tile changes
+    let mut items2 = items.clone();
+    items2
+        .get_mut(&ItemId("agent:a1".into()))
+        .unwrap()
+        .fields
+        .minutes = Some(33);
+    let s = scene(&items2, &edges, &layout, &new);
+    assert_eq!(
+        ids(&render::rows(&s, &Index::of(&s), &gui(&pal), &Cols)),
+        uniq
+    );
+    // one band's curve moves: only that band's tiles are new
+    layout.bands[0].segs[0].x1 += 4;
+    let s = scene(&items, &edges, &layout, &new);
+    let moved = ids(&render::rows(&s, &Index::of(&s), &gui(&pal), &Cols));
+    let fresh: Vec<_> = moved.difference(&uniq).collect();
+    assert_eq!(fresh.len(), 1, "one tile of the moved band: {fresh:?}");
+    uniq.retain(|i| moved.contains(i));
+    assert_eq!(uniq.len(), a.images.len() - 1);
+}
+
+/// [D] The needs-you strip: a chip with its jump key per entry (nine at most, then +N), the machines' load at the
+/// right edge.
+#[test]
+fn strip_chips_rows() {
+    let f: Frame = serde_json::from_str(include_str!(
+        "../../../../test/fixtures/work-space/frame.json"
+    ))
+    .unwrap();
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let machines: Vec<Item> = items
+        .values()
+        .filter(|i| i.id.0.starts_with("machine:"))
+        .cloned()
+        .collect();
+    let row = render::strip(&s, &f.needs_you, &machines, &gui(&pal), &Cols);
+    assert_eq!(row.key, "strip");
+    assert!(
+        row.text.contains("⚑ Codex asks: cargo clippy  g1"),
+        "{row:?}"
+    );
+    assert!(row.text.contains("desktop 3/16"), "{row:?}");
+    // the card covers the agent that needs you: no chip of its own
+    assert!(!row.text.contains("fx-sess needs you"), "{row:?}");
+    assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-needs-you"));
+    assert!(row.runs.iter().any(|r| r.2 == "drgnx-work-chip"));
+    // the machines' chips end at the right edge
+    let (pos, px) = *row.stops.last().expect("a stop before the machines");
+    let tail: String = row.text.chars().skip(pos as usize + 1).collect();
+    assert_eq!(px + 8 * tail.chars().count() as u32, 1000, "{tail:?}");
+    // more than nine: the first nine and +N
+    let many: Vec<NeedsYou> = (0..12)
+        .map(|i| NeedsYou {
+            about: vec![],
+            text: format!("ask {i}"),
+            ..f.needs_you[0].clone()
+        })
+        .collect();
+    let row = render::strip(&s, &many, &machines, &gui(&pal), &Cols);
+    assert!(
+        row.text.contains("g9") && !row.text.contains("g10") && row.text.contains("+4"),
+        "{}",
+        row.text
+    );
+}
+
+/// [D] A new env epoch (a theme) gives every image a new id: no old tile is reused.
+#[test]
+fn theme_epoch_changes_tile_ids() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    let s = scene(&items, &edges, &layout, &new);
+    let one = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    let two = render::rows(
+        &s,
+        &Index::of(&s),
+        &Env {
+            epoch: 2,
+            ..gui(&pal)
+        },
+        &Cols,
+    );
+    assert!(!one.images.is_empty());
+    assert!(one.images.iter().all(|(i, _)| i.epoch == 1));
+    assert!(two.images.iter().all(|(i, _)| i.epoch == 2));
+    let a: BTreeSet<u64> = one.images.iter().map(|i| i.0.hash).collect();
+    let b: BTreeSet<u64> = two.images.iter().map(|i| i.0.hash).collect();
+    assert_eq!(a, b, "the same strokes");
+}
+
+/// [D] The map's lanes and tiles take every colour from the env's palette.
+#[test]
+fn svg_has_no_colour_outside_the_palette() {
+    let (items, edges, layout) = frame();
+    let new = BTreeSet::new();
+    let pal = palette();
+    // the selection's chain too: the accent and an agent's colour
+    let chain: Vec<Edge> = edges.clone();
+    let s = Scene {
+        chain: &chain,
+        ..scene(&items, &edges, &layout, &new)
+    };
+    let drawn = render::rows(&s, &Index::of(&s), &gui(&pal), &Cols);
+    let allowed: BTreeSet<&str> = pal
+        .0
+        .iter()
+        .map(|(_, c)| c.as_str())
+        .chain(["none", "currentColor"])
+        .collect();
+    let mut seen = BTreeSet::new();
+    for (_, svg) in &drawn.images {
+        for attr in ["fill=\"", "stroke=\""] {
+            for (i, _) in svg.match_indices(attr) {
+                let v = &svg[i + attr.len()..];
+                let v = &v[..v.find('"').unwrap()];
+                assert!(allowed.contains(v), "{v} in {svg}");
+                seen.insert(v.to_owned());
+            }
+        }
+    }
+    assert!(seen.contains("#000200"), "the chain's accent: {seen:?}");
+    assert!(seen.len() >= 3, "{seen:?}");
 }
