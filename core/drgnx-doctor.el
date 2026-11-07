@@ -469,6 +469,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :service-unit (drgnx-doctor--service-unit)
            :fedora-release (drgnx-doctor--fedora-release)
            :native-available native
+           :history-hook (and (fboundp 'nidhogg-history-track) (fboundp 'nidhogg-history-drain)
+                              (fboundp 'nidhogg-history-pending-p) t)
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
@@ -659,6 +661,15 @@ severity, the fix the first `:fix'."
                                       (n (list 'ok (format "Nidhogg %s (GNU Emacs %s)" n v) nil))
                                       (t (list 'fail (format "GNU Emacs %s is not Nidhogg, drgnx's own Emacs build" v)
                                                drgnx-doctor-nidhogg-hint))))))
+
+(drgnx-doctor-define 'edit-history :group "Emacs"
+                     :doc "This Emacs has Nidhogg's change hook, which the edit history (revert, pair mode) needs"
+                     :check (lambda (f)
+                              (when (plist-member f :history-hook)
+                                (if (plist-get f :history-hook)
+                                    (list 'ok "the change hook is there" nil)
+                                  (list 'warn "this Emacs has no Nidhogg change hook: the edit history stays off (no revert, no pair mode)"
+                                        drgnx-doctor-nidhogg-hint)))))
 
 (drgnx-doctor-define 'fedora-release :group "Emacs" :platform 'linux
                      :doc "On Fedora: release 45 or newer (older releases are not supported)"

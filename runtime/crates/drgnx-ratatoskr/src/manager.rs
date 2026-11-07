@@ -203,8 +203,10 @@ async fn slice_of(f: &Front, id: &str, from: u64, n: Option<u64>) -> Result<Slic
         .await
         .map_err(|e| session::internal(format!("agents/slice: {e}")))?;
     let more = rows.len() as u64 > n;
-    let mut steps: Vec<runstav::methods::timeline::Step> =
-        rows.into_iter().map(|r| f.core.timeline.wire(r)).collect();
+    let mut steps: Vec<runstav::methods::timeline::Step> = rows
+        .into_iter()
+        .map(|r| f.core.timeline.wire_for(f, r))
+        .collect();
     steps.truncate(n as usize);
     let mids: HashSet<String> = steps.iter().filter_map(|s| s.message_id.clone()).collect();
     let entries = s.entries_for(&mids, SLICE_ENTRIES);
