@@ -1185,21 +1185,29 @@ impl Map {
         self.send(key.conn, &data);
     }
 
-    /// Rows view V (KEY) of space SP to each display class its editor sent an env for: the rows built in that class
-    /// and the patch from what it holds (`view::Views::publish_built`).
+    /// Rows view V (KEY) of space SP: first its model (`view-model`, what changed since its editor's replica was last
+    /// sent one), then to each display class its editor sent an env for the rows built in that class and the patch
+    /// from what it holds (`view::Views::publish_built`), naming the model's version.
     fn publish(&self, sp: &Space, v: &View, key: &ViewKey) {
         if !v.rows || !v.shown {
             return;
         }
+        let m = sp.core.model();
+        let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
         #[cfg(test)]
-        self.log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push("rows");
+        {
+            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            if doc.is_some() {
+                log.push("model");
+            }
+            log.push("rows");
+        }
         let Some(f) = self.front.get().and_then(Weak::upgrade) else {
             return;
         };
-        let m = sp.core.model();
+        if let Some(doc) = doc {
+            f.core.views.publish_model(&f, key.conn, &key.view, doc);
+        }
         // the job chips' elapsed time: whole seconds of the wall clock
         let now = crate::clock::wall_secs() as u64;
         for class in f.core.views.classes(key.conn, &key.view) {
@@ -1208,11 +1216,108 @@ impl Map {
                 .views
                 .publish_built(&f, &k3, |env, fonts| view_rows(m, v, env, fonts, now));
         }
+        Self::publish_detail(&f, m, v, key, None);
+    }
+
+    /// The Detail panel beside rows view V (KEY): its rows for V's selection, to each class its editor sent an env
+    /// for (CLASS: only that one). Nothing while no editor shows it.
+    fn publish_detail(
+        f: &Front,
+        m: &vegvisir::Model,
+        v: &View,
+        key: &ViewKey,
+        class: Option<&str>,
+    ) {
+        let view = detail::view_of(&key.view);
+        let lines = detail::lines(m, v.selected.as_ref(), crate::clock::wall_secs() as u64);
+        for c in f.core.views.classes(key.conn, &view) {
+            if class.is_some_and(|only| only != c) {
+                continue;
+            }
+            let k3 = (key.conn, view.clone(), c);
+            f.core
+                .views
+                .publish_built(f, &k3, |_env, _fonts| (detail::rows(&lines), Vec::new()));
+        }
+    }
+
+    /// The sessions whose Timeline lanes the selection of connection CONN's shown rows map views lights: the agents
+    /// and subagents on its chain, the selection's own included (a subagent stands for its session).
+    /// The agents on map view VIEW of connection CONN that work on a tracker task: (the task's title, the agent's item
+    /// id, its label), by start order. The Board puts each on its task's card (`work::trail::board`).
+    pub fn agents_of(&self, conn: u64, view: &str) -> Vec<(String, String, String)> {
+        let g = lock(&self.inner);
+        let key = ViewKey {
+            conn,
+            view: view.to_owned(),
+        };
+        let Some(sp) = g.views.get(&key).and_then(|v| g.spaces.get(&v.space)) else {
+            return Vec::new();
+        };
+        let mut agents: Vec<vegvisir::model::Item> = sp
+            .core
+            .model()
+            .items()
+            .into_values()
+            .filter(|it| it.kind == Kind::Agent && it.fields.task.is_some())
+            .collect();
+        agents.sort_by_key(|it| it.order);
+        agents
+            .into_iter()
+            .map(|it| (it.fields.task.unwrap_or_default(), it.id.0, it.label))
+            .collect()
+    }
+
+    pub fn near(&self, conn: u64) -> Vec<String> {
+        Self::near_in(&lock(&self.inner), conn)
+    }
+
+    fn near_in(g: &Inner, conn: u64) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (_, v) in g
+            .views
+            .iter()
+            .filter(|(k, v)| k.conn == conn && v.rows && v.shown)
+        {
+            let (Some(sel), Some(sp)) = (v.selected.as_ref(), g.spaces.get(&v.space)) else {
+                continue;
+            };
+            let m = sp.core.model();
+            let c = m.chain(sel);
+            for id in std::iter::once(sel).chain(&c.up).chain(&c.down) {
+                let agent = m
+                    .item(id)
+                    .is_some_and(|it| matches!(it.kind, Kind::Agent | Kind::Subagent));
+                let sid =
+                    id.0.strip_prefix("agent:")
+                        .and_then(|r| r.split('/').next());
+                if let Some(sid) = sid.filter(|_| agent)
+                    && !out.iter().any(|s| s == sid)
+                {
+                    out.push(sid.to_owned());
+                }
+            }
+        }
+        out
     }
 
     /// An env of (connection, view, class) K3 arrived: a rows map view of that name lays out again at its classes'
     /// width when it changed (as the user's own change, at once), else draws again for it.
     pub fn view_env(self: &Arc<Self>, f: &Front, k3: &crate::view::Key) {
+        if let Some(map_view) = detail::map_of(&k3.1) {
+            // a Detail panel's class: its rows for the map's selection now
+            let key = ViewKey {
+                conn: k3.0,
+                view: map_view.to_owned(),
+            };
+            let g = lock(&self.inner);
+            if let Some(v) = g.views.get(&key).filter(|v| v.rows && v.shown)
+                && let Some(sp) = g.spaces.get(&v.space)
+            {
+                Self::publish_detail(f, sp.core.model(), v, &key, Some(&k3.2));
+            }
+            return;
+        }
         let key = ViewKey {
             conn: k3.0,
             view: k3.1.clone(),
@@ -1380,7 +1485,9 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         g.views.insert(key, v);
         return Ok(MapSubscribed::Frame(frame));
     }
-    // a rows view: its rows to each class it has an env for (the first patch of each a reset)
+    // a rows view: its model (a reset), then its rows to each class it has an env for (the first patch of each a
+    // reset)
+    f.core.views.model_restart(c.conn_id, &p.view);
     map.publish(sp, &v, &key);
     let version = v.version;
     g.views.insert(key, v);
@@ -1419,6 +1526,10 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     if selected.is_some() {
         v.selected = selected;
     }
+    if p.clear {
+        v.selected = None;
+    }
+    let moved = p.selected.is_some() || p.clear;
     let space = v.space.clone();
     let mut ops = Vec::new();
     if state != v.state {
@@ -1432,8 +1543,11 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         && shown != v.shown
     {
         v.shown = shown;
-        // a hidden view drops what it gathered; shown again, it gets one full frame
+        // a hidden view drops what it gathered; shown again, it gets one full frame (and a model reset)
         v.co = Coalescer::default();
+        if !shown && v.rows {
+            f.core.views.model_hidden(c.conn_id, &p.view);
+        }
         ops.push(ViewOp::Shown {
             view: key.clone(),
             shown,
@@ -1461,7 +1575,7 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if relayout {
         f_map.coalesce(&mut g, &key, Some(CoIn::User), now);
-    } else if p.selected.is_some() {
+    } else if moved {
         f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
         // a rows view draws its new chain's edges (the tiles and lanes on it)
         if let Some(v) = g.views.get(&key)
@@ -1469,6 +1583,10 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         {
             f_map.publish(sp, v, &key);
         }
+    }
+    if moved {
+        // the Timelines of this connection light the lanes the new selection reaches
+        f.core.trails.map_moved(c.conn_id);
     }
     Ok(MapVersion {
         version: g.views.get(&key).map_or(0, |v| v.version),
@@ -1671,5 +1789,7 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+mod detail;
+mod model;
 #[cfg(test)]
 mod tests;

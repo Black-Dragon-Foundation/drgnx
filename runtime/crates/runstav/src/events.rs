@@ -353,6 +353,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "a pair write whose answer did not come in its time to live: the editor answers pair/answer from what it applied"
         ),
         event!(
+            "view-model",
+            crate::methods::view::ViewModel,
+            "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version"
+        ),
+        event!(
             "view-patch",
             crate::methods::view::Patch,
             "what changed in one (view, display class) of a hub-fed view, to its connection only: a reset first and after every new env epoch, then ops against the version base; every patch names the hub's instance id and the editor's epoch"
@@ -459,6 +464,8 @@ mod tests {
                     "view-patch",
                     "view-glyphs",
                     "search-grep-done",
+                    // the native view model
+                    "view-model",
                 ]
                 .contains(&n.as_str())
             })
@@ -473,7 +480,7 @@ mod tests {
         let mut sorted = names.clone();
         sorted.sort();
         assert_eq!(names, sorted);
-        assert_eq!(events().len(), 41);
+        assert_eq!(events().len(), 42);
         // names only: a value-shaped name is no key name, and nothing but `names` is taken
         let need = event("runners/need-keys").unwrap();
         assert_eq!(

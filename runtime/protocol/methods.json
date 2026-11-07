@@ -3293,6 +3293,53 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md \"The native view\nmodel\"), from version BASE to VERSION. MODEL is one JSON string, `{\"ops\": [...]}`, that the editor hands to its\nreplica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with\n`model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).",
+        "properties": {
+          "base": {
+            "description": "The version this patch applies to: 0 for the first model of a subscription.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hub": {
+            "description": "The hub's instance id, as on `view-patch`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reset": {
+            "description": "MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.",
+            "type": "boolean"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "hub",
+          "base",
+          "version",
+          "model"
+        ],
+        "title": "ViewModel",
+        "type": "object"
+      },
+      "doc": "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version",
+      "name": "view-model"
+    },
+    {
+      "data": {
         "$defs": {
           "ImageId": {
             "description": "an image's content hash and env epoch",
@@ -3561,6 +3608,15 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "model": {
+            "description": "The version of the view's model (`view-model`) these rows were built from; none for a view with no model.\nThe editor applies its queued models up to it before it draws these rows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "ops": {
             "items": {
@@ -12062,6 +12118,77 @@
         "type": "object"
       },
       "writes": true
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "list the Explorer's roots and open folders for a hub-fed view on a thread: its tree model (view-model) and its rows (view-patch) to every class; ask again with the new open folders to expand or collapse; a newer listing of the view stops the old one",
+      "name": "explorer/subscribe",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`: list ROOTS, and inside them the folders of EXPANDED, for the Explorer's hub-fed VIEW: its\nmodel (a `tree` of path nodes, a folder open when it is a root or in EXPANDED) and its rows (one per entry, guides\nand chevron, the path over the row) go to every class of VIEW. Folders come first, then names in natural,\ncase-insensitive order; the names a version-control folder, `.DS_Store`, `__pycache__` and `.#…` locks never show.\nAn open folder whose only entry is a folder shares its row with it (`src/app`) unless COMPACT is false. A newer\nsubscription of the same view stops this one; ask again with the new EXPANDED to open or close a folder.",
+        "properties": {
+          "compact": {
+            "description": "Join single-folder chains on one row; default on.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "expanded": {
+            "description": "The open folders under the roots (no trailing slash), at most 10000.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "roots": {
+            "description": "The roots, 1 to 16 existing folders.",
+            "items": {
+              "$ref": "#/$defs/AbsPath"
+            },
+            "type": "array"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "roots"
+        ],
+        "title": "ExplorerParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`explorer/subscribe`'s answer: LISTING numbers the listing.",
+        "properties": {
+          "listing": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "listing"
+        ],
+        "title": "ExplorerStarted",
+        "type": "object"
+      },
+      "writes": false
     },
     {
       "classes": [
@@ -29778,16 +29905,21 @@
       "classes": [
         "user"
       ],
-      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
+      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset; with model, its replica of the view's model is not: answered by a view-model reset",
       "name": "view/resync",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`.",
+        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's\nreplica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.",
         "properties": {
           "class": {
+            "default": "",
             "type": "string"
           },
+          "model": {
+            "type": "boolean"
+          },
           "version": {
+            "default": 0,
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -29797,9 +29929,7 @@
           }
         },
         "required": [
-          "view",
-          "class",
-          "version"
+          "view"
         ],
         "title": "ViewResync",
         "type": "object"
@@ -29808,6 +29938,56 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "boolean",
         "type": "boolean"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
+      "name": "work/board/subscribe",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/board/subscribe`'s params: one view of the connection shows the Board of the tracker's tasks (of `plans`,\nelse every task), each card naming the agent of map view `map` that works on it.",
+        "properties": {
+          "map": {
+            "type": "string"
+          },
+          "plans": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "map"
+        ],
+        "title": "BoardSubscribe",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`work/trail/subscribe`'s answer: the view's patches name this hub and start from a reset.",
+        "properties": {
+          "hub": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hub"
+        ],
+        "title": "TrailSubscribed",
+        "type": "object"
       },
       "writes": false
     },
@@ -30259,6 +30439,10 @@
         "additionalProperties": false,
         "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
         "properties": {
+          "clear": {
+            "description": "Nothing is selected any more (Esc, or the selection went with no item left to take it).",
+            "type": "boolean"
+          },
           "collapsed": {
             "items": {
               "format": "uint8",
@@ -30547,7 +30731,7 @@
       "classes": [
         "user"
       ],
-      "doc": "end one trail or Timeline view of this connection (a connection's views end with it)",
+      "doc": "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
       "name": "work/trail/close",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

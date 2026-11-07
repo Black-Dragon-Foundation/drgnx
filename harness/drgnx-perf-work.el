@@ -456,10 +456,116 @@ the draw alone made."
       t))
   "The `view-patch' workload's session side: no hub, a synthetic patch stream.")
 
+(defconst drgnx-perf-work--nav-rows-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view)
+      (require 'drgnx-view-nav)
+      (require 'nidhogg-views)
+      (defvar drgnx-perf--nr-buf nil "The map-shaped hub-fed view's buffer.")
+      (defvar drgnx-perf--nr-sent 0 "Hub calls the view made.")
+      (defun drgnx-perf--nr-id (kind i) (format "%s:%02d" kind i))
+      (defun drgnx-perf--nr-node (i kind label)
+        "Node KIND of agent I: an ask above it, the agent, a file below; agents linked left and right."
+        (let* ((id (drgnx-perf--nr-id kind i))
+               (nav (pcase kind
+                      ("ask" (list :down (drgnx-perf--nr-id "agent" i)))
+                      ("file" (list :up (drgnx-perf--nr-id "agent" i)))
+                      (_ (append (list :up (drgnx-perf--nr-id "ask" i) :down (drgnx-perf--nr-id "file" i))
+                                 (and (> i 0) (list :left (drgnx-perf--nr-id "agent" (1- i))))
+                                 (and (< i 29) (list :right (drgnx-perf--nr-id "agent" (1+ i)))))))))
+          (list :id id :kind kind :nav nav :fields (vector (vector "label" label) (vector "x" (* 12 i)) (vector "y" 0)
+                                                           (vector "w" 10) (vector "h" 6)))))
+      (defun drgnx-perf--nr-model ()
+        "The map model of 30 agents as the hub sends it: one JSON string."
+        (let (nodes edges agents)
+          (dotimes (i 30)
+            (push (drgnx-perf--nr-node i "ask" (format "ask %d" i)) nodes)
+            (push (drgnx-perf--nr-node i "agent" (format "agent %d" i)) nodes)
+            (push (drgnx-perf--nr-node i "file" (format "file %d" i)) nodes)
+            (push (vector (drgnx-perf--nr-id "ask" i) (drgnx-perf--nr-id "agent" i) "came-from") edges)
+            (push (vector (drgnx-perf--nr-id "agent" i) (drgnx-perf--nr-id "file" i) "edits") edges)
+            (push (drgnx-perf--nr-id "agent" i) agents))
+          (setq agents (vconcat (nreverse agents)))
+          (json-serialize
+           (list :ops (vector (list :reset
+                                    (list :descriptor (list :scheme "links" :chain_kinds ["came-from" "edits"]
+                                                            :match_fields ["label"] :lists ["team" "outline"]
+                                                            :classes ["selected" "match" "chain" "dim"] :start "team")
+                                          :nodes (vconcat (nreverse nodes)) :edges (vconcat edges)
+                                          :lists (vector (list :name "team" :ids agents)
+                                                         (list :name "outline" :ids agents)))))))))
+      (defun drgnx-perf--nr-rows ()
+        "Three rows per agent (its ask, its card, its file), each holding its node's span."
+        (let (rows)
+          (dotimes (i 30)
+            (dolist (kind '("ask" "agent" "file"))
+              (let ((text (format " %s %02d  working on core/drgnx-file-%d.el " kind i i)))
+                (push (list :key (format "%s/%02d" kind i) :text text
+                            :props (list (list 1 (1- (length text)) "drgnx-work-id" (drgnx-perf--nr-id kind i))))
+                      rows))))
+          (nreverse rows)))
+      (defun drgnx-perf--nr-up ()
+        "The map-shaped hub-fed view: its model and its 90 rows applied and drawn, agent 00 selected."
+        (setq drgnx-perf--nr-buf (get-buffer-create " *perf nav-rows*") drgnx-perf--nr-sent 0)
+        (switch-to-buffer drgnx-perf--nr-buf)
+        (drgnx-view-patch-attach "perf-nav" "gui" :epoch 1)
+        (setq-local drgnx-view-nav-notice-method "work/map/set")
+        (drgnx-view-model-event (list :view "perf-nav" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--nr-model)))
+        (drgnx-view-apply-patch (list :view "perf-nav" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
+                                      :ops (list (list :reset (drgnx-perf--nr-rows)))))
+        (drgnx-view-draw-now drgnx-view)
+        (unless (equal "agent:00" (drgnx-view-nav 'select "agent:00")) (error "Premise: no model in Sjá"))
+        t)
+      (defun drgnx-perf--nr-apply-us (model times)
+        "Microseconds per `nidhogg-view-apply' of MODEL (a function of the version), TIMES times on one fresh view."
+        (let ((view (format "perf-apply-%s" (random))) out)
+          (dotimes (v times)
+            (let ((json (funcall model (1+ v))) (t0 (float-time)))
+              (unless (eq 'applied (nidhogg-view-apply view "perf/1" (1+ v) json)) (error "Premise: apply %d" v))
+              (push (round (* 1e6 (- (float-time) t0))) out)))
+          (nidhogg-view-close (nidhogg-view-open view))   ; the view goes with its last instance
+          out))
+      (defun drgnx-perf--nr-measure ()
+        "(:alloc STATS :classed STATS :hub_calls N :reset_us STATS :field_us STATS): 100 keys held (no time passes
+between them: right and left, the team walk, up and down), the objects and the class step's overlays per key, the
+hub calls after the selection settles (the trailing notice: one), then Sjá's apply of a 30-agent reset and of a
+field patch."
+        (with-current-buffer drgnx-perf--nr-buf
+          (let ((drgnx-view-patch-send-function (lambda (_m _p) (cl-incf drgnx-perf--nr-sent)))
+                (state drgnx-view-patch) allocs classed)
+            (setq drgnx-perf--nr-sent 0)
+            (drgnx-view-nav 'select "agent:05")              ; room to move right and left without an end
+            (dotimes (i 100)
+              (let ((a0 (drgnx-perf--alloc-sum)) (c0 (drgnx-view-patch-classed state)))
+                (pcase (% i 10)
+                  ((or 0 1 2 3) (drgnx-view-nav 'follow "right"))
+                  ((or 4 5 6) (drgnx-view-nav 'follow "left"))
+                  (7 (drgnx-view-nav 'walk "team" 1))
+                  (8 (drgnx-view-nav 'follow "up"))          ; to the agent's ask, and back down: every key moves
+                  (_ (drgnx-view-nav 'follow "down")))
+                (push (- (drgnx-perf--alloc-sum) a0) allocs)
+                (push (- (drgnx-view-patch-classed state) c0) classed)))
+            (sit-for (* 3 drgnx-view-delay))
+            (let* ((reset (drgnx-perf--nr-model))
+                   (field (lambda (v)
+                            (if (= v 1) reset
+                              (json-serialize
+                               (list :ops (vector (list :nodes (vector (drgnx-perf--nr-node 3 "agent" (format "agent 3 v%d" v)))))))))))
+              (list :alloc (drgnx-perf-stats allocs) :classed (drgnx-perf-stats classed) :hub_calls drgnx-perf--nr-sent
+                    ;; a reset on a fresh view each time; field patches after one reset (its time left out: the last)
+                    :reset_us (drgnx-perf-stats (let (r) (dotimes (_ 20) (push (car (drgnx-perf--nr-apply-us (lambda (_v) reset) 1)) r)) r))
+                    :field_us (drgnx-perf-stats (butlast (drgnx-perf--nr-apply-us field 41))))))))
+      (defun drgnx-perf--nr-down ()
+        (when (buffer-live-p drgnx-perf--nr-buf) (kill-buffer drgnx-perf--nr-buf))
+        (setq drgnx-perf--nr-buf nil))
+      t))
+  "The `work-nav-rows' workload's session side: no hub, a map-shaped model and rows (30 agents), keys through Sjá.")
+
 (defun drgnx-perf-work-workloads (visit kill-fixture)
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
-`work-typing-shown', `work-typing-hidden', `view-patch' and `work-trail'."
+`work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows' and `work-trail'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -500,6 +606,10 @@ fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster'
       (view-patch :setup ,(concat "(progn " drgnx-perf-work--view-patch-form " (drgnx-perf--vp-up))")
                   :measure "(drgnx-perf--vp-measure)"
                   :teardown "(progn (drgnx-perf--vp-down) t)")
+      ;; the map's keys through the native view model (report-only until the combined pass; docs/develop/perf.md)
+      (work-nav-rows :setup ,(concat "(progn " drgnx-perf-work--nav-rows-form " (drgnx-perf--nr-up))")
+                     :measure "(drgnx-perf--nr-measure)"
+                     :teardown "(progn (drgnx-perf--nr-down) t)")
       (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
                   :each "(progn (drgnx-perf--trail-premise) t)"
                   :measure "(drgnx-perf--trail-measure)"

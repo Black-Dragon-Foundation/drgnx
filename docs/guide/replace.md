@@ -93,3 +93,9 @@ file); `test/ui/view-ui-test.el` (`drgnx test --ui`)
 types a replacement over 10k rows and checks the jank guard saw nothing; `test/ui/editor-m11c1-test.el` walks the Search view with results, the find bar, the Agent and Zen layouts, the Browser layout without WebKit, the Live view on a mock browser and the Keyboard Shortcuts editor recording a chord on a graphical frame, with a screenshot of each. The perf workload
 `replace-typing` types in a file while the Search view lists 10k matches, and `replace-retype` types a replacement
 over them ([perf.md](../develop/perf.md)).
+
+When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
+their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk
+the matches over the file rows, wrapping; a tick box unticks a match (its file's box: all of them) and stays as it is
+when the hub redraws the row; Replace All writes the ticked matches from the model's fields, then searches again.
+`test/unit/replace-rows-nav-test.el` covers these with no hub.

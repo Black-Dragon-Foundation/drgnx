@@ -227,7 +227,7 @@ anything else (it is the hub's word) is passed over.  The buffer, when the hub a
 chain, else the most recent one's; at the top with \"file only\" when no line is known.  Returns the buffer when the hub
 answered at once."
   (pcase-let ((`(,repo ,rel) (or (drgnx-work-code--file-item (cdr sel)) (user-error "Not a file"))))
-    (let ((sids (or agents (drgnx-work-code--chain-sids state sel))))
+    (let ((sids (or agents (and state (drgnx-work-code--chain-sids state sel)))))  ; no STATE: the map's rows path
       (drgnx-work-code--open-paths (drgnx-work-code--paths repo rel sids) sids beside))))
 
 ;;;; The files picker
