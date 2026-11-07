@@ -200,6 +200,15 @@ impl History {
         Ok(PeerId(self.conn.last_insert_rowid() as u64))
     }
 
+    /// The document of the file at PATH (relative to the project), when there is one (none is made).
+    pub fn find_doc(&self, path: &str) -> Result<Option<DocId>> {
+        Ok(self
+            .conn
+            .query_row("select id from doc where path = ?1", [path], |r| r.get(0))
+            .optional()?
+            .map(DocId))
+    }
+
     /// The document of the file at PATH (relative to the project), made on first use.
     pub fn doc_for(&mut self, path: &str) -> Result<DocId> {
         if let Some(id) = self

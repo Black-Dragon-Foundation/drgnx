@@ -222,6 +222,18 @@ impl UserSource {
     }
 }
 
+/// The user's text of a buffer: the edit history's MIRROR of it when the history tracks it (the user's unsaved typing
+/// and a paired agent's writes in it), else the file as DISK reads it.  None when neither has it.
+pub fn user_text(
+    mirror: Option<String>,
+    disk: impl FnOnce() -> Option<String>,
+) -> Option<(String, UserSource)> {
+    match mirror {
+        Some(t) => Some((t, UserSource::Mirror)),
+        None => disk().map(|t| (t, UserSource::Disk)),
+    }
+}
+
 /// See the module: one agent's text projected onto the user's.
 pub fn project(base: &str, agent: &str, user: &str, agent_cursor: Option<Pos>) -> Projection {
     UserMap::new(base, user).project(base, agent, agent_cursor)

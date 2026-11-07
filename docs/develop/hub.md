@@ -1934,16 +1934,26 @@ overlays from it):
   without another (task `editor:quiet`). Nothing is built while no view matches, and an unwatched file costs nothing.
 - **What a frame holds:** `agents`, each session present in the file now (the presence model's entries, with the
   session's `ordinal` and `handle`, and `step_title`, its running step's title); `gutter`, ranges merged per session
-  and kind: `pending` for an edit about to land, and `changed` for the lines the session's latest step snapshot changed
-  in its own worktree against its base (the interim before the edit history), with a hover that names the handle, the
-  step and its age ("Opus · changed in step 14 · 2 min ago").
+  and kind: `pending` for an edit about to land, and `changed` for the lines a session wrote. Where the project's edit
+  history holds the file, those come from its operations (`editor::ranges`, below): an agent's lines in its own
+  worktree, and a paired agent's writes in the user's checkout, drawn in that agent's identity ("NAME · changed");
+  where it does not, from the lines the session's latest step snapshot changed in its own worktree against its base,
+  with a hover that names the handle, the step and its age ("Opus · changed in step 14 · 2 min ago").
+- **Line authors** (`editor::ranges`, pure; kept by `history::Inner`). For each document on each branch, the runs of
+  characters each author wrote (`user`, `agent:<session>`, …; the base's text has none). The hook on every operation
+  the history applies (an agent's captured write, an editor's batch or resync) updates them in step; a document whose
+  version moved another way (a revert, a merge) or that was not kept (after a restart) is made again from its blame
+  when read, off the tick. A line is an author's when one of its characters is (its line break only on an empty
+  line); a line with the user's characters is never an agent's, and a deletion marks no line. A batch with an
+  `agent:` change (a paired chat's write) makes the file's views due at once; the user's typing waits for the quiet.
 - **Other worktrees, projected** (`editor::project`, pure). A session working in another worktree of the file's
   repository shows on the user's checkout mapped three-way: base (the file at the session's base tree) → agent (its
   copy now) gives the lines it changed, base → user (the user's text) maps them onto the user's lines. A change that
   meets a user change is a `conflict` range there; the user's own lines are never in an agent's gutter. The session's
   entry carries `projected {worktree_label}` (its worktree's folder name) and its cursor mapped the same way; its
-  ranges are `changed` or `conflict`, also `projected`. The user's text is read from disk until the edit history
-  mirrors buffers, so such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
+  ranges are `changed` or `conflict`, also `projected`. The user's text is the edit history's mirror of the buffer
+  when the editor tracks it (unsaved typing, and a paired agent's writes, are the user's side); an untracked buffer's is
+  read from disk, and such a frame is `approximate`. Base texts are kept by (base tree, path), the 256 last used. While
   the user types, a watch is answered from the frame already built; the file is projected again after the quiet.
 - **Test hooks:** `__test_buffer_views` answers `{views, built}`: the views open and the frame bodies built so far.
 

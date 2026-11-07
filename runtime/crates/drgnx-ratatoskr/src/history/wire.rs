@@ -131,6 +131,14 @@ impl Hubs {
             .collect()
     }
 
+    /// The history of the project worktree ROOT belongs to, and its tree, when that history is open already (a
+    /// reader that must not make one: the editor's frames).  Nothing runs git.
+    pub(crate) fn open_of(&self, root: &Path) -> Option<(Arc<Hub>, Tree)> {
+        let (git_dir, common) = git_dirs(root)?;
+        let hub = lock(&self.open).get(&key_of(&common)).cloned()?;
+        Some((hub, Tree::new(root, &git_dir, None)))
+    }
+
     fn of_buffer(&self, id: &str) -> Result<Arc<Hub>, Error> {
         lock(&self.buffers)
             .get(id)
@@ -237,13 +245,20 @@ pub async fn batch(f: &Front, _: &Caller, p: w::BatchParams) -> Result<w::BatchR
             origin: c.origin.unwrap_or_else(|| "user".into()),
         })
         .collect();
+    // an agent's change (a paired chat's write the editor applied) shows at once; the user's after the quiet
+    let by_agent = changes.iter().any(|c| c.origin.starts_with("agent:"));
     let (id, hash) = (p.buffer_id, p.region_hash);
+    let file = hub.buffer_file(&id);
     // the time is read here: a blocking thread does not carry the virtual clock
     let now = crate::clock::wall_secs();
     let reply = crate::clock::blocking(move || hub.batch(&id, &changes, &hash, now))
         .await
         .map_err(|e| internal(e.to_string()))?
         .map_err(failed)?;
+    if by_agent && let Some(file) = file {
+        let file = crate::work::presence::true_name(&file.to_string_lossy());
+        f.core.buffers.changed(&[file]);
+    }
     Ok(match reply {
         BatchReply::Ok => w::BatchResult {
             ok: Some(true),
