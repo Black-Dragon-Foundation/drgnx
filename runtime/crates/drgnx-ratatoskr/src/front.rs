@@ -307,6 +307,7 @@ impl Front {
         self.follows.gone(conn);
         self.core.presence.gone(conn);
         self.core.map.gone(conn);
+        self.core.trails.gone(conn);
         self.core.views.gone(conn);
         self.core.buffers.gone(conn);
     }
@@ -651,6 +652,13 @@ impl Front {
             Params::ViewGlyphs(p) => crate::view::glyphs(self, &caller, p).map(|b| json!(b)),
             Params::ViewMeasured(p) => crate::view::measured(self, &caller, p).map(|b| json!(b)),
             Params::ViewClose(p) => crate::view::close(self, &caller, p).map(|b| json!(b)),
+            Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
+            // a text search streaming rows to a view (`search/grep*`)
+            Params::SearchGrep(p) => crate::view::grep::start(self, &caller, p).map(|r| json!(r)),
+            Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
+            Params::SearchGrepReplace(p) => {
+                crate::view::grep::replace(self, &caller, p).map(|b| json!(b))
+            }
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -764,6 +772,8 @@ impl Front {
             | Params::WorkMapSubscribe(_)
             | Params::WorkMapSet(_)
             | Params::WorkMapClose(_)
+            | Params::WorkTrailSubscribe(_)
+            | Params::WorkTrailClose(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)

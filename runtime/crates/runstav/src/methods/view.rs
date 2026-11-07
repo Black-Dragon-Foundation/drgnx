@@ -52,6 +52,7 @@ pub struct ViewEnv {
     /// `[from, to, width]`: the terminal's character widths that differ from Unicode's.
     #[serde(default)]
     pub tty_widths: Vec<(u32, u32, u8)>,
+    /// The editor's offset from UTC, `+HHMM` as `%z` prints it (the trail's times); anything else is UTC.
     #[serde(default)]
     pub tz: String,
     #[serde(default)]

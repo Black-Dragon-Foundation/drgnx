@@ -177,6 +177,13 @@ pub fn from_json(name: &str, v: &Value, values: &mut RuntimeValues) -> Result<()
         "drgnx-search-exclude" => values.search_exclude = de(v)?,
         "drgnx-search-off" => values.search_off = de(v)?,
         "drgnx-search-base" => values.search_base = de(v)?,
+        "drgnx-search-ignore-rules" => {
+            let s: String = de(v)?;
+            if !["index", "real"].contains(&s.as_str()) {
+                return Err(refused("", "\"index\" or \"real\""));
+            }
+            values.search_ignore_rules = s;
+        }
         "drgnx-agents-plugins" => values.agents_plugins = de(v)?,
         "drgnx-agents-hook-rules" => {
             values.agents_hook_rules =
@@ -320,6 +327,7 @@ pub fn to_json(name: &str, values: &RuntimeValues) -> Option<Value> {
         "drgnx-search-exclude" => json!(values.search_exclude),
         "drgnx-search-off" => json!(values.search_off),
         "drgnx-search-base" => json!(values.search_base),
+        "drgnx-search-ignore-rules" => json!(values.search_ignore_rules),
         "drgnx-agents-plugins" => json!(values.agents_plugins),
         "drgnx-agents-hook-rules" => match &values.agents_hook_rules {
             Value::Null => json!([]),

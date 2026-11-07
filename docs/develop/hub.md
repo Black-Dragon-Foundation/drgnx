@@ -1379,6 +1379,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
 | `graph/entity` | user | `{as_of?: natnum, id: string, include?: ["links" \| "notes" \| "history"]}` | `EntityAnswer` | no |
@@ -1471,6 +1472,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/revise` | user | `{id: Id, text: Text}` | `boolean` | yes |
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
+| `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
+| `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
+| `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
@@ -1501,7 +1505,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
 | `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
-| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame` | no |
+| `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
+| `work/trail/close` | user | `{view: string}` | `boolean` | no |
+| `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
 <!-- hub-methods:end -->
 
 ### Classes
@@ -2016,6 +2022,16 @@ view only what changed, to the connection that shows it.
   at two widths, so the hub keeps state per (connection, view). `work/map/set {view, filters? | collapsed? |
   width_units? | density? | shown? | selected?}` answers `{version}`; an unknown view is `invalid-params`.
   `work/map/close {view}` ends one; a connection's views end with it. A workspace no view shows is dropped.
+- **Rows** (`work/map/subscribe`'s `rows: true`; "Rows" below). The view's rows are built in the hub
+  (`vegvisir::render`, `docs/develop/work-space.md`, "The rows") and go to each display class the editor sent a
+  `view/env` for (the env's `view` is the map view's id) as `view-patch`, the first per class a reset; the answer is
+  `{hub, version}` and no `work-map` event comes for that view (nor a stale mark when it is hidden: its editor hid it).
+  Its width is its narrowest GUI class's window (`(width_px / scale - 96) / 4` units; `width_units` until one sent an
+  env, and a terminal class alone keeps it): an env whose width moves the units lays the view out again at once, as the
+  user's change; any other env, a delta, a full frame or a new `selected` (the chain's edges) draws the classes again,
+  and each gets only what changed (a resize: `replace`s of the rows whose fit changed). The coalescing, the quiet
+  reflow and the held chain are the frames' own. The first row is `strip` (the needs-you strip and the machines'
+  load). Without `rows` the view keeps its frames and `work-map` events, unchanged.
 - **The event** `work-map` goes by `Front::send_to` to the view's connection only. `version` counts the view's events
   from the frame's 1, and `base` names the version it applies to: an editor drops an older one and subscribes again on
   a gap. A full frame (`full`) carries every item shown in `changed` and the new `layout`; a delta carries the items
@@ -2042,6 +2058,27 @@ view only what changed, to the connection that shows it.
   finished edit still overlaps.
 - **Restart:** nothing is kept. The editor's re-subscription after a restart gets a full frame from the new hub's
   sessions and store.
+
+### The trail and the Timeline
+
+The Work space's trail (one session's steps, its conclusions among them) and Timeline (a lane per agent session) as
+rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display class like the map's ("Rows" below).
+
+- **Methods** (user connections). `work/trail/subscribe {view, session}` opens a trail view of the connection (again,
+  if it is open); `{view, lanes: [{session, label}]}` (up to 256) a Timeline view instead; one of the two. Its rows go
+  to each class the editor sent a `view/env` for (the env's `view` is this view's id) as `view-patch`, the first per
+  class a reset, before the answer `{hub}`. `work/trail/close {view}` ends one; a connection's views end with it.
+- **Rows.** A trail: `step:ID` per step (the session's last 500, oldest first: its kind's icon, its title, the number of
+  each conclusion resting on it, and its time and duration 14 columns from the right edge), the two lines of each
+  conclusion's card (`conc:N:0`, `conc:N:1`) after the step it was stamped on, and those on no step shown at the end.
+  A Timeline: `axis` (the range's times), then `lane:SESSION` per lane (its label fitted to 130 px, each step a segment
+  at its time on a track from 140 px), or `none` without lanes. Times are in the env's `tz` (`+HHMM`, as `%z` prints it;
+  anything else is UTC).
+- **Updates.** Every view is read again (the timeline and the conclusions store, as `timeline/get` and
+  `work/conclusions` answer) after each write and each closed step, coalesced, one view at a time; each class gets
+  only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
+  inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
+  the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
 
 ### The follow feed
 
@@ -2083,7 +2120,8 @@ it builds for Android too).
 - **A row** `{key, text, runs: [[start, end, face]], props: [[start, end, name, value]], stops: [[pos, px]], images:
   [[pos, image_id, alt]], height: {lines, unit}?}`. `face` is a registered drgnx face name (Lisp drops one it does
   not know and never interns it); a stop is one placeholder character at POS, displayed as the space up to PX
-  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out.
+  (`(space :align-to (PX))`); an image takes one placeholder character too. Empty lists are left out. Runs may
+  overlap: the editor adds them in order, each below those before it (a card's box face under its text's faces).
 - **Positions** are Unicode scalar indices into `text`, which is what Lisp's string indices are after
   `json-parse-string`; never bytes or UTF-16 units. `RowBuilder` counts them and merges adjacent runs of one face.
 - **Ids** (row keys, image ids, item ids in props) go in arrays, never as JSON object keys, so Lisp interns no
@@ -2163,6 +2201,55 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
   failed (first runs, 2026-11-07: 180 rows, 0 to 1 re-fit by the guard).
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
+
+### Text search as rows (`search/grep`)
+
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/grep.rs`;
+the search itself is `hrafn::grep`).
+
+- `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
+  view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
+  runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match. A class whose
+  env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
+  matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
+  an old query never reaches the view (and the editor drops one by `base` as well).
+- **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
+  the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
+  (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
+  `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
+  `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
+  `before`, `after`; positions in characters, `line` from 1) on a match row. The tick state is the editor's.
+- `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
+  change (`replace` ops) and searches nothing again.
+- `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
+  `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
+  default); it is a runtime setting, so the hub reads the user's value.
+
+### Ranked file names as rows (`search/files`)
+
+Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list
+and the ranking are `hrafn::rank`).
+
+- `search/files {view, root, query, n?, ignore?}` stops the view's earlier query and answers `{query}`. A thread then
+  ranks the root's names and sends every class of `view` the `n` best (default 100, at most 1000) as rows: the first
+  query of a view a `reset`, a later one the patch from the rows it shows (the store's diff). The rows of the earlier
+  query stay until the new ones arrive; a query a newer one stopped sends nothing.
+- **The names.** In a repository, what `git ls-files -z --cached --others --exclude-standard` lists (a nested
+  repository, listed as its folder, is left out); elsewhere a walk that follows no link, skips `.git` folders and
+  applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
+  a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
+  and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
+  apply, and `ignore` as for `search/grep` (dot paths and secret-looking names out under `index`, listed under `real`).
+- **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
+  word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
+  among equals. A query checks its cancel flag every 4096 names.
+- **Row:** the key and the text are the path relative to `root`; each word's first place (in the basename when it is
+  there) is in `drgnx-quick-open-match` (the editor's face for it).
+- **The kept lists.** The names of at most 8 roots are kept (by root, rule and globs; the one used longest ago goes).
+  A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
+  `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
+  typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
 
 ## Sessions and their sockets
 

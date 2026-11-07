@@ -87,6 +87,33 @@ impl<'a> Svg<'a> {
         self
     }
 
+    /// A path (its `d`) stroked in ROLE's colour, dashed by DASH (lengths in px; none: solid).
+    pub fn path_dashed(&mut self, d: &str, width: f32, stroke: &str, dash: &[f32]) -> &mut Self {
+        if dash.is_empty() {
+            return self.path(d, width, stroke);
+        }
+        let c = self.palette.colour(stroke);
+        let dash: Vec<String> = dash.iter().map(f32::to_string).collect();
+        let _ = write!(
+            self.body,
+            r#"<path d="{}" fill="none" stroke="{c}" stroke-width="{width}" stroke-dasharray="{}"/>"#,
+            escape(d),
+            dash.join(" ")
+        );
+        self
+    }
+
+    /// TEXT centred on X at baseline Y in ROLE's colour, SIZE px.
+    pub fn label(&mut self, x: f32, y: f32, size: f32, fill: &str, text: &str) -> &mut Self {
+        let c = self.palette.colour(fill);
+        let _ = write!(
+            self.body,
+            r#"<text x="{x}" y="{y}" font-size="{size}" text-anchor="middle" fill="{c}">{}</text>"#,
+            escape(text)
+        );
+        self
+    }
+
     /// TEXT at (X, Y) in ROLE's colour, SIZE px.
     pub fn text(&mut self, x: f32, y: f32, size: f32, fill: &str, text: &str) -> &mut Self {
         let c = self.palette.colour(fill);

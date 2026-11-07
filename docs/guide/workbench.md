@@ -117,11 +117,18 @@ but never watched for changes (a remote watch starts a process that blocks); ref
 
 **Typing** in the Explorer jumps to the next row starting with what you typed (letters a profile does not use).
 **Find** filters the tree live to the files whose names contain the text — also inside collapsed folders — and the
-title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection. In a big
-project the files are listed in the background and the tree fills in while they arrive (with Nidhogg's framing on,
-`nidhogg-workers-framing`; a remote folder, or no framing, lists them first as before). **Quick Open** (`C-p` in the VS
-Code profile) does the same: the list grows while the project is still being listed, and the file you have highlighted
-stays highlighted wherever the new ones sort; it moves when you type or move it.
+title shows it; an empty text (or `C-g`) brings back the tree, its open folders, the view and the selection.
+**Quick Open** (`C-p` in the VS Code profile) opens a file by name. With the hub running, both ask it: it ranks the
+project's file names as you type (a name that starts with what you typed first, then one that holds it, then a path
+that does; several words must all be there) and a key never waits for the answer — the list you see stays until the
+new one arrives. The files are the ones the project's rules admit: in a repository what git lists (`.gitignore` is
+followed), elsewhere every file under the folder except what `.gitignore` files and your search globs leave out; links
+are listed but never followed. The setting `drgnx-search-ignore-rules` decides about dot paths (`.github/…`) and
+names that look like secrets (`.env`, `*.pem`): `"index"` (the default) leaves them out, as the search index does;
+`"real"` lists them. Without the hub, in a big project the files are listed in the background and the list fills in
+while they arrive (with Nidhogg's framing on, `nidhogg-workers-framing`; a remote folder, or no framing, lists them
+first as before), and the file you have highlighted in Quick Open stays highlighted wherever the new ones sort. On a
+remote folder Quick Open is Emacs's `project-find-file`.
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never

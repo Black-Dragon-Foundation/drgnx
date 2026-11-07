@@ -345,3 +345,258 @@ fn runner_job_runs_on_edge_points_at_the_runner() {
         Some("suite")
     );
 }
+
+// ---- rows views: the map's rows as patches ------------------------------------------------------------------------
+
+use drgnx_rows::fit::Measure;
+use drgnx_rows::{ImageId, Op, Patch, Row};
+use runstav::methods::view::ViewEnv;
+
+/// 8 px a column.
+struct Cols;
+
+impl Measure for Cols {
+    fn advance(&self, _role: &str, ch: char) -> Option<f32> {
+        Some(8.0 * drgnx_rows::fit_tty::char_width(ch, &[]) as f32)
+    }
+    fn fallback(&self, _role: &str) -> f32 {
+        8.0
+    }
+}
+
+/// Session I starts (no place: the "No plan" block).
+fn add_session(core: &mut Core, i: u64) {
+    let snap: Snapshot =
+        serde_json::from_value(json!({"id": format!("s{i}"), "name": format!("agent {i}")}))
+            .expect("a snapshot");
+    let sess = Sess {
+        snap,
+        kids: Vec::new(),
+        place: None,
+        seq: i,
+        state: State::Running,
+        since: 0,
+        job: None,
+    };
+    for ev in sess.facts() {
+        core.step(ev);
+    }
+}
+
+fn core_with(n: u64) -> Core {
+    let mut core = Core::new();
+    for i in 1..=n {
+        add_session(&mut core, i);
+    }
+    core
+}
+
+/// A rows view of M laid out at WIDTH units, holding what that layout shows.
+fn rows_view(m: &vegvisir::Model, width: u32) -> View {
+    let state = ViewState {
+        width_units: width,
+        ..ViewState::default()
+    };
+    let l = layout::layout(m, &state, None);
+    let sent = frame_items(m, &state, &l)
+        .into_iter()
+        .map(|it| it.id)
+        .collect();
+    View {
+        space: "w".into(),
+        state,
+        shown: true,
+        selected: None,
+        rows: true,
+        version: 1,
+        layout: Some(l),
+        sent,
+        co: Coalescer::default(),
+    }
+}
+
+fn env() -> ViewEnv {
+    serde_json::from_value(
+        json!({"view": "m", "class": "gui-1", "epoch": 1, "display": "gui", "scale": 1.0,
+                                  "cell": [8, 16], "width_px": 1000}),
+    )
+    .expect("an env")
+}
+
+/// An editor's side of one (view, class), by the rules: nothing before a reset, an older base dropped, a newer one
+/// or an image it lacks asks for a resync.
+#[derive(Default)]
+struct Editor {
+    hub: Option<u64>,
+    version: u64,
+    rows: Vec<Row>,
+    images: BTreeSet<ImageId>,
+    resync: bool,
+}
+
+impl Editor {
+    fn apply(&mut self, p: &Patch) {
+        let reset = matches!(p.ops.as_slice(), [Op::Reset(_)]);
+        if reset {
+            if self.hub == Some(p.hub) && p.version <= self.version {
+                return;
+            }
+            self.hub = Some(p.hub);
+            self.images.clear();
+        } else if self.hub != Some(p.hub) || p.base < self.version {
+            return;
+        } else if p.base > self.version {
+            self.resync = true;
+            return;
+        }
+        self.images.extend(p.images.iter().map(|i| i.0));
+        for op in &p.ops {
+            match op {
+                Op::Reset(rows) => self.rows = rows.clone(),
+                Op::Insert { after, rows } => {
+                    let at = after
+                        .as_ref()
+                        .and_then(|k| self.rows.iter().position(|r| &r.key == k))
+                        .map_or(0, |i| i + 1);
+                    for (n, r) in rows.iter().enumerate() {
+                        self.rows.insert(at + n, r.clone());
+                    }
+                }
+                Op::Replace(rows) => {
+                    for r in rows {
+                        if let Some(old) = self.rows.iter_mut().find(|o| o.key == r.key) {
+                            *old = r.clone();
+                        }
+                    }
+                }
+                Op::Remove(keys) => self.rows.retain(|r| !keys.contains(&r.key)),
+            }
+        }
+        self.version = p.version;
+        let lacks = self
+            .rows
+            .iter()
+            .flat_map(|r| r.images.iter())
+            .any(|i| !self.images.contains(&i.1));
+        self.resync |= lacks;
+    }
+}
+
+/// [A] Three versions of a rows view (one agent, two, three) go out as a reset and two patches; in every order of
+/// their arrival, the editor ends on the hub's rows, through one resync when it missed one.
+#[test]
+fn every_order_deltas_then_resync_converge() {
+    let sets: Vec<_> = (1..=3)
+        .map(|n| {
+            let core = core_with(n);
+            let v = rows_view(core.model(), 226);
+            view_rows(core.model(), &v, &env(), &Cols, 0)
+        })
+        .collect();
+    assert!(
+        sets.iter().all(|(r, _)| !r.is_empty()),
+        "every version has rows"
+    );
+    assert!(
+        sets[2].0.iter().any(|r| r.text.contains("agent 3")),
+        "{:?}",
+        sets[2].0
+    );
+    let key = (1, "m".to_owned(), "gui-1".to_owned());
+    let orders = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    for order in orders {
+        let mut store = crate::view::Store::new(7);
+        store.env(1, env());
+        let patches: Vec<Patch> = sets
+            .iter()
+            .map(|(r, i)| store.publish(&key, r.clone(), i).expect("a patch"))
+            .collect();
+        let mut ed = Editor::default();
+        for k in order {
+            ed.apply(&patches[k]);
+        }
+        if ed.resync || ed.version != patches[2].version {
+            ed.resync = false;
+            ed.apply(&store.resync(&key, &[]).expect("a reset"));
+        }
+        assert_eq!(ed.rows, sets[2].0, "order {order:?}");
+        assert!(!ed.resync, "order {order:?}: every image held");
+    }
+}
+
+/// A map of N sessions with one rows view `m` of connection 1 on it, laid out at WIDTH.
+fn rows_map(n: u64, width: u32) -> (Arc<Map>, Inner, ViewKey) {
+    let mut core = core_with(n);
+    let v = rows_view(core.model(), width);
+    let key = ViewKey {
+        conn: 1,
+        view: "m".into(),
+    };
+    core.step(Event::View(ViewOp::Open {
+        view: key.clone(),
+        state: v.state.clone(),
+        shown: true,
+    }));
+    let mut g = Inner::default();
+    g.spaces.insert(
+        "w".into(),
+        Space {
+            roots: Vec::new(),
+            core,
+            files: BTreeMap::new(),
+        },
+    );
+    g.views.insert(key.clone(), v);
+    (Arc::new(Map::default()), g, key)
+}
+
+fn log(map: &Map) -> Vec<&'static str> {
+    map.log
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// [A] A rows view gets its rows as patches for a full frame and a delta, and never a `work-map` event (a hidden one
+/// gets no stale mark either: its editor hid it).
+#[test]
+fn rows_subscriber_gets_no_work_map_event() {
+    let (map, mut g, key) = rows_map(2, 226);
+    map.send_full(&mut g, &key);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s1".into())],
+            ..Delta::default()
+        },
+    );
+    map.stale(&mut g, &key);
+    let sent = log(&map);
+    assert!(!sent.contains(&"work-map"), "{sent:?}");
+    assert_eq!(sent, ["rows", "rows"]);
+}
+
+/// [A] A rows view still holds a quiet reflow that would move its selection's chain; the user's own change draws.
+#[test]
+fn selected_still_holds_a_quiet_reflow() {
+    let (map, mut g, key) = rows_map(8, 500);
+    {
+        let v = g.views.get_mut(&key).expect("the view");
+        // laid out wide, now narrow: a reflow moves the cards
+        v.state.width_units = 120;
+        v.selected = Some(ItemId("agent:s8".into()));
+    }
+    assert!(map.chain_moves(&g, &key), "the reflow would move the chain");
+    map.outs(&mut g, &key, vec![CoOut::Reflow { user: false }], 0);
+    assert!(log(&map).is_empty(), "held: {:?}", log(&map));
+    map.outs(&mut g, &key, vec![CoOut::Reflow { user: true }], 0);
+    assert_eq!(log(&map), ["rows"]);
+}

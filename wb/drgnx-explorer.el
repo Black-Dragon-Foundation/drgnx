@@ -28,6 +28,7 @@
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
+(require 'drgnx-quick-open)                ; Find's rows from the hub (`search/files')
 
 (defgroup drgnx-explorer nil "The drgnx Explorer." :group 'drgnx)
 
@@ -905,18 +906,60 @@ host."
 excluded names left out.  A root that is your home or / and not a project is refused (far too many files)."
   (seq-mapcat #'drgnx-explorer--root-files drgnx-explorer--roots))
 
-;; Find's file list, streamed: with Nidhogg's framing on, a local root is listed in batches (core/drgnx-file-stream.el)
-;; that land in the Find state's :files while the tree is already filtered by them; a remote root, or no framing, reads
-;; the list now as before.  A listing belongs to one generation: Find ending or starting over bumps it, and a batch of an
-;; older one is dropped.
+;; Find's file list.  With the hub up, a local root's files come from the hub: each query asks `search/files' (the
+;; query, at most `drgnx-explorer--find-limit' rows) for a view of its own per root, and the rows it answers are Find's
+;; :files (Quick Open's list of keys, `drgnx-quick-open--rows', applies the patches by the patch rules).  Without the
+;; hub, streamed: with Nidhogg's framing on, a local root is listed in batches (core/drgnx-file-stream.el) that land in
+;; the Find state's :files while the tree is already filtered by them; a remote root, or no framing, reads the list now
+;; as before.  A listing belongs to one generation: Find ending or starting over bumps it, and a batch of an older one
+;; is dropped.
 (defvar drgnx-explorer--find-gen 0 "Which Find listing is current.")
 (defvar drgnx-explorer--find-streams nil "The listings Find is reading.")
+(defvar drgnx-explorer--find-views nil "((ROOT . ROWS) ...): the hub's Find views, one per root (`drgnx-quick-open--rows').")
+(defvar drgnx-explorer--find-view-count 0 "The number of the last Find view.")
+(defvar drgnx-explorer--find-limit)                     ; below
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-view-env-unregister "drgnx-view-env")
 
 (defun drgnx-explorer--find-stop ()
-  "End the listings Find is reading; their late batches are dropped."
+  "End the listings Find is reading; their late batches are dropped, and the hub's Find views are closed."
   (cl-incf drgnx-explorer--find-gen)
   (mapc #'drgnx-file-stream-stop drgnx-explorer--find-streams)
-  (setq drgnx-explorer--find-streams nil))
+  (setq drgnx-explorer--find-streams nil)
+  (when drgnx-explorer--find-views
+    (dolist (v drgnx-explorer--find-views)
+      (let ((view (drgnx-quick-open--rows-view (cdr v))))
+        (drgnx-view-env-unregister view)
+        (funcall drgnx-quick-open-send-function "view/close" (list :view view))))
+    (setq drgnx-explorer--find-views nil)
+    (remove-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)))
+
+(defun drgnx-explorer--find-view (root)
+  "A hub Find view for ROOT: registered for its env (in the Explorer's buffer), its patches taken."
+  (require 'drgnx-view-env)
+  (let ((r (drgnx-quick-open--rows-make (format "explorer-find-%d" (cl-incf drgnx-explorer--find-view-count)) root)))
+    (drgnx-view-env-register (drgnx-quick-open--rows-view r)
+                             (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer--buffer)))
+    (push (cons root r) drgnx-explorer--find-views)
+    (add-hook 'drgnx-hub-event-functions #'drgnx-explorer--find-event)))
+
+(defun drgnx-explorer--find-ask (query)
+  "Ask the hub for each Find view's files that hold QUERY; the rows come as patches (`drgnx-explorer--find-event')."
+  (dolist (v drgnx-explorer--find-views)
+    (drgnx-quick-open--rows-query (cdr v) query drgnx-explorer--find-limit)))
+
+(defun drgnx-explorer--find-event (event data)
+  "A `drgnx-hub-event-functions' handler while Find runs: a Find view's patch makes its rows Find's :files, and the
+tree is filtered by them once input pauses."
+  (when (and (equal event "view-patch") drgnx-explorer--find
+             (seq-find (lambda (v) (drgnx-quick-open--rows-patch (cdr v) data)) drgnx-explorer--find-views))
+    (let (files)
+      (dolist (v (reverse drgnx-explorer--find-views))
+        (dolist (k (drgnx-quick-open--rows-keys (cdr v)))
+          (unless (drgnx-explorer--excluded-p k) (push (concat (car v) k) files))))
+      (setq drgnx-explorer--find (plist-put drgnx-explorer--find :files (nreverse files))))
+    (drgnx-timer-debounce 'explorer-find-batch 0.1 #'drgnx-explorer--find-refilter :idle t
+                          :owner (or (get-buffer drgnx-explorer-buffer-name) :core))))
 
 (defun drgnx-explorer--find-batch (gen root names)
   "NAMES (relative to ROOT) of the Find listing generation GEN: add them to :files, and filter again once input pauses."
@@ -938,11 +981,13 @@ excluded names left out.  A root that is your home or / and not a project is ref
   (drgnx-explorer--find-stop)
   (let ((gen drgnx-explorer--find-gen) (files nil))
     (dolist (root drgnx-explorer--roots)
-      (let ((stream (and (drgnx-file-stream-available-p root)
+      (let ((stream (and (not (drgnx-quick-open--hub-p root))
+                         (drgnx-file-stream-available-p root)
                          (progn (drgnx-explorer--check-find-root root) t)
                          (drgnx-file-stream-start root (lambda (names) (drgnx-explorer--find-batch gen root names)) #'ignore))))
-        (if stream (push stream drgnx-explorer--find-streams)
-          (setq files (nconc files (drgnx-explorer--root-files root))))))
+        (cond (stream (push stream drgnx-explorer--find-streams))
+              ((drgnx-quick-open--hub-p root) (drgnx-explorer--find-view root))
+              (t (setq files (nconc files (drgnx-explorer--root-files root)))))))
     files))
 
 (defconst drgnx-explorer--find-limit 5000 "Find shows at most this many matching files.")
@@ -954,6 +999,7 @@ excluded names left out.  A root that is your home or / and not a project is ref
       (setq drgnx-explorer--find (list :files (drgnx-explorer--find-load)
                                        :expanded (copy-hash-table drgnx-explorer--expanded)
                                        :views (drgnx-view-save-places #'drgnx-explorer-node-at))))
+    (unless (equal query (plist-get drgnx-explorer--find :query)) (drgnx-explorer--find-ask query))
     (setq drgnx-explorer--find (plist-put drgnx-explorer--find :query query))
     (let ((tree (make-hash-table :test #'equal)) (q (downcase query)))
       (dolist (file (seq-take (seq-filter (lambda (file) (string-search q (downcase (file-name-nondirectory file))))

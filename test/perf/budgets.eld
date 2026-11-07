@@ -146,6 +146,8 @@
  (image-open (:image :preview_drawn_ms) 500 :report-only ot6)  ; every picture drawn within 500 ms
  (explorer-expand (:expand_ms) 80 :report-only ot8) (explorer-expand (:stalls-ge16) 0 :report-only ot8)
  (explorer-git (:input :p95) 16 :report-only ot5) (explorer-git (:stalls-ge16) 0 :report-only ot5)
+ ;; explorer-git :alloc :p50 12852 = 10281 x 1.25 (one source run, GUI container, 2026-11-07): objects allocated per command
+ (explorer-git (:alloc :p50) 12852 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
