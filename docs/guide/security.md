@@ -464,6 +464,26 @@ project).
   builds the `podman run` line itself: no capabilities, no new privileges, a read-only root, the worktree as the only
   mount, no network of its own (a granted network is the job's allow-list proxy, reached only through its relay sidecar `drgnx-px` on the job's own loopback, nothing else; the list is the setting `agents-net-hosts`, by default the package hosts of crates.io, npm and PyPI, port 443), limits from `agents-job-memory` and `agents-job-cpus`. An agent chooses an image name and a
   command and nothing else (`exec/start` refuses any other field); the command is never read as a podman option. The hub pulls the image itself (600 s at most) and names the container `drgnx-job-<id>`, removing leftovers at start.
+- **Networked container jobs** need rootless podman 5.0 or newer and nothing else: no podman network, no bridge, no
+  pasta. The job shares its sidecar's network namespace, which has a loopback only and no route; the namespace belongs
+  to the sidecar's user namespace (the sidecar runs as `nobody` there), so even root inside the job can't change it.
+  Each job has its own sidecar, so two jobs can't see each other. The job can't take the relay's port: `drgnx-px`
+  listens without `SO_REUSEPORT` as another user. A job is refused, before anything starts, with one of:
+  "Networked container jobs need podman 5.0 or newer; this host has `*version*`." (on a Mac: "… inside podman
+  machine; this machine runs `*version*`: update its OS image (`podman machine os upgrade`), or remove and re-create
+  the machine."), "drgnx runs containers rootless; this podman is rootful.", "drgnx could not build its proxy
+  image: …", "The job's proxy did not start within 10 s: …", or the memory and cgroup reasons any container job has. A running one ends `infra` with its reason as the log's last line
+  (`drgnx: infra: proxy: …`): the sidecar exited (its code and what it means; 137 is most likely its memory limit),
+  broke the channel's rules, or stopped reading; the hub stopped; or a hub that restarted found it running. A port of
+  your computer is reached only as `host.drgnx.internal:PORT` and only after you allow it on a card (the next section);
+  the hub's own ports never, whatever you allow. On SELinux hosts nothing is to be set up: the job's network needs no
+  socket rule, and a runner job's key socket is created as a container's (`container_t`; `drgnx doctor`'s
+  `key sockets:` line checks that this host's policy allows it). The shape was checked on Fedora 45 with SELinux
+  enforcing; Ubuntu (AppArmor) is CI's lane; RHEL and openSUSE are expected to work, unverified. **macOS** (podman machine) is expected to work, unverified: the relay crosses the
+  machine over podman's SSH connection (about 170 MB/s into the job and 87 MB/s back on the test VM, before gvproxy),
+  a machine restart ends running networked jobs, the machine's SSH and REST ports are never opened by a grant, and
+  gvproxy forwards ports that containers publish to the Mac's loopback, so a container you run yourself with `-p`
+  is reachable from the Mac as usual.
 
 ### Answering a browser card
 
@@ -476,7 +496,11 @@ again, so the agent's retry goes through without a second card.
     own tools could then reach any public site; pages can send what the agent gives them";
   - `browser.private`: "*session* wants to open *target* → *address* (*class*)", where the class is your LAN, your
     network (IPv6), link-local, your tailnet (CGNAT) or this computer, with the line "Any page the agent opens could
-    then send requests to it, including ones that change things".
+    then send requests to it, including ones that change things";
+  - `browser.private` for a container job: "Job *id* wants your port *PORT* (`host.drgnx.internal:PORT`)", with the
+    lines "Allowing it opens the port for this session: its browser and its other jobs too. Revoking it refuses the
+    next connection. Connections already open stay until they end; end the job to cut them." Its answers are the
+    browser's scopes, never a range or every private address.
 - **The answers:**
   - **Allow once**: for `agents-browser-once-window` (10 minutes by default), and only what the card named (the web
     card's first host, the private card's target);
