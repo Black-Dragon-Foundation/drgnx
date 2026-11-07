@@ -563,7 +563,7 @@ tarball 0.1 GB, registry and ELPA under 0.1 GB, fuzz build and corpora under 0.5
 third-party crates of the Linux, MSRV, Android, ARM and macOS builds, each compressed per crate; unmeasured, local runs
 cached 7 GB uncompressed for the whole workspace). About 6-8 GB in all, so a second `main` generation (the lock moved)
 still fits before the least recently used entries go. Replaced since: the `msrv`, `escape-host`, `agent-containers`,
-`android` and `macos` target entries (about 9 GB for macOS and the test binaries alone) and every pull request's entries.
+`android` and `macos` target entries (the macOS target and test binaries were 6.2 GB of the 9.2 GB) and every pull request's entries.
 If the budget is exceeded, the first thing to trim is sccache for `fuzz-build` and `macos`.
 
 | What | Key | Saves | Bust it |
