@@ -3288,6 +3288,53 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md \"The native view\nmodel\"), from version BASE to VERSION. MODEL is one JSON string, `{\"ops\": [...]}`, that the editor hands to its\nreplica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with\n`model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).",
+        "properties": {
+          "base": {
+            "description": "The version this patch applies to: 0 for the first model of a subscription.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hub": {
+            "description": "The hub's instance id, as on `view-patch`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reset": {
+            "description": "MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.",
+            "type": "boolean"
+          },
+          "version": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "hub",
+          "base",
+          "version",
+          "model"
+        ],
+        "title": "ViewModel",
+        "type": "object"
+      },
+      "doc": "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version",
+      "name": "view-model"
+    },
+    {
+      "data": {
         "$defs": {
           "ImageId": {
             "description": "an image's content hash and env epoch",
@@ -3556,6 +3603,15 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "model": {
+            "description": "The version of the view's model (`view-model`) these rows were built from; none for a view with no model.\nThe editor applies its queued models up to it before it draws these rows.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "ops": {
             "items": {
@@ -29526,16 +29582,21 @@
       "classes": [
         "user"
       ],
-      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
+      "doc": "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset; with model, its replica of the view's model is not: answered by a view-model reset",
       "name": "view/resync",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`.",
+        "description": "`view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an\nimage it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's\nreplica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.",
         "properties": {
           "class": {
+            "default": "",
             "type": "string"
           },
+          "model": {
+            "type": "boolean"
+          },
           "version": {
+            "default": 0,
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -29545,9 +29606,7 @@
           }
         },
         "required": [
-          "view",
-          "class",
-          "version"
+          "view"
         ],
         "title": "ViewResync",
         "type": "object"
@@ -30007,6 +30066,10 @@
         "additionalProperties": false,
         "description": "`work/map/set`'s params: what changes in one view (each absent field stays).",
         "properties": {
+          "clear": {
+            "description": "Nothing is selected any more (Esc, or the selection went with no item left to take it).",
+            "type": "boolean"
+          },
           "collapsed": {
             "items": {
               "format": "uint8",

@@ -581,7 +581,49 @@ fn rows_subscriber_gets_no_work_map_event() {
     map.stale(&mut g, &key);
     let sent = log(&map);
     assert!(!sent.contains(&"work-map"), "{sent:?}");
-    assert_eq!(sent, ["rows", "rows"]);
+    assert_eq!(sent, ["model", "rows", "model", "rows"]);
+}
+
+/// [D] A rows view's model goes before the rows built from it, for a full frame and for a delta.
+#[test]
+fn model_goes_before_its_rows() {
+    let (map, mut g, key) = rows_map(3, 226);
+    map.send_full(&mut g, &key);
+    assert_eq!(log(&map), ["model", "rows"]);
+    map.send_delta(
+        &mut g,
+        &key,
+        Delta {
+            changed: vec![ItemId("agent:s2".into())],
+            ..Delta::default()
+        },
+    );
+    assert_eq!(log(&map), ["model", "rows", "model", "rows"]);
+}
+
+/// [D] The map's model: a node per item the view shows, with its links, its card's rect and its flags; the chain
+/// edges among them; the team, needs-you and outline lists.
+#[test]
+fn map_model_carries_links_rects_and_lists() {
+    let (_map, g, key) = rows_map(3, 226);
+    let v = &g.views[&key];
+    let m = g.spaces["w"].core.model();
+    let l = v.layout.as_ref().expect("laid out");
+    let d = model::doc(m, l, &v.sent);
+    assert_eq!(d.nodes.len(), v.sent.len());
+    let a1 = &d.nodes["agent:s1"];
+    let fields = a1["fields"].as_array().expect("fields");
+    let rect = &l.at[&ItemId("agent:s1".into())];
+    for (name, want) in [("x", rect.x), ("y", rect.y), ("w", rect.w), ("h", rect.h)] {
+        assert!(
+            fields.contains(&json!([name, want])),
+            "{name} in {fields:?}"
+        );
+    }
+    assert_eq!(a1["kind"], "agent");
+    assert_eq!(a1["nav"]["right"], "agent:s2");
+    assert_eq!(d.lists["team"], vec!["agent:s1", "agent:s2", "agent:s3"]);
+    assert_eq!(d.descriptor["scheme"], "links");
 }
 
 /// [A] A rows view still holds a quiet reflow that would move its selection's chain; the user's own change draws.
@@ -598,5 +640,5 @@ fn selected_still_holds_a_quiet_reflow() {
     map.outs(&mut g, &key, vec![CoOut::Reflow { user: false }], 0);
     assert!(log(&map).is_empty(), "held: {:?}", log(&map));
     map.outs(&mut g, &key, vec![CoOut::Reflow { user: true }], 0);
-    assert_eq!(log(&map), ["rows"]);
+    assert_eq!(log(&map), ["model", "rows"]);
 }

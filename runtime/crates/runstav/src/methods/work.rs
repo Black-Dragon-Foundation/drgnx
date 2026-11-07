@@ -380,6 +380,9 @@ pub struct MapSet {
     /// The selection moved (a map key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Nothing is selected any more (Esc, or the selection went with no item left to take it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
 }
 
 /// `work/map/set`'s answer: the view's version after it.

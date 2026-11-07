@@ -1185,21 +1185,29 @@ impl Map {
         self.send(key.conn, &data);
     }
 
-    /// Rows view V (KEY) of space SP to each display class its editor sent an env for: the rows built in that class
-    /// and the patch from what it holds (`view::Views::publish_built`).
+    /// Rows view V (KEY) of space SP: first its model (`view-model`, what changed since its editor's replica was last
+    /// sent one), then to each display class its editor sent an env for the rows built in that class and the patch
+    /// from what it holds (`view::Views::publish_built`), naming the model's version.
     fn publish(&self, sp: &Space, v: &View, key: &ViewKey) {
         if !v.rows || !v.shown {
             return;
         }
+        let m = sp.core.model();
+        let doc = v.layout.as_ref().map(|l| model::doc(m, l, &v.sent));
         #[cfg(test)]
-        self.log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push("rows");
+        {
+            let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+            if doc.is_some() {
+                log.push("model");
+            }
+            log.push("rows");
+        }
         let Some(f) = self.front.get().and_then(Weak::upgrade) else {
             return;
         };
-        let m = sp.core.model();
+        if let Some(doc) = doc {
+            f.core.views.publish_model(&f, key.conn, &key.view, doc);
+        }
         // the job chips' elapsed time: whole seconds of the wall clock
         let now = crate::clock::wall_secs() as u64;
         for class in f.core.views.classes(key.conn, &key.view) {
@@ -1380,7 +1388,9 @@ pub async fn subscribe(f: &Front, c: &Caller, p: MapSubscribe) -> Result<MapSubs
         g.views.insert(key, v);
         return Ok(MapSubscribed::Frame(frame));
     }
-    // a rows view: its rows to each class it has an env for (the first patch of each a reset)
+    // a rows view: its model (a reset), then its rows to each class it has an env for (the first patch of each a
+    // reset)
+    f.core.views.model_restart(c.conn_id, &p.view);
     map.publish(sp, &v, &key);
     let version = v.version;
     g.views.insert(key, v);
@@ -1419,6 +1429,10 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     if selected.is_some() {
         v.selected = selected;
     }
+    if p.clear {
+        v.selected = None;
+    }
+    let moved = p.selected.is_some() || p.clear;
     let space = v.space.clone();
     let mut ops = Vec::new();
     if state != v.state {
@@ -1432,8 +1446,11 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
         && shown != v.shown
     {
         v.shown = shown;
-        // a hidden view drops what it gathered; shown again, it gets one full frame
+        // a hidden view drops what it gathered; shown again, it gets one full frame (and a model reset)
         v.co = Coalescer::default();
+        if !shown && v.rows {
+            f.core.views.model_hidden(c.conn_id, &p.view);
+        }
         ops.push(ViewOp::Shown {
             view: key.clone(),
             shown,
@@ -1461,7 +1478,7 @@ pub fn set(f: &Front, c: &Caller, p: MapSet) -> Result<MapVersion, Error> {
     }
     if relayout {
         f_map.coalesce(&mut g, &key, Some(CoIn::User), now);
-    } else if p.selected.is_some() {
+    } else if moved {
         f_map.coalesce(&mut g, &key, Some(CoIn::Key), now);
         // a rows view draws its new chain's edges (the tiles and lanes on it)
         if let Some(v) = g.views.get(&key)
@@ -1671,5 +1688,6 @@ pub async fn run(front: Arc<Front>) {
     }
 }
 
+mod model;
 #[cfg(test)]
 mod tests;

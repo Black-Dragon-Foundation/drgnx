@@ -1,0 +1,20 @@
+{"scenario": "view-model/ids-stable-across-restart", "requires": ["v1", "test-hooks"], "doc": "A hub restart changes the hub's instance id, not the model: the new hub's first view-model is a reset (base 0) under a new hub id, and it is the same model string, so every node id, link and list the editor's replica held names the same items. Pattern B: each answer and event is the gate."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$capture:old", "base": 0, "version": 1, "model": "$capture:first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$old", "version": "$number"}}, "within_ms": 10000}
+{"do": "kill", "hub": "h", "signal": "TERM"}
+{"do": "expect_exit", "hub": "h", "code": 0, "within_ms": 15000}
+{"do": "start", "hub": "h2", "same_root_as": "h"}
+{"do": "connect", "conn": "e2", "hub": "h2"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e2", "json": {"event": "view-model", "data": {"view": "m", "hub": "$not:old", "base": 0, "version": 1, "model": "$first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"id": 2, "result": {"hub": "$not:old", "version": "$number"}}, "within_ms": 10000}

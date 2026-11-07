@@ -1498,13 +1498,13 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
-| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
+| `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
@@ -2141,7 +2141,8 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
-  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
   view; a connection's views end with it.
@@ -2172,6 +2173,36 @@ All of it is in memory only.
   colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
   never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
   carries.
+
+### The native view model (`view-model`)
+
+A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
+Nidhogg: `nidhogg-view-apply`) needs to answer every key in-process, never from the hub. The hub keeps, per
+(connection, view), the model and version it last sent (`view::Store`'s models, `view::model`), and sends what changed
+as the event `view-model {view, hub, base, version, reset?, model}`:
+
+- **One string.** `model` is a JSON string, `{"ops": [...]}`, that the editor hands to its replica whole; the editor
+  never makes Lisp data of it. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
+  {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
+  changed descriptor is a reset.
+- **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
+  each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
+  to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
+- **Resets.** The first model after a `work/map/subscribe` (the editor starts a new replica: version 1), after a
+  hidden view is shown again (`work/map/set {shown}`), and the answer to `view/resync {view, model: true}` (CLASS is
+  not read) are resets, and say so in the envelope (`reset: true`), so the editor routes a model without parsing
+  it; a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
+  items' own, so the same records give the same model.
+- **Hidden views get none.** A view hidden by its editor gets no model until it is shown again.
+- **The selection is the editor's.** The hub's own selection only draws the chain's edges in the rows: `work/map/set
+  {selected}` moves it, `{clear: true}` drops it; neither changes the model.
+
+The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
+`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
+(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
+fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`.
 
 ### Fitting: text to a pixel width
 

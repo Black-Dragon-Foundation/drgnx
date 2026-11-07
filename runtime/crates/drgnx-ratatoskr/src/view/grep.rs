@@ -196,6 +196,7 @@ impl Store {
 
     /// ROWS after the last row, one insert; `None` when the pair has no env or its next patch is a reset.
     fn append(&mut self, key: &Key, rows: Vec<Row>) -> Option<Patch> {
+        let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
         if p.reset_due || rows.is_empty() {
             return None;
@@ -208,6 +209,7 @@ impl Store {
             p,
             vec![Op::Insert { after, rows }],
             &[],
+            model,
         ))
     }
 }

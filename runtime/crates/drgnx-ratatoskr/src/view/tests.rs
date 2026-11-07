@@ -431,3 +431,112 @@ fn fixture_labels_are_fitted_per_class() {
     let t = super::label_rows(&labels, &tty, &FontSet::new());
     assert_eq!(t[0].text, "abcde… |");
 }
+
+/// A small model: two nodes with a label each (the second's GEN), one edge, one list.
+fn doc(gen_: u32) -> super::model::Doc {
+    use serde_json::json;
+    let mut d = super::model::Doc {
+        descriptor: json!({"scheme": "links", "lists": ["all"]}),
+        ..Default::default()
+    };
+    d.nodes.insert(
+        "a".into(),
+        json!({"id": "a", "kind": "k", "fields": [["label", "A"]]}),
+    );
+    d.nodes.insert(
+        "b".into(),
+        json!({"id": "b", "kind": "k", "fields": [["label", format!("B{gen_}")]]}),
+    );
+    d.edges.insert(("a".into(), "b".into(), "came-from".into()));
+    d.lists.insert("all".into(), vec!["a".into(), "b".into()]);
+    d
+}
+
+/// The model's ops, parsed back from its one string.
+fn ops_of(m: &runstav::methods::view::ViewModel) -> Vec<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_str(&m.model).expect("one JSON string");
+    v["ops"].as_array().expect("ops").clone()
+}
+
+/// [D] The model goes as one string field: the event's `model` is a JSON string holding `{"ops": [...]}`, never an
+/// object the editor's reader would make Lisp data of.
+#[test]
+fn model_is_one_string_field() {
+    let mut s = Store::new(7);
+    let m = s.publish_model(CONN, "v", doc(1)).expect("a first model");
+    let ev = serde_json::to_value(&m).expect("the event");
+    assert!(ev["model"].is_string(), "{ev}");
+    assert_eq!((m.hub, m.base, m.version), (7, 0, 1));
+    assert!(ops_of(&m)[0].get("reset").is_some());
+    assert_eq!(ev["reset"], true, "the envelope says reset: {ev}");
+    let m = s.publish_model(CONN, "v", doc(2)).expect("a changed model");
+    assert!(!m.reset);
+    let ev = serde_json::to_value(&m).expect("the event");
+    assert!(ev.get("reset").is_none(), "no reset key on a diff: {ev}");
+}
+
+/// [D] A patch names the model version its rows were built from; a view with no model names none.
+#[test]
+fn patch_names_its_model_version() {
+    let mut s = Store::new(7);
+    s.env(CONN, env("g", 1, 600));
+    let p = s.publish(&key("g"), rows("g", 2, 1), &[]).expect("rows");
+    assert_eq!(p.model, None);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.publish_model(CONN, "v", doc(2)).expect("a changed model");
+    let p = s.publish(&key("g"), rows("g", 2, 2), &[]).expect("rows");
+    assert_eq!(p.model, Some(2));
+    assert_eq!(s.resync(&key("g"), &[]).expect("a reset").model, Some(2));
+}
+
+/// [D] A change only the model sees (a field the rows don't show) sends a model and no rows; nothing changed sends
+/// neither.
+#[test]
+fn fields_only_change_sends_model_and_no_rows() {
+    let mut s = Store::new(7);
+    s.env(CONN, env("g", 1, 600));
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.publish(&key("g"), rows("g", 2, 1), &[]).expect("rows");
+    let m = s
+        .publish_model(CONN, "v", doc(2))
+        .expect("the field change");
+    assert_eq!((m.base, m.version), (1, 2));
+    let ops = ops_of(&m);
+    assert_eq!(ops.len(), 1, "{ops:?}");
+    assert_eq!(ops[0]["nodes"][0]["id"], "b");
+    assert!(s.publish(&key("g"), rows("g", 2, 1), &[]).is_none());
+    assert!(s.publish_model(CONN, "v", doc(2)).is_none());
+}
+
+/// [D] A hidden view's next model is a reset; a resync answers one too, and a closed view has none to resync.
+#[test]
+fn hidden_view_gets_no_model_then_reset() {
+    let mut s = Store::new(7);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    s.model_hidden(CONN, "v");
+    let m = s
+        .publish_model(CONN, "v", doc(1))
+        .expect("a reset, though unchanged");
+    assert!(ops_of(&m)[0].get("reset").is_some());
+    assert_eq!(m.version, 2);
+    let r = s.resync_model(CONN, "v").expect("a resync");
+    assert!(ops_of(&r)[0].get("reset").is_some());
+    assert_eq!((r.base, r.version), (2, 3));
+    s.close(CONN, "v");
+    assert!(s.resync_model(CONN, "v").is_none());
+}
+
+/// [D] Removals: edges first, then the nodes; a list that went is sent empty.
+#[test]
+fn removals_send_edges_before_nodes() {
+    let mut s = Store::new(7);
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    let mut d = doc(1);
+    d.nodes.remove("b");
+    d.edges.clear();
+    d.lists.clear();
+    let ops = ops_of(&s.publish_model(CONN, "v", d).expect("removals"));
+    assert!(ops[0]["edges"]["remove"].is_array(), "{ops:?}");
+    assert_eq!(ops[1]["remove"], serde_json::json!(["b"]));
+    assert_eq!(ops[2]["list"]["ids"], serde_json::json!([]));
+}

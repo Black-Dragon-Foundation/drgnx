@@ -38,6 +38,10 @@ pub struct Patch {
     /// `[id, svg]`: images the rows name and Lisp may not hold yet (a reset: every image its rows name).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<(ImageId, String)>,
+    /// The version of the view's model (`view-model`) these rows were built from; none for a view with no model.
+    /// The editor applies its queued models up to it before it draws these rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<u64>,
 }
 
 /// The ops that turn OLD into NEW, rows matched by key: removes, then replaces of changed rows, then inserts of new

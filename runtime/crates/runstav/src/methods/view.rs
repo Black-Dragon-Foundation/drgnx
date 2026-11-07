@@ -60,12 +60,36 @@ pub struct ViewEnv {
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an
-/// image it lacks); VERSION is what it holds. The answer is a `reset`.
+/// image it lacks); VERSION is what it holds. The answer is a `reset`. With MODEL, it is VIEW's model the editor's
+/// replica cannot take (a gap, a hub it has no reset from): the answer is a `view-model` reset, and CLASS is not read.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ViewResync {
     pub view: String,
+    #[serde(default)]
     pub class: String,
+    #[serde(default)]
     pub version: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub model: bool,
+}
+
+/// `view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md "The native view
+/// model"), from version BASE to VERSION. MODEL is one JSON string, `{"ops": [...]}`, that the editor hands to its
+/// replica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with
+/// `model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViewModel {
+    pub view: String,
+    /// The hub's instance id, as on `view-patch`.
+    pub hub: u64,
+    /// The version this patch applies to: 0 for the first model of a subscription.
+    pub base: u64,
+    pub version: u64,
+    /// MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reset: bool,
+    pub model: String,
 }
 
 /// `view/glyphs`: the editor's answer to `view-glyphs`, `[role, char, px]` each.
@@ -134,8 +158,8 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "view/resync", ViewResync(ViewResync) -> bool,
             classes: [User], writes: false,
-            doc: "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset",
-            check: |p: &ViewResync| check_ids(&p.view, Some(&p.class)),
+            doc: "the editor's rows of a (view, class) are not the hub's: answered by a view-patch reset; with model, its replica of the view's model is not: answered by a view-model reset",
+            check: |p: &ViewResync| check_ids(&p.view, (!p.model).then_some(p.class.as_str())),
         ),
         method!(
             "view/glyphs", ViewGlyphs(ViewGlyphs) -> bool,
@@ -211,7 +235,7 @@ mod tests {
                 &mut found,
             );
         }
-        for e in ["view-patch", "view-glyphs"] {
+        for e in ["view-patch", "view-glyphs", "view-model"] {
             let t = crate::events::event(e).unwrap_or_else(|| panic!("no event {e}"));
             maps(&serde_json::to_value((t.data)()).unwrap(), e, &mut found);
         }
