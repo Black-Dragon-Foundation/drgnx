@@ -188,6 +188,9 @@ gateway run for real; only the agent's process is the recording. The scratch dir
   line at PATH; re-record`), appends `{connection, code, why, path, expected, received}` to the misses file and exits
   3, which the hub shows as the agent ending. A message no unclaimed connection expects, a session request no
   unclaimed connection opens with, and (with `--strict`) recorded lines left unused when stdin closes are misses too.
+  A SIGTERM ends the replay the same way: the hub ends a session by its process group (`draugr::kill_group`), stdin
+  still open, so the strict check runs at a session's kill as well (SIGTERM is blocked and taken by one thread with
+  `sigwait`).
 
 ## The scrub
 
@@ -365,7 +368,8 @@ milliseconds, the look moves off the reader thread.
   (`DRGNX_REPLAY_STRICT=1` puts `--strict` on the replayer's command), `the_replayer_needs_the_recording_and_scratch_dirs`,
   `agents::launch::tests::a_replayed_launch_sees_the_recording_and_its_scratch_dir`, `recording_cli::tests`.
 - `cargo test -p domr --test replay_strict` (pattern C: the test is the hub): `strict_fails_a_replay_that_left_recorded_lines_unused`,
-  `without_strict_the_same_replay_ends_clean`, `a_replay_under_another_root_sends_its_own_paths`.
+  `without_strict_the_same_replay_ends_clean`, `a_sigterm_ends_the_replay_as_stdin_closing_does`,
+  `a_replay_under_another_root_sends_its_own_paths`.
 - `test/unit/drgnx-record-cli-test.el` (`drgnx-record-cli/`): the lint fails on a planted key without printing it (needs
   `DRGNX_RATATOSKR_BIN`), `export-never-copies-the-bundle`, `export-keeps-the-manifests-roots-and-normalizes-the-streams`,
   `export-refuses-over-256-kib`, a live run, a refusing lint; `stop` and a failing lint; the repository's fixtures lint

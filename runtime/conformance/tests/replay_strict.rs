@@ -34,6 +34,12 @@ fn recording(dir: &std::path::Path) {
 
 /// Replay DIR, send the first two requests, wait for their answers, close stdin: the exit code, and the misses file.
 fn replay(strict: bool) -> (Option<i32>, String) {
+    replay_ended(strict, false)
+}
+
+/// As [`replay`], but with TERM the end is a SIGTERM with stdin still open, as the hub ends a session's process group
+/// (`draugr::kill_group`).
+fn replay_ended(strict: bool, term: bool) -> (Option<i32>, String) {
     let root = tempfile::tempdir().unwrap();
     let run = root.path().join("run");
     recording(&run);
@@ -67,7 +73,12 @@ fn replay(strict: bool) -> (Option<i32>, String) {
         let v: Value = serde_json::from_str(&answer).unwrap();
         assert!(v.get("result").is_some(), "{v}");
     }
-    drop(stdin);
+    if term {
+        // SAFETY: a signal to the child this test spawned and has not waited on yet
+        assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
+    } else {
+        drop(stdin);
+    }
     let code = child.wait().unwrap().code();
     (code, std::fs::read_to_string(&misses).unwrap_or_default())
 }
@@ -139,6 +150,18 @@ fn strict_fails_a_replay_that_left_recorded_lines_unused() {
 #[test]
 fn without_strict_the_same_replay_ends_clean() {
     let (code, misses) = replay(false);
+    assert_eq!(code, Some(0), "{misses}");
+    assert_eq!(misses, "");
+}
+
+/// The hub ends a session with a SIGTERM to its process group, not by closing its stdin: the replay ends as it would
+/// at stdin's close, so `--strict` still finds the unused lines (exit 3), and without it the end is clean.
+#[test]
+fn a_sigterm_ends_the_replay_as_stdin_closing_does() {
+    let (code, misses) = replay_ended(true, true);
+    assert_eq!(code, Some(3), "{misses}");
+    assert!(misses.contains("never used"), "{misses}");
+    let (code, misses) = replay_ended(false, true);
     assert_eq!(code, Some(0), "{misses}");
     assert_eq!(misses, "");
 }
