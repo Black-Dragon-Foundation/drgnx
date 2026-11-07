@@ -608,3 +608,74 @@ async fn base_refresh_reuses_tree_content() {
     assert_eq!(chunk_ids(&f.store, "b.txt", &blob).await, ids);
     assert!(f.rows().await.is_empty(), "{:?}", f.rows().await);
 }
+
+/// A door that rewrites PATH (once) just before it hashes: the file changes between the overlay's read and the hash.
+struct Racing<'a> {
+    inner: &'a (dyn TreeGit + Sync),
+    file: PathBuf,
+    text: &'static str,
+    done: std::sync::atomic::AtomicBool,
+}
+
+impl TreeGit for Racing<'_> {
+    fn kind(&self) -> DoorKind {
+        self.inner.kind()
+    }
+    fn head(&self, root: &Path) -> std::io::Result<hrafn::Head> {
+        self.inner.head(root)
+    }
+    fn tree_diff(&self, root: &Path, a: &str, b: &str) -> std::io::Result<Vec<hrafn::TreeChange>> {
+        self.inner.tree_diff(root, a, b)
+    }
+    fn stat_status(&self, root: &Path) -> std::io::Result<hrafn::Status> {
+        self.inner.stat_status(root)
+    }
+    fn ls_tree(&self, root: &Path, commit: &str) -> std::io::Result<Vec<hrafn::TreeEntry>> {
+        self.inner.ls_tree(root, commit)
+    }
+    fn blobs(&self, root: &Path, paths: &[String]) -> std::io::Result<Vec<hrafn::Blob>> {
+        if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            std::fs::write(&self.file, self.text).unwrap();
+        }
+        self.inner.blobs(root, paths)
+    }
+    fn filtered(&self, root: &Path, paths: &[String]) -> std::io::Result<Vec<String>> {
+        self.inner.filtered(root, paths)
+    }
+    fn as_git(&self) -> &dyn hrafn::Git {
+        self.inner.as_git()
+    }
+}
+
+/// Pattern D. A file written between the overlay's read and the door's hash: the row's blob and its chunks are of the
+/// same bytes (the ones on disk last), never a blob of new bytes over chunks of old ones.
+#[tokio::test]
+async fn row_blob_matches_the_bytes_chunked() {
+    let f = fixture().await;
+    write(&f.t, &[("b.txt", "beta-before\n")]);
+    let door = Racing {
+        inner: &GitCli,
+        file: f.t.join("b.txt"),
+        text: "beta-after\n",
+        done: false.into(),
+    };
+    overlay::seed(&f.cx(&door)).await.unwrap();
+    f.at_invariant().await.unwrap();
+    let rows = f.rows().await;
+    let Some(Some(blob)) = rows.get("b.txt").cloned() else {
+        panic!("T's row of b.txt: {rows:?}");
+    };
+    let text: String = f
+        .store
+        .handle()
+        .read(move |c| {
+            Ok(c.query_row(
+                "select group_concat(embed_text, '') from chunk where path = 'b.txt' and blob = ?1",
+                [blob],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert!(text.contains("beta-after"), "{text:?}");
+}

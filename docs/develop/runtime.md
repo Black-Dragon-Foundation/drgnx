@@ -1053,7 +1053,9 @@ stat-clean at a committed blob equal to the base's is decided without a read. Ad
 the base's rules, so a file can be admitted in one view and not the other. A link is never admitted in any view,
 through either door: a committed link is refused by its mode and a link on disk by the read, both before any hash
 (the CLI door's `hash-object` would hash the target's content, gix the target's name). A blob the gix door marks
-uncertain always gets its row. A seed marks the tree `seeding` and, in its last transaction, `live` with `head`,
+uncertain always gets its row. The door hashes the file as it is when it runs, so after the hash the file is read
+again: a hash is kept only while the file still holds the bytes read (and chunked), a file that changed is hashed
+again, and one still changing after three rounds is left to the hint its write sends. A seed marks the tree `seeding` and, in its last transaction, `live` with `head`,
 `branch` and `seeded_from`; one cut short is simply run again. Tier 1 moves every tree that is not seeding in the same
 transaction as each base change (a tree whose row equals the new base content loses it; a tree with no row gets one
 naming the old content, a tombstone if there was none), so no tree reads a file for it; and tier 1 neither reads nor

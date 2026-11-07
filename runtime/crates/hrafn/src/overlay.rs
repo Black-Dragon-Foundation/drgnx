@@ -24,7 +24,7 @@
 //!
 //! Reading, hashing and chunking run in the caller's task, as tier 1's do; only the batch writes are store jobs.
 
-use crate::door::TreeGit;
+use crate::door::{Blob, TreeGit};
 use crate::files::{Config, Rules, listed, read_admitted};
 use crate::index::{Built, META_BUILT_FROM, build, known_blobs, row_of};
 use crate::store::{CodeStore, FileRow, StoreError, content_ids, remove_file_row, write_version};
@@ -35,6 +35,9 @@ use std::path::Path;
 
 /// Paths written per transaction.
 pub const BATCH: usize = 64;
+
+/// Times a file read for a hash is hashed and read again while it keeps changing under the hash.
+const HASH_ROUNDS: usize = 3;
 
 /// A committed link's mode.
 const LINK: u32 = 0o120000;
@@ -191,11 +194,29 @@ async fn diff(cx: &Cx<'_>, only: Option<&[String]>) -> Result<Seed, StoreError> 
             None => want.push((p.clone(), absent(in_base))),
         }
     }
-    let paths: Vec<String> = to_hash.iter().map(|h| h.0.clone()).collect();
-    let blobs = cx.door.blobs(cx.root, &paths)?;
+    // the door hashes the file as it is when it runs: a hash is kept only when the file still holds the bytes read, so
+    // a row never names a blob over chunks of other bytes; a file that keeps moving is left to the hint its write sends
+    let mut hashed: Vec<(String, Vec<u8>, Blob)> = Vec::new();
+    for _ in 0..HASH_ROUNDS {
+        if to_hash.is_empty() {
+            break;
+        }
+        let paths: Vec<String> = to_hash.iter().map(|h| h.0.clone()).collect();
+        let blobs = cx.door.blobs(cx.root, &paths)?;
+        let mut again = Vec::new();
+        for ((p, bytes), b) in to_hash.into_iter().zip(blobs) {
+            match read_admitted(&root_fd, &p) {
+                Some(now) if now == bytes => hashed.push((p, bytes, b)),
+                Some(now) => again.push((p, now)),
+                None => want.push((p.clone(), absent(base.get(&p)))),
+            }
+        }
+        to_hash = again;
+    }
+    let paths: Vec<String> = hashed.iter().map(|h| h.0.clone()).collect();
     let generated: HashSet<String> = git.generated(cx.root, &paths)?.into_iter().collect();
     let mut facts: HashMap<String, bool> = HashMap::new();
-    for ((p, bytes), b) in to_hash.into_iter().zip(blobs) {
+    for (p, bytes, b) in hashed {
         if base.get(&p) == Some(&b.id) && !b.uncertain {
             want.push((p, Want::None));
         } else {
