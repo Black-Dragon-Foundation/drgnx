@@ -7,6 +7,7 @@
  (:file "core/drgnx-bootstrap.el" :fn drgnx-bootstrap--git-clone :what rename-file :why "a directory move: a fresh clone renamed into the empty config dir" :until never)
  (:file "core/drgnx-work-db.el" :fn drgnx-work-db--keep-schema-5 :what rename-file :why "a directory move: the schema-5 copy built as work.db.schema5.tmp, then renamed" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt--learn :what read-site :why "a user's file: Lisp source read to learn indentation" :until never)
+ (:file "modules/tools/drgnx-term-settings.el" :fn drgnx-term-settings-write-reference :what with-temp-file :why "a developer tool: writes docs/reference/terminal-settings.md in the checkout" :until never)
  (:file "core/drgnx-fmt.el" :fn drgnx-fmt-file :what write-region :why "a user's file: bin/drgnx fmt rewrites source" :until never)
  (:file "core/drgnx-build.el" :fn drgnx-build--read-forms :what read-site :why "Lisp source: drgnx's own files, read by the build's scan of the primitives they advise and never written" :until never)
  (:file "core/drgnx-keys.el" :fn drgnx-keys--read-file :what read-site :why "Lisp source: the shipped key profiles keys/*.eld, read from the checkout and never written" :until never)

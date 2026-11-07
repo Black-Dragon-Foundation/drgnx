@@ -35,7 +35,13 @@ terminal's buffer only shows the screen it sends. So:
   title names the buffer, a progress report (OSC 9;4) shows in the mode line, and a notification (OSC 9 / 777) is a
   drgnx notice.
 - Resizing the window resizes the terminal once the window settles.
-- Undo is off in a terminal's buffer; the theme's colours apply at once.
+- Undo is off in a terminal's buffer; the theme's colours apply at once, and a program that asks for the terminal's
+  colours (OSC 10, 11, 4) is told the theme's.
+- **Settings:** every option of Ghostty's configuration has its place, listed in
+  [terminal settings](../reference/terminal-settings.md): the cursor, paste protection (a multi-line paste into a
+  program that did not ask for bracketed paste asks first), copy on select, trailing spaces trimmed on copy, a bell or
+  notice when a long command ends (`drgnx-term-notify-on-command-finish`), the program, environment, TERM and memory
+  limit of new terminals, and more. The colours are the theme's faces (`drgnx-term-color-0` to `15` and the others).
 - Wide characters (CJK) keep the columns after them in place. Not yet: an emoji whose glyph is wider than its two
   cells can show as `…` or push the rest of its line a few pixels, and a joined emoji (👩‍💻) takes four cells.
 

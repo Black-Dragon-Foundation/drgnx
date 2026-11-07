@@ -50,6 +50,8 @@ pub struct Sink {
     /// Whether programs may write the clipboard (`drgnx-term-clipboard-write`).
     pub clipboard_write: bool,
     pub size: GhosttySizeReportSize,
+    /// The answer to ENQ (`drgnx-term-enquiry-response`; empty: none).
+    pub enquiry: String,
 }
 
 /// The cursor as the frame sees it.
@@ -106,6 +108,13 @@ unsafe extern "C" fn on_write_pty(_: GhosttyTerminal, u: *mut c_void, data: *con
                 .pty
                 .extend_from_slice(std::slice::from_raw_parts(data, len))
         };
+    }
+}
+unsafe extern "C" fn on_enquiry(_: GhosttyTerminal, u: *mut c_void) -> GhosttyString {
+    let s = unsafe { &sink(u).enquiry };
+    GhosttyString {
+        ptr: s.as_ptr(),
+        len: s.len(),
     }
 }
 unsafe extern "C" fn on_bell(_: GhosttyTerminal, u: *mut c_void) {
@@ -267,7 +276,7 @@ impl Engine {
                 ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_USERDATA, u as *const c_void),
                 "userdata",
             )?;
-            let fns: [(i32, *const c_void); 10] = [
+            let fns: [(i32, *const c_void); 11] = [
                 (
                     GHOSTTY_TERMINAL_OPT_WRITE_PTY,
                     on_write_pty as GhosttyTerminalWritePtyFn as *const c_void,
@@ -275,6 +284,10 @@ impl Engine {
                 (
                     GHOSTTY_TERMINAL_OPT_BELL,
                     on_bell as GhosttyTerminalBellFn as *const c_void,
+                ),
+                (
+                    GHOSTTY_TERMINAL_OPT_ENQUIRY,
+                    on_enquiry as GhosttyTerminalEnquiryFn as *const c_void,
                 ),
                 (
                     GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
@@ -343,6 +356,113 @@ impl Engine {
                 GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
                 (&raw const bytes).cast(),
             );
+        }
+    }
+
+    /// The cursor a program's reset (CSI 0 q) and a new terminal show: STYLE `block`, `block_hollow`, `bar` or
+    /// `underline` (else unchanged), blinking when BLINK (Emacs blinks every cursor alike: drgnx sets none).
+    pub fn set_default_cursor(&mut self, style: Option<&str>, blink: Option<bool>) {
+        let style = style.and_then(|s| match s {
+            "block" => Some(GHOSTTY_CURSOR_STYLE_BLOCK),
+            "block_hollow" => Some(GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW),
+            "bar" => Some(GHOSTTY_CURSOR_STYLE_BAR),
+            "underline" => Some(GHOSTTY_CURSOR_STYLE_UNDERLINE),
+            _ => None,
+        });
+        // SAFETY: a GhosttyCursorStyle* (a C enum: int) and a bool*.
+        unsafe {
+            if let Some(s) = style {
+                ghostty_terminal_set(
+                    self.term,
+                    GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+                    (&raw const s).cast(),
+                );
+            }
+            if let Some(b) = blink {
+                ghostty_terminal_set(
+                    self.term,
+                    GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+                    (&raw const b).cast(),
+                );
+            }
+            // the defaults apply on a reset: one now, when the program has not chosen a cursor itself
+            let reset = b"\x1b[0 q";
+            ghostty_terminal_vt_write(self.term, reset.as_ptr(), reset.len());
+        }
+    }
+
+    /// Whether a program may read the title back (CSI 21 t; off by default: a title can carry commands).
+    pub fn set_title_report(&mut self, on: bool) {
+        // SAFETY: a bool*.
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_TITLE_REPORT,
+                (&raw const on).cast(),
+            )
+        };
+    }
+
+    /// Mode N's value now and after a reset (a DEC private mode; ANSI: an ANSI mode).
+    pub fn set_mode_default(&mut self, n: u16, ansi: bool, on: bool) {
+        let m = GhosttyTerminalModeConfig {
+            mode: ghostty_mode_new(n, ansi),
+            value: on,
+        };
+        // SAFETY: a GhosttyTerminalModeConfig*.
+        unsafe {
+            ghostty_terminal_set(
+                self.term,
+                GHOSTTY_TERMINAL_OPT_MODE_DEFAULT,
+                (&raw const m).cast(),
+            )
+        };
+    }
+
+    /// The default colours a program reads back (OSC 10, 11, 12, 4): the editor's faces. FG, BG and CURSOR (none:
+    /// the built-in one) and, given all 16, the first 16 of the palette (the rest: the standard cube and greys).
+    pub fn set_colours(
+        &mut self,
+        fg: Option<[u8; 3]>,
+        bg: Option<[u8; 3]>,
+        cursor: Option<[u8; 3]>,
+        ansi: Option<&[[u8; 3]; 16]>,
+    ) {
+        let rgb = |c: [u8; 3]| GhosttyColorRgb {
+            r: c[0],
+            g: c[1],
+            b: c[2],
+        };
+        let mut palette: Vec<GhosttyColorRgb> = (0..256).map(|i| rgb(standard_colour(i))).collect();
+        if let Some(ansi) = ansi {
+            for (i, c) in ansi.iter().enumerate() {
+                palette[i] = rgb(*c);
+            }
+            for (i, c) in palette.iter().enumerate() {
+                self.palette[i] = [c.r, c.g, c.b];
+            }
+        }
+        // SAFETY: a GhosttyColorRgb* (NULL: unset) each, and an array of exactly 256.
+        unsafe {
+            for (opt, c) in [
+                (GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, fg),
+                (GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, bg),
+                (GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, cursor),
+            ] {
+                let v = c.map(rgb);
+                let p: *const c_void = match &v {
+                    Some(v) => (v as *const GhosttyColorRgb).cast(),
+                    None => null(),
+                };
+                ghostty_terminal_set(self.term, opt, p);
+            }
+            if ansi.is_some() {
+                ghostty_terminal_set(
+                    self.term,
+                    GHOSTTY_TERMINAL_OPT_COLOR_PALETTE,
+                    palette.as_ptr().cast(),
+                );
+            }
         }
     }
 
@@ -869,6 +989,23 @@ impl CellReader<'_> {
             }
         }
         out
+    }
+}
+
+/// Palette entry I (16–255) of the standard 256 colours: the 6×6×6 cube, then 24 greys; below 16: black (the
+/// editor's faces give those).
+pub fn standard_colour(i: usize) -> [u8; 3] {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    match i {
+        16..=231 => {
+            let n = i - 16;
+            [LEVELS[n / 36], LEVELS[(n / 6) % 6], LEVELS[n % 6]]
+        }
+        232..=255 => {
+            let v = (8 + (i - 232) * 10) as u8;
+            [v, v, v]
+        }
+        _ => [0, 0, 0],
     }
 }
 

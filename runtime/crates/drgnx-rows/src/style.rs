@@ -134,6 +134,9 @@ pub struct TermMeta {
     pub alt_screen: bool,
     #[serde(default)]
     pub mouse_tracking: bool,
+    /// The program asked for bracketed paste (mode 2004).
+    #[serde(default)]
+    pub bracketed_paste: bool,
     #[serde(default)]
     pub title: String,
 }

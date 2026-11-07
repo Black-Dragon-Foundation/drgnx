@@ -384,6 +384,37 @@ impl Worker {
             "clipboard-write" => {
                 self.engine.sink().clipboard_write = value.as_bool().unwrap_or(false)
             }
+            "cursor-style" => {
+                self.engine.set_default_cursor(value.as_str(), None);
+                self.clock.touch();
+            }
+            "enquiry-response" => {
+                self.engine.sink().enquiry = value.as_str().unwrap_or_default().to_string()
+            }
+            "title-report" => self
+                .engine
+                .set_title_report(value.as_bool().unwrap_or(false)),
+            // mode 2027: grapheme clusters take the width Unicode gives them (`legacy`: each code point its own)
+            "grapheme-width-method" => {
+                self.engine
+                    .set_mode_default(2027, false, value.as_str() != Some("legacy"))
+            }
+            // `[fg, bg, cursor]` then maybe `c0 … c15`, `#rrggbb` each ("": the built-in one; the palette only whole)
+            "colours" => {
+                let c: Vec<Option<[u8; 3]>> = value
+                    .as_array()
+                    .map(|a| a.iter().map(|v| v.as_str().and_then(hex)).collect())
+                    .unwrap_or_default();
+                if c.len() >= 3 {
+                    let ansi: Option<[[u8; 3]; 16]> = (c.len() == 19)
+                        .then(|| c[3..].iter().copied().collect::<Option<Vec<_>>>())
+                        .flatten()
+                        .and_then(|v| v.try_into().ok());
+                    self.engine.set_colours(c[0], c[1], c[2], ansi.as_ref());
+                    self.reset_due = true;
+                    self.clock.touch();
+                }
+            }
             _ => {}
         }
     }
@@ -605,6 +636,7 @@ impl Worker {
             cursor: (key, col, c.shape, c.visible && c.at.is_some()),
             alt_screen: self.alt,
             mouse_tracking: self.engine.mouse_tracking(),
+            bracketed_paste: self.engine.mode(2004, false),
             title: self.engine.title(),
         }
     }
@@ -834,4 +866,11 @@ impl Worker {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// `#rrggbb` as bytes.
+fn hex(s: &str) -> Option<[u8; 3]> {
+    let h = s.strip_prefix('#').filter(|h| h.len() == 6)?;
+    let b = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    Some([b(0)?, b(2)?, b(4)?])
 }

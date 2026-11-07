@@ -19,6 +19,7 @@
 (declare-function drgnx-explorer-node-at "drgnx-explorer")
 (declare-function drgnx-terminal-eat-start "drgnx-terminal-eat")
 (declare-function drgnx-term-start "drgnx-term")
+(declare-function drgnx-term-start-directory "drgnx-term" (dir))
 (declare-function drgnx-term-usable-p "drgnx-term")
 
 (defconst drgnx-terminal-eat-missing-notice
@@ -81,7 +82,9 @@
 Your shell in drgnx's own terminal (module tools/term); with that module off in eat; eshell for a remote folder, on
 Windows, and (with a notice, once) while neither can run."
   (interactive)
-  (let ((dir (or dir default-directory)))
+  (let ((dir (or dir (if (fboundp 'drgnx-term-start-directory)
+                         (drgnx-term-start-directory default-directory)
+                       default-directory))))
     (cond
      ((and (fboundp 'drgnx-term-usable-p) (drgnx-term-usable-p dir)) (drgnx-term-start dir))
      ((drgnx-terminal-eat-usable-p dir) (drgnx-terminal-eat-start dir))
