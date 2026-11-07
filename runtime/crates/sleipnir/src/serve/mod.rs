@@ -652,13 +652,7 @@ impl<W: Write> Serve<W> {
             return;
         }
         let since = *self.level2_since.get_or_insert_with(Instant::now);
-        let own_mib: u64 = m.running.iter().map(|r| r.current_mib).sum();
-        let mut others: BTreeMap<String, u64> = BTreeMap::new();
-        for r in &m.others {
-            *others.entry(r.scheduler.clone()).or_default() += r.reserve_mib.max(r.current_mib);
-        }
-        let others: Vec<(String, u64)> = others.into_iter().collect();
-        if !forseti::ladder_actor(&self.scheduler, own_mib, &others) {
+        if !forseti::ladder_acts(&self.scheduler, &m.running, &m.others) {
             return;
         }
         let acts = forseti::ladder_actions(

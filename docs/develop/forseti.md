@@ -152,7 +152,10 @@ each admission).
   other schedulers that are on this boot, whose process is alive (pid and start time, so a reused pid isn't taken
   for it) and that haven't expired. A job written twice counts once.
 - **`ladder_actor(own, own_slice_mib, others)`**: at ladder level 2 or higher only the scheduler whose slice holds
-  the most memory acts; a tie goes to the name first in order.
+  the most memory acts; a tie goes to the name first in order. **`ladder_acts(own, ours, others)`** is the call a
+  scheduler makes: every scheduler, its own included, counted by the same rule, Σ `max(reserve, current)` with a job
+  written twice counted once (its own counted by use alone lost to any young job of another's, so two hubs on one
+  runner each stood down at danger).
 
 `admitted_reservations_never_exceed_the_budget` (a property) and `admissions_in_every_order_stay_in_the_budget` ([A],
 every interleaving of two schedulers' admissions under the lock) check that what both reserve stays within one

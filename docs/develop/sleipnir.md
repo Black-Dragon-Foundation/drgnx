@@ -624,8 +624,8 @@ result is written as `infra: killed`. `cancel` writes `cancelled` and the kill r
 job-exec writes the verdict, which `serve` reports as `Cancelled`.
 
 **The ladder** runs at every `ready` on the runner's slice tree: `tight` stops admissions; at `pressure` and
-`danger` the scheduler holding the most memory (`forseti::ladder_actor`, over the reservations) evicts (dedicated) or
-kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
+`danger` the scheduler holding the most memory (`forseti::ladder_acts`: every scheduler, ours included, counted by
+Σ `max(reserve, current)`) evicts (dedicated) or kills our newest (workstation), writing `evicted` or `infra: killed` before it kills the container. On a dedicated
 runner it pauses the lowest-priority long builds at `pressure` and lets them go on below it; a paused or evicted job
 is marked `disturbed` first. After the ladder, `ready` grows the jobs near their caps and sets the CPU weights (live
 resizing, above).

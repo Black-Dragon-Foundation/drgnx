@@ -1120,6 +1120,72 @@ mod drill {
         d.end().await;
     }
 
+    /// The other hub's job and its reservation on r1 go at the end of the row, failed or not: a live one would stand
+    /// in the next rows' ladders.
+    struct OtherHubGoes;
+
+    impl Drop for OtherHubGoes {
+        fn drop(&mut self) {
+            let _ = ssh(
+                "r1",
+                "systemctl --user stop dr-other-hub; \
+                 rm -f $XDG_RUNTIME_DIR/forseti/reservations/drgnx-hub-other.xother-1.json",
+            );
+        }
+    }
+
+    /// [C] As the ladder row, beside another hub's young job on the same runner whose reservation is a little smaller
+    /// than ours (and more than our job uses yet): our hub holds the most memory by the counting rule, so its ladder
+    /// is the one that acts, and kills our newest job (`infra: killed`). The other job is a live `sleep` of the
+    /// runner's user with a reservation file, as another hub's `serve` writes one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "fleet"]
+    async fn ladder_beside_another_hub_acts_by_the_counting_rule() {
+        let mut d = Drill::new("ladder2", "r1", "workstation");
+        d.link().await;
+        d.submit(d.job(
+            "xladder2",
+            "echo parked; mkfifo /tmp/gate; read x < /tmp/gate",
+            &[],
+        ));
+        d.parked("xladder2").await;
+        let dir = "$XDG_RUNTIME_DIR/forseti/reservations";
+        let ours: Value = serde_json::from_str(&sh(
+            "r1",
+            &format!("cat {dir}/drgnx-hub-ladder2.xladder2-1.json"),
+        ))
+        .unwrap();
+        let reserve = ours["reserve_mib"].as_u64().unwrap() - 1;
+        let _gone = OtherHubGoes;
+        let other = sh(
+            "r1",
+            "systemd-run --user --quiet --collect --unit=dr-other-hub sleep 600 && \
+             systemctl --user show -p MainPID --value dr-other-hub",
+        );
+        let start = sh("r1", &format!("cut -d' ' -f22 /proc/{other}/stat"));
+        let boot = sh("r1", "cat /proc/sys/kernel/random/boot_id");
+        let r = json!({"scheduler": "drgnx-hub-other", "pid": other.parse::<u32>().unwrap(), "boot_id": boot,
+                       "start_time": start.parse::<u64>().unwrap(), "job": "xother-1", "reserve_mib": reserve,
+                       "current_mib": 0, "expires": now() + 3600});
+        sh(
+            "r1",
+            &format!("printf %s '{r}' > {dir}/drgnx-hub-other.xother-1.json"),
+        );
+        let danger =
+            QUIET_MACHINE.replace("\"mem_available_mib\": 8192", "\"mem_available_mib\": 512");
+        sh(
+            "r1",
+            &format!("printf %s '{danger}' > {}/test-machine.json", d.root),
+        );
+        let (attempt, result) = d.done("xladder2").await;
+        assert_eq!(
+            (attempt, &result["verdict"]),
+            (1, &json!({"Infra": forseti::classify::infra::KILLED})),
+            "{result}"
+        );
+        d.end().await;
+    }
+
     /// [C] The runner's host key changes while a job runs there: its connection ends (the hub hears the channel end),
     /// and every new dial is refused as a changed host key, never accepted: the runner shows `needs a login` with the
     /// command to run, and the attempt stays detached. Once the user has checked and accepted the key at a terminal,
