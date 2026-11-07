@@ -44,6 +44,15 @@ steps and the cache hits; the mode, its lock and the row of the permissions matr
 key that answers it; the MCP servers the hub gave the session with their tool counts. A fact the hub does not know is
 not listed.
 
+## Subagents and huddles
+
+A step a subagent made (Claude's `Task` tool) is indented under its call and drawn in a colour of its own. A huddle is two
+agents stating their positions about a clash, with you deciding; its thread is a panel of its own: each agent's reply
+with its position quoted, the decision it proposes, the outcome, and a composer (`s`) that writes to both agents.
+Opening the thread is joining (`agents-huddle-open` in the palette). Start one from the who-is-here list: `m` marks an
+agent, `h` meets the two marked ones; `agents-huddle` in the palette does the same by name. While a huddle is open or
+waits for you the status bar says `huddle N`.
+
 ## Live and paged
 
 A panel asks the hub for the session's entries only while a window shows it, and lets them go when none does. It opens

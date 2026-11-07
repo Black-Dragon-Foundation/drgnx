@@ -594,3 +594,56 @@ unanswered, and panel \"s1\" as `buf'."
         (should text))
       (drgnx-agent-panel-chip 'mcp)
       (should (equal '("agents/explain" :id "s1" :item "mcp") (car drgnx-agent-panel-test--calls))))))
+
+;;;; Task 43: subagents and huddle threads
+
+(declare-function drgnx-agent-panel-huddle-buffer "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle--take "drgnx-agent-panel-huddle")
+(declare-function drgnx-agent-panel-huddle-send "drgnx-agent-panel-huddle")
+
+(ert-deftest drgnx-agent-panel/subagent-steps-indent-in-their-colour ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-steps (list (list :seq 1) (list :seq 2 :detail (list :parent_tool "task-1"))))
+      (drgnx-agent-panel--take-entries
+       (list (list 0 (drgnx-agent-panel-test--tool "task-1" "Task: explore" "completed" :step 1))
+             (list 1 (drgnx-agent-panel-test--tool "c1" "Read b.el" "completed" :step 2))))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "^  [●○] Task: explore" text))
+        (should (string-match-p "^      [●○] Read b.el" text)))
+      (goto-char (point-min))
+      (search-forward "Read b.el")
+      (let ((faces (ensure-list (get-text-property (match-beginning 0) 'face))))
+        (should (seq-some (lambda (f) (string-match-p "\\`drgnx-agent-[0-9]+\\'" (symbol-name f))) faces))))))
+
+(defun drgnx-agent-panel-test--huddle ()
+  (list :id "huddle:1" :clash "src/a.el" :participants (vector "s1" "s2") :state "open"
+        :replies (vector (list :from "s1" :text "I would keep the old API" :proposal "keep")
+                         (list :from "s2" :text "I would drop it"))))
+
+(ert-deftest drgnx-agent-panel/huddle-thread-shows-both-positions-quoted ()
+  (drgnx-agent-panel-test--with
+    (let ((hb (drgnx-agent-panel-huddle-buffer "huddle:1")))
+      (unwind-protect
+          (progn
+            (with-current-buffer hb (drgnx-agent-panel-huddle--take (drgnx-agent-panel-test--huddle)))
+            (let ((text (drgnx-agent-panel-test--text hb)))
+              (should (string-match-p "▎ I would keep the old API" text))
+              (should (string-match-p "▎ I would drop it" text))
+              (should (string-match-p "s1" text))
+              (should (string-match-p "s2" text))
+              (should (string-match-p "src/a.el" text))
+              (should (string-match-p "open" text))))
+        (kill-buffer hb)))))
+
+(ert-deftest drgnx-agent-panel/composer-in-a-huddle-sends-to-both ()
+  (drgnx-agent-panel-test--with
+    (let ((hb (drgnx-agent-panel-huddle-buffer "huddle:1")))
+      (unwind-protect
+          (with-current-buffer hb
+            (drgnx-agent-panel-huddle--take (drgnx-agent-panel-test--huddle))
+            (drgnx-agent-panel-huddle-send "settle it with a shim")
+            (should (equal '(("agents/send" :id "s2" :text "settle it with a shim")
+                             ("agents/send" :id "s1" :text "settle it with a shim"))
+                           (seq-filter (lambda (c) (equal (car c) "agents/send")) drgnx-agent-panel-test--calls))))
+        (kill-buffer hb)))))

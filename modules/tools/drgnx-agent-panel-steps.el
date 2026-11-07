@@ -437,15 +437,26 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
     (require 'drgnx-history-revert)
     (drgnx-history-fork-here drgnx-agent-panel--session (plist-get step :seq))))
 
+(defun drgnx-agent-panel--parent-tool (e)
+  "The `Task' call that E's step ran under (a subagent's step), or nil."
+  (when-let* ((seq (plist-get e :step)) (step (gethash seq drgnx-agent-panel--steps)))
+    (plist-get (plist-get step :detail) :parent_tool)))
+
+(defun drgnx-agent-panel--child-face (parent)
+  "The agent colour a subagent's steps (those under PARENT) are drawn in."
+  (intern (format "drgnx-agent-%d" (1+ (mod (sxhash-equal parent) 6)))))
+
 (defun drgnx-agent-panel--tool-row (idx e)
   (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
          (title (drgnx-agent-panel--one-line (or (plist-get e :title) (plist-get e :kind) "tool") 50))
          (result (drgnx-agent-panel--one-line (drgnx-agent-panel--text-of (plist-get e :content)) 40))
          (meta (drgnx-agent-panel--meta e))
+         (parent (drgnx-agent-panel--parent-tool e))
          (thoughts (drgnx-agent-panel--thoughts-of idx))
          (open-thinking (drgnx-agent-panel--thinking-open-p key))
          (open-detail (drgnx-agent-panel--detail-open-p key e)))
-    (concat (format "  %s %s" (drgnx-agent-panel--dot status) title)
+    (concat (format "%s%s %s" (if parent "      " "  ") (drgnx-agent-panel--dot status)
+                    (if parent (propertize title 'face (drgnx-agent-panel--child-face parent)) title))
             (if (string-empty-p result) ""
               (propertize (concat "  · " result) 'face 'drgnx-agent-panel-subtle))
             (if (drgnx-agent-panel--undone-p e) (propertize "  ↶ undone" 'face 'drgnx-agent-panel-subtle) "")
