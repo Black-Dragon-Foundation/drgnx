@@ -14,7 +14,10 @@
 (declare-function drgnx-explorer-remove-decorator "drgnx-explorer")
 (declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--user-path "drgnx-agents-editor-here")
-(declare-function drgnx-agents-editor-here-choose "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-here-show "drgnx-agents-editor-here")
+(declare-function drgnx-agents-here-follow "drgnx-agents-editor-here")
+(declare-function drgnx-agents-here-panel "drgnx-agents-editor-here")
+(declare-function drgnx-agents-here-quit "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor--event "drgnx-agents-editor")
 (declare-function drgnx-agents-editor-ordinal "drgnx-agents-editor")
 (defvar drgnx-agents-editor-here--rows)
@@ -122,19 +125,51 @@ yet gets the next ordinal first, as its `agent' snapshot would give it."
     (should (equal drgnx-agents-editor-here--status (drgnx-agents-editor-here--segment)))))
 
 (ert-deftest drgnx-agents-editor/who-is-here-row-follows-on-ret ()
+  ;; who is here is a small list window, one row per agent; RET on a row follows that agent (no `completing-read')
   (drgnx-agents-editor-here-test--with
-    (let ((file (expand-file-name "a.el" root)) (asked nil))
+    (let ((file (expand-file-name "a.el" root)) (list-buffer nil))
       (write-region "one\ntwo\nthree\nfour\n" nil file nil 'silent)
       (unwind-protect
           (save-window-excursion
-            (cl-letf (((symbol-function 'completing-read)
-                       (lambda (_prompt candidates &rest _) (setq asked candidates) (car candidates))))
-              (drgnx-agents-editor-here-choose (list (list "s1" 1 "edit" file 3))))
-            (should (= 1 (length asked)))
+            (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) (error "who is here asked with completing-read"))))
+              (setq list-buffer (drgnx-agents-editor-here-show (list (list "s1" 1 "edit" file 3) (list "s2" 2 "read" file 1))))
+              (with-current-buffer list-buffer
+                (should (derived-mode-p 'drgnx-agents-here-mode))
+                (should (= 2 (count-lines (point-min) (point-max))))
+                (goto-char (point-min))
+                (should (string-match-p "agent s1.*edit.*a\\.el:3" (buffer-substring (pos-bol) (pos-eol))))
+                (should (get-text-property (pos-bol) 'face))
+                (drgnx-agents-here-follow)))
             (should (equal "s1" drgnx-agents-editor-followed))
-            (should (equal file (buffer-file-name)))
-            (should (= 3 (line-number-at-pos))))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (equal file (buffer-file-name)))
+              (should (= 3 (line-number-at-pos)))))
+        (when (buffer-live-p list-buffer) (kill-buffer list-buffer))
         (when-let* ((b (get-file-buffer file))) (kill-buffer b))))))
+
+(ert-deftest drgnx-agents-editor/who-is-here-o-opens-the-panel ()
+  ;; `o' on a row opens that agent's panel, by the hub's session id
+  (drgnx-agents-editor-here-test--with
+    (let ((file (expand-file-name "a.el" root)) (opened nil) (list-buffer nil))
+      (unwind-protect
+          (save-window-excursion
+            (cl-letf (((symbol-function 'drgnx-agent-panel-open) (lambda (session) (push session opened))))
+              (setq list-buffer (drgnx-agents-editor-here-show (list (list "s1" 1 "edit" file 3) (list "hub-s2" 2 "read" file 1))))
+              (with-current-buffer list-buffer
+                (goto-char (point-min))
+                (forward-line 1)
+                (drgnx-agents-here-panel)))
+            (should (equal '("hub-s2") opened)))
+        (when (buffer-live-p list-buffer) (kill-buffer list-buffer))))))
+
+(ert-deftest drgnx-agents-editor/who-is-here-q-closes-the-list ()
+  (drgnx-agents-editor-here-test--with
+    (let ((list-buffer (drgnx-agents-editor-here-show (list (list "s1" 1 "edit" (expand-file-name "a.el" root) 3)))))
+      (unwind-protect
+          (save-window-excursion
+            (with-current-buffer list-buffer (drgnx-agents-here-quit))
+            (should-not (buffer-live-p list-buffer)))
+        (when (buffer-live-p list-buffer) (kill-buffer list-buffer))))))
 
 (ert-deftest drgnx-agents-editor/ordinals-come-from-the-hubs-snapshots ()
   (drgnx-agents-editor-here-test--with

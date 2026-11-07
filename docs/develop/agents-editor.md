@@ -99,8 +99,36 @@ The draw file adds itself to `drgnx-agents-editor-apply-functions` and draws fro
   `drgnx-agent-identity-sessions-function` (identity's reuse past capacity) from it; an agent the hub has not named yet
   has no mark and no who-is-here row until its snapshot comes, and a change of ordinals rebuilds the three;
   `drgnx-agents-editor-here-paired-function` (a ring on a paired agent's mark) is nil until the pair feature sets it.
-  `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-choose` (RET follows); its `o` (open the
-  panel) comes with the panel.
+  `work-who-is-here`, called interactively, ends in `drgnx-agents-editor-here-show`: a small list window
+  (`drgnx-agents-here-mode`, placed in the popup lane, buffer `*drgnx agents here*`), one row per agent with the
+  identity's mark and face. Its keys are registry commands on the mode's map, so the profiles bind them:
+  `agents-here-follow` (RET), `agents-here-panel` (`o`, `drgnx-agent-panel-open` with the hub's session id) and
+  `agents-here-quit` (`q`). The list is plain text drawn once per call; teardown kills it.
+- **Follow (`drgnx-agents-follow.el`):** `drgnx-agents-follow-start SESSION [HERE]` asks the hub `agents/follow {view,
+  session}` (view ids `follow:N`, one follow at a time; the hub is asked again on every connection) and sets
+  `drgnx-agents-editor-followed`, so the agent's tag stays on. The `agent-follow` events of that view move a side
+  window (or, with HERE, the selected window): the file is opened by `drgnx-agents-follow--open` with
+  `enable-local-variables` `:safe`, `enable-local-eval` nil, `drgnx-large-file-open` `auto` and `eglot-ensure` made a
+  no-op while it opens; a buffer the user already has is shown as it is. Buffers it opened get
+  `drgnx-agents-follow-mode` (read-only, edit commands remapped to `drgnx-agents-follow-edit-hint`) and are killed
+  at the end if unmodified. A `changed` event reads the file again with `insert-file-contents` REPLACE after
+  `set-visited-file-modtime` (without that the read asks about the supersession); point moves with
+  `set-window-point`, and the window scrolls only when point leaves its middle third. The header is the window's
+  `header-line-format` parameter, rebuilt per event. Navigation is any command in the window that is not one of
+  `drgnx-agents-follow--own-commands` (a buffer-local `post-command-hook`): it sets `--detached`, which stops moves and
+  file switches (a refresh of the shown file still happens) until `F`. Following in the selected window uses a
+  global `post-command-hook` function that ends the follow, added at start and removed at stop. The keys are the
+  profiles' rows for `agents-follow-resume`, `agents-follow-stop`, `agents-follow-panel` on
+  `drgnx-agents-follow-mode-map`; `agents-follow-here` is in the palette.
+- **The wheel (also `drgnx-agents-follow.el`):** `drgnx-agents-take-wheel` (`agents-take-wheel`; `agents-follow-wheel`
+  is `W` in the follow window, `work-take-wheel` keeps `W` in live files and calls it) asks `agents/wheel/take` on the
+  subscribed connection and records the buffers it was taken from in `drgnx-agents-follow--wheel`; they stay
+  read-only until the `agent-wheel` event says `held`, and lock again on `free`. While held, the same command gives
+  the wheel back (`agents/wheel/give`). `wheel-save` (sent only for a session in a worktree of its own) is answered by
+  saving every modified buffer under that worktree inside `drgnx-with-no-prompts` and replying
+  `agents/wheel/saved {req, unsaved}`; a give the hub refuses reports those files. A chat gets no `wheel-save`, so its
+  buffers are never saved here. The session for a wheel key comes from the follow window, a live file, the panel or the
+  who-is-here row. The interim `agents/pause` + `after-save-hook` of the Work space is gone.
 - A buffer that stops being watched (`drgnx-agents-editor-unwatch-functions`) or is killed loses its bars, ring
   overlays and tags.
 
@@ -120,4 +148,3 @@ three gutter ranges, an 80 to 95 row window). These are readings; the verdicts w
 - The rows that need the hub (`agents-editor-hub-test.el`, the client's [B] row, and the Explorer's
   `badges-land-on-the-users-tree-for-a-worktree-agent`) come with the hub's buffer view and presence feed; the same
   mapping is tested here with a real git worktree.
-- The who-is-here list's `o` (open the panel) comes once the panel is in `p3`.

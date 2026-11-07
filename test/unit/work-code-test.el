@@ -53,26 +53,18 @@ worktree (its .git is a file) and `own' a checkout of the user's (its .git is a 
             (should (equal 'drgnx-work-live-file--lighter (cadr (assq 'drgnx-work-live-file-mode minor-mode-alist)))))
         (kill-buffer buf)))))
 
-(ert-deftest drgnx-work-code/take-the-wheel-pauses-and-makes-it-editable ()
+(ert-deftest drgnx-work-code/take-the-wheel-is-the-editors-wheel ()
+  ;; `work-take-wheel' is an alias of `agents-take-wheel' (the hub's wheel protocol); without that module it says so
+  ;; and leaves the file read-only.  The wheel itself is tested in agents-editor-hub-test.el.
   (drgnx-work-code-test--with
-    (let* ((m (drgnx-work-code-test--start wt)) (buf (find-file-noselect (concat wt "a.txt"))))
+    (drgnx-work-code-test--start wt)
+    (let ((buf (find-file-noselect (concat wt "a.txt"))))
       (unwind-protect
           (with-current-buffer buf
             (should buffer-read-only)
-            (drgnx-work-take-wheel)
-            (should-not buffer-read-only)
-            ;; the hub paused the agent: the mirror hears it in the next snapshot
-            (drgnx-agents-mirror-test--settle (lambda () (drgnx-agent-session-paused m)) "the agent is paused")
-            ;; the user's edit queues as a message to the agent on save
-            (goto-char (point-max)) (insert "two\n")
-            (let ((sent nil))
-              (cl-letf (((symbol-function 'drgnx-hub-call)
-                         (lambda (method params &rest _) (push (cons method params) sent) 1)))
-                (save-buffer))
-              (should (seq-some (lambda (c) (and (equal (car c) "agents/send")
-                                                 (string-search "a.txt" (plist-get (cdr c) :text))))
-                                sent))))
-        (set-buffer-modified-p nil)
+            (should-not (fboundp 'drgnx-agents-take-wheel))
+            (should-error (drgnx-work-take-wheel) :type 'user-error)
+            (should buffer-read-only))
         (kill-buffer buf)))))
 
 (ert-deftest drgnx-work-code/own-checkout-stays-editable ()

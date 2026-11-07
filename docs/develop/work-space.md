@@ -653,8 +653,9 @@ them (`drgnx-work-map--chip-line`, a `:queue` section of the side panel). The hu
 under the `cwd` of a mirrored hub session that is not `exited` and whose `cwd` is a linked worktree (its `.git` is a
 file, not a directory: the user's own checkout has a directory). It sets `view-mode`, keeps the buffer's old read-only
 state, and shows " live · NAME" (`drgnx-work-live-file--lighter`). `drgnx-work-take-wheel` (`W`, and the remaps of
-`read-only-mode` and `View-exit`) calls `agents/pause`, makes the buffer editable and adds a local `after-save-hook`
-that sends `agents/send` naming the file. The module's `:teardown` turns the mode off in every buffer, restoring the
+`read-only-mode` and `View-exit`) is an alias of `drgnx-agents-take-wheel` (module tools/agents-in-editor, the hub's
+wheel protocol, docs/develop/agents-editor.md); without that module it says so. The interim `agents/pause` and its
+`after-save-hook` are gone. The module's `:teardown` turns the mode off in every buffer, restoring the
 read-only state each had.
 
 ### Into the code (`drgnx-work-code.el`)
