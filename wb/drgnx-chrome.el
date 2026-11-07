@@ -234,7 +234,32 @@ their width with the gap before them."
       (set-window-buffer (selected-window) (cdr (assoc pick names)))
       (drgnx-chrome-apply nil t))))
 
+(defvar drgnx-chrome--tab-lines (make-hash-table :test 'eq :weakness 'key)
+  "Window -> (KEY . STRING): the tab line last made for it and what it shows (`drgnx-chrome--tab-line-key').  Weak on
+the window: one entry per live window, one string each.")
+
+(defun drgnx-chrome--tab-line-key (w rows)
+  "What W's tab line shows, as a list for `equal': the shown buffer, the active group, ROWS, each tab's buffer, name,
+file and modified flag, and the settings its tabs are drawn with (glyphs, icons, fonts, corners, the frame's kind)."
+  (list (window-buffer w) (eq w (drgnx-signal-editor-window)) rows
+        (mapcar (lambda (b) (list b (buffer-name b) (buffer-file-name b) (and (buffer-modified-p b) t)))
+                (drgnx-chrome-tabs w))
+        (window-pixel-width w) (nth 1 (window-fringes w)) drgnx-chrome-transient-tabs
+        (bound-and-true-p drgnx-face-glyphs) (bound-and-true-p drgnx-look-icons) drgnx-pixels-generation
+        (and (fboundp 'glitnir-active-p) (glitnir-active-p) t) (drgnx-state-frame-kind (window-frame w))
+        (frame-char-width (window-frame w)) (frame-char-height (window-frame w))))
+
 (defun drgnx-chrome--tab-line (w)
+  "W's tab line: the one kept while what it shows (`drgnx-chrome--tab-line-key') is the same, else made tab by tab
+\(`drgnx-chrome--tab-line-make') and kept."
+  (let ((key (drgnx-chrome--tab-line-key w (drgnx-chrome--tab-rows w))) (kept (gethash w drgnx-chrome--tab-lines)))
+    (if (and kept (equal (car kept) key))
+        (cdr kept)
+      (let ((line (drgnx-chrome--tab-line-make w)))
+        (puthash w (cons key line) drgnx-chrome--tab-lines)
+        line))))
+
+(defun drgnx-chrome--tab-line-make (w)
   "W's tab line, tab by tab (`drgnx-chrome--tab').  On a graphical frame the row is `tab-row' high on the panel, two
 pixels separate the tabs (a space on a terminal), and the overflow and split buttons are at the right."
   (let* ((shown (window-buffer w)) (active (eq w (drgnx-signal-editor-window))) (rows (drgnx-chrome--tab-rows w))
@@ -547,6 +572,7 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
     (drgnx-state-unsubscribe 'frame-resized #'drgnx-chrome--frame-resized)
     (remove-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
     (clrhash drgnx-chrome--memo)
+    (clrhash drgnx-chrome--tab-lines)
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
     (dolist (e '(buffer-set-changed modified-changed))
       (drgnx-signal-unsubscribe e #'drgnx-chrome--refresh))

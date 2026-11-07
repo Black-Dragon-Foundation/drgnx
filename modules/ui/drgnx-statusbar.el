@@ -60,6 +60,8 @@
 (declare-function eglot--server-info "ext:eglot")
 (declare-function eglot--current-server-connection-running-p "ext:eglot")
 (defvar drgnx-statusbar--measure)
+(defvar drgnx-statusbar--space)
+(defvar drgnx-statusbar--pad)
 (defvar drgnx-statusbar-other)
 (defvar vc-mode)
 (defvar flymake-mode)
@@ -277,7 +279,52 @@ Within `drgnx-statusbar-retry-seconds' of the last record nothing is formatted: 
   (when-let* ((e (assq id drgnx-statusbar--errors)))
     (< (- (drgnx-statusbar--now) (cddr e)) drgnx-statusbar-retry-seconds)))
 
+(defconst drgnx-statusbar--steady
+  '(branch trust folder problems tests needs-you drgnx toasts modal mode misc lsp encoding eol language)
+  "The segments that show nothing of the text being edited: what they say changes with the epochs, the notice tick, the
+mode, the encoding, the narrowing or the layout (`drgnx-statusbar--steady-key'), never with a keystroke.  `position' and
+`indent' read the text, and a segment of your own may too: those run on every build.")
+
+(defvar drgnx-statusbar--steady-store nil
+  "While a bar is built: the hash (segment → text) of the steady segments for the window, or nil (no window).")
+
+(defvar drgnx-statusbar--steady-stores (make-hash-table :test #'eq :weakness 'key)
+  "Window → (KEY . HASH): the texts of its steady segments and the key (`drgnx-statusbar--steady-key') they were made
+at.  Weak on the window, so it holds one entry per live window.")
+
+(defun drgnx-statusbar--steady-key (w)
+  "The values the steady segments' texts follow in window W's buffer (current), as a list compared with `eql'."
+  (list (drgnx-epoch 'buffer-look (current-buffer)) (drgnx-epoch 'flymake (current-buffer))
+        (drgnx-epoch 'eglot (current-buffer)) (drgnx-epoch 'git) (drgnx-epoch 'misc-info) (drgnx-epoch 'statusbar)
+        (drgnx-notice-tick) (drgnx-statusbar--toasts-waiting) (current-buffer) default-directory mode-line-process
+        defining-kbd-macro (and (bound-and-true-p keycast-mode-line-mode) (bound-and-true-p keycast--this-command-keys))
+        major-mode buffer-file-coding-system (point-min) (buffer-narrowed-p) drgnx-large-file
+        (drgnx-statusbar--selected-p w) (drgnx-statusbar--which-func w) (drgnx-statusbar--misc)
+        drgnx-statusbar--measure drgnx-statusbar--space drgnx-statusbar--pad (drgnx-statusbar--layout-key w)))
+
+(defun drgnx-statusbar--steady-store (w)
+  "The hash of window W's steady segment texts, emptied when the key moved since it was filled."
+  (let ((key (drgnx-statusbar--steady-key w)) (kept (gethash w drgnx-statusbar--steady-stores)))
+    (if (and kept (let ((a (car kept)) (b key))
+                    (while (and a b (eql (car a) (car b))) (setq a (cdr a) b (cdr b)))
+                    (and (null a) (null b))))
+        (cdr kept)
+      (let ((hash (make-hash-table :test #'eq)))
+        (puthash w (cons key hash) drgnx-statusbar--steady-stores)
+        hash))))
+
 (defun drgnx-statusbar--text (id)
+  "The text of segment ID: the kept one while the window's steady key (`drgnx-statusbar--steady-key') is the same,
+for the segments that do not show the text being typed (`drgnx-statusbar--steady'); else `drgnx-statusbar--text-now'."
+  (let ((store drgnx-statusbar--steady-store))
+    (if (and store (memq id drgnx-statusbar--steady))
+        (let ((kept (gethash id store 'none)))
+          (if (eq kept 'none)
+              (puthash id (drgnx-statusbar--text-now id) store)
+            kept))
+      (drgnx-statusbar--text-now id))))
+
+(defun drgnx-statusbar--text-now (id)
   "The text of segment ID with its properties, or nil when it has nothing to say (or failed).
 The same string as last time when the segment's function gave a text `equal-including-properties' to its last
 \(`drgnx-statusbar--texts')."
@@ -596,6 +643,7 @@ COMPACT: only the segments of `drgnx-statusbar-compact' (on the right); `quiet':
                                                  (drgnx-statusbar--scale frame)))
                                      1))
              (drgnx-statusbar--left-sep (drgnx-statusbar--separator))
+             (drgnx-statusbar--steady-store (and (window-live-p w) (drgnx-statusbar--steady-store w)))
              (texts (lambda (ids)
                       (delq nil (mapcar (lambda (id) (when-let* ((s (drgnx-statusbar--text id))) (cons id s))) ids))))
              (left (cond ((eq compact 'quiet) (funcall texts drgnx-statusbar-quiet))

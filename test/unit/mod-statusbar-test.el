@@ -1706,6 +1706,32 @@ the six epochs and plain values."
       (should (drgnx-statusbar-test--rebuilt-p))
       (should-not (drgnx-statusbar-test--rebuilt-p)))))
 
+(defvar drgnx-statusbar-test--steady-builds 0 "How many times the counted steady segment was worked out.")
+
+(ert-deftest drgnx-statusbar/typing-does-not-rebuild ()
+  "20 self-inserts move the position and the text, so the bar is built again each time, but a segment that shows
+nothing of the text (a steady one) is worked out once; one of your own is worked out every build."
+  (drgnx-statusbar-test--counted
+    (setq drgnx-statusbar-test--steady-builds 0)
+    (drgnx-statusbar-define-segment 'mode :fn (lambda ()
+                                                (setq drgnx-statusbar-test--steady-builds
+                                                      (1+ drgnx-statusbar-test--steady-builds))
+                                                "M"))
+    (setq drgnx-statusbar-left '(a mode))
+    (drgnx-statusbar-mode-line)
+    (setq drgnx-statusbar-test--builds 0 drgnx-statusbar-test--steady-builds 0)
+    (dotimes (_ 20)
+      (goto-char (point-max))
+      (insert "x")
+      (drgnx-statusbar-mode-line))
+    (should (= drgnx-statusbar-test--builds 20))
+    (should (= drgnx-statusbar-test--steady-builds 0))
+    ;; what it shows changing still works it out again, once
+    (drgnx-statusbar--bump)
+    (drgnx-statusbar-mode-line)
+    (drgnx-statusbar-mode-line)
+    (should (= drgnx-statusbar-test--steady-builds 1))))
+
 (defmacro drgnx-statusbar-test--epoch-deftest (name epoch object doc &rest triggers)
   "The test NAME (spelt out: the selector prefilter reads it) that each of TRIGGERS moves EPOCH (read for OBJECT) and
 makes the next redisplay build the bar again."

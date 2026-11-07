@@ -270,3 +270,15 @@ conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
     (should (equal (drgnx-buffers-test--rows dir) '("alpha.txt" "alphabet.md")))
     (drgnx-buffers-filter-clear)
     (should (equal (drgnx-buffers-test--rows dir) '("alpha.txt" "beta.txt" "alphabet.md" "gamma.txt")))))
+
+(ert-deftest drgnx-buffers/one-shown-per-render ()
+  "A render that draws the rows works out the shown buffers once, not once for the signature and twice for the rows."
+  (drgnx-buffers-test--with dir
+    (drgnx-buffers-test--open dir "a.txt")
+    (let ((calls 0) (orig (symbol-function 'drgnx-buffers--shown)))
+      (cl-letf (((symbol-function 'drgnx-buffers--shown) (lambda () (cl-incf calls) (funcall orig))))
+        (drgnx-buffers-test--open dir "b.txt")
+        (setq calls 0)
+        (setq drgnx-buffers--signature nil)
+        (drgnx-buffers--render)
+        (should (= calls 1))))))
