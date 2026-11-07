@@ -27,12 +27,15 @@ pub enum Edit {
 /// `pair-apply`: write WRITE of session SESSION to FILE, to the editor that has it open.  `version` is the buffer's
 /// change counter the edits are based on (none: `edit_file`, or a new file), `floor` the oldest version the hub
 /// still holds for a read of this file (the editor keeps its change log back to it), `ttl_ms` how long the write
-/// may wait in the editor's queue, counted from its arrival.
+/// may wait in the editor's queue, counted from its arrival.  `step` is the session's step the write was made in
+/// (`step.seq`; 0 before its first): the editor applies it under the origin `agent:SESSION#STEP`, so the edit history
+/// records it as that step's.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PairApply {
     pub write: u64,
     pub session: String,
+    pub step: i64,
     /// The writes to FILE in the order the hub sends them (1, 2, …).
     pub ordinal: u64,
     pub file: AbsPath,

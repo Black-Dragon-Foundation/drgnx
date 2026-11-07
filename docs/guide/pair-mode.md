@@ -36,8 +36,17 @@ The module `tools/agent-pair` is pair mode's side in Emacs:
 - **Your Emacs tells drgnx which files are open**, when you open, close or rename one (`write-file` too) and again
   after every reconnection, so a chat writes only the files you have open, and `read_file` gives the chat your
   buffer's text, unsaved edits included.
-- **For now every write is refused whole** ("pair needs the edit history"): applying one safely over what you typed
-  since the chat read the file needs Nidhogg .6 with Glitnir and the edit history, which are not here yet.
+- **A write moves past what you typed since the chat read the file.** Lines you added or removed above the chat's
+  change shift it to where its lines are now; if you changed the very lines it changes, the whole write is refused
+  and the chat is told which lines you are editing. It is refused too when it would touch the line you are on (±1,
+  in every window showing the buffer) or your active region, and when the chat's read is too old to shift from ("read
+  it with read_file"). Shifting needs the edit history (Nidhogg .6 with Glitnir); without it a whole-file write is
+  refused, and nothing is ever applied unshifted.
+- **A chat's write is one undo step of its own.** `C-/` right after it takes the whole write away (every hunk) and
+  nothing of yours; typing after it is a separate step, so undoing your typing never takes the chat's change with
+  it. Point and your marks stay on their text. The edit history records the write as the chat's, not yours.
+- **A read-only buffer, or a file another Emacs has locked, refuses the write.** If the file changed on disk and the
+  buffer has none of your edits, it is quietly read again first; with your unsaved edits the write is refused.
 - **Saving never asks.** A write to a buffer with no unsaved edits is saved right after it is applied, so the chat's
   builds and tests see it; a buffer with your unsaved edits stays unsaved, and the chat is told the file on disk has
   neither yet. Your `before-save-hook` (a formatter) runs as usual; one that would ask a question stops the save.
@@ -72,5 +81,8 @@ writes are refused the same way, and so they are at once when you change the pre
 
 The chat is told why, in words it can act on: the lines you are editing, "read it with read_file", "the editor is
 away". After two refusals of one file within a minute it is told to wait for you or ask you, and its card shows which
-file it waits on. A chat writes only files open in your editor: a file you have not opened is refused "not open in the
-editor; ask the user to open it", and a file open as a large or remote file is refused too.
+file it waits on. A file open in your editor is written only through it; a file open as a large or remote file is
+refused. A file you have not opened is written on disk by the hub, only if it is still exactly what the chat last read
+("changed since you read it; read it with read_file" otherwise): atomically, keeping its permissions, owner, extended
+attributes and SELinux context, its line ends and byte-order mark, and recorded in the edit history as the chat's
+edit.

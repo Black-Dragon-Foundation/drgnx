@@ -6,6 +6,7 @@
 (require 'drgnx-paths)
 (require 'drgnx-modules)
 (require 'drgnx-hub-client)
+(require 'drgnx-history)
 (load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agent-panel))
 
@@ -16,6 +17,15 @@
 (declare-function drgnx-agent-panel--take-steps "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-toggle "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--ask "drgnx-agent-panel")
+(defvar drgnx-history--buffers)
+(declare-function drgnx-history--st-make "drgnx-history")
+(declare-function drgnx-agent-panel-cards-load "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-reject "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
+(declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
+(declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
+(declare-function drgnx-history-revert-to-here "drgnx-history-revert")
+(declare-function drgnx-forecast-line "drgnx-forecast")
 
 (defvar drgnx-agent-panel-test--calls nil)
 
@@ -347,6 +357,155 @@ unanswered, and panel \"s1\" as `buf'."
         (let ((shown (drgnx-agent-panel-test--text buf)))
           (should (string-match-p "c$" shown))
           (should-not (string-match-p "hidden" shown)))))))
+
+;;;; Task 39: checkpoints (revert and fork at a step)
+
+(defun drgnx-agent-panel-test--with-steps ()
+  "Feed buf two tool entries on steps 4 (revertible) and 5 (undone by record 9, not revertible)."
+  (drgnx-agent-panel--take-steps (list (list :seq 4 :revertible t) (list :seq 5 :revertible :json-false :undone_by 9)))
+  (drgnx-agent-panel--take-entries
+   (list (list 0 (drgnx-agent-panel-test--tool "t1" "Edit a.el" "completed" :step 4))
+         (list 1 (drgnx-agent-panel-test--tool "t2" "Edit b.el" "completed" :step 5)))))
+
+(ert-deftest drgnx-agent-panel/revert-here-calls-the-history ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (called)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (s q) (setq called (list s q)))))
+          (drgnx-agent-panel-revert-here)
+          (should (equal called '("s1" 4))))
+        ;; a step with no history record is refused, and so is a row that is not a step
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 1)))
+                  ((symbol-function 'drgnx-history-revert-to-here) (lambda (&rest _) (error "must not be called"))))
+          (should-error (drgnx-agent-panel-revert-here) :type 'user-error))
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:strip))))
+          (should-error (drgnx-agent-panel-revert-here) :type 'user-error))))))
+
+(ert-deftest drgnx-agent-panel/fork-here-shows-the-forecast-line ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (prompt fork)
+        (cl-letf (((symbol-function 'drgnx-view-key-at) (lambda (&rest _) '(:e 0)))
+                  ((symbol-function 'drgnx-forecast-line) (lambda (_) "about $0.40 and 6 min"))
+                  ((symbol-function 'drgnx-hub-call-sync)
+                   (lambda (method params &rest _)
+                     (if (equal method "history/fork") (progn (setq fork params) (list :id "s2")) (list :cost 0.4))))
+                  ((symbol-function 'read-string) (lambda (p &rest _) (setq prompt p) "try again")))
+          (drgnx-agent-panel-fork-here)
+          (should (string-match-p "step 4" prompt))
+          (should (string-match-p "about \\$0.40 and 6 min" prompt))
+          (should (equal (list (plist-get fork :session) (plist-get fork :seq) (plist-get fork :message))
+                         '("s1" 4 "try again"))))))))
+
+(ert-deftest drgnx-agent-panel/undone-steps-are-marked ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
+        (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines)))
+        (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))))))
+
+(ert-deftest drgnx-agent-panel/checkpoints-chip-names-the-restore-level ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3 :restore_level "message"))
+      (should (string-match-p "3 checkpoints · message" (drgnx-agent-panel-test--text buf)))
+      (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Claude" :status "idle" :checkpoints 3))
+      (let ((text (drgnx-agent-panel-test--text buf)))
+        (should (string-match-p "3 checkpoints" text))
+        (should-not (string-match-p "checkpoints ·" text))))))
+
+(ert-deftest drgnx-agent-panel/an-applied-history-reloads-the-step-rows ()
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--with-steps)
+      (let (asked cb)
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method params callback &rest _) (push (cons method params) asked) (setq cb callback) 1)))
+          (drgnx-agent-panel--event "history/applied" (list :op 9 :paths ["a.el"] :worktree "/w"))
+          ;; one reload per event, of this panel's session, over the steps it holds
+          (should (equal (length asked) 1))
+          (should (equal (car (car asked)) "timeline/get"))
+          (should (equal (plist-get (cdr (car asked)) :id) "s1"))
+          (funcall cb (list :steps (vector (list :seq 4 :revertible :json-false :undone_by 11)
+                                           (list :seq 5 :revertible t)))
+                   nil))
+        (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
+          (should (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit a.el" l)) lines)))
+          (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "Edit b.el" l)) lines))))))))
+
+;;;; Task 39a: a paired chat's hunks
+
+(defun drgnx-agent-panel-test--paired (buf hunks)
+  "Make BUF a paired chat in /w whose `history/op/hunks' answer is HUNKS; the ledger is open and drawn."
+  (with-current-buffer buf
+    (drgnx-agent-panel--take-snapshot (list :id "s1" :name "Pair" :status "idle" :paired t :cwd "/w"))
+    (let (asked cb)
+      (cl-letf (((symbol-function 'drgnx-hub-call)
+                 (lambda (method params callback &rest _) (push (cons method params) asked) (when (equal method "history/op/hunks") (setq cb callback)) 1)))
+        (drgnx-agent-panel-cards-load buf)
+        (funcall cb (list :hunks (vconcat hunks)) nil))
+      (drgnx-agent-panel-ledger)
+      (nreverse asked))))
+
+(defconst drgnx-agent-panel-test--hunks
+  (list (list :op 7 :path "a.el" :index 0 :start_line 3 :end_line 4 :text "new" :deleted "old" :state "live" :undone_by [])
+        (list :op 8 :path "b.el" :index 0 :start_line 1 :end_line 1 :text "x" :deleted "" :state "undone"
+              :undone_by [(list :op 12 :author (list :kind "user"))])))
+
+(ert-deftest drgnx-agent-panel/a-paired-chats-ledger-lists-its-hunks ()
+  (drgnx-agent-panel-test--with
+    (let ((asked (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)))
+      ;; the chat's own ledger comes from the user's history, filtered to its session; there is no work/hunks
+      (should (equal (cdr (assoc "history/op/hunks" asked)) '(:worktree "/w" :session "s1")))
+      (should-not (assoc "work/hunks" asked))
+      (let ((lines (split-string (drgnx-agent-panel-test--text buf) "\n")))
+        (should (string-match-p "a\\.el.*3" (seq-find (lambda (l) (string-match-p "a\\.el" l)) lines)))
+        (should-not (string-match-p "undone" (seq-find (lambda (l) (string-match-p "a\\.el" l)) lines)))
+        (should (string-match-p "undone by you" (seq-find (lambda (l) (string-match-p "b\\.el" l)) lines)))))))
+
+(ert-deftest drgnx-agent-panel/reject-on-a-paired-hunk-reverts-that-operation ()
+  (drgnx-agent-panel-test--with
+    (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--text buf)
+      (goto-char (point-min)) (search-forward "a.el")
+      (let (asked)
+        (cl-letf (((symbol-function 'drgnx-hub-call)
+                   (lambda (method params _cb &rest _) (push (cons method params) asked) 1)))
+          (drgnx-agent-panel-reject))
+        (should (equal (car asked) '("history/revert/hunk" :worktree "/w" :op 7 :path "a.el" :hunk 0)))))))
+
+(ert-deftest drgnx-agent-panel/an-in-buffer-hunk-revert-keeps-later-typing ()
+  (drgnx-agent-panel-test--with
+    (drgnx-agent-panel-test--paired buf drgnx-agent-panel-test--hunks)
+    (with-current-buffer buf
+      (drgnx-agent-panel-test--text buf)
+      (goto-char (point-min)) (search-forward "a.el")
+      (let ((file (generate-new-buffer " *hunk-file*")) cb)
+        (unwind-protect
+            (progn
+              (with-current-buffer file (insert "NEW typed\n"))
+              (puthash file (drgnx-history--st-make :id "b1") drgnx-history--buffers)
+              (cl-letf (((symbol-function 'drgnx-hub-call)
+                         (lambda (_m _p callback &rest _) (setq cb callback) 1))
+                        ((symbol-function 'drgnx-history--hash) (lambda (_b) "h1")))
+                (drgnx-agent-panel-reject)
+                (funcall cb (list :state "in-buffer" :buffer_id "b1" :version "h1"
+                                  :edits (vector (list :start 0 :old_len 3 :inserted "old")))
+                         nil)
+                (should (equal (with-current-buffer file (buffer-string)) "old typed\n"))
+                ;; a buffer that moved on since the hub looked is left alone
+                (with-current-buffer file (erase-buffer) (insert "NEW typed\n"))
+                (cl-letf (((symbol-function 'drgnx-history--hash) (lambda (_b) "other")))
+                  (funcall cb (list :state "in-buffer" :buffer_id "b1" :version "h1"
+                                    :edits (vector (list :start 0 :old_len 3 :inserted "old")))
+                           nil))
+                (should (equal (with-current-buffer file (buffer-string)) "NEW typed\n"))))
+          (kill-buffer file))))))
 
 (provide 'agent-panel-test)
 ;;; agent-panel-test.el ends here

@@ -34,6 +34,8 @@
 (declare-function drgnx-agent-panel--one-line "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--seconds "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--cost-of "drgnx-agent-panel")
+(declare-function drgnx-history-revert-to-here "drgnx-history-revert")
+(declare-function drgnx-history-fork-here "drgnx-history-revert")
 
 (defun drgnx-agent-panel--align (meta)
   "A space that pushes META to the right edge, then META."
@@ -83,7 +85,9 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
                 (and sandbox (format "%s" (if (eq sandbox t) "sandboxed" sandbox)))
                 (and mcp (format "MCP %s" (if (numberp mcp) mcp (length mcp))))
                 (and (numberp files) (format "%d files" files))
-                (and (numberp checks) (format "%d checkpoints" checks))))))
+                (and (numberp checks)
+                     (let ((level (plist-get snap :restore_level)))
+                       (format "%d checkpoints%s" checks (if (stringp level) (concat " · " level) ""))))))))
 
 (defun drgnx-agent-panel--chips-row ()
   (let ((chips (drgnx-agent-panel--chips drgnx-agent-panel--snap)))
@@ -237,6 +241,12 @@ else when the chat's toggle for its type is on."
   (drgnx-command-define 'agents-panel-make-default :category "Agents" :title "Make the Panel View the Default"
                         :command #'drgnx-agent-panel-make-default :map 'drgnx-agent-panel-mode-map
                         :doc "The step types open now are what new panels open")
+  (drgnx-command-define 'agents-panel-revert-here :category "Agents" :title "Revert to the Step at Point"
+                        :command #'drgnx-agent-panel-revert-here :map 'drgnx-agent-panel-mode-map
+                        :doc "Open the revert card for the step at point")
+  (drgnx-command-define 'agents-panel-fork-here :category "Agents" :title "Fork from the Step at Point"
+                        :command #'drgnx-agent-panel-fork-here :map 'drgnx-agent-panel-mode-map
+                        :doc "Start a second agent from the step at point")
   (drgnx-command-define 'agents-panel-output-search :category "Agents" :title "Search a Tool Output"
                         :command #'drgnx-agent-panel-output-search :map 'drgnx-agent-panel-mode-map
                         :doc "List the matching lines of the output of the step at point, paging through the hub")
@@ -391,6 +401,39 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
                         (t (step next tail off)))))))))
       (step 0 "" 0))))
 
+;;;; Checkpoints: revert and fork at a step
+
+(defun drgnx-agent-panel--step-row (e)
+  "The hub's timeline row of the step that entry E names, or nil."
+  (when-let* ((seq (plist-get e :step))) (gethash seq drgnx-agent-panel--steps)))
+
+(defun drgnx-agent-panel--undone-p (e)
+  "Whether a revert undid the step of tool entry E."
+  (integerp (plist-get (drgnx-agent-panel--step-row e) :undone_by)))
+
+(defun drgnx-agent-panel--step-at-point ()
+  "The timeline row of the step at point, or a user error."
+  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+         (e (and (eq (car-safe key) :e) (drgnx-agent-panel--entry (cadr key))))
+         (step (and e (drgnx-agent-panel--step-row e))))
+    (unless step (user-error "Point is not on a step"))
+    step))
+
+(defun drgnx-agent-panel-revert-here ()
+  "Open the revert card for the step at point (the edit history's revert; nothing changes until its Apply)."
+  (interactive)
+  (let ((step (drgnx-agent-panel--step-at-point)))
+    (unless (eq (plist-get step :revertible) t) (user-error "This step has no checkpoint to go back to"))
+    (require 'drgnx-history-revert)
+    (drgnx-history-revert-to-here drgnx-agent-panel--session (plist-get step :seq))))
+
+(defun drgnx-agent-panel-fork-here ()
+  "Start a second agent from the step at point; the prompt says what one more run like this costs."
+  (interactive)
+  (let ((step (drgnx-agent-panel--step-at-point)))
+    (require 'drgnx-history-revert)
+    (drgnx-history-fork-here drgnx-agent-panel--session (plist-get step :seq))))
+
 (defun drgnx-agent-panel--tool-row (idx e)
   (let* ((key (list :e idx)) (status (format "%s" (or (plist-get e :status) "")))
          (title (drgnx-agent-panel--one-line (or (plist-get e :title) (plist-get e :kind) "tool") 50))
@@ -402,6 +445,7 @@ hidden (an estimate, marked ~, when the hub kept only the ends of a huge output)
     (concat (format "  %s %s" (drgnx-agent-panel--dot status) title)
             (if (string-empty-p result) ""
               (propertize (concat "  · " result) 'face 'drgnx-agent-panel-subtle))
+            (if (drgnx-agent-panel--undone-p e) (propertize "  ↶ undone" 'face 'drgnx-agent-panel-subtle) "")
             (if meta (drgnx-agent-panel--align meta) "")
             "\n"
             (when thoughts

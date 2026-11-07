@@ -96,6 +96,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--entry-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--block-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--redraw-steps "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--strip-row "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
@@ -463,8 +464,26 @@ FROM-SLICE: they come from a page, which never overwrites an entry the hub sent 
 (defun drgnx-agent-panel--panel-for (id)
   (seq-find (lambda (b) (equal (buffer-local-value 'drgnx-agent-panel--session b) id)) (drgnx-agent-panel-buffers)))
 
+(defun drgnx-agent-panel--refresh-steps ()
+  "Ask the hub again for the step rows this panel holds (a revert or fork changed `revertible' and `undone_by')."
+  (when (and drgnx-agent-panel--first-step (> (hash-table-count drgnx-agent-panel--steps) 0))
+    (let ((buf (current-buffer)))
+      (drgnx-agent-panel--ask
+       "timeline/get" (list :scope "session" :id drgnx-agent-panel--session
+                            :limit (min 200 (hash-table-count drgnx-agent-panel--steps))
+                            :before (1+ (apply #'max (hash-table-keys drgnx-agent-panel--steps))))
+       (lambda (r err)
+         (when (and (not err) (buffer-live-p buf))
+           (with-current-buffer buf
+             (drgnx-agent-panel--take-steps (append (plist-get r :steps) nil))
+             (drgnx-agent-panel--redraw-steps))))))))
+
 (defun drgnx-agent-panel--event (event data)
-  "An event from the hub (`drgnx-hub-event-functions'): a snapshot or entries of a session whose panel exists."
+  "An event from the hub (`drgnx-hub-event-functions'): a snapshot or entries of a session whose panel exists;
+`history/applied' (it names no session) reloads the step rows of every panel."
+  (when (equal event "history/applied")
+    (dolist (b (drgnx-agent-panel-buffers))
+      (with-current-buffer b (drgnx-agent-panel--refresh-steps))))
   (when (member event '("agent" "agent-entries"))
     (when-let* ((b (drgnx-agent-panel--panel-for (plist-get data :id))))
       (with-current-buffer b

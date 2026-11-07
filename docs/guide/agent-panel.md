@@ -16,6 +16,15 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
+- **Checkpoints:** `R` on a step opens the revert card for it (the edit history's revert: nothing changes until you
+  apply it) and `F` forks a second agent from it; the prompt of a fork says what one more run like it costs when the
+  forecast is there. A step with no checkpoint to go back to refuses `R`. A step a revert undid is marked `↶ undone`; the rows reload by themselves when a revert, redo or take is applied.
+  The checkpoints chip names how much of the conversation the agent's provider restores (message, turn or summary)
+  when the hub reports it.
+- **A paired chat's edits:** a paired chat writes your own checkout, so it has no worktree base to diff against. Its
+  ledger (`L`) lists the hunks the edit history holds for that chat, one line each with the file and the lines; `D` on a
+  line takes that one hunk back through the history's selective revert, keeping what you typed after it. A hunk you
+  undid yourself (with undo) shows `undone by you`.
 - **Messages:** yours, the agent's, and the ends of turns, in order. The agent's messages are drawn as Markdown:
   headings, code, quotes, lists, rules and tables, with emphasis, strong, strike-through, links and code in the look's
   faces. As a message streams, only the blocks that changed are drawn again; a reopened session keeps the styling,

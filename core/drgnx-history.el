@@ -45,8 +45,9 @@
 
 (defvar drgnx-history-drained-functions nil
   "Abnormal hook run after each drain that sent changes, with (BUFFER COUNTER CHANGES): the buffer, how many drains
-of it have sent changes (1 for the first), and the changes sent, in the hub's shape.  A listener that signals is
-ignored; with no listener the drain does nothing more.")
+of it have sent changes (1 for the first), and the changes sent, in the hub's shape.  CHANGES is `resync' when the
+buffer's changes since the last drain went unsent (Nidhogg's ring lost some, or the whole text went instead): a gap,
+counted as a drain of its own.  A listener that signals is ignored; with no listener the drain does nothing more.")
 
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
@@ -118,7 +119,7 @@ inserts more is split (`drgnx-history--pieces')."
 
 (defmacro drgnx-history-with-origin (origin &rest body)
   "Run BODY with its changes to tracked buffers recorded as ORIGIN's (a string such as \"external:git\" or
-\"agent:SESSION\"), not the user's.  Emacs's undo of them, run later, is the user's."
+\"agent:SESSION#STEP\"), not the user's.  Emacs's undo of them, run later, is the user's."
   (declare (indent 1) (debug t))
   `(let ((nidhogg-history-origin ,origin)) ,@body))
 
@@ -222,14 +223,20 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
       (widen)
       (let ((coding-system-for-write 'utf-8-unix)) (secure-hash 'sha256 (current-buffer))))))
 
+(defun drgnx-history--gap (buffer st)
+  "BUFFER's changes since its last drain went unsent: a drain of its own, told to the listeners as `resync'."
+  (cl-incf (drgnx-history--st-drains st))
+  (when drgnx-history-drained-functions (drgnx-history--tell buffer st 'resync)))
+
 (defun drgnx-history--resync (buffer st)
-  "Send BUFFER's whole text; what the ring holds is part of it, so it is dropped."
+  "Send BUFFER's whole text; what the ring holds is part of it, so it is dropped (a gap for the listeners)."
   (unless (drgnx-history--st-resyncing st)
     (with-current-buffer buffer
       (save-restriction
         (widen)
         (nidhogg-history-drain buffer)
         (setf (drgnx-history--st-resyncing st) t)
+        (drgnx-history--gap buffer st)
         (unless (drgnx-history--send "history/resync"
                                      (list :buffer_id (drgnx-history--st-id st)
                                            :text (buffer-substring-no-properties (point-min) (point-max)))
@@ -264,7 +271,7 @@ costs time in proportion to the buffer and must not sit between two keystrokes. 
   (let ((drained (nidhogg-history-drain buffer)))
     (cond ((null drained))
           ((eq drained 'resync) (drgnx-history--resync buffer st))
-          ((drgnx-history--st-resyncing st) nil)  ; the text on its way includes these
+          ((drgnx-history--st-resyncing st) (drgnx-history--gap buffer st))  ; the text on its way includes these
           (t (let* ((changes (drgnx-history--changes drained))
                     (batches (drgnx-history--batches changes drgnx-history-batch-max))
                     (hash (drgnx-history--hash buffer)) (id (drgnx-history--st-id st)) (sent t))
@@ -282,6 +289,20 @@ costs time in proportion to the buffer and must not sit between two keystrokes. 
   "Tell `drgnx-history-drained-functions' that BUFFER's CHANGES went; a listener that signals is skipped."
   (dolist (fn drgnx-history-drained-functions)
     (condition-case nil (funcall fn buffer (drgnx-history--st-drains st) changes) (error nil))))
+
+(defun drgnx-history-drain-now (&optional buffer)
+  "Hand BUFFER's (default the current one) ring to the hub now, its listeners told, and return its drain counter:
+the version of its text from then on.  Nil when the history does not track it.  Never prompts, waits or signals."
+  (let* ((b (or buffer (current-buffer))) (st (gethash b drgnx-history--buffers)))
+    (when (and st (drgnx-history--st-registered st))
+      (condition-case nil (drgnx-history--drain-buffer b st) (error (drgnx-history--forget b)))
+      (and (eq (gethash b drgnx-history--buffers) st) (drgnx-history--st-drains st)))))
+
+(defun drgnx-history-resyncing-p ()
+  "Whether some buffer's whole text is on its way to the hub (`history/resync')."
+  (catch 'yes
+    (maphash (lambda (_b st) (when (drgnx-history--st-resyncing st) (throw 'yes t))) drgnx-history--buffers)
+    nil))
 
 (defun drgnx-history--drain ()
   "The `history-drain' timer: when Nidhogg's rings hold changes, send them.  Never prompts, waits or signals."
