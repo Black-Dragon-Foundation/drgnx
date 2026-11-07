@@ -477,7 +477,7 @@ fetches it, once for the page.  Its end (`drgnx-extensions-trust--job-done') ask
            (source (plist-get row :source)) (name (plist-get row :name)))
       (when (and (eq (plist-get row :kind) 'package) (not (drgnx-extensions-trust--installed-p row))
                  (null (plist-get info :readme)) (null drgnx-extensions-details--readme)
-                 (stringp source) (not (member source '("emacs" "git" "builtin"))))
+                 (stringp source) (not (member source '("git" "builtin" "emacs"))))
         (setq drgnx-extensions-details--readme (list :state 'fetching))
         (drgnx-extensions-jobs-run
          'fetch-readme source name
