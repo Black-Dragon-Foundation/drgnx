@@ -146,7 +146,8 @@ keys it needs (names only); drgnx gets them to the job on the runner without wri
   keyed job never runs on this machine for now: it waits for a runner and says so.
 - **What went where is recorded.** Each key sent is a `key_sent` record (the job, attempt, key name, runner and time);
   each read by the job, as the runner reports it, is a `key_use` record marked runner-reported. `runners/audit` lists
-  them (by job or by key); the values are never in them.
+  them (by job or by key), and so does `drgnx runner audit [--key K] [--job J]` from a terminal (JSON, oldest first);
+  the values are never in them.
 - **The returned log has them masked.** The hub knows the values it sent a job, so its copy of the job's log has every
   one masked (`*`, the same length): raw, in base64 and percent-encoded, even split across two pieces of the log.
   drgnx also tells you when a line looks like some other secret ("this log may hold a secret at line N"), but never
