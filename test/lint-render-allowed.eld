@@ -7,7 +7,7 @@
 (
  (:file "modules/tools/drgnx-agents-session.el" :in drgnx-agents-session-job-log :what erase-buffer :kind document :why "the job log is shown on the user's action")
  (:file "modules/tools/drgnx-live.el" :in drgnx-live--render-notes :what delete-region :kind migrate :why "the notes below the live page are cut and redrawn on a state change (no render task owns this file: the manager assigns one)" :until "phase 2 (live browser notes)")
- (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
+ (:file "wb/drgnx-explorer.el" :in drgnx-explorer--render-old :what erase-buffer :kind listing :why "Explorer is styled by jit-lock and rebuilt on a root change (spec non-goal)")
  (:file "wb/drgnx-explorer.el" :in drgnx-explorer--find-apply :what erase-buffer :kind listing :why "the find-in-tree result is the same listing, built whole (spec non-goal)")
  (:file "wb/drgnx-buffers.el" :in drgnx-buffers--render :what erase-buffer :kind listing :why "Buffers is styled by jit-lock and rebuilt on a list change (spec non-goal)")
  (:file "wb/drgnx-view.el" :in drgnx-view--remove-rows :what delete-region :kind recovery :why "the fallback when the row starts no longer match the text (a foreign edit); the normal path removes rows in slices")

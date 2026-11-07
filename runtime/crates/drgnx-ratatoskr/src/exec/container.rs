@@ -8,18 +8,15 @@
 //! The image is the allow-list's reference pinned by digest; the hub pulls it ([`ensure_image`]), the job never does
 //! (`--pull=never`).
 
-use crate::agents::launch::NetCell;
 use crate::shell_env::ShellEnv;
 use gleipnir::{Refusal, Rule};
 use sleipnir::linux::podman;
 use std::ffi::OsString;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 pub use sleipnir::linux::podman::{
-    CONTROLLERS, Caps, ContainerReq, FORWARDER, FORWARDER_ARGS, PIDS, PROXY_SOCKET, Proxy, WORK,
-    limits_enforced,
+    CONTROLLERS, Caps, ContainerReq, JobNet, NetNames, PIDS, WORK, limits_enforced, net_names,
 };
 
 fn refuse(message: impl Into<String>) -> Refusal {
@@ -81,10 +78,31 @@ pub fn resolve<'a>(caps: &'a Caps, name: &str) -> Result<&'a str, Refusal> {
     podman::resolve(caps, name).map_err(|r| refuse(r.message))
 }
 
+/// The placement of the hub's own jobs: `drgnx-job-<id>`, no parent slice, labelled with the hub's OWNER tag.
+pub fn placement(owner: &str) -> podman::RunnerArgs {
+    podman::RunnerArgs::local(owner)
+}
+
+/// This hub's tag in container names and labels: the 8 hex of its socket's name (`hub-<tag>.sock`), which the hash of
+/// its data dir makes.
+pub fn owner_tag() -> String {
+    tag_of(&runstav::paths::socket_path(&runstav::paths::Env::process()))
+}
+
+/// The tag in the hub's socket name SOCKET (`hub-<tag>.sock`); `00000000` for a name of another shape.
+pub fn tag_of(socket: &Path) -> String {
+    socket
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_prefix("hub-")?.strip_suffix(".sock"))
+        .unwrap_or("00000000")
+        .to_string()
+}
+
 /// The `podman run` arguments (without the program) for REQ under CAPS: the shared builder with the hub's own
-/// placement (`drgnx-job-<id>`, no parent slice, no runner label).
-pub fn argv(req: &ContainerReq, caps: &Caps) -> Result<Vec<OsString>, Refusal> {
-    podman::argv(req, caps, &podman::RunnerArgs::local()).map_err(|r| refuse(r.message))
+/// placement ([`placement`] of OWNER).
+pub fn argv(req: &ContainerReq, caps: &Caps, owner: &str) -> Result<Vec<OsString>, Refusal> {
+    podman::argv(req, caps, &placement(owner)).map_err(|r| refuse(r.message))
 }
 
 /// The refusal for a hub that found no `podman` on its PATH at start.
@@ -95,97 +113,6 @@ pub fn podman_missing() -> Refusal {
         message: "container jobs need podman on the PATH; run `drgnx doctor` for what to install"
             .into(),
     }
-}
-
-/// A job's proxy: the listener on its socket, the socket (removed when the job ends) and the forwarder's copy.
-pub struct JobProxy {
-    _handle: gleipnir::net::proxy::ProxyHandle,
-    pub mounts: Proxy,
-}
-
-impl Drop for JobProxy {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.mounts.socket);
-    }
-}
-
-/// Where a job's proxy socket lives: a short path (a Unix socket's path holds 108 bytes) under the user's runtime dir.
-pub fn socket_for(job: &str, run_dir: &Path) -> PathBuf {
-    run_dir.join("drgnx-jobs").join(format!("{job}.sock"))
-}
-
-/// Makes job JOB's proxy: its own copy of FORWARDER in DIR (the job's folder; the copy is what gets relabelled, never
-/// the installed binary) and its proxy on a socket under RUN_DIR with the allow-list of NET under HOSTS and the names
-/// PINS pins.  An error means the job was granted a network it cannot be given.
-pub fn prepare_proxy(
-    job: &str,
-    dir: &Path,
-    run_dir: &Path,
-    forwarder: &Path,
-    net: NetCell,
-    hosts: &[(String, Vec<String>)],
-    pins: &[(String, IpAddr)],
-) -> Result<JobProxy, Refusal> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    let copy = dir.join("fwd");
-    std::fs::copy(forwarder, &copy)
-        .and_then(|_| std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755)))
-        .map_err(|e| {
-            refuse(format!(
-                "this job was granted network access, but the forwarder {} cannot be copied: {e}",
-                forwarder.display()
-            ))
-        })?;
-    let socket = socket_for(job, run_dir);
-    if let Some(parent) = socket.parent() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(|e| refuse(format!("{}: {e}", parent.display())))?;
-    }
-    let handle = start_proxy(&socket, net, hosts, pins)?;
-    Ok(JobProxy {
-        _handle: handle,
-        mounts: Proxy {
-            socket,
-            forwarder: copy,
-        },
-    })
-}
-
-/// Starts a proxy listening on the Unix socket SOCKET with the allow-list of NET under HOSTS (`agents-net-hosts`) and
-/// the names PINS pins (`sandbox-proxy-pinned-addresses`).  Dropping the handle closes the listener and every
-/// connection.
-pub fn start_proxy(
-    socket: &Path,
-    net: NetCell,
-    hosts: &[(String, Vec<String>)],
-    pins: &[(String, IpAddr)],
-) -> Result<gleipnir::net::proxy::ProxyHandle, Refusal> {
-    use gleipnir::net::{host, proxy};
-    let allow = crate::sandbox::allowed_hosts(net, hosts)
-        .iter()
-        .map(|h| host::parse_target(h))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| refuse(format!("the allow-list: {e:?}")))?;
-    let _ = std::fs::remove_file(socket);
-    let listener = tokio::net::UnixListener::bind(socket)
-        .map_err(|e| refuse(format!("the proxy socket {}: {e}", socket.display())))?;
-    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    // nobody is asked about a denied host here; the channel only has to stay drained
-    tokio::spawn(async move { while rx.recv().await.is_some() {} });
-    let handle = proxy::start(
-        proxy::ProxyConfig {
-            allow,
-            pinned: pins.to_vec(),
-            ..Default::default()
-        },
-        std::sync::Arc::new(proxy::SystemResolver),
-        tx,
-    );
-    handle.listen(proxy::Listener::Unix(listener), 1);
-    Ok(handle)
 }
 
 /// Run `podman ARGS`; kill it and say so when it outlives LIMIT.
@@ -226,46 +153,59 @@ pub fn ensure_image(
     })
 }
 
-/// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT.
-pub fn check_limits(shell: &ShellEnv, podman: &Path, limit: Duration) -> Result<(), Refusal> {
+/// Refuse the job unless PODMAN enforces its caps ([`limits_enforced`]), asked within LIMIT; answers the parsed
+/// `podman info`, for the networked job's checks (`sleipnir::linux::netcheck`).
+pub fn check_limits(
+    shell: &ShellEnv,
+    podman: &Path,
+    limit: Duration,
+) -> Result<serde_json::Value, Refusal> {
     podman::check_limits(podman, &podman_env(shell), limit).map_err(setup)
 }
 
-/// At hub start: remove the `drgnx-job-*` containers whose job is not in RUNNING (a podman client killed with the
-/// hub leaves its container behind).  Only names under [`NAME_PREFIX`] are looked at; answers how many it removed.
+/// At hub start: remove what this hub (OWNER, its tag) left behind (a podman client killed with the hub leaves its
+/// container): the containers labelled `drgnx.owner=<OWNER>` whose `drgnx.job` is not in RUNNING, the jobs' before
+/// the sidecars (S11; `podman::leftovers`, shared with the runners), then the relay images other than PX_CURRENT.  A
+/// sibling hub's containers carry another tag and are never touched; ones made before the labels are left (they are
+/// `--rm`).  Answers how many containers it removed.
 pub fn remove_leftovers(
     shell: &ShellEnv,
     podman: &Path,
+    owner: &str,
     running: &std::collections::HashSet<String>,
+    px_current: Option<&str>,
 ) -> usize {
     let limit = Duration::from_secs(30);
-    let Ok(list) = run_limited(
-        shell,
-        podman,
-        &[
-            "ps",
-            "-a",
-            "--filter",
-            "name=drgnx-job-",
-            "--format",
-            "{{.Names}}",
-        ],
-        limit,
-    ) else {
-        return 0;
+    let label = format!("label=drgnx.owner={owner}");
+    let json = |args: &[&str]| {
+        run_limited(shell, podman, args, limit)
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| serde_json::from_slice::<serde_json::Value>(&o.stdout).ok())
     };
     let mut n = 0;
-    for name in String::from_utf8_lossy(&list.stdout).lines() {
-        let name = name.trim();
-        let Some(id) = name.strip_prefix(NAME_PREFIX) else {
-            continue;
-        };
-        if running.contains(id) || name_of(id).is_err() {
-            continue;
+    if let Some(ps) = json(&["ps", "-a", "--filter", &label, "--format", "json"]) {
+        let left = podman::leftovers(&ps, None, ("drgnx.owner", owner), running);
+        for name in left.jobs.iter().chain(&left.sidecars) {
+            if run_limited(shell, podman, &["rm", "-f", name], limit)
+                .is_ok_and(|o| o.status.success())
+            {
+                n += 1;
+            }
         }
-        if run_limited(shell, podman, &["rm", "-f", name], limit).is_ok_and(|o| o.status.success())
-        {
-            n += 1;
+    }
+    if let Some(current) = px_current
+        && let Some(images) = json(&[
+            "images",
+            "--filter",
+            "reference=localhost/drgnx-px",
+            "--format",
+            "json",
+        ])
+    {
+        for tag in podman::old_px_tags(&images, current) {
+            // an image a sibling hub's sidecar still runs from stays: `rmi` without force refuses it
+            let _ = run_limited(shell, podman, &["rmi", &tag], limit);
         }
     }
     n
@@ -274,7 +214,9 @@ pub fn remove_leftovers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::launch::NetCell;
     use crate::settings::ContainerImage;
+    use std::path::PathBuf;
 
     const REF: &str = "registry.example/tools@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -292,9 +234,8 @@ mod tests {
             cpus: 2,
             pids: PIDS,
             net_hosts: test_hosts(),
-            proxy: Some(Proxy {
-                socket: "/run/h/job.sock".into(),
-                forwarder: "/opt/drgnx-fwd".into(),
+            proxy: Some(JobNet {
+                sidecar: "drgnx-px-0a1b2c3d-x1a".into(),
             }),
             pins: vec![],
         }
@@ -322,7 +263,7 @@ mod tests {
     /// no runner label; refusals keep their rule.  The builder's own rows are `sleipnir::linux::podman`'s tests.
     #[test]
     fn the_hub_builds_its_jobs_with_the_shared_argv() {
-        let a = strs(argv(&req(&["make", "test"]), &caps()).unwrap());
+        let a = strs(argv(&req(&["make", "test"]), &caps(), "0a1b2c3d").unwrap());
         assert_eq!(a[2..4], ["--name", "drgnx-job-x1a"]);
         assert!(a.windows(2).any(|w| w == ["--memory-swap", "4G"]));
         assert!(a.contains(&"--oom-score-adj=1000".to_string()));
@@ -333,116 +274,23 @@ mod tests {
         assert_eq!(a[a.len() - 3..], [REF, "make", "test"]);
         let mut r = req(&["ls"]);
         r.image = "evil".into();
-        assert_eq!(argv(&r, &caps()).unwrap_err().rule, Rule::Malformed);
+        assert_eq!(
+            argv(&r, &caps(), "0a1b2c3d").unwrap_err().rule,
+            Rule::Malformed
+        );
         assert_eq!(resolve(&caps(), "tools").unwrap(), REF);
     }
 
-    #[tokio::test]
-    async fn every_mount_source_lies_in_the_jobs_own_dirs() {
-        let d = tempfile::tempdir().unwrap();
-        let (job_dir, run_dir, installed) = (
-            d.path().join("job"),
-            d.path().join("run"),
-            d.path().join("bin-drgnx-fwd"),
+    #[test]
+    fn the_owner_tag_is_the_sockets_hash() {
+        assert_eq!(
+            tag_of(Path::new("/run/user/1000/drgnx/hub-1a2b3c4d.sock")),
+            "1a2b3c4d"
         );
-        std::fs::create_dir_all(&job_dir).unwrap();
-        std::fs::write(&installed, b"binary").unwrap();
-        let jp = prepare_proxy(
-            "j1",
-            &job_dir,
-            &run_dir,
-            &installed,
-            NetCell::ProviderAndPackages,
-            &test_hosts(),
-            &[],
-        )
-        .unwrap();
-        // the socket path stays short; the copy is the job's own; the installed file is never a mount source
-        assert!(jp.mounts.socket.starts_with(&run_dir));
-        assert!(jp.mounts.socket.as_os_str().len() < 108);
-        assert_eq!(jp.mounts.forwarder, job_dir.join("fwd"));
-        assert_eq!(std::fs::read(&jp.mounts.forwarder).unwrap(), b"binary");
-        let c = Caps {
-            proxy: Some(jp.mounts.clone()),
-            ..caps()
-        };
-        let mut r = req(&["ls"]);
-        r.worktree = d.path().join("tree");
-        r.net = true;
-        let a = strs(argv(&r, &c).unwrap());
-        let sources: Vec<&str> = a
-            .windows(2)
-            .filter(|w| w[0] == "-v")
-            .map(|w| w[1].split(':').next().unwrap())
-            .collect();
-        assert_eq!(sources.len(), 3);
-        for s in sources {
-            let p = Path::new(s);
-            assert!(
-                p.starts_with(d.path().join("tree"))
-                    || p.starts_with(&job_dir)
-                    || p.starts_with(&run_dir),
-                "{s}"
-            );
-            assert_ne!(p, installed);
-        }
-        assert!(a.iter().all(|s| !s.ends_with(":ro,z")));
-        let sock = jp.mounts.socket.clone();
-        drop(jp);
-        assert!(!sock.exists());
-        // a forwarder that is not there refuses the job instead of running it without a network
-        assert!(
-            prepare_proxy(
-                "j2",
-                &job_dir,
-                &run_dir,
-                &d.path().join("none"),
-                NetCell::Open,
-                &test_hosts(),
-                &[]
-            )
-            .is_err()
+        assert_eq!(
+            tag_of(Path::new("/run/user/1000/drgnx/other.sock")),
+            "00000000"
         );
-    }
-
-    #[tokio::test]
-    async fn the_job_proxy_listens_on_its_socket() {
-        let d = tempfile::tempdir().unwrap();
-        let sock = d.path().join("proxy.sock");
-        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &test_hosts(), &[]).unwrap();
-        // not on the allow-list: refused by the proxy itself
-        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        c.write_all(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
-            .await
-            .unwrap();
-        let mut buf = [0u8; 12];
-        let n = c.read(&mut buf).await.unwrap_or(0);
-        assert!(!buf[..n].starts_with(b"HTTP/1.1 200"), "{:?}", &buf[..n]);
-        drop(handle);
-    }
-
-    /// Pattern D (the proxy's answer is the only wait).  A name the setting pins, on the job's allow-list, reaches
-    /// its address: here a listener on loopback, which DNS would never give.
-    #[tokio::test]
-    async fn the_job_proxy_resolves_a_pinned_name() {
-        use std::net::{IpAddr, Ipv4Addr};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let d = tempfile::tempdir().unwrap();
-        let sock = d.path().join("proxy.sock");
-        let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let host = format!("pinned.test:{}", upstream.local_addr().unwrap().port());
-        let hosts = vec![("packages".to_string(), vec![host.clone()])];
-        let pins = vec![("pinned.test".to_string(), IpAddr::V4(Ipv4Addr::LOCALHOST))];
-        let handle = start_proxy(&sock, NetCell::ProviderAndPackages, &hosts, &pins).unwrap();
-        let mut c = tokio::net::UnixStream::connect(&sock).await.unwrap();
-        c.write_all(format!("CONNECT {host} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes())
-            .await
-            .unwrap();
-        let mut head = [0u8; 12];
-        c.read_exact(&mut head).await.unwrap();
-        assert_eq!(&head, b"HTTP/1.1 200", "{:?}", head.escape_ascii());
-        drop(handle);
     }
 
     #[test]
@@ -455,13 +303,13 @@ mod tests {
         };
         let c = crate::settings::containers::caps(&v);
         assert_eq!((c.memory.as_str(), c.cpus, c.pids), ("512M", 3, PIDS));
-        let a = strs(argv(&req(&["ls"]), &c).unwrap());
+        let a = strs(argv(&req(&["ls"]), &c, "0a1b2c3d").unwrap());
         assert!(a.windows(2).any(|w| w == ["--memory", "512M"]));
         assert!(a.windows(2).any(|w| w == ["--cpus", "3"]));
         // a limit podman would misread is refused
         v.agents_job_memory = "4G --privileged".into();
         let c = crate::settings::containers::caps(&v);
-        assert!(argv(&req(&["ls"]), &c).is_err());
+        assert!(argv(&req(&["ls"]), &c, "0a1b2c3d").is_err());
         // the job's proxy pins what the setting pins
         v.sandbox_proxy_pins = vec![("registry.corp".into(), "10.0.0.5".parse().unwrap())];
         assert_eq!(
@@ -523,6 +371,7 @@ mod tests {
 mod name_and_pull_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
 
     fn script(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("podman");
@@ -569,17 +418,49 @@ mod name_and_pull_tests {
     fn leftovers_removal_touches_only_dead_hub_names() {
         let d = tempfile::tempdir().unwrap();
         let log = d.path().join("log");
+        let ps = r#"[{"Names":["drgnx-job-dead"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"dead"}},
+{"Names":["drgnx-px-aaaa1111-dead"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"dead"}},
+{"Names":["drgnx-job-live"],"Labels":{"drgnx.owner":"aaaa1111","drgnx.job":"live"}},
+{"Names":["drgnx-job-sib"],"Labels":{"drgnx.owner":"bbbb2222","drgnx.job":"sib"}},
+{"Names":["other"],"Labels":{}}]"#;
+        let images =
+            r#"[{"Names":["localhost/drgnx-px:00aa"]},{"Names":["localhost/drgnx-px:11bb"]}]"#;
         let p = script(
             d.path(),
             &format!(
-                "echo \"$@\" >> {}\nif [ \"$1\" = ps ]; then printf 'drgnx-job-dead\\ndrgnx-job-live\\nother\\n'; fi",
+                "echo \"$@\" >> {}\nif [ \"$1\" = ps ]; then echo '{ps}'; fi\nif [ \"$1\" = images ]; then echo '{images}'; fi",
                 log.display()
             ),
         );
         let running = ["live".to_string()].into_iter().collect();
-        assert_eq!(remove_leftovers(&ShellEnv::default(), &p, &running), 1);
+        let n = remove_leftovers(
+            &ShellEnv::default(),
+            &p,
+            "aaaa1111",
+            &running,
+            Some("localhost/drgnx-px:11bb"),
+        );
+        assert_eq!(n, 2);
         let said = std::fs::read_to_string(&log).unwrap();
-        assert!(said.contains("rm -f drgnx-job-dead"), "{said}");
-        assert!(!said.contains("rm -f drgnx-job-live") && !said.contains("rm -f other"));
+        assert!(
+            said.contains("ps -a --filter label=drgnx.owner=aaaa1111"),
+            "{said}"
+        );
+        let (j, s) = (
+            said.find("rm -f drgnx-job-dead")
+                .expect("the dead job goes"),
+            said.find("rm -f drgnx-px-aaaa1111-dead")
+                .expect("its sidecar goes"),
+        );
+        assert!(j < s, "the job's container before its sidecar: {said}");
+        assert!(
+            !said.contains("rm -f drgnx-job-live") && !said.contains("rm -f drgnx-job-sib"),
+            "{said}"
+        );
+        assert!(
+            said.contains("rmi localhost/drgnx-px:00aa")
+                && !said.contains("rmi localhost/drgnx-px:11bb"),
+            "{said}"
+        );
     }
 }

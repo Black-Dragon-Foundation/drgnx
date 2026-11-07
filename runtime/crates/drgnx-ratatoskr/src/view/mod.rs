@@ -12,10 +12,12 @@
 //!
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
+pub mod explorer;
 pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod grep;
+pub mod model;
 #[cfg(test)]
 mod tests;
 
@@ -24,7 +26,7 @@ use drgnx_rows::fit_tty;
 use drgnx_rows::image::ImageSet;
 use drgnx_rows::{ImageId, Op, Patch, Row, RowBuilder};
 use runstav::methods::view::{
-    Display, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewResync,
+    Display, ViewClose, ViewEnv, ViewGlyphs, ViewGlyphsAsk, ViewMeasured, ViewModel, ViewResync,
 };
 use runstav::wire::Error;
 use serde_json::json;
@@ -46,10 +48,12 @@ struct Pair {
     reset_due: bool,
 }
 
-/// The pure core: every (view, class)'s env, version and rows, for one hub instance.
+/// The pure core: every (view, class)'s env, version and rows, and every view's model, for one hub instance.
 pub struct Store {
     hub: u64,
     pairs: BTreeMap<Key, Pair>,
+    /// (connection, view) → the model its editor was last sent (views with a model only).
+    models: BTreeMap<(u64, String), model::Sent>,
 }
 
 impl Store {
@@ -57,6 +61,54 @@ impl Store {
         Store {
             hub,
             pairs: BTreeMap::new(),
+            models: BTreeMap::new(),
+        }
+    }
+
+    /// The model version of KEY's view, for its patches; none for a view with no model.
+    fn model_version(&self, key: &Key) -> Option<u64> {
+        self.models.get(&(key.0, key.1.clone())).map(|s| s.version)
+    }
+
+    /// CONN's VIEW's model is now DOC: the `view-model` that turns what its editor holds into it (none when nothing
+    /// changed). Its rows' patches name the new version.
+    pub fn publish_model(&mut self, conn: u64, view: &str, doc: model::Doc) -> Option<ViewModel> {
+        let hub = self.hub;
+        let out = self
+            .models
+            .entry((conn, view.to_owned()))
+            .or_default()
+            .publish(doc)?;
+        Some(Self::model_event(hub, view, out))
+    }
+
+    /// CONN's editor asks for VIEW's model again: a reset of what it was last sent.
+    pub fn resync_model(&mut self, conn: u64, view: &str) -> Option<ViewModel> {
+        let hub = self.hub;
+        let out = self.models.get_mut(&(conn, view.to_owned()))?.resync()?;
+        Some(Self::model_event(hub, view, out))
+    }
+
+    /// CONN subscribed VIEW (again): its editor starts a new replica, so its model starts again at version 1.
+    pub fn model_restart(&mut self, conn: u64, view: &str) {
+        self.models.remove(&(conn, view.to_owned()));
+    }
+
+    /// CONN's VIEW was hidden: it gets no model until it is shown again, and then a reset.
+    pub fn model_hidden(&mut self, conn: u64, view: &str) {
+        if let Some(s) = self.models.get_mut(&(conn, view.to_owned())) {
+            s.reset_due();
+        }
+    }
+
+    fn model_event(hub: u64, view: &str, out: model::Out) -> ViewModel {
+        ViewModel {
+            view: view.to_owned(),
+            hub,
+            base: out.base,
+            version: out.version,
+            reset: out.reset,
+            model: out.model,
         }
     }
 
@@ -111,6 +163,7 @@ impl Store {
         rows: Vec<Row>,
         images: &[(ImageId, String)],
     ) -> Option<Patch> {
+        let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
         let ops = if p.reset_due {
             vec![Op::Reset(rows.clone())]
@@ -121,7 +174,7 @@ impl Store {
             return None;
         }
         p.rows = rows;
-        Some(Self::send(self.hub, key, p, ops, images))
+        Some(Self::send(self.hub, key, p, ops, images, model))
     }
 
     /// The patch of OPS for P, which now holds its new rows: the next version, and the images its rows name that the
@@ -132,6 +185,7 @@ impl Store {
         p: &mut Pair,
         ops: Vec<Op>,
         images: &[(ImageId, String)],
+        model: Option<u64>,
     ) -> Patch {
         let reset = matches!(ops.as_slice(), [Op::Reset(_)]);
         if reset {
@@ -152,26 +206,30 @@ impl Store {
             env_epoch: p.env.epoch,
             ops,
             images: new,
+            model,
         }
     }
 
     /// The editor of KEY asks for its rows again: a reset of the rows it was last sent.
     pub fn resync(&mut self, key: &Key, images: &[(ImageId, String)]) -> Option<Patch> {
+        let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
         let ops = vec![Op::Reset(p.rows.clone())];
-        Some(Self::send(self.hub, key, p, ops, images))
+        Some(Self::send(self.hub, key, p, ops, images, model))
     }
 
     /// CONN shows VIEW no more.
     pub fn close(&mut self, conn: u64, view: &str) -> bool {
-        let before = self.pairs.len();
+        let before = self.pairs.len() + self.models.len();
         self.pairs.retain(|(c, v, _), _| !(*c == conn && v == view));
-        self.pairs.len() != before
+        self.models.retain(|(c, v), _| !(*c == conn && v == view));
+        self.pairs.len() + self.models.len() != before
     }
 
-    /// Connection CONN is gone: its pairs with it.
+    /// Connection CONN is gone: its pairs and models with it.
     pub fn gone(&mut self, conn: u64) {
         self.pairs.retain(|(c, _, _), _| *c != conn);
+        self.models.retain(|(c, _), _| *c != conn);
     }
 }
 
@@ -227,6 +285,8 @@ pub struct Views {
     letters: git::Letters,
     /// The ranked file queries (`search/files`) and the names they rank.
     files: files::Files,
+    /// The Explorer's listings (`explorer/subscribe`).
+    explorers: explorer::Explorers,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
     front: OnceLock<Weak<Front>>,
 }
@@ -240,6 +300,7 @@ impl Default for Views {
             greps: grep::Greps::default(),
             letters: git::Letters::default(),
             files: files::Files::default(),
+            explorers: explorer::Explorers::default(),
             front: OnceLock::new(),
         }
     }
@@ -253,7 +314,11 @@ impl Views {
     /// Builds (CONN, VIEW, CLASS)'s rows again and sends what changed. The builders: the test fixture view (its
     /// rows as given, then its labels fitted with the class's fonts).
     fn build(&self, f: &Front, key: &Key) {
-        if self.grep_build(f, key) || self.git_build(f, key) || self.files_build(f, key) {
+        if self.grep_build(f, key)
+            || self.git_build(f, key)
+            || self.files_build(f, key)
+            || self.explorer_build(f, key)
+        {
             return;
         }
         let Some((mut rows, images, labels)) =
@@ -317,6 +382,23 @@ impl Views {
             f.send_to(key.0, "view-patch", json!(p));
         }
         self.ask(f, key);
+    }
+
+    /// CONN's VIEW's model is now DOC: what changed goes out (`view-model`) before the rows built from it, which name
+    /// its version. Returns whether one went.
+    pub fn publish_model(&self, f: &Front, conn: u64, view: &str, doc: model::Doc) -> bool {
+        let out = lock(&self.store).publish_model(conn, view, doc);
+        out.is_some_and(|m| f.send_to(conn, "view-model", json!(m)))
+    }
+
+    /// CONN's VIEW was hidden: its next model is a reset.
+    pub fn model_hidden(&self, conn: u64, view: &str) {
+        lock(&self.store).model_hidden(conn, view);
+    }
+
+    /// CONN subscribed VIEW (again): its model starts again.
+    pub fn model_restart(&self, conn: u64, view: &str) {
+        lock(&self.store).model_restart(conn, view);
     }
 
     /// KEY's font set, for a builder to measure with (none before its `view/env`).
@@ -386,6 +468,7 @@ impl Views {
         self.greps.gone(conn);
         self.letters.gone(conn);
         self.files.gone(conn);
+        self.explorers.gone(conn);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
@@ -404,9 +487,13 @@ pub fn env(f: &Front, c: &Caller, p: ViewEnv) -> Result<bool, Error> {
     Ok(true)
 }
 
-/// `view/resync`: a reset of what the hub last sent (none for a pair with no env).
+/// `view/resync`: a reset of what the hub last sent (none for a pair with no env); with `model`, of the view's model.
 pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
     let views = &f.core.views;
+    if p.model {
+        let m = lock(&views.store).resync_model(c.conn_id, &p.view);
+        return Ok(m.is_some_and(|m| f.send_to(c.conn_id, "view-model", json!(m))));
+    }
     let key = (c.conn_id, p.view, p.class);
     let images = views.images_of(&key);
     let patch = lock(&views.store).resync(&key, &images);
@@ -461,6 +548,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.greps.stop(c.conn_id, &p.view);
     views.letters.stop(c.conn_id, &p.view);
     views.files.stop(c.conn_id, &p.view);
+    views.explorers.stop(c.conn_id, &p.view);
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
     Ok(closed)

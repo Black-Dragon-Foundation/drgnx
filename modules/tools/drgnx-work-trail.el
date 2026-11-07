@@ -17,6 +17,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'drgnx-view)
+(require 'drgnx-view-nav)
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-work-board)
   (load (expand-file-name "drgnx-work-board" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -27,6 +28,8 @@
 (declare-function drgnx-work-hunk-mode "drgnx-work-code")
 
 (declare-function drgnx-hub-call "drgnx-hub-client")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(declare-function nidhogg-view-set "nidhogg-views" (h what value))
 (declare-function drgnx-work--open-agent "drgnx-work-map")
 (declare-function drgnx-work-map--card-face "drgnx-work-map")
 (declare-function drgnx-work-map--state "drgnx-work-map")
@@ -479,9 +482,58 @@ its diff.  BESIDE: without moving focus.  Returns the buffer when it is there at
                       (format "\nBased on %d steps\n" (length (drgnx-work-trail--rest-on c))))))
     (drgnx-work-trail--show (drgnx-work-trail--text-buffer (format "*Work conclusion %d*" (plist-get c :n)) text) beside)))
 
+;;;; On the rows path: the keys through the native view model (Sjá)
+
+(defun drgnx-work-trail--rows-p ()
+  "Whether this trail or Timeline is a hub-fed view with Sjá's model (the rows path)."
+  (and (not drgnx-view-old-path) drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch) t))
+
+(defun drgnx-work-trail--model-step (&optional id)
+  "The step node ID (default: the selection) of the model as the step plist `drgnx-work-trail-open-step' takes, or nil
+when ID is no step."
+  (let ((id (or id (drgnx-view-nav-selection))) (h (drgnx-view-patch-handle drgnx-view-patch)))
+    (when (and id (equal (nidhogg-view-get h 'kind id) "step"))
+      (let ((f (lambda (name) (drgnx-view-nav-field name id))))
+        (list :seq (funcall f "seq") :session (funcall f "session") :class (funcall f "class") :tool (funcall f "tool")
+              :detail (list :kind (funcall f "detail-kind") :path (funcall f "path") :line_start (funcall f "line")
+                            :query (funcall f "query") :url (funcall f "url")))))))
+
+(defun drgnx-work-trail--rows-nav (dir)
+  "DIR of the lens on the rows path: a move follows the selection's link of that name (`next-agent' and
+`previous-agent' are `down' and `up'); `open' and `open-beside' open the selected step or conclusion."
+  (pcase dir
+    ((or 'left 'right 'up 'down) (drgnx-view-nav 'follow (symbol-name dir)))
+    ('next-agent (drgnx-view-nav 'follow "down"))
+    ('previous-agent (drgnx-view-nav 'follow "up"))
+    ((or 'open 'open-beside)
+     (let ((beside (eq dir 'open-beside)) (id (drgnx-view-nav-selection)))
+       (cond
+        ((drgnx-work-trail--model-step id)
+         (drgnx-work-trail-open-step (drgnx-work-trail--model-step id) beside beside))
+        ((and id (equal (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'kind id) "conclusion"))
+         (drgnx-work-trail--open-conclusion (list :kind (drgnx-view-nav-field "conclusion-kind" id)
+                                                  :n (drgnx-view-nav-field "n" id) :text (drgnx-view-nav-field "label" id))
+                                            beside))
+        (t (message "Work: no step is selected"))))))
+  t)
+
+(defun drgnx-work-timeline-rows-attached ()
+  "The Timeline buffer is a hub-fed view on the rows path: its lit lanes are the model's list `near' (the lanes the
+map's selection reaches, which the hub keeps), in the chain's face."
+  (setq-local drgnx-view-nav-faces '(("lit" . drgnx-work-chain)))
+  (setf (drgnx-view-patch-class-faces drgnx-view-patch) nil)
+  (nidhogg-view-set (drgnx-view-patch-handle drgnx-view-patch) 'lit "near"))
+
 (defun drgnx-work-trail--nav (dir)
   "A key of the lens in a trail: DIR is `left' `up' (the earlier row), `right' `down' (the later), `open' or
 `open-beside' (a step's source; S-RET: a read as the agent read it); the agent keys do nothing here."
+  (if (drgnx-work-trail--rows-p)
+      (unless (memq dir '(next-agent previous-agent)) (drgnx-work-trail--rows-nav dir))
+    (drgnx-work-trail--nav-old dir))
+  t)
+
+(defun drgnx-work-trail--nav-old (dir)
+  "`drgnx-work-trail--nav' off the rows path."
   (pcase dir
     ((or 'left 'up) (forward-line -1))
     ((or 'right 'down) (forward-line 1))
@@ -499,6 +551,8 @@ its diff.  BESIDE: without moving focus.  Returns the buffer when it is there at
   "The hub session of the agent selected in the current Work view, or an error saying there is none."
   (or (cond ((derived-mode-p 'drgnx-work-trail-mode) drgnx-work-trail--session)
             ((derived-mode-p 'drgnx-work-review-mode) (bound-and-true-p drgnx-work-review--session))
+            ((and (derived-mode-p 'drgnx-work-timeline-mode) (drgnx-work-trail--rows-p))
+             (when (drgnx-view-nav-selection) (drgnx-view-nav-field "session")))
             ((derived-mode-p 'drgnx-work-timeline-mode)
              (when-let* ((lane (car (bound-and-true-p drgnx-work-timeline--sel)))) (drgnx-work-trail--sid lane)))
             ((derived-mode-p 'drgnx-work-board-mode)
@@ -717,7 +771,14 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
 
 (defun drgnx-work-timeline--nav (dir)
   "A key of the lens in the Timeline: DIR moves to the earlier or later step of the lane (`left' `right'), the lane
-above or below (`up' `down', `previous-agent' `next-agent'), or opens the step (`open' `open-beside')."
+above or below (`up' `down', `previous-agent' `next-agent'), or opens the step (`open' `open-beside').  On the rows
+path the model's links say where (`drgnx-work-trail--rows-nav')."
+  (if (drgnx-work-trail--rows-p)
+      (drgnx-work-trail--rows-nav dir)
+    (drgnx-work-timeline--nav-old dir)))
+
+(defun drgnx-work-timeline--nav-old (dir)
+  "`drgnx-work-timeline--nav' off the rows path."
   (let* ((lane (car drgnx-work-timeline--sel)) (steps (gethash lane drgnx-work-timeline--steps))
          (at (cl-position (cdr drgnx-work-timeline--sel) steps :key (lambda (s) (plist-get s :seq))))
          (lanes drgnx-work-timeline--lanes) (li (cl-position lane lanes :test #'equal)))

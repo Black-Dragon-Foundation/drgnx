@@ -152,6 +152,33 @@ impl Redial {
     }
 }
 
+/// When a runner that is out of reach is dialled again: [`Redial::delay`] after the loss, then after each dial that
+/// did not bring it back; a runner that is back starts over.
+#[derive(Debug, Default)]
+pub struct RedialClock {
+    tries: u32,
+    due: Option<u64>,
+}
+
+impl RedialClock {
+    /// Whether to dial now (NOW in seconds), given whether the runner is out of reach.
+    pub fn tick(&mut self, unreachable: bool, now: u64) -> bool {
+        if !unreachable {
+            *self = RedialClock::default();
+            return false;
+        }
+        let due = *self
+            .due
+            .get_or_insert(now + Redial::delay(self.tries).as_secs());
+        if now < due {
+            return false;
+        }
+        self.tries = self.tries.saturating_add(1);
+        self.due = None;
+        true
+    }
+}
+
 /// What applies to a runner's connection, from `ssh -G` with its generated config: shown at onboarding and in the
 /// runner list, so the user sees what reaches the runner.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -774,6 +801,27 @@ mod tests {
         let secs: Vec<u64> = (0..7).map(|n| Redial::delay(n).as_secs()).collect();
         assert_eq!(secs, [5, 15, 45, 120, 120, 120, 120]);
         assert_eq!(Redial::delay(u32::MAX), Duration::from_secs(120));
+    }
+
+    // [D] pure
+    #[test]
+    fn a_lost_runner_is_dialled_again_on_the_backoff_and_a_returned_one_starts_over() {
+        let mut c = RedialClock::default();
+        assert!(!c.tick(false, 100), "a runner in reach is not dialled");
+        assert!(!c.tick(true, 100), "the loss is seen: wait 5 s");
+        assert!(!c.tick(true, 104));
+        assert!(c.tick(true, 105), "the first redial");
+        assert!(!c.tick(true, 106) && !c.tick(true, 119), "then 15 s");
+        assert!(c.tick(true, 121), "the second redial");
+        assert!(!c.tick(true, 122) && !c.tick(true, 166), "then 45 s");
+        assert!(c.tick(true, 167), "the third redial");
+        assert!(!c.tick(true, 168) && !c.tick(true, 287), "then every 120 s");
+        assert!(c.tick(true, 288), "the fourth redial");
+        assert!(!c.tick(false, 500), "back in reach");
+        assert!(
+            !c.tick(true, 600) && c.tick(true, 605),
+            "a new loss starts at 5 s again"
+        );
     }
 
     // [D] pure

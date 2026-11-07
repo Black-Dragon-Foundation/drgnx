@@ -339,6 +339,17 @@ pub struct TrailClose {
     pub view: String,
 }
 
+/// `work/board/subscribe`'s params: one view of the connection shows the Board of the tracker's tasks (of `plans`,
+/// else every task), each card naming the agent of map view `map` that works on it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoardSubscribe {
+    pub view: String,
+    pub map: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<String>,
+}
+
 /// A map view's full frame: `work/map/subscribe`'s answer.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -380,6 +391,9 @@ pub struct MapSet {
     /// The selection moved (a map key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Nothing is selected any more (Esc, or the selection went with no item left to take it).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
 }
 
 /// `work/map/set`'s answer: the view's version after it.
@@ -517,6 +531,18 @@ fn check_trail_subscribe(p: &TrailSubscribe) -> Result<(), Error> {
 
 fn check_trail_close(p: &TrailClose) -> Result<(), Error> {
     check_view(&p.view)
+}
+
+/// The most plans one Board is scoped to.
+const PLANS_MAX: usize = 64;
+
+fn check_board_subscribe(p: &BoardSubscribe) -> Result<(), Error> {
+    check_view(&p.view)?;
+    check_view(&p.map).map_err(|_| invalid("map", "a map view id of 1 to 64 bytes"))?;
+    if p.plans.len() > PLANS_MAX || p.plans.iter().any(|s| s.is_empty() || s.len() > NAME_MAX) {
+        return Err(invalid("plans", "at most 64 plan ids"));
+    }
+    Ok(())
 }
 
 fn check_conclusions(p: &ConclusionsParams) -> Result<(), Error> {
@@ -686,8 +712,14 @@ pub(crate) fn methods() -> Vec<Method> {
         method!(
             "work/trail/close", WorkTrailClose(TrailClose) -> bool,
             classes: [User], writes: false,
-            doc: "end one trail or Timeline view of this connection (a connection's views end with it)",
+            doc: "end one trail, Timeline or Board view of this connection (a connection's views end with it)",
             check: check_trail_close,
+        ),
+        method!(
+            "work/board/subscribe", WorkBoardSubscribe(BoardSubscribe) -> TrailSubscribed,
+            classes: [User], writes: false,
+            doc: "open (or open again) one Board view of this connection: the tracker's tasks (of plans, else every task) by column, its model and its rows per display class, the first a reset, before the answer; read again after each write",
+            check: check_board_subscribe,
         ),
         method!(
             "work/files", WorkFiles(EditedFiles) -> EditedFilesList,

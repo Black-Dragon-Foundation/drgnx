@@ -3,13 +3,19 @@
 //! `search/grep-replace` changes the replacement the rows preview, patching the rows without a new search. A search
 //! of a view stops the one before it (a stopped search sends nothing more), and the view's close or its connection's
 //! end stops it too. The rows do not depend on the display class: every class of the view gets the same rows.
+//!
+//! The view's model (`view-model`, before the rows that name it) is a `tree`: a node per file (`f:FILE`, open) with
+//! its matches as children (`m:FILE:LINE:COL`), the rows' keys and their `drgnx-work-id`; a match's fields are what
+//! Replace writes from (file, line, col, end, text).
 
+use super::model::Doc;
 use super::{Key, Store, Views, lock};
 use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use hrafn::grep::{self, Match, Query};
 use runstav::methods::search::{GrepDone, GrepParams, GrepReplaceParams, GrepStarted};
+use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -118,7 +124,7 @@ fn header(root: &Path, file: &str) -> Row {
         .and_then(|d| d.strip_prefix(root).ok())
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut b = RowBuilder::new(format!("f:{file}"));
+    let mut b = RowBuilder::new(file_id(file));
     b.push("[x]", None)
         .prop(0, 3, "drgnx-replace-box", json!(file));
     b.push(" ", None).push(&name, None);
@@ -127,7 +133,78 @@ fn header(root: &Path, file: &str) -> Row {
     }
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-file", json!(file));
+    b.prop(0, end, "drgnx-work-id", json!(file_id(file)));
     b.finish()
+}
+
+/// FILE's node id (and its header row's key).
+fn file_id(file: &str) -> String {
+    format!("f:{file}")
+}
+
+/// M's node id (and its row's key).
+fn match_id(m: &Match) -> String {
+    format!("m:{}:{}:{}", m.file, m.line, m.col)
+}
+
+/// The entries (files and matches) a search's model holds; past them its list `order` is a window of the first ones
+/// (Sjá takes no longer list unwindowed).
+const MODEL_WINDOW: usize = 20_000;
+
+/// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
+fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
+    grep_doc_in(files, MODEL_WINDOW)
+}
+
+/// [`grep_doc`] holding at most WINDOW entries.
+fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize) -> Doc {
+    let mut d = Doc {
+        descriptor: json!({
+            "scheme": "tree",
+            "chain_kinds": [],
+            "match_fields": ["label"],
+            "lists": ["order"],
+            "classes": ["selected", "match", "dim"],
+            "flags": ["expanded"],
+            "forms": [],
+            "start": "order",
+        }),
+        ..Doc::default()
+    };
+    let total: usize = files.iter().map(|(_, ms)| 1 + ms.len()).sum();
+    let mut order = Vec::new();
+    for (file, ms) in files {
+        if order.len() >= window {
+            break;
+        }
+        let fid = file_id(file);
+        let name = Path::new(file)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        d.nodes.insert(
+            fid.clone(),
+            json!({"id": fid, "kind": "file", "flags": 1,
+                   "fields": [["label", name], ["path", file]]}),
+        );
+        order.push(fid.clone());
+        for m in ms.iter().take(window - order.len()) {
+            let id = match_id(m);
+            d.nodes.insert(
+                id.clone(),
+                json!({"id": id, "kind": "match", "flags": 0, "parent": fid,
+                       "fields": [["label", format!("{}{}{}", m.before.trim_start(), m.text, m.after)],
+                                  ["file", m.file], ["line", m.line], ["col", m.col], ["end", m.end],
+                                  ["text", m.text]]}),
+            );
+            order.push(id);
+        }
+    }
+    if total > order.len() {
+        d.windows.insert("order".into(), (total, 0));
+    }
+    d.lists.insert("order".into(), order);
+    d
 }
 
 /// M's row: a tick box, the text around the match (the match struck out and the replacement beside it when REPLACE
@@ -150,7 +227,7 @@ fn match_row(q: &Query, replace: &str, m: &Match) -> Row {
     } else {
         grep::new_text(q, &m.text, replace)
     };
-    let mut b = RowBuilder::new(format!("m:{}:{}:{}", m.file, m.line, m.col));
+    let mut b = RowBuilder::new(match_id(m));
     b.push("  ", None);
     let at = b.pos();
     b.push("[x]", None)
@@ -168,6 +245,7 @@ fn match_row(q: &Query, replace: &str, m: &Match) -> Row {
     b.push(&flat(&m.after), None);
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-match", match_json(m));
+    b.prop(0, end, "drgnx-work-id", json!(match_id(m)));
     b.finish()
 }
 
@@ -196,6 +274,7 @@ impl Store {
 
     /// ROWS after the last row, one insert; `None` when the pair has no env or its next patch is a reset.
     fn append(&mut self, key: &Key, rows: Vec<Row>) -> Option<Patch> {
+        let model = self.model_version(key);
         let p = self.pairs.get_mut(key)?;
         if p.reset_due || rows.is_empty() {
             return None;
@@ -208,6 +287,7 @@ impl Store {
             p,
             vec![Op::Insert { after, rows }],
             &[],
+            model,
         ))
     }
 }
@@ -231,7 +311,8 @@ fn start_patches(store: &mut Store, conn: u64, view: &str) -> Vec<Patch> {
         .collect()
 }
 
-/// A file's rows after the ones sent: an insert (a reset for a class whose env just changed).
+/// A file's matches: the model with them (none when nothing changed), then the rows after the ones sent, an insert (a
+/// reset for a class whose env just changed), which name its version.
 fn batch_patches(
     store: &mut Store,
     conn: u64,
@@ -239,16 +320,18 @@ fn batch_patches(
     run: &mut Run,
     file: String,
     ms: Vec<Match>,
-) -> Vec<Patch> {
+) -> (Option<ViewModel>, Vec<Patch>) {
     let rows = file_rows(run, &file, &ms);
     run.files.push((file, ms));
-    keys(store, conn, view)
+    let model = store.publish_model(conn, view, grep_doc(&run.files));
+    let patches = keys(store, conn, view)
         .iter()
         .filter_map(|k| match store.append(k, rows.clone()) {
             Some(p) => Some(p),
             None => store.publish(k, all_rows(run), &[]),
         })
-        .collect()
+        .collect();
+    (model, patches)
 }
 
 /// The rows as they are now, for the classes whose rows differ (replace text changed, an env arrived).
@@ -265,6 +348,7 @@ impl Views {
     pub(super) fn grep_build(&self, f: &Front, key: &Key) -> bool {
         self.greps
             .current(key.0, &key.1, |run| {
+                self.publish_model(f, key.0, &key.1, grep_doc(&run.files));
                 let rows = all_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
                     f.send_to(key.0, "view-patch", json!(p));
@@ -285,7 +369,12 @@ impl Views {
     ) -> bool {
         self.greps
             .with(conn, view, id, |run| {
-                for p in batch_patches(&mut lock(&self.store), conn, view, run, file, ms) {
+                let (model, patches) =
+                    batch_patches(&mut lock(&self.store), conn, view, run, file, ms);
+                if let Some(m) = model {
+                    f.send_to(conn, "view-model", json!(m));
+                }
+                for p in patches {
                     f.send_to(conn, "view-patch", json!(p));
                 }
             })
@@ -339,6 +428,8 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
     let (id, cancel) = views
         .greps
         .start(conn, &view, query.clone(), p.replace.unwrap_or_default());
+    // a new search's model: no files yet
+    views.publish_model(f, conn, &view, grep_doc(&[]));
     for patch in start_patches(&mut lock(&views.store), conn, &view) {
         f.send_to(conn, "view-patch", json!(patch));
     }

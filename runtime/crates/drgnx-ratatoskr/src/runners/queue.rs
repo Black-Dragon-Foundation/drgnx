@@ -1084,6 +1084,17 @@ impl Queue {
         }
     }
 
+    /// Whether runner NAME has no link and wants one: it is out of reach, or benched with its link gone (a benched
+    /// runner returns by a health check, which needs a link). One that waits on a login or on its user does not.
+    pub fn needs_redial(&self, name: &str) -> bool {
+        self.lock().runners.get(name).is_some_and(|r| {
+            matches!(
+                r.state,
+                RunnerState::Unreachable { .. } | RunnerState::Benched(_) | RunnerState::Ready
+            ) && r.session.ended()
+        })
+    }
+
     /// How many runners are known.
     pub fn runners(&self) -> usize {
         self.lock().runners.len()
@@ -2377,12 +2388,14 @@ impl Queue {
                 facts,
                 missing,
                 limits,
+                key_socket,
                 ..
             } => {
                 if let Some(c) = st.runners.get_mut(runner).and_then(|r| r.check.as_mut()) {
                     c.facts.probed = true;
                     c.facts.missing = missing.iter().map(|m| m.what.clone()).collect();
                     c.facts.limits = limits;
+                    c.facts.key_socket = key_socket;
                     // the probe's facts carry the free space only: the floor is its 20 GB part
                     if let Some(f) = facts {
                         c.facts.disk_free_gb = f.disk_free_gb;

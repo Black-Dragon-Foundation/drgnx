@@ -1336,10 +1336,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "drgnx-fwd"
+name = "drgnx-px"
 version = "0.1.0"
 dependencies = [
+ "gleipnir",
  "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "skuld",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -1352,6 +1359,7 @@ dependencies = [
  "brokkr",
  "bytes",
  "draugr",
+ "drgnx-px",
  "drgnx-rows",
  "eitri",
  "fastwebsockets",
@@ -5666,6 +5674,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "sleipnir"
 version = "0.1.0"
 dependencies = [
+ "drgnx-px",
  "forseti",
  "gleipnir",
  "libc",

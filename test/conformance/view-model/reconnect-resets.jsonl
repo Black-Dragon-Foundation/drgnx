@@ -1,0 +1,20 @@
+{"scenario": "view-model/reconnect-resets", "requires": ["v1", "test-hooks"], "doc": "A rows map view's model starts again with each subscription: an editor that connects again and subscribes the same view gets a model reset (base 0, version 1) before its rows, never a patch against what its old connection held. Pattern B: each answer and event is the gate."}
+{"do": "root"}
+{"do": "sqlite", "path": "$DATA/work.db", "sql_file": "$SCENARIOS/../fixtures/work-db-6.sql"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$capture:hub", "base": 0, "version": 1, "model": "$capture:first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
+{"do": "connect", "conn": "e2", "hub": "h"}
+{"do": "send", "conn": "e2", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e2", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e2", "json": {"id": 2, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e2", "json": {"event": "view-model", "data": {"view": "m", "hub": "$hub", "base": 0, "version": 1, "model": "$first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e2", "json": {"id": 2, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "work/map/subscribe", "params": {"view": "m", "workspace": {"id": "workspace:000000000000", "roots": ["$ROOT/work"]}, "width_units": 250, "rows": true}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m", "hub": "$hub", "base": 0, "version": 1, "model": "$first"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub", "version": "$number"}}, "within_ms": 10000}

@@ -116,15 +116,14 @@ rt_cap() { # RT_CAP: the systemd-run words that cap the build's memory (Linux wi
   fi
 }
 
-rt_fwd_triple() { # the static (musl) target of the forwarder on Linux, nothing elsewhere (macOS: AS1-FWD-MACOS-1)
-  [[ "$(update_platform)" == Linux ]] || return 0
-  printf '%s-unknown-linux-musl' "$(uname -m)"
+rt_px_arch() { # the architecture of the Linux that runs the relay sidecar: this host's (a Mac's podman machine matches it)
+  case "$(uname -m)" in arm64 | aarch64) printf aarch64 ;; *) printf x86_64 ;; esac
 }
 
-rt_fwd_path() { # where rt_build leaves the forwarder
-  local triple
-  triple="$(rt_fwd_triple)"
-  printf '%s/ratatoskr-fwd-target/%srelease/drgnx-fwd' "$(drgnx_dir cache)" "${triple:+$triple/}"
+rt_px_path() { # where rt_build leaves the sidecar's binary
+  local arch
+  arch="$(rt_px_arch)"
+  printf '%s/ratatoskr-px-target/%s-unknown-linux-musl/release/drgnx-px' "$(drgnx_dir cache)" "$arch"
 }
 
 rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of drgnx-ratatoskr; then rt_install when asked
@@ -149,26 +148,25 @@ rt_build() { # [--install] [--prefix DIR] — cargo build --release --locked of 
   printf 'drgnx runtime: building Ratatoskr %s with %s (-j%s)\n' "${commit:0:12}" "$RT_CARGO" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
         --manifest-path runtime/Cargo.toml -p drgnx-ratatoskr) || { rt_err "the build failed"; return 1; }
-  # the forwarder a container job runs: static, so it starts in any image. On Linux that is the musl target (Rust's
-  # self-contained musl: no static glibc needed, build scripts stay host builds); a failure here only warns (the hub
-  # then gives container jobs no network)
-  local triple fwdenv
-  triple="$(rt_fwd_triple)"
-  printf 'drgnx runtime: building the container forwarder (static)\n'
-  # with rustup, add the target (quietly; a no-op once installed); a distro Rust may carry it already
-  if [[ -n "$triple" ]]; then env "${envs[@]}" rustup target add "$triple" >/dev/null 2>&1 || true; fi
-  fwdenv=("CARGO_TARGET_DIR=$cache/ratatoskr-fwd-target")
-  if [[ -n "$triple" ]]; then fwdenv+=("CARGO_BUILD_TARGET=$triple"); else fwdenv+=("RUSTFLAGS=-C target-feature=+crt-static"); fi
-  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "${fwdenv[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
-        --manifest-path runtime/Cargo.toml -p drgnx-fwd) ||
-    rt_err "warning: no forwarder built${triple:+ (needs the Rust target $triple: rustup target add $triple)}: container jobs get no network"
+  # the relay sidecar of a networked container job: static Linux musl, whatever the host (on a Mac it is cross-built with
+  # Rust's self-contained musl and rust-lld: no C toolchain for Linux); a failure only warns (no network for jobs then)
+  local pxarch pxtriple pxl pxenv
+  pxarch="$(rt_px_arch)"; pxtriple="$pxarch-unknown-linux-musl"
+  pxl="$(printf '%s' "$pxtriple" | tr 'a-z-' 'A-Z_')"
+  pxenv=("CARGO_TARGET_DIR=$cache/ratatoskr-px-target")
+  if [[ "$(update_platform)" != Linux ]]; then pxenv+=("CARGO_TARGET_${pxl}_LINKER=rust-lld" "CARGO_TARGET_${pxl}_RUSTFLAGS=-C link-self-contained=yes"); fi
+  printf 'drgnx runtime: building the relay sidecar (static)\n'
+  env "${envs[@]}" rustup target add "$pxtriple" >/dev/null 2>&1 || true
+  (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "${pxenv[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
+        --target "$pxtriple" --manifest-path runtime/Cargo.toml -p drgnx-px --bin drgnx-px) ||
+    rt_err "warning: no relay sidecar built (needs the Rust target $pxtriple: rustup target add $pxtriple): container jobs get no network"
   if ((install)); then
     if [[ -n "$prefix" ]]; then rt_install --prefix "$prefix"; else rt_install; fi
   fi
 }
 
-rt_bundle() { # [--arch x86_64|aarch64] — the runner bundle (sleipnir, drgnx-key, drgnx-fwd), static musl, into runtime/target/bundle/<arch>/
-  local arch triple jobs b out dir l
+rt_bundle() { # [--arch x86_64|aarch64] — the runner bundle (sleipnir, drgnx-key, drgnx-px), static musl, into runtime/target/bundle/<arch>/
+  local arch triple jobs b n out dir l
   arch="$(uname -m)"
   while (($#)); do
     case "$1" in
@@ -193,24 +191,25 @@ rt_bundle() { # [--arch x86_64|aarch64] — the runner bundle (sleipnir, drgnx-k
   rt_cap "$jobs"
   printf 'drgnx runtime: building the runner bundle for %s (-j%s)\n' "$arch" "$jobs"
   (cd "$here" && "${RT_CAP[@]+"${RT_CAP[@]}"}" env "${envs[@]}" "$RT_CARGO" build --release --locked -j "$jobs" \
-        --target "$triple" --manifest-path runtime/Cargo.toml -p sleipnir -p drgnx-fwd --bins) ||
+        --target "$triple" --manifest-path runtime/Cargo.toml -p sleipnir -p drgnx-px --bins) ||
     { rt_err "the runner bundle failed to build (it needs the Rust target $triple: rustup target add $triple)"; return 1; }
   dir="$here/runtime/target/bundle/$arch"
   mkdir -p "$dir"
-  for b in sleipnir drgnx-key drgnx-fwd; do
+  for b in sleipnir drgnx-key drgnx-px; do
     out="$here/runtime/target/bundle-build/$triple/release/$b"
-    cp "$out" "$dir/$b.new" && chmod 755 "$dir/$b.new" && mv -f "$dir/$b.new" "$dir/$b" ||
-      { rt_err "could not put $b into $dir"; return 1; }
-    case "$(file -b -L "$dir/$b" 2>&1)" in
+    n="$b"; if [[ "$b" == drgnx-px ]]; then n="drgnx-px-$arch-linux-musl"; fi   # the name the hub looks for (image::binary_for)
+    cp "$out" "$dir/$n.new" && chmod 755 "$dir/$n.new" && mv -f "$dir/$n.new" "$dir/$n" ||
+      { rt_err "could not put $n into $dir"; return 1; }
+    case "$(file -b -L "$dir/$n" 2>&1)" in
       *"statically linked"* | *"static-pie linked"*) ;;
-      *) rt_err "$dir/$b is not a static binary: $(file -b -L "$dir/$b" 2>&1)"; return 1 ;;
+      *) rt_err "$dir/$n is not a static binary: $(file -b -L "$dir/$n" 2>&1)"; return 1 ;;
     esac
   done
   printf 'drgnx runtime: the runner bundle for %s is in %s\n' "$arch" "$dir"
 }
 
 rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by rename; with a prefix, $PREFIX/bin/{ratatoskr,rtsk} link to it
-  local prefix="" built dir fwd answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
+  local prefix="" built dir px answer re_true='"test_hooks": *true' re_false='"test_hooks": *false' n
   while (($#)); do
     case "$1" in
       --prefix) [[ -n "${2:-}" ]] || { rt_err "--prefix needs a directory"; return 2; }; prefix="$2"; shift ;;
@@ -227,13 +226,16 @@ rt_install() { # [--prefix DIR] — the built binary to <data>/bin/ratatoskr by 
   mkdir -p "$dir"
   cp "$built" "$dir/ratatoskr.new" && chmod 755 "$dir/ratatoskr.new" && mv -f "$dir/ratatoskr.new" "$dir/ratatoskr" ||
     { rt_err "could not install into $dir"; return 1; }   # a rename: a running hub sees a new inode at its resolved path
-  # beside the hub, where it looks for the forwarder of a container job's network
-  fwd="$(rt_fwd_path)"
-  if [[ -x "$fwd" ]]; then
-    cp "$fwd" "$dir/drgnx-fwd.new" && chmod 755 "$dir/drgnx-fwd.new" && mv -f "$dir/drgnx-fwd.new" "$dir/drgnx-fwd" ||
-      { rt_err "could not install drgnx-fwd into $dir"; return 1; }
+  # beside the hub: the relay sidecar's binary, which the hub turns into the image of a networked job's sidecar (the
+  # forwarder it replaced goes)
+  rm -f "$dir/drgnx-fwd"
+  px="$(rt_px_path)"
+  if [[ -x "$px" ]]; then
+    n="drgnx-px-$(rt_px_arch)-linux-musl"
+    cp "$px" "$dir/$n.new" && chmod 755 "$dir/$n.new" && mv -f "$dir/$n.new" "$dir/$n" ||
+      { rt_err "could not install $n into $dir"; return 1; }
   else
-    rt_err "no forwarder built at $fwd: container jobs get no network until drgnx runtime build runs"
+    rt_err "no relay sidecar built at $px: container jobs get no network until drgnx runtime build runs"
   fi
   if [[ -n "$prefix" ]]; then
     mkdir -p "$prefix/bin"
@@ -2050,7 +2052,7 @@ usage: drgnx PATH…             open folders and files in drgnx, like code . (d
        drgnx macos-app         macOS: install drgnx.app into ~/Applications (Finder, Spotlight, Dock, Open With)
        drgnx build             byte-compile drgnx (core, wb, modules, harness); native compilation follows on load
        drgnx build runner-bundle [--arch x86_64|aarch64]
-                               the static runner bundle (sleipnir, drgnx-key, drgnx-fwd) in runtime/target/bundle/ARCH
+                               the static runner bundle (sleipnir, drgnx-key, drgnx-px) in runtime/target/bundle/ARCH
                                (docs/guide/runners.md)
        drgnx runtime build [--install] [--prefix DIR] | install [--prefix DIR]
                                build Ratatoskr (Rust) from source / install the built binary (docs/guide/install.md)

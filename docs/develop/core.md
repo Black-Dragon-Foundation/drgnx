@@ -1970,9 +1970,8 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   reported by `view/measured`, after which the hub fits that string by the editor's width.
 - **`drgnx-view-fit TEXT PX`** cuts TEXT with an ellipsis to PX pixels (memoised in `drgnx-view--fit-memo`, emptied
   at 4000). The Work map, the Board and the timeline's lane labels use it too.
-- **Selection, dimming and the stale shade** are the view's own state, put back by PATCHED after every draw over the
-  rows by key; `drgnx-view-patch-select` draws the selection at once, so it wins over a queued patch. A removed
-  selected row moves the selection to the next row, else the previous, else none.
+- **The stale shade** is the view's own state, put back by PATCHED after every draw; the classes (selected, match,
+  lit, dim) come from the model, on each node's span ("Keys through the model" below).
 - `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
   pass that compares the two.
 - **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
@@ -1987,6 +1986,57 @@ Hub-fed views do not call `drgnx-view-sync-rows`.
   instance starts it with a reset, an old instance's late patch is dropped; `drgnx-rows-demo-restart-hub`)
   (`test/unit/view-patch-test.el`); the fit check, row heights against `window-line-height`,
   `text-scale` and two GUI frames at font sizes 1x and 2x (`test/ui/rows-fit-gui-test.el`, runnable from a checkout with only the hub built, macOS included).
+
+**The native view model.** A view whose keys move a selection also gets its model (`view-model`, docs/develop/hub.md
+"The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
+from. drgnx never parses it: the event's `model` is one string on the framed and the unframed hub path alike.
+- **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
+  closed with the buffer or at teardown; the view's queue (`drgnx-view-model--views`, per view, not per class) goes
+  with its last buffer.
+- **The envelope's rules** (`drgnx-view-model--decide`, pure): a reset (`reset: true`) of a new stream (base 0, or
+  another hub) restarts the view; a reset of the same stream that is not newer, another hub's diff, one before the
+  first reset or an old one is dropped; a gap asks `view/resync {view, model: true}`, one outstanding. Sjá is told the
+  hub as `HUB/GEN`, GEN counting the streams this Emacs began, so a new subscription's version 1 is never old to it.
+- **Applied at the draw:** models queue in arrival order (at most 64; past that, or on Sjá's `resync`, the queue goes
+  and a reset is asked for). A row patch that names `model: N` touches its view; the draw's first slice (the type's
+  SYNC, `drgnx-view-patch--sync`) applies the queued models up to N, then inserts the rows, so a key answers from the
+  model that is drawn. A model no row patch names applies on the view's own timer (`(drgnx-view-model . VIEW)`) one
+  `drgnx-view-delay` later; one a patch named waits for that patch's draw.
+- **The hub goes:** the queues and streams go, `nidhogg-view-hub-lost` marks every view stale (dimmed with the rows),
+  and keys keep moving on what is drawn.
+- Tests: `test/unit/view-model-test.el` (every order of model, rows, timer, key and draw; keys with every door to
+  the hub shut) and `test/unit/view-model-hub-test.el` (the real hub: one string with framing on and off).
+  Without Sjá both skip, and models are ignored.
+
+**Keys through the model (`wb/drgnx-view-nav.el`).** A hub-fed view's command is one line, answered in-process with
+no hub call: `(drgnx-view-nav 'follow "up")`, `(drgnx-view-nav 'walk "team" 1)`, `'walk-to LIST N`, `'select ID`
+(nil: none). It moves the buffer's instance in Sjá, puts point on the selection's span in every window, runs the
+class step, and when the selection moved arms the trailing notice and runs `drgnx-view-selected-functions` (BUFFER
+ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` read the model.
+- **Classes on the card:** Sjá answers the nodes whose class changed; each class is a face by the descriptor's class
+  name (`drgnx-view-nav-faces`, then `drgnx-view-nav-default-faces`: `drgnx-view-selected`, `drgnx-view-match`,
+  `drgnx-view-chain`, `drgnx-view-lit`, `shadow` for dim), put as an overlay on the node's span (the text whose
+  `drgnx-view-patch-id-prop`, `drgnx-work-id` by default, is its id), never on the whole line. Rendering a row notes
+  which rows hold which node (`drgnx-view-patch-ids`); after a draw, the rows it replaced get their nodes' classes
+  again (PATCHED), so a selection made while a patch waits is still shown once the patch lands. Row patches carry no
+  selection: a removed row takes nothing with it. A view's own marks over the hub's rows go back on after the classes
+  through `drgnx-view-patch-patched-functions` (VIEW KEYS), added buffer-locally (the Search view's tick boxes).
+- **The trailing notice:** the view's `drgnx-view-nav-notice-method` gets `(:view V :selected ID)`, or
+  `(:view V :clear t)` for none, once the selection has been still for `drgnx-view-delay`, and at most once per
+  `drgnx-view-delay` while a key is held (`drgnx-timer-soon`, owned by the buffer).
+- **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
+  condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
+  clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view--call`.
+- Tests: `test/unit/view-nav-test.el` (the class on the card, a replaced row in every order of patch, draw and key,
+  a held key's notices on the test clock, the clear notice, the hook on a move only, the broken view).
+- **The Explorer on the rows path** (`drgnx-explorer-rows-attach VIEW CLASS`): the hub lists the roots and the open
+  folders (`explorer/subscribe`, hub.md) and its jit-lock painting is off. Next and previous follow `down` and `up`,
+  expand on an open folder follows `right` and collapse on anything but an open folder `left`; opening or closing a
+  folder changes `drgnx-explorer--expanded` and asks the hub again without waiting; typing is Sjá's `prefix` over the
+  visible siblings; a row's node (`drgnx-explorer-node-at`) is the path over it, so the file commands work as before.
+  A key first selects the row at point (a click moved it). The folder watches stay the Explorer's: an event asks the
+  hub again, as do Refresh and a reveal (which opens the file's folders). Find, icons, git letters and multi-select are
+  drawn only off this path, so the Explorer does not attach itself yet. Tests: `test/unit/explorer-rows-nav-test.el`.
 
 ## Modal core (`drgnx-modal.el`)
 

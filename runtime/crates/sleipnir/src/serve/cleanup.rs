@@ -13,14 +13,6 @@ use std::time::SystemTime;
 /// A job folder older than this goes even if its result was never collected.
 pub const FOLDER_MAX_AGE_S: u64 = 24 * 3600;
 
-/// A container as `podman ps -a` lists it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Container {
-    pub name: String,
-    /// Its `drgnx.runner` label, if it has one.
-    pub hub: Option<String>,
-}
-
 /// A unit as `systemctl --user list-units` shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unit {
@@ -31,7 +23,8 @@ pub struct Unit {
 /// What the cleanup reads.
 #[derive(Clone, Debug, Default)]
 pub struct Seen {
-    pub containers: Vec<Container>,
+    /// `podman ps -a --format json` of the containers labelled with this hub (`linux::podman::leftovers` reads it).
+    pub containers: serde_json::Value,
     pub units: Vec<Unit>,
     /// Every attempt folder under the root, of any hub.
     pub folders: Vec<Found>,
@@ -71,22 +64,24 @@ pub fn plan(owner: &Owner, seen: &Seen) -> Vec<Remove> {
     let running = |f: &&Found| f.state == AttemptState::Running;
     let pfx = format!("{}-", owner.prefix);
     let mut out = vec![];
-    // a container is the attempt's while its unit runs; its name is `<prefix>-<job id>`
-    for c in &seen.containers {
-        let Some(id) = c.name.strip_prefix(&pfx) else {
-            continue;
-        };
-        if c.hub.as_deref() != Some(owner.hub_id) {
-            continue;
-        }
-        let live = seen
-            .folders
-            .iter()
-            .filter(ours)
-            .filter(running)
-            .any(|f| f.meta.r.job == id);
-        if !live {
-            out.push(Remove::Container(c.name.clone()));
+    // a container (the job's, or its sidecar) is the attempt's while its unit runs: the shared sweep picks those of our
+    // label whose job isn't running, the job's containers before the sidecars (S11), and only names of our prefix go
+    let live: std::collections::HashSet<String> = seen
+        .folders
+        .iter()
+        .filter(ours)
+        .filter(running)
+        .map(|f| f.meta.r.job.clone())
+        .collect();
+    let left = crate::linux::podman::leftovers(
+        &seen.containers,
+        None,
+        ("drgnx.runner", owner.hub_id),
+        &live,
+    );
+    for name in left.jobs.into_iter().chain(left.sidecars) {
+        if name.starts_with(&pfx) {
+            out.push(Remove::Container(name));
         }
     }
     // a unit is ours only when one of our folders names it
@@ -122,8 +117,8 @@ pub fn plan(owner: &Owner, seen: &Seen) -> Vec<Remove> {
     out
 }
 
-/// The containers podman lists with our prefix and HUB's label, whatever their state.
-pub fn containers(prefix: &str, hub: &str) -> Vec<Container> {
+/// The containers podman lists with our prefix and HUB's label, whatever their state, as `podman ps -a --format json`.
+pub fn containers(prefix: &str, hub: &str) -> serde_json::Value {
     let out = run::limited(
         Path::new("podman"),
         &[
@@ -134,7 +129,7 @@ pub fn containers(prefix: &str, hub: &str) -> Vec<Container> {
             "--filter",
             &format!("label=drgnx.runner={hub}"),
             "--format",
-            "{{.Names}}",
+            "json",
         ],
         &[],
         run::SYSTEMCTL_LIMIT,
@@ -146,21 +141,14 @@ pub fn containers(prefix: &str, hub: &str) -> Vec<Container> {
                 "sleipnir serve: podman ps: {}",
                 String::from_utf8_lossy(&o.stderr).trim()
             );
-            return vec![];
+            return serde_json::Value::Null;
         }
         Err(e) => {
             eprintln!("sleipnir serve: podman ps: {e}");
-            return vec![];
+            return serde_json::Value::Null;
         }
     };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|name| Container {
-            name: name.to_string(),
-            hub: Some(hub.to_string()),
-        })
-        .collect()
+    serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null)
 }
 
 /// Our prefix's units, loaded or not.
@@ -277,10 +265,15 @@ mod tests {
         }
     }
 
-    fn ctr(name: &str, hub: Option<&str>) -> Container {
-        Container {
-            name: name.into(),
-            hub: hub.map(String::from),
+    /// A container as `podman ps --format json` lists it: HUB's `drgnx.runner` label and the job id its name ends
+    /// with as `drgnx.job`.
+    fn ctr(name: &str, hub: Option<&str>) -> serde_json::Value {
+        let job = name.rsplit('-').next().unwrap_or("");
+        match hub {
+            Some(h) => {
+                serde_json::json!({"Names": [name], "Labels": {"drgnx.runner": h, "drgnx.job": job}})
+            }
+            None => serde_json::json!({"Names": [name], "Labels": {}}),
         }
     }
 
@@ -290,14 +283,16 @@ mod tests {
     #[test]
     fn cleanup_matches_prefix_and_label_only() {
         let seen = Seen {
-            containers: vec![
-                ctr("run-a1", Some("hubA")),   // A's, running
-                ctr("run-a2", Some("hubA")),   // A's, ended
-                ctr("run-b1", Some("hubB")),   // B's, ended
-                ctr("run-x9", None),           // our prefix, no label
-                ctr("run-a3", Some("hubB")),   // our prefix and an A job's name, B's label
-                ctr("other-a2", Some("hubA")), // another prefix
-            ],
+            containers: serde_json::json!([
+                ctr("run-a1", Some("hubA")),    // A's, running
+                ctr("run-a2", Some("hubA")),    // A's, ended
+                ctr("run-b1", Some("hubB")),    // B's, ended
+                ctr("run-x9", None),            // our prefix, no label
+                ctr("run-a3", Some("hubB")),    // our prefix and an A job's name, B's label
+                ctr("other-a2", Some("hubA")),  // another prefix
+                ctr("run-px-a2", Some("hubA")), // A's ended job's sidecar
+                ctr("run-px-a1", Some("hubA")), // A's running job's sidecar
+            ]),
             units: vec![
                 Unit {
                     name: "run-a2-1".into(),
@@ -342,6 +337,7 @@ mod tests {
             plan(&owner, &seen),
             vec![
                 Remove::Container("run-a2".into()),
+                Remove::Container("run-px-a2".into()),
                 Remove::Unit("run-a2-1".into()),
                 Remove::Folder("/r/jobs/hubA-a2.1".into()),
                 Remove::Folder("/r/jobs/hubA-a4.1".into()),
@@ -357,8 +353,8 @@ mod tests {
         assert_eq!(
             plan(&b, &seen),
             vec![
-                Remove::Container("run-b1".into()),
                 Remove::Container("run-a3".into()),
+                Remove::Container("run-b1".into()),
                 Remove::Unit("run-b1-1".into()),
                 Remove::Folder("/r/jobs/hubB-b1.1".into()),
                 Remove::Folder("/r/jobs/hubB-b2.1".into()),

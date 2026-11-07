@@ -215,8 +215,12 @@ impl KeyStore {
 }
 
 /// Binds the socket NAME in DIR, mode 0600, at once: bound under a temporary name and renamed, so whoever sees it
-/// can connect.
-pub fn bind(dir: &Path, name: &str) -> io::Result<UnixListener> {
+/// can connect.  With CTX (the key socket on an SELinux host, k1) the socket is created with that context
+/// ([`super::selinux::bind_labelled`]).
+pub fn bind(dir: &Path, name: &str, ctx: Option<&str>) -> io::Result<UnixListener> {
+    if let Some(c) = ctx {
+        return super::selinux::bind_labelled(dir, name, c, Path::new(super::selinux::SOCKCREATE));
+    }
     let tmp = dir.join(format!(".{name}.tmp"));
     let _ = fs::remove_file(&tmp);
     let l = UnixListener::bind(&tmp)?;

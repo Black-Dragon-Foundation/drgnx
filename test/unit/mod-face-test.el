@@ -56,7 +56,9 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
          (values (mapcar (lambda (v) (cons v (default-value v))) drgnx-face-test--defaults))
          (frame (mapcar (lambda (p) (cons p (frame-parameter nil p))) '(menu-bar-lines vertical-scroll-bars)))
          (frame-alist (copy-alist default-frame-alist))
-         (remap (lookup-key global-map [remap menu-bar-open])))
+         ;; the remapping, not `lookup-key': with no remap in the global map yet, it answers 1 (key too long), and an
+         ;; empty remap map left after one answers nil, though neither binds anything
+         (remap (command-remapping 'menu-bar-open nil global-map)))
     (should-not tab-bar-mode)
     (drgnx-face-test--settings
       (drgnx-test-with-modules '(ui/face) :strict t
@@ -82,7 +84,7 @@ too, no stubs — and turned off after, strictly: the state after equals the sta
                                        (should-not (or tab-bar-mode drgnx-statusbar-mode drgnx-close-mode window-divider-mode))
                                        (should-not (or drgnx-face--active drgnx-quickhelp--active drgnx-topline--active))
                                        (should-not (drgnx-timer-active-p 'quickhelp-hover))
-                                       (should (equal (lookup-key global-map [remap menu-bar-open]) remap))
+                                       (should (equal (command-remapping 'menu-bar-open nil global-map) remap))
                                        (should (equal (mapcar (lambda (f) (cons f (get f 'face-defface-spec))) drgnx-face-test--faces) specs))
                                        (should (equal (mapcar (lambda (v) (cons v (default-value v))) drgnx-face-test--defaults) values))
                                        (should (equal (mapcar (lambda (p) (cons p (frame-parameter nil p))) '(menu-bar-lines vertical-scroll-bars))

@@ -271,7 +271,9 @@ drgnx app is installed (fix: `drgnx macos-app`), that Homebrew is there (also lo
 `/usr/local/bin`, in case it is not on PATH) and that the `drgnx` command is on PATH (fix: add `~/.local/bin` to PATH in
 your shell's profile, `~/.zprofile` for zsh or, with `SHELL` unset, when it exists; else `~/.profile`) — each only a warning. `portable-config` warns when the config dir holds a key in plain text (it names the file,
 never the key) or a machine-local file such as the old `emacs` record, and says which `projects.eld` roots are not
-cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). The `modules`, `display-rules` and `key-problems` checks (and the problems under the Terminal group's keys row) are
+cloned on this machine (info only; [second-machine.md](second-machine.md#the-doctors-check)). `view-model` fails on an
+Emacs without Sjá, Nidhogg's native view model (`nidhogg-view--call`), which the Work views' keys answer from; `views`
+fails while a hub-fed view is broken (its model broke twice; closing its buffer and opening it again clears it). The `modules`, `display-rules`, `views` and `key-problems` checks (and the problems under the Terminal group's keys row) are
 what the running drgnx says as notices (see below); `modules-report.eld` and `wb-report.eld` are no longer written, and
 `key-conflicts` still reads the conflict table of `keys-report.eld`. With Vim keys the `modal` check warns when the stack needs evil and it is not
 installed or not running (fix: `drgnx sync`, then restart, or choose another Keyboard Profile…), says when Vim waits for `drgnx sync`, and on
@@ -338,14 +340,14 @@ installs anything and never asks.
 
 Ratatoskr is built from source (no prebuilt binaries yet) with `cargo build --release --locked`; it needs Rust 1.95
 or newer (an older distro Rust can't build it) and a C compiler (`cc`; its bundled SQLite is C). The build takes a few minutes and about 1.5 GiB of memory per
-parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-fwd`,
-the small forwarder that gives a container job its network (Container jobs in the jobs guide). On Linux it is built for
-`<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none) into
-its own target folder, so it is a static binary that starts in any image; `drgnx runtime build` runs
-`rustup target add` for it first (a Rust without rustup needs that target installed, or the forwarder is skipped).
-`drgnx runtime install` puts it beside `ratatoskr`. A forwarder that cannot be built only warns and the update goes
-on; without it, a container job that is allowed a network is refused. (macOS builds it with
-`-C target-feature=+crt-static` and no target.)
+parallel job. The same build (`drgnx runtime build`, which install.sh and `drgnx update` run) also makes `drgnx-px`,
+the small relay sidecar that gives a container job its network (Container jobs in the jobs guide). It is built for
+`<arch>-unknown-linux-musl` (Rust's self-contained musl, so no static glibc package is needed; Fedora has none; on a
+Mac it is cross-built with `rust-lld`) into its own target folder, so it is a static binary the hub turns into a tiny
+image; `drgnx runtime build` runs `rustup target add` for it first (a Rust without rustup needs that target
+installed, or the sidecar is skipped). `drgnx runtime install` puts it beside `ratatoskr` as
+`drgnx-px-<arch>-linux-musl` (and removes the older forwarder, `drgnx-fwd`). A sidecar that cannot be built only warns
+and the update goes on; without it, a container job that is allowed a network is refused.
 install.sh takes the first of these that applies (`--dry-run` says which):
 
 1. `cargo` and `rustc` 1.95 or newer already on `PATH`.

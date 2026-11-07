@@ -7,9 +7,10 @@ RUN dnf -y install systemd openssh-server openssh-clients podman git fuse-overla
         iproute procps-ng passwd util-linux crun curl \
     && dnf clean all
 
-# the user, with a subuid range inside the 65536 ids a rootless outer container maps
+# the user, with subuid ranges inside the 65536 ids a rootless outer container maps: every id but 0 and its own, so
+# an inner container's uid 65534 (the relay sidecar runs as 65534:65534) is mapped as on a host's default range
 RUN useradd -m -u 1000 -s /bin/bash runner \
-    && echo 'runner:20000:30000' > /etc/subuid && echo 'runner:20000:30000' > /etc/subgid \
+    && printf 'runner:1:999\nrunner:1001:64535\n' > /etc/subuid && printf 'runner:1:999\nrunner:1001:64535\n' > /etc/subgid \
     && mkdir -p /var/lib/systemd/linger && touch /var/lib/systemd/linger/runner \
     && passwd -l runner
 

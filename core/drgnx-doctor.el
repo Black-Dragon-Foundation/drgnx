@@ -473,6 +473,7 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
                               (fboundp 'nidhogg-history-pending-p) t)
            :native-compiles (if native (drgnx-doctor--native-compiles) "not built with native compilation")
            :treesit (and (fboundp 'treesit-available-p) (treesit-available-p))
+           :view-model (fboundp 'nidhogg-view--call)
            :gui (cond ((featurep 'pgtk) 'pgtk) ((featurep 'ns) 'ns) ((featurep 'x) 'x)
                       (t (drgnx-doctor--gui-from-features system-configuration-features)))
            :git (and (executable-find "git") t)
@@ -701,6 +702,13 @@ severity, the fix the first `:fix'."
                      :check (lambda (f)
                               (if (plist-get f :treesit) (list 'ok "tree-sitter available" nil)
                                 (list 'warn "this Emacs has no tree-sitter support" drgnx-doctor-install-hint))))
+
+(drgnx-doctor-define 'view-model :group "Emacs"
+                     :doc "Sjá, Nidhogg's native view model: the hub-fed views' keys answer from it (nidhogg-view--call)"
+                     :check (lambda (f)
+                              (if (plist-get f :view-model) (list 'ok "nidhogg-view--call is there" nil)
+                                (list 'fail "this Emacs has no nidhogg-view--call: the Work views' keys need Sjá"
+                                      drgnx-doctor-nidhogg-hint))))
 
 (drgnx-doctor-define 'gui :group "Emacs" :doc "A graphical build (pgtk on Wayland, X11 or macOS), or a terminal-only one"
                      :check (lambda (f)
@@ -1294,6 +1302,8 @@ built-in model once it is ready (its device)."
                                                nil))))))
 
 (drgnx-doctor-define-notices 'wb :name 'display-rules :group "drgnx" :doc "Buffers are placed by drgnx's rules")
+(drgnx-doctor-define-notices 'render :name 'views :group "drgnx"
+                             :doc "No hub-fed view is broken (Sjá stops a view whose model broke twice)")
 
 (drgnx-doctor-define 'portable-config :group "drgnx"
                      :doc "The config dir travels as it is: no key in plain text, no machine-local file (docs/guide/second-machine.md)"

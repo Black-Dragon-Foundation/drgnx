@@ -659,6 +659,10 @@ impl Front {
             Params::SearchGrepReplace(p) => {
                 crate::view::grep::replace(self, &caller, p).map(|b| json!(b))
             }
+            // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
+            Params::ExplorerSubscribe(p) => {
+                crate::view::explorer::subscribe(self, &caller, p).map(|r| json!(r))
+            }
             // the agent core's (`agents/*`, `job/*`, `exec/*`, …)
             p @ (Params::AgentsList(_)
             | Params::AgentsStart(_)
@@ -776,6 +780,7 @@ impl Front {
             | Params::WorkMapClose(_)
             | Params::WorkTrailSubscribe(_)
             | Params::WorkTrailClose(_)
+            | Params::WorkBoardSubscribe(_)
             | Params::WorkFiles(_)
             | Params::WorkHunks(_)
             | Params::WorkFileAt(_)) => crate::agent_core::serve(self, &caller, p)

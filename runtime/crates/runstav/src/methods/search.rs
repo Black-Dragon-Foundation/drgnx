@@ -457,6 +457,34 @@ pub struct FilesStarted {
     pub query: u64,
 }
 
+/// `explorer/subscribe`: list ROOTS, and inside them the folders of EXPANDED, for the Explorer's hub-fed VIEW: its
+/// model (a `tree` of path nodes, a folder open when it is a root or in EXPANDED) and its rows (one per entry, guides
+/// and chevron, the path over the row) go to every class of VIEW. Folders come first, then names in natural,
+/// case-insensitive order; the names a version-control folder, `.DS_Store`, `__pycache__` and `.#…` locks never show.
+/// An open folder whose only entry is a folder shares its row with it (`src/app`) unless COMPACT is false. A newer
+/// subscription of the same view stops this one; ask again with the new EXPANDED to open or close a folder.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerParams {
+    /// The hub-fed view that shows the rows (`view/env`).
+    pub view: String,
+    /// The roots, 1 to 16 existing folders.
+    pub roots: Vec<AbsPath>,
+    /// The open folders under the roots (no trailing slash), at most 10000.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded: Vec<AbsPath>,
+    /// Join single-folder chains on one row; default on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact: Option<bool>,
+}
+
+/// `explorer/subscribe`'s answer: LISTING numbers the listing.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerStarted {
+    pub listing: u64,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -503,6 +531,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
             classes: [User], writes: false,
             doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+        ),
+        method!(
+            "explorer/subscribe", ExplorerSubscribe(ExplorerParams) -> ExplorerStarted,
+            classes: [User], writes: false,
+            doc: "list the Explorer's roots and open folders for a hub-fed view on a thread: its tree model (view-model) and its rows (view-patch) to every class; ask again with the new open folders to expand or collapse; a newer listing of the view stops the old one",
         ),
         method!(
             "search/typing", SearchTyping(Empty) -> Empty,

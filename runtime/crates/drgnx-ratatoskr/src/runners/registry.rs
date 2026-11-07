@@ -227,7 +227,7 @@ pub struct Cfg {
     pub hub_boot_id: String,
     /// The hub's `$XDG_RUNTIME_DIR`, where the generated ssh configs are (`ssh -G` reads one).
     pub runtime_dir: PathBuf,
-    /// The built bundles: `<arch>/sleipnir` (and `drgnx-key`, `drgnx-fwd`), as `drgnx build runner-bundle` leaves them.
+    /// The built bundles: `<arch>/sleipnir` (and `drgnx-key`, `drgnx-px-<arch>-linux-musl`), as `drgnx build runner-bundle` leaves them.
     pub bundles: PathBuf,
     /// The images a new runner pulls, by digest (`name@sha256:...`); the first benches it and runs its canary.
     pub images: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
@@ -313,6 +313,8 @@ struct Probe {
     facts: Option<sleipnir::proto::Facts>,
     missing: Vec<Missing>,
     limits: Option<String>,
+    /// Why a keyed container job would be refused there (the key socket's SELinux self-check), if it would.
+    key_socket: Option<String>,
     features: Vec<String>,
 }
 
@@ -501,8 +503,9 @@ impl Registry {
                         facts,
                         missing,
                         limits,
+                        key_socket,
                         features,
-                    })) => result = Some((facts, missing, limits, features)),
+                    })) => result = Some((facts, missing, limits, key_socket, features)),
                     Ok(Some(_)) => {}
                     Ok(None) => {
                         return Err(failed(format!("{name}: serve ended before it answered")));
@@ -512,7 +515,7 @@ impl Registry {
             }
             Ok((hello.expect("hello-ok"), result.expect("probe-result")))
         };
-        let ((boot_id, linger, mut missing), (facts, more, limits, features)) =
+        let ((boot_id, linger, mut missing), (facts, more, limits, key_socket, features)) =
             crate::clock::timeout(PROBE, read).await.map_err(|_| {
                 failed(format!(
                     "{}: serve didn't answer in {} s",
@@ -538,6 +541,7 @@ impl Registry {
             facts,
             missing,
             limits,
+            key_socket,
             features,
         })
     }
@@ -562,7 +566,7 @@ impl Registry {
         let (rec, probe) = staged?;
         let _ = rec;
         Ok(match probe.facts {
-            Some(f) if probe.missing.is_empty() && probe.limits.is_none() => Probed {
+            Some(f) if all_missing(&probe).is_empty() => Probed {
                 effective,
                 facts: Some(host_facts(&f)),
                 missing: vec![],
@@ -621,7 +625,8 @@ impl Registry {
             ))
         })?;
         let bundle = hex(&Sha256::digest(&sleipnir))[..16].to_string();
-        for file in ["sleipnir", "drgnx-key", "drgnx-fwd"] {
+        let px = format!("drgnx-px-{arch}-linux-musl");
+        for file in ["sleipnir", "drgnx-key", px.as_str()] {
             let bytes = if file == "sleipnir" {
                 sleipnir.clone()
             } else {
@@ -726,7 +731,7 @@ impl Registry {
                 "this is the hub's own machine; it already runs jobs as `local`",
             ));
         }
-        if probe.facts.is_none() || !probe.missing.is_empty() || probe.limits.is_some() {
+        if !all_missing(probe).is_empty() {
             return Err(refused(refusal_text(&all_missing(probe))));
         }
         rec.trust = p.trust;
@@ -821,6 +826,34 @@ impl Registry {
         for rec in recs {
             if let Err(e) = self.connect(&rec).await {
                 tracing::warn!("runners: {} isn't connected: {e}", rec.name);
+            }
+        }
+    }
+
+    /// Every runner whose link is lost dialled again on the backoff of [`super::transport::Redial`], for as long as
+    /// the hub runs; a login or a host key it needs stays the user's to do (those runners are not `unreachable`).
+    pub async fn redial_lost(self: Arc<Self>) {
+        let mut clocks: std::collections::HashMap<String, super::transport::RedialClock> =
+            Default::default();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let Ok(recs) = self.cfg.store.list().await else {
+                continue;
+            };
+            clocks.retain(|n, _| recs.iter().any(|r| &r.name == n));
+            for rec in recs {
+                let out = self.cfg.queue.needs_redial(&rec.name);
+                if !clocks.entry(rec.name.clone()).or_default().tick(out, now) {
+                    continue;
+                }
+                let _g = self.busy.lock().await;
+                match self.connect(&rec).await {
+                    Ok(()) => tracing::info!("runners: {} is dialled again", rec.name),
+                    Err(e) => tracing::info!("runners: {} is still out of reach: {e}", rec.name),
+                }
             }
         }
     }
@@ -1008,13 +1041,24 @@ fn host_facts(f: &sleipnir::proto::Facts) -> HostFacts {
     }
 }
 
-/// Everything a probe found missing, `limits` included.
+/// Everything a probe found missing, `limits` and `key_socket` included.
 fn all_missing(p: &Probe) -> Vec<Missing> {
     let mut m = p.missing.clone();
     if let Some(why) = &p.limits {
         m.push(Missing {
             what: format!("container jobs can't be capped here: {why}"),
             fix: "run podman on the systemd cgroup manager with the memory, pids and cpu controllers delegated to the user".into(),
+        });
+    }
+    if let Some(why) = &p.key_socket {
+        m.push(Missing {
+            what: format!(
+                "keyed container jobs would be refused here: this host's SELinux policy did not let a socket be \
+                 created container_t: {why}"
+            ),
+            fix: "use the distribution's container-selinux policy, which lets a user create container_t sockets \
+                  (`ausearch -m avc -ts recent` names the denial)"
+                .into(),
         });
     }
     if p.facts.is_none() && m.is_empty() {
@@ -1076,6 +1120,26 @@ mod tests {
         for want in ["cgroup v2", "enable delegation", "git", "install git"] {
             assert!(t.contains(want), "{want}: {t}");
         }
+    }
+
+    // [D] pure: a runner whose key socket can't be labelled for its jobs is refused with the reason and the fix, as
+    // one that can't cap its containers is
+    #[test]
+    fn a_key_socket_the_policy_refuses_is_missing() {
+        let p = Probe {
+            boot_id: String::new(),
+            linger: true,
+            facts: Some(sleipnir::proto::Facts::default()),
+            missing: vec![],
+            limits: None,
+            key_socket: Some("the socket was not labelled: Permission denied".into()),
+            features: vec![],
+        };
+        let m = all_missing(&p);
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(m[0].what.contains("keyed container jobs"), "{m:?}");
+        assert!(m[0].what.contains("Permission denied"), "{m:?}");
+        assert!(m[0].fix.contains("container_t"), "{m:?}");
     }
 
     // [D] pure

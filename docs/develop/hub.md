@@ -1369,6 +1369,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/log` | user | `{from?: natnum, id: Id, n?: natnum, tail_bytes?: natnum}` | `{from?: natnum, id: string, lines?: [string], next?: natnum, running: boolean}` | no |
 | `exec/start` | user | `{argv: [string], background?: boolean, cwd?: AbsPath, env?: [{name: EnvName, value: string}], heavy?: boolean, image?: string, keys?: [string], kind?: "cargo" \| "ert" \| "domr" \| "other" \| "container", local_only?: boolean, machine?: Id, memory_max?: string, name?: string, network?: boolean, nice?: integer, no_timebox?: boolean, priority?: natnum, rows?: {listed: [string], parser: string}, timebox_s?: natnum, writes?: [string]}` | `{id: string, text: string}` | yes |
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
+| `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
@@ -1502,13 +1503,14 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
-| `view/resync` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
+| `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
+| `work/board/subscribe` | user | `{map: string, plans?: [string], view: string}` | `{hub: natnum}` | no |
 | `work/conclusions` | user | `{session: string}` | `{conclusions?: [Conclusion]}` | no |
 | `work/file-at` | user | `{path: string, seq: natnum, session: Id}` | `{bytes: string, seq: natnum}` | no |
 | `work/files` | user | `{session: Id}` | `{files: [EditedFile]}` | no |
 | `work/hunks` | user | `{path: string, session: Id}` | `{diff: string}` | no |
 | `work/map/close` | user | `{view: string}` | `boolean` | no |
-| `work/map/set` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
+| `work/map/set` | user | `{clear?: boolean, collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, selected?: string, shown?: boolean, view: string, width_units?: natnum}` | `{version: natnum}` | no |
 | `work/map/subscribe` | user | `{collapsed?: [natnum], density?: "compact" \| "comfortable" \| "roomy", filters?: {finished?: boolean, focus?: string, overlaps?: boolean}, rows?: boolean, selected?: string, view: string, width_units: natnum, workspace: {id: string, roots?: [string]}}` | `MapFrame \| MapRows` | no |
 | `work/trail/close` | user | `{view: string}` | `boolean` | no |
 | `work/trail/subscribe` | user | `{lanes?: [{label: string, session: string}], session?: string, view: string}` | `{hub: natnum}` | no |
@@ -2083,6 +2085,27 @@ rows built in the hub (`work::trail`, pure part `vegvisir::trail`), per display 
   only what changed: a new step is an insert of its row, a conclusion replaces the rows of the steps it rests on and
   inserts its card, a step in a lane's range redraws that lane, one past it the axis and every lane. A new env draws
   the view again for its class. `timeline/get` and `work/conclusions` stay for their other callers.
+- **Model** (`work::trail::model`, the editor's replica; "The native view model"). Before the rows, each refresh sends
+  the view's `view-model`. A trail: nodes `step:ID` (kind `step`) and `conc:N` (kind `conclusion`) in the rows' order,
+  `up`/`left` to the row before and `down`/`right` to the row after; edges `conc:N → step:ID` of kind `rests-on` (the
+  chain kind: a selected conclusion lights its steps); the list `steps`, a window `{total, from}` of the session's
+  when its first step is not its first (`from` = that step's seq − 1). A Timeline: `lane:SESSION` (kind `lane`) and
+  `step:SESSION:SEQ` (kind `step`); left and right along the lane (left of the first step is the lane), up and down to
+  the step of the lane above or below nearest in time, wrapping (the lane when it has none); lists `lanes`, `lasts`
+  (each lane's last step, else the lane: the descriptor's `start`) and `near`, the lanes of the sessions the selection
+  of the connection's shown rows map views reaches (`Map::near`: the agents and subagents on its chain). A
+  `work/map/set` that moves a selection sends the connection's Timelines their model again from what was last read
+  (`Trails::map_moved`), no rows. Step nodes carry what opening one needs: `label seq class tool detail-kind path line
+  query url` and, in a Timeline, `session`. The rows' node spans are their `drgnx-work-id` props.
+- **The Board** (`work::trail::board`). `work/board/subscribe {view, map, plans?}` opens a Board view the same way:
+  the tasks of `plans` (`plans/get` each, their steps the progress), else every task (`tasks/find`, up to four pages),
+  each card naming the agent of the connection's map view `map` that works on it (the agent whose task title is the
+  card's). It is read again after each write like a trail; `work/trail/close` ends it. Rows: `head` (each column's
+  heading and count at a sixth of the width, at least 120 px), then `cards:I:0` (the titles at height I) and
+  `cards:I:1` (state · agent · steps done), or `none`. Its model is its own, not the map's: a `card` node per task
+  (fields `label status column plan agent agent-label`) whose links are the `board` form's (`navs.board`: up and down
+  in its column, left and right to the nearest column with cards, at the same height or its last card), lists
+  `cards` (column by column) and `team` (the cards an agent works on).
 
 ### The follow feed
 
@@ -2147,7 +2170,8 @@ All of it is in memory only.
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
   width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
-  class) and builds its rows again. `view/resync {view, class, version}` answers a reset. `view/glyphs {view, class,
+  class) and builds its rows again. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/close {view}` forgets the
   view; a connection's views end with it.
@@ -2169,8 +2193,8 @@ All of it is in memory only.
   a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
   `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
   outstanding per (view, class).
-- **A stream is a row stream.** A stream method (`search/grep`, `search/files`) is a (view, class) row stream like any
-  other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
+- **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
+  class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 - **SVG images** (lanes, band tiles, chips) are drawn with `drgnx_rows::svg`, which takes palette roles, never colour
   literals: each colour comes from the env's `palette` (the theme's faces, read through `core/drgnx-color.el`'s
@@ -2178,6 +2202,36 @@ All of it is in memory only.
   colour name is never written. An image's id is its content hash and the epoch it was drawn at, so a theme change
   never reuses an old tile. `drgnx_rows::image::ImageSet` keeps a (view, class)'s images and picks the ones a patch
   carries.
+
+### The native view model (`view-model`)
+
+A view whose keys move a selection (the Work map first) also sends its **model**: what the editor's replica (Sjá, in
+Nidhogg: `nidhogg-view-apply`) needs to answer every key in-process, never from the hub. The hub keeps, per
+(connection, view), the model and version it last sent (`view::Store`'s models, `view::model`), and sends what changed
+as the event `view-model {view, hub, base, version, reset?, model}`:
+
+- **One string.** `model` is a JSON string, `{"ops": [...]}`, that the editor hands to its replica whole; the editor
+  never makes Lisp data of it. The ops are Sjá's wire: `reset {descriptor, nodes, edges, lists}`, then `edges
+  {remove}`, `remove [id]`, `nodes [node]`, `edges {add}`, `list {name, ids}` (a list that went is sent empty). A
+  changed descriptor is a reset.
+- **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
+  each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
+  to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
+- **Resets.** The first model after a `work/map/subscribe` (the editor starts a new replica: version 1), after a
+  hidden view is shown again (`work/map/set {shown}`), and the answer to `view/resync {view, model: true}` (CLASS is
+  not read) are resets, and say so in the envelope (`reset: true`), so the editor routes a model without parsing
+  it; a subscribe's reset has `base` 0. A hub restart is a new `hub`, and the subscribe that follows starts at a reset; the ids are the
+  items' own, so the same records give the same model.
+- **Hidden views get none.** A view hidden by its editor gets no model until it is shown again.
+- **The selection is the editor's.** The hub's own selection only draws the chain's edges in the rows: `work/map/set
+  {selected}` moves it, `{clear: true}` drops it; neither changes the model.
+
+The Work map's model (`work::map::model`): scheme `links`; the chain kinds `came-from`, `edits`, `reads`, `runs-on`;
+search over `label` and `task`; the lists `team`, `needs-you`, `outline` (`vegvisir::nav`); classes `selected`,
+`match`, `chain`, `dim` (the editor's faces by index); flags `needs-you`, `warn`, `live`; forms `graph` and `outline`
+(up and down walk the outline). Each node is an item the view shows, with its `nav` links, `then`, `parent`, and the
+fields `label`, `state`, `task` and its card's rect `x y w h` in layout units. Rows: `test/conformance/view-model/`,
+`work/map-set-clear-drops-selected`.
 
 ### Fitting: text to a pixel width
 
@@ -2225,7 +2279,14 @@ the search itself is `hrafn::grep`).
   (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
   `\\` in `replace` are the groups. Props: `drgnx-replace-box` on the box (the file, or the match as an object),
   `drgnx-replace-file` on a header, `drgnx-replace-match` (the match: `file`, `line`, `col`, `end`, `text`,
-  `before`, `after`; positions in characters, `line` from 1) on a match row. The tick state is the editor's.
+  `before`, `after`; positions in characters, `line` from 1) on a match row, and `drgnx-work-id` (the row's node id)
+  over each row. The tick state is the editor's.
+- **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
+  holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
+  by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
+  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
+  20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
@@ -2256,6 +2317,28 @@ and the ranking are `hrafn::rank`).
   A root whose Hrafn project is open is listed again when the project's watcher reports any change (a tap of
   `Project::tap`, taken without opening the project); any other root is listed again for each new view, so the keys
   typed in one Quick Open rank one listing and the next Quick Open sees the files as they are.
+
+### The Explorer's listing as a tree (`explorer/subscribe`)
+
+The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/drgnx-ratatoskr/src/view/explorer.rs`).
+
+- `explorer/subscribe {view, roots, expanded?, compact?}` stops the view's earlier listing and answers `{listing}`. A
+  thread then reads each root (1 to 16 existing folders) and, inside it, each folder of `expanded` (at most 10000, no
+  trailing slash) that is shown, and sends the view its model (`view-model`), then its rows to every class: the first
+  listing a reset, a later one the difference. The editor opens or closes a folder by asking again with the new set,
+  without waiting; a listing a newer one stopped sends nothing. A folder that cannot be read has no entries.
+- **The entries.** Folders first, then names in natural, case-insensitive order (`file2` before `file10`); a link to a
+  folder is a folder. `.git`, `.hg`, `.svn`, `.DS_Store`, `__pycache__` and `.#…` lock files never show. With
+  `compact` (default on), an open folder whose only entry is a folder shares its row with it (`src/app`, the node being
+  the last folder); the chain ends at the first closed folder, which is not read.
+- **The model** is a `tree`: one node per row, its id the path (a root's without the trailing slash), kind `root`, `dir`
+  or `file`, its parent the row above it in the tree, the flag `expanded` on a root and on each open folder, and the
+  fields `label` (as shown; a root's name in capitals), `path` and `dir` (1 or 0). The list `order` holds the rows in
+  pre-order; past 20,000 it is a window of the first ones (the rows hold every entry).
+- **Row:** the key is the path; the indent guides (`│ ` per level below the first) and the chevron (`▾ `, `▸ `, or two
+  spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
+  control character as `^X`; the path is the `drgnx-work-id` over the whole row.
+- The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
 
 ### The symbol at a line (`search/symbol-at`)
 
@@ -2381,6 +2464,17 @@ own.
     `host.drgnx.internal` port that was asked), `addr` the address and port it led to, `class` its class (`lan`,
     `ula`, `link_local`, `cgnat`, `loopback`, `host_own`). One card per target; none for a refused target.
     `browser.private` is capped at Ask, so every new target asks.
+  - **A container job's host port** (`exec/hostgrants.rs`): a session's networked job's proxy runs under
+    `Policy::Job` with a web state of its own and sends its `Private` events to the job's loop, which asks
+    `decide(browser.private)` with the facts `{target, job}` (`target` `{"host_port": "host.drgnx.internal:PORT"}`;
+    other targets are the allow-list's and ask nothing). The card's title is "Job ID wants your port PORT
+    (`host.drgnx.internal:PORT`)", its body says the grant opens the port for the whole session (its browser and its
+    other jobs) and that a revoke leaves open connections until they end; its choices are the browser's scopes, never
+    a CIDR or "all private". One card per port per job, whatever the answer; none once the job ended, none for a
+    user's job. An MCP session's job asks with the default (no role) columns, as the hub holds no `Who` for it. On every change to an answer the loop reads the session's
+    `browser.private` grants again and sets the job's proxy's grants to their `host.drgnx.internal` ports
+    (`WebState::set_grants`): a grant opens the next request, a revoke refuses it; open streams stay (no
+    `CloseStreams`). The pure core is `Core::step(Ev) -> Vec<Effect>`; the loop ends with the relay.
   - **`Refused`** (a hard never, a port, a rebinding, a malformed request) is logged only; **`Reached`** is a store
     event, once per host per session: kind `status`, the session as `agent`, data
     `{"browser-host": true, "session": SID, "host": HOST}`.
@@ -2401,7 +2495,10 @@ own.
   - `NeverSetWatch`: the hub's own TCP ports on the host's loopback: the gateway's (registered once it listens), every
     listener the hub registers (`hold`, `release`), and an Emacs TCP server's port, read every 30 s from the first line
     (`HOST:PORT PID`) of each server file in `~/.emacs.d/server/` and `$XDG_CONFIG_HOME/emacs/server/` (the hub's
-    HOME; the line with the key is never read).
+    HOME; the line with the key is never read). On a Mac also podman machine's control ports (B4): its SSH port and
+    its hypervisor's REST port (`machine_ports` over `podman machine inspect` and the machine's config file,
+    `AppleHypervisor.Vfkit.Endpoint` or `LibKrunHypervisor.KRun.Endpoint`), read on the same 30 s tick and before
+    each networked container job; a restart that moves a port swaps the held pair (`set_machine_ports`).
 - **Test hooks.** A test launch is unsandboxed and has no browser host. With `DRGNX_TEST_BROWSER` set, a session
   whose `browser` cell is not Never still gets the hub's side of its browser at its start (the web proxy, and the
   broker with the far end of its socketpair held); `DRGNX_TEST_WEB_REDIRECT=ADDR:PORT` sends every upstream but the
@@ -2695,11 +2792,18 @@ reading and fallbacks; `profiles.rs`, `providers.rs`: the types).
 reads lines only up to the last it answers; its `tail_bytes` form seeks to the file's end; both replace bytes that are
 not UTF-8). A job's folder
 `<state>/hub/exec/<id>/` holds `meta.json`, `log`, `exit` (written by the wrapper shell through a rename), `why`
-(`stopped` or `timed-out`, written before the hub kills the group) and, once ended, `result.json`; a folder without
+(`stopped`, `timed-out` or `infra: proxy: <reason>`, written before the hub kills the group; the infra reason is also
+the log's last line) and, once ended, `result.json`; a folder without
 `result.json` is running. A session's job is launched with `launch::launch` (its sandbox spec) and the status pipe is
 read with `gleipnir::read_status`; the user's runs with the user's rights. The command is wrapped by a shell that logs
 and records the exit, and (Linux with a user systemd) by `systemd-run --user --scope -p MemoryMax=…`, a scope so the
-command stays the hub's child. `Runner::open` re-attaches every folder without a result. Every job but the editor's
+command stays the hub's child. `Runner::open` re-attaches every folder without a result, except a networked container
+job's (its meta names a `relay`): its relay died with the old hub, so the job's container is removed and the job
+recorded `infra` ("the hub restarted, and a networked job can't keep its relay"); a graceful stop ends the running
+ones the same way first (`Runner::end_networked`, "the hub stopped"). Then it sweeps: the containers labelled `drgnx.owner=<this hub's
+tag>` whose `drgnx.job` isn't running, job containers before sidecars (`sleipnir::linux::podman::leftovers`, shared with
+the runners), and relay images (`localhost/drgnx-px:<tag>`) other than the current binary's. A sibling hub's
+containers carry its own tag and stay; unlabelled ones (made before the labels) are left. Every job but the editor's
 servers (a user's `no_timebox` job, up for days, started at once) goes through the queue ("Runners: the queue"), whose
 local runner admits it here (`Hooks::admission`). `exec/get`, `exec/log` and
 `exec/stop` answer an agent caller (`Class::Agent`, the job tools through `Coord::exec`) only for its own session's
@@ -3270,12 +3374,12 @@ or two within 3600 s (`BENCH_WINDOW_S`) bench it; `clear` (a pass, the user's `u
 The queue counts a strike at each runner verdict (`Queue::strike_of`) and at a link lost with attempts open, and holds a
 benched runner as `RunnerState::Benched`, which `forseti`'s filter keeps every job off; its `hello` doesn't put it back.
 **The check** runs every 300 s per runner (`CHECK_EVERY_S`; `Queue::check_now` makes it due), on a ready or benched one:
-a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, the free disk), a canary attempt
+a `probe` frame (its `probe-result`: the contract's missing items, `check_limits`, k1's `key_socket`, the free disk), a canary attempt
 offered straight to the runner (job `health<runner><at>`, letters and digits as a runner takes a job id, `true` in
 `RemoteRunner.image`, priority 1, no grace;
 offered again 2 s after a refusal; its verdict never reaches the job layer), and the runner's clock from its last `ping`
 (`LinkEvent::Clock`, the runner's `at` against the hub's time). `judge(Facts)` passes only when all hold: the probe
-answered with nothing missing and no `check_limits` failure, 20 GB free (and 10 % where the size is known), the canary
+answered with nothing missing and no `check_limits` or `key_socket` failure, 20 GB free (and 10 % where the size is known), the canary
 `Pass`, the clock within 2 s (`CLOCK_SKEW_S`); else it names every part that failed. It judges once every answer is in,
 or after 120 s (`CHECK_WAIT_S`) with what it has. A pass clears the strikes and returns a benched runner to rotation; a
 failure is a strike (`health check: …`). `Queue::runner(name)` gives the row (`state`, `strikes`, `last`) and
@@ -3297,10 +3401,10 @@ seam: `UrdrStore` in the hub, `MemStore` in tests.
 `Registry::add(host, trust, …)`, in order, each step a `sh -c` on the runner over the user's own ssh (the generated
 config, no terminal): `uname -m`, `uname -s` and `$HOME` (not Linux: refused); the bundle for that architecture from
 `DRGNX_RUNNER_BUNDLES` (default `runtime/target/bundle` beside the hub's build folder, where `drgnx build runner-bundle`
-puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-fwd`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
+puts `<arch>/sleipnir`, `drgnx-key`, `drgnx-px-<arch>-linux-musl`) copied to `<root>/bin/<hash>/` (written as `.part`, hash checked, moved
 into place; refused with the build command when there is none); `sleipnir serve` asked for `hello-ok` and `probe` over
 one set of sessions that end after. A `boot_id` equal to the hub's is refused (`this is the hub's own machine; it
-already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items and `check_limits`)
+already runs jobs as `local``), then anything the contract finds missing (`Probe`'s missing items, `check_limits` and `key_socket`)
 is refused with all of it, each with its fix. Then `podman pull --policy=missing` of each image in
 `drgnx-runners-image` (it must be pinned by digest), `sleipnir bench` in the first, the record, and the link:
 `Session::start` over the queue's route and events, `Queue::add_runner`. A root must be absolute, plain, and never the
