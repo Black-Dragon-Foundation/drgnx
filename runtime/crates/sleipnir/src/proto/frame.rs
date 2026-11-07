@@ -338,6 +338,17 @@ pub enum Frame {
         reason: Option<WaitReason>,
     },
 
+    /// hub → runner: the queue's head is reserved on this runner, to start at AT (epoch seconds) with MEM_MIB and
+    /// CPU, so a grow here leaves it that room ([`crate::linux::resize::Head`]). AT 0: no head is reserved here now.
+    Head {
+        #[serde(default)]
+        at: u64,
+        #[serde(default)]
+        mem_mib: u64,
+        #[serde(default)]
+        cpu: f64,
+    },
+
     // ---- sync
     /// hub → runner: what the attempt's inputs are: the commit of repository REPO (its mirror's id) and the overlay
     /// the runner's trust may get. The runner answers with a `sync-need`.

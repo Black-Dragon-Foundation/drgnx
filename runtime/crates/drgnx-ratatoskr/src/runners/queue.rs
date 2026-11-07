@@ -487,6 +487,8 @@ struct St {
     /// This tick's head reservation (`forseti::backfill`): the head of the highest waiting priority that fits no
     /// machine now, and where and when it is to start.
     reservation: Option<forseti::backfill::Reservation>,
+    /// The runner last told it holds the head (its `head` frame), with the head's start and memory need.
+    head_told: Option<(String, u64, u64)>,
 }
 
 impl St {
@@ -1734,6 +1736,7 @@ impl Queue {
             .map(Self::forseti_job)
             .collect();
         if queued.is_empty() {
+            Self::tell_head(&mut st, None);
             return t;
         }
         let eff = forseti::effective_priorities(&queued, &[], &[]);
@@ -1766,8 +1769,46 @@ impl Queue {
             let e = eff.get(id).copied().unwrap_or(job.own);
             self.place(&mut st, job, e, now, &mut t.starts);
         }
+        let need = st.reservation.as_ref().map(|r| need_of(by_id[&r.job]));
+        Self::tell_head(&mut st, need);
         st.reservation = None;
         t
+    }
+
+    /// The head still waits after this tick's placing, reserved on a runner (NEED: its need): that runner hears it in
+    /// a `head` frame, so a grow there leaves the head its room; a runner that held it before and doesn't now hears
+    /// `at` 0. A runner hears it again only when it changes, or after its next hello.
+    fn tell_head(st: &mut St, need: Option<forseti::Need>) {
+        let on = st
+            .reservation
+            .as_ref()
+            .filter(|r| st.runners.contains_key(&r.machine))
+            .zip(need)
+            .map(|(r, n)| (r.machine.clone(), r.at, n));
+        let told = on.as_ref().map(|(m, at, n)| (m.clone(), *at, n.mem_mib));
+        if told == st.head_told {
+            return;
+        }
+        if let Some((was, ..)) = st.head_told.take()
+            && on.as_ref().is_none_or(|(m, ..)| *m != was)
+            && let Some(rr) = st.runners.get(&was)
+        {
+            rr.session.send(Frame::Head {
+                at: 0,
+                mem_mib: 0,
+                cpu: 0.0,
+            });
+        }
+        if let Some((m, at, n)) = &on
+            && let Some(rr) = st.runners.get(m)
+        {
+            rr.session.send(Frame::Head {
+                at: *at,
+                mem_mib: n.mem_mib,
+                cpu: n.cpu,
+            });
+        }
+        st.head_told = told;
     }
 
     /// The head's reservation this tick (`forseti::backfill::reservation`): the first queued job of the highest
@@ -2317,6 +2358,10 @@ impl Queue {
                     r.linger = linger;
                     let grace = r.grace();
                     st.attempts.set_grace(runner, grace);
+                }
+                // a new link's serve holds no head: the next tick tells it again
+                if st.head_told.as_ref().is_some_and(|(m, ..)| m == runner) {
+                    st.head_told = None;
                 }
                 AEvent::Hello {
                     runner: runner.into(),
@@ -3784,6 +3829,96 @@ mod tests {
             Some("room is kept for job xh")
         );
         assert_eq!(row("xs2").machine.as_deref(), Some("r1"));
+    }
+
+    /// A runner whose control channel the test reads, and the end it would answer on (held, so its link stays up).
+    fn add_heard(
+        q: &Arc<Queue>,
+        name: &str,
+    ) -> (
+        tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+        tokio::io::DuplexStream,
+    ) {
+        let (hub_tx, heard) = tokio::io::duplex(1 << 20);
+        let (hub_rx, answer) = tokio::io::duplex(1 << 10);
+        let c = || Channel::new(Box::new(tokio::io::sink()), Box::new(tokio::io::empty()));
+        let channels = Channels {
+            control: Channel::new(Box::new(hub_tx), Box::new(hub_rx)),
+            bulk_in: c(),
+            bulk_out: c(),
+        };
+        q.add_runner(
+            remote(name, 600),
+            Session::start(name, channels, q.route(), q.link_events()),
+        );
+        (
+            tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(heard)),
+            answer,
+        )
+    }
+
+    /// The `head` frames RUNNER was sent up to now, as JSON: read up to a `ping` sent after them (one session sends in
+    /// order).
+    async fn heads_heard(
+        q: &Queue,
+        runner: &str,
+        lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+        mark: u64,
+    ) -> Vec<Value> {
+        assert!(
+            q.lock().runners[runner]
+                .session
+                .send(Frame::Ping { at: mark })
+        );
+        let mut heads = vec![];
+        while let Some(line) = lines.next_line().await.unwrap() {
+            let Ok(f) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if f["t"] == "ping" && f["at"] == mark {
+                return heads;
+            }
+            if f["t"] == "head" {
+                heads.push(f);
+            }
+        }
+        panic!("the link to {runner} ended");
+    }
+
+    // [D] pure (links fed by hand): the head reserved on r1 (as in the backfill row: from +300 s, needing 3,500 MiB)
+    // reaches r1 in a `head` frame once, so a grow there leaves it that room; a tick that changes nothing sends no
+    // other; once the head is placed, r1 hears `at` 0
+    #[tokio::test]
+    async fn the_heads_runner_hears_its_reservation() {
+        let dir = tempfile::tempdir().unwrap();
+        let (q, _rx) = test_queue(dir.path(), None, true);
+        let (mut heard, _answer) = add_heard(&q, "r1");
+        hello(&q, "r1", true, 100);
+        ready(&q, "r1", 8000, &[], &[], 100);
+        q.submit(job("xa", Priority::P4, 3000), 100);
+        q.tick(100);
+        let a = current(&q, "xa");
+        admitted(&q, "r1", &a, 3000, 100);
+        started(&q, "r1", &a, 100);
+        ready(&q, "r1", 1000, &[], &[], 400);
+        q.submit(job("xh", Priority::P1, 3500), 400);
+        q.tick(400);
+        let at = |f: &Value| f["at"].as_u64().unwrap();
+        let hs = heads_heard(&q, "r1", &mut heard, 1).await;
+        assert_eq!(hs.len(), 1, "{hs:?}");
+        assert!(at(&hs[0]) > 400, "{hs:?}");
+        assert_eq!(hs[0]["mem_mib"], 3500, "{hs:?}");
+        q.tick(401);
+        assert_eq!(
+            heads_heard(&q, "r1", &mut heard, 2).await,
+            Vec::<Value>::new()
+        );
+        // r1's job is gone: the head fits now and is offered there
+        ready(&q, "r1", 8000, &[], &[], 402);
+        q.tick(402);
+        assert_eq!(q.row("xh").unwrap().machine.as_deref(), Some("r1"));
+        let hs = heads_heard(&q, "r1", &mut heard, 3).await;
+        assert_eq!(hs.iter().map(at).collect::<Vec<_>>(), vec![0], "{hs:?}");
     }
 
     fn frozen(key: &str, size: u64) -> Frozen {

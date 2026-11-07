@@ -214,7 +214,11 @@ The moves on a running job that never throttle it (the job scheduler's "grow and
 In `serve`, a grow is judged under the admission lock (`admit::grow`) against the machine as it is, the others'
 reservations counted; once applied, the job's reservation holds what it added, so no scheduler admits into it, and the
 grown grant is written to the attempt's `attempt.json`. A grow that can't be applied leaves the reservation as it was.
-The hub's head reservation doesn't reach runners yet, so on a runner only the machine's room holds a grow. CPU weights
+The hub's head reservation reaches the runner it is on as a `head` frame (the head's start and need; `at` 0 once it
+holds there no more; the queue sends it after a tick when it changed, and again after a hello,
+`runners::queue::tests::the_heads_runner_hears_its_reservation`): a grow there also leaves what the machine will have
+at the head's start (`forseti::budget_at`, from the running jobs' expected ends) minus the head's need
+(`admit::HeadHere`, `a_grow_leaves_the_hubs_head_its_room`). CPU weights
 follow the offers: a P1–P2 offer refused for CPU since the last `ready` makes the P4–P5 jobs yield at the next one.
 Builds count as long builds for the ladder.
 
@@ -563,6 +567,7 @@ does not parse.
 | `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), why a keyed job would be refused (`key_socket`, k1), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
+| `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
 | `sync-have` / `sync-need` / `blob` / `bundle` / `origin-fetch` | both | the repository's mirror id, the commit, tree and overlay manifest (paths as raw bytes); the missing blobs and commit, and the mirror's ref tips; a blob's chunk at its offset of its total; a bundle chunk at its offset, each with the bundle's hash; a fetch from the project's origin (with `cred`: through the key of that name, sent before it) |
 | `start` / `started` | hub → runner / back | the image, plain variables, the allowed hosts, the pinned names (`pins`, `[[name, address]]`, none from an older hub), the row parser; the unit |
 | `log` | runner → hub | the offset, then the bytes, read from the attempt's log file, never from a pipe |

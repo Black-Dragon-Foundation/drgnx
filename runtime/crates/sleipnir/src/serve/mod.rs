@@ -306,6 +306,8 @@ pub struct Serve<W: Write> {
     last_kill: Option<Instant>,
     /// The jobs the ladder paused, until the pressure is gone.
     paused: BTreeSet<String>,
+    /// The hub's head reserved here (its last `head` frame), which a grow leaves its room.
+    head: Option<admit::HeadHere>,
     /// The CPU weights set on job slices (the others are at systemd's default).
     weights: BTreeMap<String, u32>,
     /// A P1–P2 offer was refused for CPU since the last `ready`.
@@ -415,6 +417,7 @@ impl<W: Write> Serve<W> {
             level2_since: None,
             last_kill: None,
             paused: BTreeSet::new(),
+            head: None,
             weights: BTreeMap::new(),
             p12_waiting: false,
             last_ready: now,
@@ -523,6 +526,13 @@ impl<W: Write> Serve<W> {
             } => self.start(&r, image, env, (net_hosts, pins), &parser),
             Frame::Attach { r, log_offset } => self.attach(&r, log_offset),
             Frame::Cancel { r } => self.cancel(&r),
+            Frame::Head { at, mem_mib, cpu } => {
+                self.head = (at > 0).then_some(admit::HeadHere {
+                    need: forseti::Need { mem_mib, cpu },
+                    at,
+                });
+                Next::Go
+            }
             Frame::Done { r } => self.done(&r),
             Frame::Key(k) => self.key(k),
             other => {
@@ -766,7 +776,6 @@ impl<W: Write> Serve<W> {
             else {
                 continue;
             };
-            // the hub's head reservation doesn't reach runners: only the machine's room holds a grow here
             let g = admit::Grow {
                 job: resize::Sized {
                     job: JobId(id.clone()),
@@ -777,7 +786,7 @@ impl<W: Write> Serve<W> {
                     max_mib: l.meta.spec.mem_mib.max,
                 },
                 reservation: admit::reservation_job(&id, l.meta.r.attempt),
-                head: None,
+                head: self.head,
             };
             match admit::grow(
                 &self.probe,
