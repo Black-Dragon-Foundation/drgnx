@@ -212,7 +212,7 @@ async fn start_watch(f: &Front, hub: Arc<Hub>, tree: Tree, root: PathBuf) {
     let key = {
         let (t, p) = (tree.clone(), project.clone());
         crate::clock::blocking(move || {
-            if std::fs::canonicalize(&t.root).is_ok_and(|r| r == p.root()) {
+            if std::fs::canonicalize(&t.root).is_ok_and(|r| r == p.base_root()) {
                 return Some(hrafn::MAIN_TREE.to_string());
             }
             let key = t.id.0.clone();

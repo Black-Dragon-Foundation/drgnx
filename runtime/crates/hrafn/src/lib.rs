@@ -13,6 +13,7 @@ pub mod fresh;
 pub mod index;
 pub mod overlay;
 pub mod query;
+pub mod rank;
 pub mod schema;
 pub mod store;
 pub mod tree;

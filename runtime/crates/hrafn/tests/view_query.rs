@@ -177,7 +177,12 @@ async fn overlay_shadows_base_path() {
     assert_eq!(hits(&s, View::Base, "base_only_fn").await[0].0, "src/p.rs");
 }
 
-/// Pattern D. p deleted in T (a tombstone): no hit and no path row in T; the base still has it.
+/// The ranked file query's paths for TEXT in VIEW.
+async fn ranked(s: &CodeStore, view: View, text: &str) -> Vec<String> {
+    hrafn::rank::files(s, view, text, 10).await.unwrap()
+}
+
+/// Pattern D. p deleted in T (a tombstone): no hit, no path row and no ranked file in T; the base still has it.
 #[tokio::test]
 async fn tombstone_hides_base_file() {
     let (_d, s, t, _t2) = store().await;
@@ -192,6 +197,8 @@ async fn tombstone_hides_base_file() {
     assert!(hits(&s, tv, "src/p.rs").await.is_empty(), "the path route");
     assert_eq!(hits(&s, tv, "src/q.rs").await.len(), 1);
     assert!(!hits(&s, View::Base, "src/p.rs").await.is_empty());
+    assert_eq!(ranked(&s, tv, "rs").await, ["src/q.rs"]);
+    assert_eq!(ranked(&s, View::Base, "rs").await, ["src/p.rs", "src/q.rs"]);
 }
 
 /// Pattern D. A new untracked file is found in its tree, not in the base or in another tree.
@@ -214,7 +221,45 @@ async fn untracked_file_only_in_its_tree() {
             "{v:?}"
         );
         assert!(hits(&s, v, "src/new.rs").await.is_empty(), "{v:?}");
+        assert!(
+            !ranked(&s, v, "new")
+                .await
+                .contains(&"src/new.rs".to_string()),
+            "{v:?}"
+        );
     }
+    assert_eq!(ranked(&s, View::Tree(t), "new").await, ["src/new.rs"]);
+}
+
+/// Pattern D. The ranked file query: a basename that starts with the query first, then one that holds it, then a
+/// path that holds it; shorter first among equals; at most N.
+#[test]
+fn ranks_basename_prefix_first() {
+    let base: Vec<String> = [
+        "lib/xmap.rs",
+        "map/a.rs",
+        "src/map.rs",
+        "src/mapping/x.rs",
+        "z/roadmap.rs",
+    ]
+    .iter()
+    .map(|p| p.to_string())
+    .collect();
+    let d = hrafn::rank::Delta::default();
+    assert_eq!(
+        hrafn::rank::rank(&base, &d, "map", 10),
+        [
+            "src/map.rs",
+            "lib/xmap.rs",
+            "z/roadmap.rs",
+            "map/a.rs",
+            "src/mapping/x.rs"
+        ]
+    );
+    assert_eq!(
+        hrafn::rank::rank(&base, &d, "MAP", 2),
+        ["src/map.rs", "lib/xmap.rs"]
+    );
 }
 
 /// Pattern D. A vector whose key only the base's shadowed p uses gives no hit in T (the vector route takes the first

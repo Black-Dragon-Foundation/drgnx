@@ -429,6 +429,7 @@ fn project_spec(f: &Fixture, embedders: Vec<Arc<WorkerEmbedder>>, power: &Path) 
             .map(|e| e as Arc<dyn DocEmbedder>)
             .collect(),
         power_root: power.to_path_buf(),
+        base: None,
         test_permits: None,
     }
 }
@@ -541,6 +542,7 @@ async fn denied_root_refused_and_canary_never_embedded() {
         config: hrafn::Config::default(),
         embedders: vec![],
         power_root: PathBuf::from("/nonexistent"),
+        base: None,
         test_permits: None,
     };
     match Project::open(spec_for(inside.clone())).await {
@@ -1026,5 +1028,75 @@ async fn restart_rechecks_stale_tree() {
             .map(|r| r.0.as_str())
             .collect::<Vec<_>>(),
         ["core/f0.el", "core/f2.el"]
+    );
+}
+
+/// The symbol names the base view holds.
+async fn base_names(p: &Project) -> Vec<String> {
+    p.store()
+        .handle()
+        .read(|c| {
+            let mut st = c.prepare(
+                "select s.name from symbol s join file f on f.tree = 0 and f.path = s.path and f.blob = s.blob
+                 order by s.name",
+            )?;
+            Ok(st
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+        .unwrap()
+}
+
+/// Pattern D. The base-checkout setting (H16 overlay design §6.5): with another checkout as the base, tier 1 builds
+/// from it, a query there answers from the base, and the main checkout is a worktree with its own overlay. Changing
+/// the base back rebuilds from main and re-seeds the trees.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn base_setting_builds_from_that_checkout() {
+    let f = fixture(&lisp_files(3));
+    let next = f.home.path().join("src/proj-next");
+    git(
+        &f.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "next",
+            next.to_str().unwrap(),
+        ],
+    );
+    edit(&next, "core/f1.el", "next-line-fn");
+    git(&next, &["commit", "-qam", "next"]);
+    let mut spec = project_spec(&f, vec![], Path::new("/nonexistent"));
+    spec.base = Some(next.clone());
+    let p = Project::open(spec).await.unwrap();
+    p.refresh_now().await.unwrap();
+    assert!(base_names(&p).await.contains(&"next-line-fn".to_string()));
+    assert_eq!(
+        p.view_for(&next, false).await.unwrap().view,
+        hrafn::View::Base
+    );
+    let key = seeded(&p, &f.root).await;
+    assert_eq!(
+        tree_rows(&p, &key)
+            .await
+            .iter()
+            .map(|r| r.0.as_str())
+            .collect::<Vec<_>>(),
+        ["core/f1.el"],
+        "main differs from the base in f1"
+    );
+    drop(p);
+    // back to main as the base: tier 1 rebuilds from it
+    let p = Project::open(project_spec(&f, vec![], Path::new("/nonexistent")))
+        .await
+        .unwrap();
+    p.refresh_now().await.unwrap();
+    let n = base_names(&p).await;
+    assert!(!n.contains(&"next-line-fn".to_string()), "{n:?}");
+    assert_eq!(
+        p.view_for(&f.root, false).await.unwrap().view,
+        hrafn::View::Base
     );
 }

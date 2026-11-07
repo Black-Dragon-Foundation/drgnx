@@ -1087,6 +1087,18 @@ drops the overlay of a worktree `git worktree list` no longer shows, or whose fo
 answers from the root's view (`base: true` asks for the base) with `view: {worktree?, differing_files, state}`, and
 `search/status` lists `trees` and the `watch` budget.
 
+**The base checkout** is the main checkout unless the project's `drgnx-search-base` names another checkout of it
+(a folder that is not one is warned about and ignored). Tier 1 lists, reads and diffs that checkout, `.drgnx/search.eld`
+is read there, and it is the watcher's main tree; the main checkout is then a worktree like any other. The store keeps
+the base's folder in `meta.base_root`: a different one at open resets the index (the trees with it), so the base is
+built again and every tree re-seeds against it. The setting is part of the project's signature, so changing it opens
+the project again.
+
+**Ranked files in a view** (`hrafn::rank`). In a tree the file set is the base's paths less the tree's tombstones plus
+its new paths: `base_paths` is the one shared list, `delta(view)` reads only the tree's rows, and `rank(base, delta,
+query, n)` puts a basename that starts with the query first, then one that holds it, then a path that holds it. The
+ranked query of render offload Task 21 (`search/files`) builds on these.
+
 `vec_key(chunker, embed_text)` is sha256 over the length-prefixed chunker version and text. A chunk has one key; each
 model that embeds it adds a `vec` row, so a branch switch back embeds nothing.
 

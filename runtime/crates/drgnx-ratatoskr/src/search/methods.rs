@@ -296,7 +296,36 @@ impl Hub {
         front.settings.current().loaded.values.search_builtin
     }
 
-    /// The project's globs: the file, narrowed by what the editor sent for the project.
+    /// The names the editor's per-project settings of ROOT's project are under (its id and slug).
+    async fn project_names(root: &Path) -> Vec<String> {
+        // git runs (up to 3 s): not on a runtime worker
+        let at = root.to_path_buf();
+        let project = crate::clock::blocking(move || norn::project::resolve(&at))
+            .await
+            .ok()
+            .flatten();
+        project
+            .iter()
+            .flat_map(|p| [p.id.clone(), p.slug.clone()])
+            .collect()
+    }
+
+    /// The checkout `drgnx-search-base` names for ROOT's project, when it does.
+    async fn base_for(front: &Front, root: &Path) -> Option<PathBuf> {
+        let names = Self::project_names(root).await;
+        names
+            .iter()
+            .find_map(|p| {
+                front
+                    .settings
+                    .effective("drgnx-search-base", Some(p))
+                    .filter(|(_, seen)| *seen)
+                    .map(|(v, _)| v)
+            })
+            .and_then(|v| v.as_str().map(PathBuf::from))
+    }
+
+    /// The project's globs: the file (in ROOT, the base checkout), narrowed by what the editor sent for the project.
     async fn config_for(&self, front: &Front, root: &Path) -> Config {
         let mut cfg = match config_file(root) {
             Ok(c) => c,
@@ -311,16 +340,7 @@ impl Hub {
                 };
             }
         };
-        // git runs (up to 3 s): not on a runtime worker
-        let at = root.to_path_buf();
-        let project = crate::clock::blocking(move || norn::project::resolve(&at))
-            .await
-            .ok()
-            .flatten();
-        let names: Vec<String> = project
-            .iter()
-            .flat_map(|p| [p.id.clone(), p.slug.clone()])
-            .collect();
+        let names = Self::project_names(root).await;
         let get = |name: &str| -> Option<Value> {
             names.iter().find_map(|p| {
                 front
@@ -373,9 +393,12 @@ impl Hub {
         {
             embedders.push(b);
         }
+        let base = Self::base_for(front, &real).await;
+        // another base is another project too: it is opened again (and its base rebuilt)
         let sig = embedders
             .iter()
             .map(|e| e.model().to_string())
+            .chain(base.iter().map(|b| format!("base={}", b.display())))
             .collect::<Vec<_>>()
             .join(",");
         let mut open = self.projects.lock().await;
@@ -384,7 +407,9 @@ impl Hub {
         {
             return Ok(o.project.clone());
         }
-        let config = self.config_for(front, &real).await;
+        let config = self
+            .config_for(front, base.as_deref().unwrap_or(&real))
+            .await;
         let project = Arc::new(
             Project::open(ProjectSpec {
                 root: real.clone(),
@@ -394,6 +419,7 @@ impl Hub {
                 config,
                 embedders,
                 power_root: PathBuf::from(power::SYS),
+                base,
                 #[cfg(feature = "test-hooks")]
                 test_permits: None,
             })
@@ -404,7 +430,17 @@ impl Hub {
         let watch = Arc::new(hrafn::ProjectWatch::new(move || {
             hrafn::HostWatch::new(&common).map(|w| Arc::new(w) as Arc<dyn hrafn::Watch>)
         }));
-        let (w2, main) = (watch.clone(), hrafn::TreeSpec::main(&real));
+        // the base checkout's events arm tier 1: it is the watcher's main tree
+        let base_root = project.base_root().to_path_buf();
+        let main = match crate::history::wire::git_dirs(&base_root) {
+            Some((gitdir, _)) if base_root != real => hrafn::TreeSpec {
+                key: hrafn::MAIN_TREE.into(),
+                root: base_root,
+                gitdir,
+            },
+            _ => hrafn::TreeSpec::main(&real),
+        };
+        let w2 = watch.clone();
         let added = crate::clock::blocking(move || w2.add_tree(main))
             .await
             .map_err(internal)?;

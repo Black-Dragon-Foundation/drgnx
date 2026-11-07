@@ -128,6 +128,8 @@ pub struct ProjectSpec {
     pub embedders: Vec<Arc<dyn DocEmbedder>>,
     /// The sysfs root for the battery gate (`/sys`).
     pub power_root: PathBuf,
+    /// The checkout the base is built from (`drgnx-search-base`); none: the main checkout.
+    pub base: Option<PathBuf>,
     /// Test-hooks: tier 2 takes one permit before each request.
     #[cfg(feature = "test-hooks")]
     pub test_permits: Option<Arc<tokio::sync::Semaphore>>,
@@ -226,6 +228,8 @@ struct Gate {
 
 struct Inner {
     root: PathBuf,
+    /// The checkout tier 1 builds the base from: the main checkout, or the one `drgnx-search-base` names.
+    base: PathBuf,
     id: String,
     store: CodeStore,
     deny: DenyList,
@@ -291,7 +295,37 @@ impl Project {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        // the base: another checkout of this project when the setting names one, else the main checkout
+        let base = match spec.base {
+            Some(b) => {
+                let (r2, b2) = (root.clone(), b.clone());
+                let same = crate::clock::blocking(move || {
+                    let real = std::fs::canonicalize(&b2).ok()?;
+                    (project_id(&real).ok()?.0 == r2).then_some(real)
+                })
+                .await
+                .ok()
+                .flatten();
+                if same.is_none() {
+                    tracing::warn!(
+                        "search: drgnx-search-base {} is not a checkout of {}: the main checkout is the base",
+                        b.display(),
+                        root.display()
+                    );
+                }
+                same.unwrap_or_else(|| root.clone())
+            }
+            None => root.clone(),
+        };
         let store = CodeStore::open(&path)?;
+        // another base: the base is built again from it, and every tree re-seeds against it
+        let named = base.to_string_lossy().into_owned();
+        if store.meta_get(META_BASE_ROOT).await?.as_deref() != Some(named.as_str()) {
+            if store.meta_get(META_BASE_ROOT).await?.is_some() {
+                hrafn::reset(&store).await?;
+            }
+            store.meta_set(META_BASE_ROOT, &named).await?;
+        }
         // edits may have happened while the hub was down: every tree is checked on its next use
         store.trees_reopened().await?;
         let (status, _) = watch::channel(Status {
@@ -301,6 +335,7 @@ impl Project {
         Ok(Project {
             inner: Arc::new(Inner {
                 root,
+                base,
                 id,
                 store,
                 deny,
@@ -331,6 +366,11 @@ impl Project {
     /// The main checkout's real path.
     pub fn root(&self) -> &Path {
         &self.inner.root
+    }
+
+    /// The checkout the base is built from (the main checkout unless `drgnx-search-base` names another).
+    pub fn base_root(&self) -> &Path {
+        &self.inner.base
     }
 
     pub fn id(&self) -> &str {
@@ -569,7 +609,7 @@ impl Project {
     /// answers from the base; a stale or unwatched one answers at once from its rows and starts a check (at most one
     /// per [`CHECK_TTL`]). TOUCHED: an agent's sandbox worked in the tree, so its git door is gix, never the CLI.
     pub async fn view_for(&self, root: &Path, touched: bool) -> Result<ViewOf, ProjectError> {
-        let (given, main) = (root.to_path_buf(), self.inner.root.clone());
+        let (given, main) = (root.to_path_buf(), self.inner.base.clone());
         let found = clock::blocking(move || tree_of(&given, &main))
             .await
             .map_err(io::Error::other)??;
@@ -577,7 +617,7 @@ impl Project {
             return Ok(ViewOf {
                 view: hrafn::View::Base,
                 worktree: None,
-                root: self.inner.root.clone(),
+                root: self.inner.base.clone(),
                 state: None,
                 checking: false,
             });
@@ -613,7 +653,7 @@ impl Project {
             },
             worktree: Some(key),
             root: if seeding {
-                self.inner.root.clone()
+                self.inner.base.clone()
             } else {
                 troot
             },
@@ -745,7 +785,7 @@ impl Project {
     /// The file REL as it is now (read through the root's descriptor, at most [`hrafn::files::MAX_FILE_BYTES`]); none
     /// when it cannot be read or is not text.
     pub fn read_now(&self, rel: &str) -> Option<String> {
-        self.read_now_in(&self.inner.root, rel)
+        self.read_now_in(&self.inner.base, rel)
     }
 
     /// What is wrong with the index's coverage of the listed files (storage design §12A.3 item 9), one line each.
@@ -791,6 +831,9 @@ impl Project {
         self.refresh_now().await
     }
 }
+
+/// The store's meta key naming the checkout its base was built from.
+const META_BASE_ROOT: &str = "base_root";
 
 /// `max_user_watches`: the user's inotify budget.
 const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
@@ -1127,12 +1170,12 @@ impl Inner {
     }
 
     fn allowed(&self, rel: &str) -> bool {
-        self.deny.check(&self.root.join(rel)) == Verdict::Allowed
+        self.deny.check(&self.base.join(rel)) == Verdict::Allowed
     }
 
     /// The file list (blocking: git and a read of every file).
     fn list(&self) -> io::Result<Vec<Listed>> {
-        hrafn::list(&self.root, &GitCli, &self.config, &|p: &str| {
+        hrafn::list(&self.base, &GitCli, &self.config, &|p: &str| {
             self.allowed(p)
         })
     }
@@ -1146,7 +1189,7 @@ impl Inner {
 
     async fn refresh(&self) -> Result<Refresh, ProjectError> {
         let listed = self.list()?;
-        let root = eitri::open_path(&self.root, eitri::Kind::Dir)
+        let root = eitri::open_path(&self.base, eitri::Kind::Dir)
             .map_err(|e| io::Error::other(e.to_string()))?;
         let read = |p: &str| {
             eitri::read_regular(root.fd.as_fd(), Path::new(p), hrafn::files::MAX_FILE_BYTES)
@@ -1155,7 +1198,7 @@ impl Inner {
         let models = self.models();
         let pairs: Vec<(&str, usize)> = models.iter().map(|(m, d)| (m.as_str(), *d)).collect();
         let r = hrafn::refresh(&self.store, &listed, &read, &pairs).await?;
-        if let Ok(head) = GitCli.head(&self.root) {
+        if let Ok(head) = GitCli.head(&self.base) {
             self.store
                 .meta_set(hrafn::index::META_BUILT_FROM, &head)
                 .await?;
