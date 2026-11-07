@@ -54,7 +54,18 @@
  ;; collection no longer lands in a keystroke (that was the failure before: 3 of 10 runs over 50); what is left comes from
  ;; the length of eat's output batches (20-60 ms under load), not from GC: DEFERRED M12e-5-1.  See docs/develop/perf.md.
  (terminal-typing (:input :p95) 7) (terminal-typing (:input :max) 13)
- (terminal-output (:input :p95) 6) (terminal-output (:input :max) 50)
+ (terminal-output (:input :p95) 6)
+ ;; drgnx's terminal (the Ghostty design, §8), targets not measurements: judged at the combined gate pass on the desktop
+ ;; island.  terminal-echo is end to end (:echo_ms: a key's send to the draw that shows its echo) with 30 agents
+ ;; streaming and a flood in a second terminal, on one hub; the flood rows are `cat' of 10 MB and 100 MB (eat allocated 20-30 MB/s); input max under the
+ ;; seq loop drops from eat's provisional 50 to 16.  terminal-typing's allocation per key and the 10k terminal's heap
+ ;; (terminal-backfill :heap_kb) are recorded first, not gated.
+ (terminal-output (:input :max) 16)
+ (terminal-echo (:echo_ms :p95) 8) (terminal-echo (:echo_ms :max) 16)
+ (terminal-output-10mb (:wall_ms) 250) (terminal-output-10mb (:alloc_rate) 2) (terminal-output-10mb (:draw_kb :p50) 40)
+ (terminal-output-10mb (:slice_ms :max) 4)
+ (terminal-output-100mb (:alloc_rate) 2) (terminal-output-100mb (:draw_kb :p50) 40) (terminal-output-100mb (:slice_ms :max) 4)
+ (terminal-backfill (:slice_ms :max) 4)
  ;; Glitnir (the compositor) P1, spec §9.2: the popup rows, judged by `--ab-env DRGNX_PERF_GLITNIR=on,off' on the judged
  ;; (Glitnir on) side at n >= 100 (`:compose' n = `(:compose :count)' over its rounds); hides included in popup-churn.
  ;; The popup-typing and popup-churn compose p95 rows are a known failure, GL-POPUP-CHURN-FULL-1 (GTK repaints the whole
