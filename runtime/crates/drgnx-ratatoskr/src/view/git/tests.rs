@@ -104,3 +104,16 @@ fn letters_are_rows_with_their_faces() {
     assert_eq!(r.props[0].2, "drgnx-git-status");
     assert_eq!(folder_row("a", Kind::Added).text, "●");
 }
+
+#[test]
+fn a_root_that_is_no_repository_is_an_error_not_no_changes() {
+    let dir = std::env::temp_dir().join(format!("letters-norepo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let err = read_status(&dir).expect_err("git status of a folder outside any repository fails");
+    assert!(!err.is_empty());
+    let ev = error_event("v", &dir, &err);
+    assert_eq!(ev["view"], "v");
+    assert_eq!(ev["root"], dir.to_string_lossy().as_ref());
+    assert_eq!(ev["error"], err);
+    std::fs::remove_dir_all(&dir).unwrap();
+}

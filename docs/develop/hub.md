@@ -2350,6 +2350,15 @@ the search itself is `hrafn::grep`).
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.
 
+### Git letters as rows (`git/letters`)
+
+`git/letters {view, root, shown?}` reads the repository's status on a thread and gives the view the rows `f:<path>` (a
+letter in its git face; ignored paths too, unless more than 20,000), `d:<folder>` (a mark for each folder in `shown` and
+for `.` that holds a change) and `branch`; a later call sends only what changed.  When git cannot read the status (no
+repository, git's ownership check, a missing git) the hub sends the event `git-letters-error {view, root, error}` to the
+asking connection with git's first complaint, and the view keeps its rows; the editor shows it as a warning notice and in
+` *drgnx git errors*`.  A root that is no folder is an `invalid-params` error of the call.
+
 ### Ranked file names as rows (`search/files`)
 
 Quick Open's and Find's candidates are a row stream too (`runtime/crates/drgnx-ratatoskr/src/view/files.rs`; the list

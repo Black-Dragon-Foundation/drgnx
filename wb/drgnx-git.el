@@ -474,6 +474,11 @@ running is overtaken by the hub: the newer read wins."
 (defun drgnx-git--hub-event (event data)
   "`drgnx-hub-event-functions': after a patch of a letters view (the view's own handler ran first), the panels
 read the status again."
+  (when (equal event "git-letters-error")
+    (when-let* ((root (gethash (plist-get data :view) drgnx-git--letters-views)))
+      (drgnx-git--stderr nil (format "%s: %s\n" root (plist-get data :error)))
+      (drgnx-notify 'wb 'warn (format "git status of %s: %s" (abbreviate-file-name root) (plist-get data :error))
+                    :id (list 'git-letters-error root))))
   (when (equal event "view-patch")
     (when-let* ((root (gethash (plist-get data :view) drgnx-git--letters-views)))
       (run-hook-with-args 'drgnx-git-changed-functions root))))

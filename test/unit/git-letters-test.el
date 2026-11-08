@@ -99,6 +99,23 @@ changed hook runs after each patch."
         (should (equal (list root root) drgnx-git-letters-test--changed))
         (should-not (drgnx-git-status (concat root "src/a.rs")))))))
 
+(ert-deftest drgnx-git/a-letters-error-reaches-the-user ()
+  "Pattern D: the hub's `git-letters-error' (git could not read the status) is a warning notice and a line in the errors
+buffer, never silence; the status of that root stays what it was."
+  (drgnx-git-letters-test--with root
+    (let ((notes nil))
+      (cl-letf (((symbol-function 'drgnx-notify) (lambda (&rest a) (push a notes) nil)))
+        (drgnx-git-refresh root)
+        (let ((view (plist-get (cdr (car drgnx-git-letters-test--calls)) :view)))
+          (with-current-buffer (get-buffer-create " *drgnx git errors*") (erase-buffer))
+          (drgnx-git--hub-event "git-letters-error"
+                                (list :view view :root (directory-file-name root) :error "fatal: detected dubious ownership"))
+          (should (= 1 (length notes)))
+          (should (eq 'warn (nth 1 (car notes))))
+          (should (string-match-p "dubious ownership" (nth 2 (car notes))))
+          (with-current-buffer " *drgnx git errors*"
+            (should (string-match-p "dubious ownership" (buffer-string)))))))))
+
 (ert-deftest drgnx-git/old-path-switch-reads-no-letters ()
   "Pattern D: with `drgnx-view-old-path' the hub is not asked, and a root has no letters (its status is the cache's)."
   (let ((drgnx-view-old-path t))

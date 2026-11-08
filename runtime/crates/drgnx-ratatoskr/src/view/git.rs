@@ -348,6 +348,11 @@ fn read_status(root: &std::path::Path) -> Result<Vec<u8>, String> {
     }
 }
 
+/// The event `git-letters-error` for VIEW and ROOT: git's complaint ERROR.
+pub fn error_event(view: &str, root: &std::path::Path, error: &str) -> serde_json::Value {
+    json!({"view": view, "root": root.to_string_lossy(), "error": error})
+}
+
 /// `git/letters`: read ROOT's status on a thread and give VIEW the rows; answers at once.
 pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
     let views = &f.core.views;
@@ -371,7 +376,15 @@ pub fn letters(f: &Front, c: &Caller, p: LettersParams) -> Result<bool, Error> {
     std::thread::Builder::new()
         .name("git-letters".into())
         .spawn(move || {
-            let Ok(out) = read_status(&root) else { return };
+            let out = match read_status(&root) {
+                Ok(out) => out,
+                Err(e) => {
+                    if let Some(f) = front.upgrade() {
+                        f.send_to(conn, "git-letters-error", error_event(&view, &root, &e));
+                    }
+                    return;
+                }
+            };
             let rows = rows(&parse(&out, IGNORED_LIMIT), &shown);
             if let Some(f) = front.upgrade() {
                 f.core.views.git_publish(&f, conn, &view, read, rows);

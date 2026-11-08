@@ -2158,6 +2158,33 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The event `git-letters-error`: `git/letters` could not read the status of ROOT for VIEW (git's complaint), so the\nview keeps the rows it has.  To the asking connection only.",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "error"
+        ],
+        "title": "LettersError",
+        "type": "object"
+      },
+      "doc": "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only",
+      "name": "git-letters-error"
+    },
+    {
+      "data": {
         "$defs": {
           "HuddleReply": {
             "additionalProperties": false,

@@ -21,6 +21,16 @@ pub struct LettersParams {
     pub shown: Option<Vec<String>>,
 }
 
+/// The event `git-letters-error`: `git/letters` could not read the status of ROOT for VIEW (git's complaint), so the
+/// view keeps the rows it has.  To the asking connection only.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LettersError {
+    pub view: String,
+    pub root: String,
+    pub error: String,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![method!(
         "git/letters", GitLetters(LettersParams) -> bool,

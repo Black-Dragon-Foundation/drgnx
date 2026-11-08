@@ -408,6 +408,11 @@ static EVENTS: LazyLock<Vec<EventType>> = LazyLock::new(|| {
             "the hub asks the editor for advances it cannot read from a font file, [role, char] each: answered by view/glyphs"
         ),
         event!(
+            "git-letters-error",
+            crate::methods::git::LettersError,
+            "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only"
+        ),
+        event!(
             "search-grep-done",
             crate::methods::search::GrepDone,
             "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing"
@@ -504,6 +509,7 @@ mod tests {
                     "view-patch",
                     "view-glyphs",
                     "search-grep-done",
+                    "git-letters-error",
                     // the native view model
                     "view-model",
                     // the terminals
