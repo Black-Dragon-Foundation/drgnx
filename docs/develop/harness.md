@@ -516,6 +516,31 @@ sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
 
+## Look scenes
+
+`drgnx ui look-scenes OUT` draws the look's scenes and saves them as PNGs in OUT. Each PNG is named after the approved
+mockup it is compared with (`window-dark-s1.png`, `palette-s2.png`, …). The command runs in a container on the
+Nidhogg build under test, once with `DRGNX_UI_SCALE=1` and once with `2`.
+
+How it works:
+- It makes a git project from a copy of drgnx's `core`, `wb`, `themes` and `test/unit`, on branch `main`. Two files
+  are modified, one is untracked, and there is a shell script with a Python heredoc.
+- It starts a session with the drgnx configuration at 1500×1000 logical pixels.
+- It loads `harness/drgnx-look-scenes-session.el` into the session and calls each scene's `drgnx-look-scene-NAME`.
+  The scenes, in order, are listed in `drgnx-look-scenes`.
+- It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows and the
+  modules. It also writes `scenes-sN.eld`, with the shots and each scene's errors.
+
+What it reads from the environment:
+- `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, diff-hl, …). A session has no packages of its
+  own, and the user's install does.
+- `DRGNX_RATATOSKR_BIN`: a `test-hooks` ratatoskr with `ratatoskr-mock` beside it, for the agent panel. Without it, the
+  agent scenes record what is missing.
+
+Nothing in the command asserts a pixel. **A look change is done only when its scene sits beside its mockup at scales 1
+and 2, someone has looked at both, and the remaining differences are written down.** `test/unit/look-scenes-test.el`
+checks that every mockup has a scene and that the project is set up correctly.
+
 ## Emacs-side API
 
 Functions the CLI and MCP server call through `emacsclient -s <session socket> -e`; each returns JSON text. Each is sent
@@ -555,6 +580,7 @@ bin/drgnx ui keys drgnx-ui-1-3f9a0c "C-x b"             # kbd syntax
 bin/drgnx ui type drgnx-ui-1-3f9a0c "hello"
 bin/drgnx ui measure drgnx-ui-1-3f9a0c '[{"keys":"C-x 2"},{"x":10,"y":10}]'
 bin/drgnx ui stop drgnx-ui-1-3f9a0c | bin/drgnx ui reap
+bin/drgnx ui look-scenes OUT                     # the look's scenes as PNGs (see Look scenes)
 ```
 
 Input commands wait until the session settles and print the jank report. `click` takes X and Y as non-negative

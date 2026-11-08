@@ -26,6 +26,7 @@
 (declare-function drgnx-perf-ab-env "drgnx-perf-run")
 (declare-function drgnx-perf-ab "drgnx-perf-run")
 (declare-function drgnx-bench-run "drgnx-bench")
+(declare-function drgnx-look-scenes-run "drgnx-look-scenes")
 
 (defconst drgnx-ui-harness-dir (file-name-directory (or load-file-name buffer-file-name)))
 (defconst drgnx-ui-repo-dir (file-name-directory (directory-file-name drgnx-ui-harness-dir)))
@@ -1986,6 +1987,7 @@ CONFIG (default drgnx) and print each scenario: green, red (known) with its trac
   click NAME X Y | click NAME --buffer B --text T     [--button N] [--count N] [--hold-ms N]
   keys NAME KEYS | type NAME TEXT                     kbd syntax / literal text
   measure NAME ACTIONS-JSON                           several actions, one jank report
+  look-scenes OUT                                     the look's scenes as PNGs in OUT, for the mockups' side-by-side
   mcp                                                 serve the drgnx-ui MCP tools on stdio
   test-ui                                             the --ui test tier
   test-ui-session                                     its test/ui half alone (bin/drgnx check)
@@ -2049,6 +2051,8 @@ a boolean flag (`drgnx-ui--boolean-flags') becomes :name t."
       ("type" (drgnx-ui-measure (drgnx-ui-own-session name) (list (list :type (nth 1 pos)))))
       ("measure" (drgnx-ui-measure (drgnx-ui-own-session name)
                                    (append (drgnx-ui--parse-json (or (nth 1 pos) "[]")) nil)))
+      ("look-scenes" (require 'drgnx-look-scenes (expand-file-name "drgnx-look-scenes" drgnx-ui-harness-dir))
+       (drgnx-look-scenes-run (or name (drgnx-ui--fail "look-scenes needs OUT, a directory for the PNGs"))))
       ("test-ui" (drgnx-ui-run-ui-tests))
       ("test-ui-session" (drgnx-ui-run-ui-session-tests))
       ("test-scenario" (drgnx-ui-run-scenarios (plist-get opts :config) (plist-get opts :dir)))
