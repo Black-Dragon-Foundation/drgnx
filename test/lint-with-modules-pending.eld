@@ -8,7 +8,6 @@
  "test/unit/jobs-test.el: drgnx-jobs--running"
  "test/unit/mod-editing-test.el: child-frame-chrome"
  "test/unit/mod-remote-test.el: eglot--servers-by-project"
- "test/unit/mod-terminal-test.el: drgnx-terminal--notice-shown"
  "test/unit/mod-tty-frames-test.el: xterm-mouse-mode"
  "test/unit/mod-tty-frames-test.el: drgnx-tty-mouse"
  "test/unit/mod-tty-popups-test.el: standard-display-table"

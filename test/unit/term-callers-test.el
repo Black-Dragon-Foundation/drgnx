@@ -60,8 +60,7 @@
   ;; the modal engines start it in insert state, and Esc and q are the program's, never Close Pane
   (require 'drgnx-close (expand-file-name "modules/ui/drgnx-close" drgnx-dir))
   (should (memq 'drgnx-term-mode drgnx-modal-input-modes))
-  (should (memq 'drgnx-term-mode drgnx-close-input-modes))
-  (should-not (memq 'eat-mode drgnx-modal-input-modes)))
+  (should (memq 'drgnx-term-mode drgnx-close-input-modes)))
 
 (provide 'term-callers-test)
 ;;; term-callers-test.el ends here

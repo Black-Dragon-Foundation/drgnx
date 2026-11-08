@@ -2,7 +2,7 @@
 # (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and outside drgnx's own terminal never
 # touches PROMPT, PS1 or your plugin manager.  What it does: tab completion for drgnx; inside drgnx's own terminal,
 # Ghostty's shell integration (prompt marks, the folder, the title; it adds to PS1 and the hooks) and an ssh that
-# gives the host a TERM it knows; inside eat, eat's shell integration.
+# gives the host a TERM it knows.
 (( ${+_drgnx_sourced} )) && return 0
 typeset -g _drgnx_sourced=1
 
@@ -12,19 +12,6 @@ fpath=("${${(%):-%x}:A:h}" "${fpath[@]}")
 if (( ${+functions[compdef]} )); then
   autoload -Uz _drgnx
   compdef _drgnx drgnx
-fi
-
-# Inside eat only: its integration file is what makes a prompt clear "a program is running".  Eat refuses to
-# enable itself twice, so a line of your own that sources it is harmless.  It hands Emacs your history with
-# tail on $HISTFILE: without a readable HISTFILE (zsh sets none by default) that would print an error at every start,
-# so it then sees /dev/null instead, for the moment it is sourced; your HISTFILE stays as it was.
-if [[ ${INSIDE_EMACS-} == *eat* && -n ${EAT_SHELL_INTEGRATION_DIR-} && -r ${EAT_SHELL_INTEGRATION_DIR-}/zsh ]]; then
-  if [[ -r ${HISTFILE-} ]]; then
-    source "$EAT_SHELL_INTEGRATION_DIR/zsh"
-  else
-    _drgnx_eat() { local HISTFILE=/dev/null; source "$EAT_SHELL_INTEGRATION_DIR/zsh"; }
-    _drgnx_eat; unfunction _drgnx_eat
-  fi
 fi
 
 # Inside drgnx's own terminal (DRGNX_TERMINAL, set by drgnx-term.el).  Ghostty's shell integration, vendored in

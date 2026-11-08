@@ -511,6 +511,17 @@ process took the lock meanwhile: it is put back and this is a `drgnx-pkg-sync-bu
   (when (and (not (file-exists-p (drgnx-elpa-dir))) (file-directory-p (drgnx-pkg--old)))
     (rename-file (drgnx-pkg--old) (directory-file-name (drgnx-elpa-dir)))))
 
+(defun drgnx-pkg--retire-eat ()
+  "Remove eat, the old terminal backend (drgnx's own terminal replaced it), from the packages directory, once: a
+marker in the data directory says it was done, so a copy the user installs again later stays.  Called holding the
+sync lock, before the staging copy is made."
+  (let ((marker (expand-file-name "eat-retired" (drgnx-data-dir))))
+    (unless (file-exists-p marker)
+      (dolist (d (and (file-directory-p (drgnx-elpa-dir)) (directory-files (drgnx-elpa-dir) t "\\`eat-[0-9]")))
+        (delete-directory d t))
+      (make-directory (drgnx-data-dir) t)
+      (make-empty-file marker))))
+
 (defun drgnx-pkg--sweep ()
   "Delete what a killed run left: half downloads (cache/*.part), the lock's temp files and stale locks
 set aside.  Called holding the sync lock: no other run is writing them."
@@ -1290,6 +1301,7 @@ load byte-compiled, and the next sync compiles what is missing."
                             (mapconcat (lambda (r) (format "%s cannot be removed: %s" (car r) (cdr r))) refused "; "))))
       (drgnx-pkg--recover)
       (drgnx-pkg--sweep)
+      (drgnx-pkg--retire-eat)
       (unwind-protect
           (let ((package-user-dir staging) (package-directory-list nil)
                 (package-archives (cond (offline nil) (archives-given archives) (t (drgnx-pkg-archives))))

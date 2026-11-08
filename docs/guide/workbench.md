@@ -217,7 +217,7 @@ the entry is back.
 | `panel` Problems | flymake / flycheck lists |
 | `panel` Output | `*Messages*`, `*Warnings*`, `*Backtrace*`, ert results |
 | `panel` Results | compilation, grep, occur, xref |
-| `panel` Terminal | New Terminal (your shell in eat; eshell for a remote folder, on Windows, and until eat is synced), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
+| `panel` Terminal | New Terminal (your shell in drgnx's own terminal; eshell for a remote folder and on Windows), New Eshell, shell, eshell, term, vterm, ielm, other comint buffers |
 | `panel` Help | help, apropos, Info, man, eldoc documentation |
 | `right` | agents, chat, viewers — tabs come with their modules (M7) |
 | `popup` | transient, which-key, `*Completions*`, `*Calendar*` |
@@ -484,7 +484,7 @@ and the panel, the right dock and the popup lane close with `Esc` or `q` (**Clos
 profiles): the panel and the right dock hide (size and tabs kept), a popup ends, and focus goes to the editor you
 used last. The keys only act where you read, not where you type: in a buffer you can edit `q` types a `q`, `Esc` is the Meta
 prefix (`Esc x` is `M-x`) and, in the Vim profile, still leaves insert state, and a terminal tab (`comint`,
-`eshell`, `term`, `vterm`, `eat`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
+`eshell`, `term`, `vterm`; `drgnx-close-input-modes`), a live page you are driving and the minibuffer keep
 both keys. A mode that takes the keyboard for itself joins by adding a predicate to `drgnx-close-input-functions`. In a terminal frame `Esc` stays the Meta prefix, so use
 `q` or the × there. The left dock's sections keep `Esc` as Back to the Editor (the sidebar stays); its ×, or Close
 Pane in the palette, hides the sidebar. In the Vim profile the two keys close a read-only pane in normal and motion

@@ -2,8 +2,7 @@
 #   source /path/to/drgnx/etc/shell/drgnx.fish
 # (docs/guide/shell.md).  It prints nothing, runs no program while it loads, and never touches fish_prompt or your
 # plugin manager.  What it does: tab completion for drgnx; inside drgnx's own terminal, Ghostty's shell integration
-# (prompt marks, the folder) and an ssh that gives the host a TERM it knows; inside eat, the few lines of eat's
-# integration that fish needs (eat ships none for fish): directory tracking and "is a command running".
+# (prompt marks, the folder) and an ssh that gives the host a TERM it knows.
 if not set -q _drgnx_sourced
     set -g _drgnx_sourced 1
 
@@ -241,26 +240,6 @@ if not set -q _drgnx_sourced
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l dry-run -d 'Say what each step would do, change nothing'
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l yes -d 'Confirm the age/chezmoi install and the key import'
     complete -c drgnx -n '__fish_seen_subcommand_from bootstrap' -l replace -d 'Overwrite a different key in the keyring'
-
-    # Inside eat only.  The prompt-end mark is bash and zsh only: fish cannot add it without redefining fish_prompt.
-    if string match -q '*eat*' -- "$INSIDE_EMACS"; and set -q EAT_SHELL_INTEGRATION_DIR
-        function __drgnx_eat_preexec --on-event fish_preexec
-            set -g __drgnx_eat_ran 1
-            printf '\e]51;e;F;%s\e\\\\' (printf %s $argv[1] | base64 | string join '')
-            printf '\e]51;e;G\e\\\\'
-        end
-
-        function __drgnx_eat_prompt --on-event fish_prompt
-            set -l last $status
-            if set -q __drgnx_eat_ran
-                set -e __drgnx_eat_ran
-                printf '\e]51;e;H;%s\e\\\\' $last
-            end
-            printf '\e]51;e;J\e\\\\'
-            printf '\e]51;e;A;%s;%s\e\\\\' (printf %s $hostname | base64 | string join '') (printf %s $PWD | base64 | string join '')
-            printf '\e]51;e;B\e\\\\'
-        end
-    end
 
     # Inside drgnx's own terminal (DRGNX_TERMINAL, set by drgnx-term.el).  Ghostty's shell integration, vendored in
     # ghostty/ next to this file (ghostty/NOTICE): prompt and command marks, a sudo that keeps TERMINFO.  Its features

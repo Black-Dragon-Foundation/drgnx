@@ -1225,5 +1225,20 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
           (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) unit))))
       (should (equal (directory-files dir nil "\\`[^.]\\|\\`\\.[^.]") '("drgnx.service"))))))
 
+(ert-deftest drgnx-pkg/eat-is-retired-once-by-the-next-sync ()
+  ;; eat, the old terminal backend, is gone: the first sync removes its package directory, a later one leaves a copy
+  ;; the user installed again alone
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0")))))
+      (drgnx-pkg-test--want root 'fa)
+      (cl-flet ((seed ()
+                  (make-directory (expand-file-name "eat-0.9.4" (drgnx-elpa-dir)) t)
+                  (write-region "" nil (expand-file-name "eat-0.9.4/eat.el" (drgnx-elpa-dir)) nil 'silent))
+                (sync () (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok)))
+                (eat-p () (file-exists-p (expand-file-name "eat-0.9.4" (drgnx-elpa-dir)))))
+        (seed) (sync)
+        (should-not (eat-p))
+        (seed) (sync)
+        (should (eat-p))))))
 
 ;;; pkg-test.el ends here

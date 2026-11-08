@@ -428,7 +428,7 @@ every line, with the machine: `(:synthetic t :composition SHA :machine HOST)`).
 - **Rules** (`drgnx-perf-day-verdict`): RSS grows at most 20 % from the first steady round to the last, and no
   workload fails. There is **no 400 MB rule** (that is the soak's); a day is not compared with a user's numbers (a user's
   RSS is not the Lisp heap, the number of collections follows their consing, pauses differ by machine).
-- **Not in it:** the workloads that need eat, websocket, evil, popups, a mock agent or the repository's own index; real
+- **Not in it:** the workloads that need websocket, evil, popups, a mock agent or the repository's own index; real
   language servers and agents; Magit (the built-in `vc-git` stands in).
 - **Container memory:** `DRGNX_TEST_DAY_MEMORY` (default 6g, a desktop size; set 4g or less on a laptop), swap equal. The
   host name in the label is `DRGNX_PERF_MACHINE`, which `--container` sets to the host's.
@@ -454,7 +454,7 @@ fails). It gates on the budgets, not on history, and not on wall clock (the runn
 | RSS | 147 MB | 218 MB |
 | key resolution (startup) | 82 ms | 20 ms |
 
-## The terminal (eat), 2026-10-18
+## The terminal before drgnx's own (eat, deleted), 2026-10-18
 
 Measured on this machine at load 2.5–5 (other builds ran; each figure is the workload's median of three repeats, over
 several runs, range shown):
@@ -464,13 +464,13 @@ several runs, range shown):
 | terminal-typing (`cat` echoing) | 1.3–1.8 ms | 3.5–4.9 ms | 4.0–12.5 ms | none |
 | terminal-output (`seq 1 2000` in a loop, in the panel) | 1.8–2.7 ms | 4.1–6.0 ms | 23–68 ms | 9–10 collections, ~46 ms each, ~460 ms in all |
 
-The numbers above and below were measured with eat. The terminal workloads now drive drgnx's terminal (on Ghostty's
+The numbers above were measured with eat, the terminal backend before drgnx's own, which is deleted. The terminal workloads now drive drgnx's terminal (on Ghostty's
 engine, a worker per terminal behind the hub); its rows below are judged at the combined gate pass on the desktop island.
 
 ## drgnx's terminal (the Ghostty engine), 2026-11-08
 
 The design's targets (§8), in `budgets.eld`: `terminal-echo` input p95 8 ms and max 16 ms with 30 agents streaming and
-a flood in a second terminal; `terminal-output` input max 16 ms (from eat's provisional 50); `cat` of 10 MB and 100 MB
+a flood in a second terminal; `terminal-output` input max 16 ms; `cat` of 10 MB and 100 MB
 at ≤ 2 MB/s of Emacs allocation, `draw_kb` p50 ≤ 40 kB, draw slices ≤ 4 ms, and 10 MB on screen in ≤ 250 ms;
 `terminal-backfill` slices ≤ 4 ms. terminal-typing keeps p95 7 and max 13; its allocation per key and the full 10k
 terminal's heap are recorded first, then gated. If `terminal-echo` misses only because the key or the patch queued
@@ -494,41 +494,6 @@ A flood draws the screen only (the rows that scrolled past fill in once it pause
 Budgets (`test/perf/budgets.eld`): terminal-typing p95 7 ms, max 13 ms; terminal-output p95 6 ms, max 50 ms (provisional, below). Typing into
 a terminal costs about what typing into a file does.
 
-**Where the output garbage comes from.** Eat's terminal emulation allocates about 470 bytes for every text segment it
-writes (14 conses, 3 intervals, 10 vector cells and a string in `eat--t-write`) and 56 for each line feed, whatever the
-segment's length: 110 bytes per output byte for `seq` lines, 7 for 80-column lines. A flood saturates Emacs (about 0.2 MB/s of
-`seq`), so 20 to 30 MB of garbage a second and a collection every ~2 s. drgnx's own hooks do not appear in the memory
-profile, `eat-minimum-latency`/`eat-maximum-latency` change nothing about the amount (larger values only make batches of
-250 to 600 ms), and neither does the scrollback. Cutting the garbage means rewriting eat's writer (a fast path saved about
-a quarter: not worth shadowing eat's internals).
-
-**Where the pause lands.** A collection (45 to 55 ms: the live heap, not the garbage, sets it) is run by whichever code
-allocates when the threshold is crossed. That is often the keystroke's own handling (the command, its redisplay, the
-harness recorder) or the eat batch that runs before the latency timer; the pause then counts. So while a terminal prints,
-`tools/terminal-eat` takes the collection itself, after an eat output batch, when no key was handled in the last 20 ms, no
-input is waiting (`input-pending-p`) and 85% of `gc-cons-threshold` has been allocated: it calls the GC owner's `drgnx-gc-gap`
-(below; `drgnx-gc-gap-quiet`, nil
-turns it off; the module's old `drgnx-terminal-eat-gc-quiet` is an obsolete alias of it). The threshold is
-unchanged (a higher one only trades the pause for a longer one: 95 ms at 256 MB, and 410 MB of memory), and the natural
-collection stays as the backstop. The pause is not shortened, only kept out of a keystroke's handling; a key that arrives
-during it still waits.
-
-Measured on a machine at load 2.7 to 6.2, ten runs of terminal-output each (the workload's median of three repeats):
-
-| | max, sorted | over 50 ms |
-|---|---|---|
-| without the early collection | 8.7 16.8 23.9 24.1 25.3 39.5 41.9 53.3 54.6 54.9 | 3 of 10 |
-| with it | 5.3 5.6 5.9 5.9 22.3 24.0 30.7 36.3 40.7 49.4 | 0 of 10 |
-
-A second comparison, five runs each on a busy machine (load 3.3 to 7.8), could not tell the two apart (with: 29 6 17 36
-44; without: 26 5 38 32 35), so the evidence that the early collection helps is the mechanism (no collection overlapped a
-slow keystroke with it) and the first ten-run comparison, not a large margin.
-
-What remains is an eat output batch of 20 to 60 ms (under load) that a key waits for; slicing the batches (one chunk per
-timer) made the p95 worse, because each slice redraws the terminal. **terminal-output's max budget is provisional**: 50 ms
-is the ceiling, not a measurement (ten runs per arm, a busy machine, worst 49.4). The failures it can still give come from
-the length of eat's output batches, not from GC (DEFERRED M12e-5-1: throttle or slice eat's output without the redraw cost).
-terminal-typing's p95 is 7 ms: the worst of 16 runs with the module active (1.9 to 6.4, load 3 to 6), rounded up.
 
 ## Tuning (and why)
 

@@ -210,8 +210,8 @@ their own, so they never reach your drgnx); a server named anything but `drgnx` 
 to the front with `(drgnx-session-raise)`, has it read the AI keys once per start (`drgnx-ai-load-keys-soon`: from
 a timer, [ai.md](ai.md#keys)), sends files as file arguments and each folder as
 `(drgnx-session-open-folder "…")`. Every call but `--wait`'s file call has `-n` (no waiting); with no display,
-`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`DRGNX_TERMINAL` is set, or `INSIDE_EMACS` names eat, and
-`DRGNX_SERVER_NAME` is set: the terminal's Emacs's socket) none of that runs but the AI keys: the files and folders go
+`--wait` is just `emacsclient -t -- FILE…`. In drgnx's terminal (`DRGNX_TERMINAL` and
+`DRGNX_SERVER_NAME` are set: the terminal's Emacs's socket) none of that runs but the AI keys: the files and folders go
 straight to that server, with neither `-c` nor `-t`, so they open in its selected frame. `drgnx -t` sends each file as
 `(drgnx-session-open-file "…")`. Emacs asks in the server's process filter about an open buffer whose file changed
 (`server-visit-files` reverts it with `(revert-buffer t nil)`; `find-file` asks "Reread from disk?"), so an advice
@@ -233,4 +233,4 @@ runs `emacsclient` with `env -u XDG_RUNTIME_DIR`, so Terminal and Finder reach t
 headless `open --check`), and the live scenario `test/live/drgnx-session-keep-or-quit-test.el` (a daemon session:
 `bin/drgnx open` with a file and a folder with a space and an accent, then the last window closed in each mode).
 From drgnx's terminal: `test/unit/terminal-bin-test.el` (the emacsclient calls inside and outside drgnx's terminal) and the live
-`test/live/drgnx-terminal-test.el` (zsh in eat: `cd` followed, `drgnx` with odd names, `git commit`, the key split).
+the terminal's own tests (`test/unit/term-*-test.el`).

@@ -105,7 +105,7 @@ later (Meow is the candidate):
   already running; it works in Xterm-compatible terminals, and the default shape returns when Vim editing stops.
 - **Panels are in Emacs state.** They keep their own keys and get `SPC` leader and `j` / `k` for rows; forms (the
   Search/Replace view) take typed text and have no Vim keys.
-- **Inputs are in insert state.** Shells (eshell, comint, term, eat) and commit messages start where you type.
+- **Inputs are in insert state.** Shells (eshell, comint, term) and commit messages start where you type.
   The minibuffer is never modal.
 - **Leader Menu.** `M-SPC` from any state, and `SPC` in normal state, show the leader's keys in a which-key popup.
 - **Toggle Modal Editing** (`SPC u m`, the palette) turns Vim editing off and on for this session; the key stack
