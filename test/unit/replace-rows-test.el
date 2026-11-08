@@ -136,6 +136,50 @@ the old version), is dropped by the editor and never drawn."
       (when buf (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-replace-rows/unsaved-buffer-rescan-still-marks-on-the-hub-path ()
+  "Pattern A: on the hub path a modified buffer's matches are the Lisp rescan's, not the disk's.  a.txt: the buffer
+has a match the file lacks, and the hub found none; b.txt: the hub found a match on disk that the buffer no longer
+has.  After `search-grep-done' the view shows a.txt's match and no row of b.txt, the status counts what is shown, and
+Replace All writes the buffer's match."
+  (drgnx-replace-rows-test--with
+    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-hub" t)))
+           (a (expand-file-name "a.txt" dir)) (b (expand-file-name "b.txt" dir)) (c (expand-file-name "c.txt" dir))
+           bufs)
+      (unwind-protect
+          (progn
+            (write-region "nothing here\n" nil a nil 'silent)
+            (write-region "old needle\n" nil b nil 'silent)
+            (write-region "disk needle\n" nil c nil 'silent)
+            (let ((ba (find-file-noselect a)) (bb (find-file-noselect b)))
+              (setq bufs (list ba bb))
+              (with-current-buffer ba (goto-char (point-max)) (insert "a needle appears\n"))
+              (with-current-buffer bb (erase-buffer) (insert "no match now\n")))
+            (setq drgnx-replace--root dir)
+            (drgnx-replace--fill 'find "needle")
+            (drgnx-replace--search-now)
+            (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
+            (drgnx-view-apply-patch
+             (drgnx-replace-rows-test--patch
+              view 1 2 (list (list :insert (list :after nil
+                                                 :rows (list (drgnx-replace-rows-test--row (concat "f:" b) "[x] b.txt")
+                                                             (drgnx-replace-rows-test--row (concat "m:" b ":1:4") "  [x] old needle")
+                                                             (drgnx-replace-rows-test--row (concat "f:" c) "[x] c.txt")
+                                                             (drgnx-replace-rows-test--row (concat "m:" c ":1:5") "  [x] disk needle")))))))
+            (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 2 :matches 2))
+            (drgnx-view-draw-now drgnx-view)
+            (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))
+              (should (string-match-p "a\\.txt" text))
+              (should (string-match-p "a needle appears" text))
+              (should-not (string-match-p "b\\.txt" text))
+              (should (string-match-p "c\\.txt" text)))
+            (should (string-match-p "2 results in 2 files" (buffer-substring-no-properties
+                                                            drgnx-replace--status-beg drgnx-replace--status-end)))
+            (let ((ms (drgnx-replace--rows-ticked nil)))
+              ;; no model here: the hub's c.txt is not in it
+              (should (equal (list a) (mapcar (lambda (m) (plist-get m :file)) ms)))))
+        (dolist (x bufs) (with-current-buffer x (set-buffer-modified-p nil)) (kill-buffer x))
+        (delete-directory dir t)))))
+
 (ert-deftest drgnx-replace-rows/old-path-switch-still-searches ()
   "Pattern D: with `drgnx-view-old-path' the view is not hub-fed and a search runs the engine in Emacs, no hub call."
   (let ((drgnx-view-old-path t) (asked nil) (calls nil) (drgnx-replace-view "rr-old") (drgnx-view--types drgnx-view--types))

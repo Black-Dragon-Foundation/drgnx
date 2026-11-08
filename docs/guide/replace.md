@@ -109,5 +109,7 @@ base.  `search-grep-done` ends the search and gives the count the status line sh
 nothing is searched again.  Symbol mode (the language server's edits), a hub that is down and
 `drgnx-view-old-path` keep the Lisp engine and its rows, and the view changes between the two with each search.  The
 file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second
-(an unsaved edit is not on disk, so the hub path does not see it; the rescan of a file from its buffer, `drgnx-replace--scan`,
-is the Lisp engine's).  `test/unit/replace-rows-test.el` covers the stream with no hub.
+.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
+(`drgnx-replace--scan`, after each search and half a second after an edit), also when the hub found nothing in the file:
+those matches take the place of the hub's rows of the file, are counted and are what Replace All and Replace This
+write.  Next Match and the tick boxes skip them (they are not in the hub's model); a new search forgets them.  `test/unit/replace-rows-test.el` covers the stream with no hub.
