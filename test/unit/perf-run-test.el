@@ -347,6 +347,17 @@ file; without it the measure is as written."
       (should (member "(m)" forms))                         ; the measure itself is not wrapped again
       (should-not (cl-some (lambda (f) (string-prefix-p "(drgnx-perf-profiled" f)) forms)))))
 
+(ert-deftest drgnx-perf-run/the-terminal-flood-is-a-wait-the-profiler-can-see-into ()
+  "Pattern D: `terminal-flood' types no key and its measure is the wait itself (`drgnx-perf--term-watch'), with the
+setup that opens the streaming terminal outside it, so a profile of the measure is the stream's own work; the
+terminal workloads that profile only the driver (a file built in the measure) are not it."
+  (let ((w (cdr (assq 'terminal-flood (drgnx-perf-run--workloads)))))
+    (should w)
+    (should-not (plist-get w :actions))
+    (should (string-match-p "drgnx-perf--term-watch" (plist-get w :measure)))
+    (should (string-match-p "seq 1 2000" (plist-get w :setup)))
+    (should (assq 'terminal-flood drgnx-perf-run-unseeded))))
+
 (ert-deftest drgnx-perf-run/a-tree-of-sources-is-built-before-the-run ()
   "Pattern D: a tree with a Lisp file whose .elc is missing or older than it is built before the sessions start (a
 run of sources measures the interpreter); a compiled tree is not."

@@ -53,6 +53,7 @@ DRGNX_MODAL_ELPA=DIR        a package directory with evil (see below): adds the 
 | terminal-output-10mb, terminal-output-100mb | `cat` of a 10 MB (100 MB) file of numbered lines in a new terminal in the panel, then a mark; no keys | `:wall_ms` from the start to the mark on screen, the draws and `:alloc_rate` |
 | terminal-echo | terminal-typing end to end with load: the 120 characters typed into a terminal running `cat` in the editor area while 30 mock agents stream (their Work map shown, the 30-agent fixture's hub) and a second terminal in the panel runs the `seq` loop; one hub carries the agents, both terminals and the keys | input latency (the key read to its echo drawn) |
 | terminal-echo-idle | the same with nothing else running | input latency |
+| terminal-flood | the terminal in the panel streams `seq 1 2000` in a loop for 10 s and no key is typed: the measure is only the wait, so a profile (`DRGNX_PERF_PROFILE=1`) shows the stream's decode and the draws | `:alloc_rate` (MB/s), `:gc_count` and `:gc_pause` over the 10 s, the draws (`:slice_ms`, `:draw_kb`); report-only |
 | terminal-backfill | `seq 1 10000` in a new terminal in the panel, timed until the backfill has brought line 1 into the buffer | the draws while it fills (`:slice_ms`); `:lines`, and `:heap_kb` (the live objects a collection finds against before the terminal opened, plus the buffer's text): the 10k terminal's memory, recorded only |
 | frames | 5 new frames until drawn | frame time |
 | redisplay | 30 forced redisplays of the fixture | redisplay time |
