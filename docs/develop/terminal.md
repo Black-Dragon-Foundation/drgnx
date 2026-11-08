@@ -261,13 +261,21 @@ program runs).
   a font change never re-pairs the buffer, and no `view/env` is sent). A reset that came before the answer found no
   buffer, so the answer sends `view/resync` when nothing was applied yet. With no subscription the buffer waits and
   `drgnx-hub-connect` runs; the subscription opens it.
+- **What an open reuses** (memos, `core/drgnx-memo.el`, activated by the module's setup): the environment (`term-env`,
+  one per session, built again when `process-environment` is set or bound to another list, a terminal setting it is
+  made of changes, the terminfo entry appears or goes, or the server starts or stops; the epoch `term-env-set` watches
+  `process-environment`, since `setenv` edits it in place), the `colours` of the config (`term-colours`, per frame
+  and weak on it, read again after a theme change: the epoch `term-theme`) and the word syntax table (`term-word-syntax`,
+  one for every terminal buffer, per value of `drgnx-term-selection-word-chars`). Together they were ~38 kB of an
+  open's ~78 kB of allocation.
 - **The view type `drgnx-term-view`:** `:delay 0` (no throttle; the 4 ms slices stay), `:ack t`, `:epoch-reset nil`,
   `:follow-tail t`. Its PATCHED puts the inserter's overlays back, then point and the cursor on the cursor's row and
   column (`cursor-type` from the shape: block `box`, hollow `hollow`, bar `(bar . 2)`, underline `(hbar . 2)`; not
   visible: nil). A cursor past the row's last character (trailing blanks are not sent) is drawn by an overlay's
   `after-string` of blanks whose last carries `cursor`.
-- **Theme:** a theme enabled or disabled repaints every terminal from the faces (`drgnx-view-patch-repaint`): rows
-  keep their keys, nothing goes to the hub.
+- **Theme:** a theme enabled or disabled bumps `term-theme` and repaints every terminal from the faces
+  (`drgnx-view-patch-repaint`): rows keep their keys; the workers get the new `colours` in a `term/config`. A face
+  changed without a theme (`set-face-attribute`) reaches a new terminal's worker only after the next theme change.
 - **Scrollback:** `drgnx-term-scrollback-lines`'s `:apply` sends `term/config` `scrollback-lines` to every worker,
   which removes the oldest rows or backfills; window-start reaching the buffer's top sends `term/fetch` with the first
   row's key (one at a time; not again for the same top row once the worker said nothing is missing).

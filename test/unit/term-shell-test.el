@@ -239,5 +239,26 @@ case \"$*\" in *tic*) printf 'stdin=%%s\\n' \"$(cat)\" >> '%s' ;; esac" log log)
           (should (equal default-directory "/")))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-term-shell/an-open-reuses-its-environment-colours-and-word-table ()
+  ;; an open builds the environment, the colours and the word table once and reuses them: the environment again when
+  ;; it or a setting changes (`setenv' edits it in place), the colours after a theme change
+  (drgnx-test-with-modules '(tools/term)
+    (let* ((process-environment (cons "DRGNX_TERM_T=1" process-environment))
+           (get (lambda (name) (seq-some (lambda (e) (and (equal (aref e 0) name) (aref e 1))) (drgnx-term--env)))))
+      (should (eq (drgnx-term--env) (drgnx-term--env)))
+      (should (eq (drgnx-term--colours) (drgnx-term--colours)))
+      (with-temp-buffer
+        (drgnx-term--set-locals)
+        (let ((table (syntax-table)))
+          (with-temp-buffer (drgnx-term--set-locals) (should (eq (syntax-table) table)))))
+      (setenv "DRGNX_TERM_T" "2")
+      (should (equal (funcall get "DRGNX_TERM_T") "2"))
+      (let ((drgnx-term-env '("DRGNX_TERM_U=3")))
+        (should (equal (funcall get "DRGNX_TERM_U") "3")))
+      (should-not (funcall get "DRGNX_TERM_U"))
+      (let ((colours (drgnx-term--colours)))
+        (drgnx-term--theme-changed)
+        (should-not (eq colours (drgnx-term--colours)))))))
+
 (provide 'term-shell-test)
 ;;; term-shell-test.el ends here

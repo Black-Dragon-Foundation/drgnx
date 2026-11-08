@@ -31,6 +31,7 @@
 (require 'drgnx-state)
 (require 'url-util)
 (require 'drgnx-color)
+(require 'drgnx-memo)
 (require 'drgnx-pixels)
 (require 'drgnx-term-settings (expand-file-name "drgnx-term-settings" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-keys-last)
@@ -440,15 +441,23 @@ when it has none (a terminal frame's unspecified colour)."
   (let ((c (if (eq attribute :foreground) (face-foreground face nil 'default) (face-background face nil 'default))))
     (if-let* ((rgb (drgnx-color-rgb c))) (drgnx-color-hex rgb) "")))
 
+(drgnx-epoch-define 'term-theme
+                    :doc "Raised when a theme is enabled or disabled (`drgnx-term--theme-changed'): colours are read again.")
+(drgnx-memo-define term-colours :on frame :keys ((drgnx-epoch 'term-theme))
+                   :doc "The worker's `colours' for a frame (a text terminal's frame has other colours than a graphical
+one), read from the faces again only after a theme change.  Weak on the frame.")
+
 (defun drgnx-term--colours ()
   "The `colours' entry's value: the faces' foreground, background and cursor, then `drgnx-term-color-0' to 15 when
-every one of them has a colour (else the worker keeps its palette)."
-  (let ((ansi (mapcar (lambda (n) (drgnx-term--face-hex (intern (format "drgnx-term-color-%d" n)) :foreground))
-                      (number-sequence 0 15))))
-    (vconcat (list (drgnx-term--face-hex 'drgnx-term-default :foreground)
-                   (drgnx-term--face-hex 'drgnx-term-default :background)
-                   (drgnx-term--face-hex 'drgnx-term-cursor :background))
-             (unless (member "" ansi) ansi))))
+every one of them has a colour (else the worker keeps its palette).  The memo `term-colours' of the selected frame:
+read again only after a theme change.  Shared: never changed in place."
+  (drgnx-memo term-colours (selected-frame)
+              (let ((ansi (mapcar (lambda (n) (drgnx-term--face-hex (intern (format "drgnx-term-color-%d" n)) :foreground))
+                                  (number-sequence 0 15))))
+                (vconcat (list (drgnx-term--face-hex 'drgnx-term-default :foreground)
+                               (drgnx-term--face-hex 'drgnx-term-default :background)
+                               (drgnx-term--face-hex 'drgnx-term-cursor :background))
+                         (unless (member "" ansi) ansi)))))
 
 (defun drgnx-term--worker-config ()
   "Every live setting the worker reads, as `term/config' entries `[NAME VALUE]'."
@@ -477,11 +486,16 @@ every one of them has a colour (else the worker keeps its palette)."
       (modify-syntax-entry c (if (memq c '(?\s ?\t)) " " ".") st))
     st))
 
+(drgnx-memo-define term-word-syntax :keys (drgnx-term-selection-word-chars)
+                   :doc "The terminals' word syntax table, one for every terminal buffer, built again when
+`drgnx-term-selection-word-chars' changes.")
+
 (defun drgnx-term--set-locals ()
-  "This terminal buffer's local state from the settings: copy on select, the word characters, the copy filter."
+  "This terminal buffer's local state from the settings: copy on select, the word characters (one syntax table every
+terminal shares, the memo `term-word-syntax'), the copy filter."
   (setq-local mouse-drag-copy-region (and drgnx-term-copy-on-select t))
   (setq-local filter-buffer-substring-function #'drgnx-term--filter-substring)
-  (set-syntax-table (drgnx-term--word-syntax drgnx-term-selection-word-chars)))
+  (set-syntax-table (drgnx-memo term-word-syntax nil (drgnx-term--word-syntax drgnx-term-selection-word-chars))))
 
 (defun drgnx-term--apply-local ()
   "`:apply' of the settings a terminal buffer holds locally: every terminal buffer takes them at once."
@@ -679,21 +693,37 @@ ssh choice; Ghostty's own variables from a Ghostty around this Emacs are unset."
               (list "DRGNX_TERMINAL_SHELL")
             (list (concat "DRGNX_TERMINAL_SHELL=" (symbol-name drgnx-term-shell-integration))))))
 
+(defvar server-process)
+
+(drgnx-epoch-define 'term-env-set :watch '(process-environment)
+                    :doc "Raised when `process-environment' is set: `setenv' edits it in place, so the list alone does
+not show the change.")
+(drgnx-memo-define term-env
+  :keys ((drgnx-epoch 'term-env-set) process-environment drgnx-term-env drgnx-term-term
+         drgnx-term-shell-integration drgnx-term-shell-integration-features drgnx-term-ssh-terminfo
+         (and (drgnx-term--terminfo) t)
+         (and (boundp 'server-process) (process-live-p server-process) server-process))
+  :doc "The terminals' environment (`drgnx-term--env'), built once a session and again when what it is
+made of changes: `process-environment' (set, or bound to another list), the terminal's settings, the compiled
+terminfo entry, the live server.")
+
 (defun drgnx-term--env ()
   "The program's whole environment, as `[[NAME, VALUE]…]': `drgnx-term-env', then drgnx's terminal entries (TERM
 from `drgnx-term-term', `drgnx-term--integration-entries'), then `drgnx-terminal-environment', then this Emacs's; an
-entry without `=' unsets its name."
-  (let ((seen (make-hash-table :test #'equal)) (out nil))
-    (dolist (e (append drgnx-term-env
-                       (drgnx-term--term-entries)
-                       (list "COLORTERM=truecolor" (format "INSIDE_EMACS=%s,drgnx" emacs-version) "COLUMNS" "LINES")
-                       (drgnx-term--integration-entries)
-                       (drgnx-terminal-environment) process-environment))
-      (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
-        (unless (gethash name seen)
-          (puthash name t seen)
-          (when i (push (vector name (substring e (1+ i))) out)))))
-    (vconcat (nreverse out))))
+entry without `=' unsets its name.  The memo `term-env': shared, never changed in place."
+  (drgnx-memo term-env nil
+              (let ((seen (make-hash-table :test #'equal)) (out nil))
+                (dolist (e (append drgnx-term-env
+                                   (drgnx-term--term-entries)
+                                   (list "COLORTERM=truecolor" (format "INSIDE_EMACS=%s,drgnx" emacs-version)
+                                         "COLUMNS" "LINES")
+                                   (drgnx-term--integration-entries)
+                                   (drgnx-terminal-environment) process-environment))
+                  (let* ((i (string-search "=" e)) (name (if i (substring e 0 i) e)))
+                    (unless (gethash name seen)
+                      (puthash name t seen)
+                      (when i (push (vector name (substring e (1+ i))) out)))))
+                (vconcat (nreverse out)))))
 
 (defun drgnx-term--window-size (window)
   "WINDOW's body in cells and its frame's cell in px: (COLS ROWS [W H])."
@@ -886,6 +916,7 @@ with the path raw, or a path): the buffer's `default-directory' follows, for a l
 (defun drgnx-term--theme-changed (&optional _theme)
   "A theme was enabled or disabled: every terminal repaints from the faces now, without a reset, and its worker
 learns the new colours (a program reads them back)."
+  (drgnx-epoch-bump 'term-theme)
   (dolist (b (drgnx-term-buffers)) (drgnx-view-patch-repaint b))
   (drgnx-term--apply-config))
 
@@ -1063,6 +1094,7 @@ and the next Emacs of the session adopts them."
                      :teardown #'drgnx-term--teardown
                      :setup
                      (lambda ()
+                       (drgnx-memo-activate 'term-theme 'term-colours 'term-word-syntax 'term-env-set 'term-env)
                        (add-hook 'drgnx-hub-event-functions #'drgnx-term--event)
                        (drgnx-term-apply-keys)
                        (advice-add 'drgnx-keys-apply :after #'drgnx-term-apply-keys)
