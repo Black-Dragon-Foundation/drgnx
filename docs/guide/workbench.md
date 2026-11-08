@@ -458,6 +458,10 @@ and solid in High Contrast; the shadow is 45 % in the dark theme, 8 % in the lig
 number of logical pixels at any display scale, and set again when the scale or the density changes, at once); the
 frame's edge gets the same gap (`internal-border-width`), so the outer cards have their corners, ring and shadow
 against a margin and not the frame's edge or the top line. So the ring and shadow have room and never cover text.
+Dragging the gap between two cards resizes them, and so does dragging either card's side edge beside it (the fringe
+there; `drgnx-look-edge-drag`), as VS Code's sash takes a few pixels on each side. The inner half of a fringe whose
+click a mode uses (diff-hl's hunk, a breakpoint) keeps that click. A drag released over a fringe ends there (Emacs's
+`mouse-drag-line` takes no fringe events, so such a drag used to stay on and go on resizing with every mouse movement).
 A window made while the module runs is born with the edge (`default-frame-alist`), so it never grows by it once it is
 shown: a shown window that asked the window manager for a bigger size could get the size it was made with back a
 moment later, after a restored workbench was laid out in it, and lose the difference from its split. A density change

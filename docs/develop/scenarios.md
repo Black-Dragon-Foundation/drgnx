@@ -35,6 +35,16 @@ The last results of each configuration are kept in `$XDG_STATE_HOME/drgnx/ui/sce
 | `buffers-scroll-kept` | a scrolled panel stays scrolled when another file is opened | **red** | the workspace timer resets the panel's start (392 → 1) on each refresh (+193 ms, again at +1232 ms); the top row goes from `file09.txt` to `main.py` |
 | `buffers-close-hits-row` | × on a row closes that row's buffer, even if another file was opened just before | **red** | opening another file re-sorts the rows by recency, so the × aimed at `README.md` now belongs to `guide.md`, and the panel's close-at-mouse command closes that |
 
+## Cards (resizing by the edges)
+
+| Scenario | Expected (VS Code) | Reference | Why (trace) |
+|---|---|---|---|
+| `cards-drag-the-gap` | dragging the gap between the dock's card and the editor's widens the dock | drgnx only | the gap is the right divider (`mouse-drag-vertical-line`) |
+| `cards-drag-the-dock-edge` | dragging the dock card's side edge beside the gap does the same | drgnx only | the edge is the dock's right fringe (`drgnx-look-edge-drag`); before, `<right-fringe> <drag-mouse-1> is undefined` |
+| `cards-drag-the-editor-edge` | dragging the editor card's side edge beside the gap does the same | drgnx only | the editor's left fringe drags its left neighbour's edge |
+
+Each runs at the session's scale: run them with `DRGNX_UI_SCALE=1` and `2`.
+
 ## New frames
 
 `frame-from-daemon-fast` runs in the controller after the in-session suite (because it starts a daemon
