@@ -146,6 +146,12 @@ pub fn secret(s: &str) {
     }
 }
 
+/// Whether this hub replays a recording (its providers answer from the recording, so a request nothing recorded is a
+/// miss, not a connection refused).
+pub fn replaying() -> bool {
+    matches!(MODE.get(), Some(Mode::Replay(_)))
+}
+
 /// While replaying, provider ID's base on the replayer, keyless; else none (the provider as configured).
 pub fn replayed(id: &str) -> Option<(bifrost::Uri, bifrost::Auth)> {
     match MODE.get() {
