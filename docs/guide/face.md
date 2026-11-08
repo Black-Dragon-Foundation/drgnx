@@ -510,7 +510,8 @@ contrast rings it in its text colour, with the same room. A keycap (`drgnx-keyca
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
 start page show keys this way. The rings' colours come from the theme (a box's colour cannot be inherited), so a
 theme that is not drgnx's draws them in the text colour. A theme's spec for a face replaces the face's own, its
-`:inherit` too, so drgnx's themes repeat the keycap's caption role in theirs.
+`:inherit` too, so drgnx's themes repeat a face's parents in theirs (the keycaps' and high contrast's chips' caption
+role); `drgnx-themes/a-theme-spec-keeps-the-defface-inherit` fails when a theme spec loses what a parent gave.
 
 ### Faces for theme authors
 

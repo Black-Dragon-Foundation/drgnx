@@ -152,5 +152,58 @@ ringed in the strong border, with no fill of its own."
   (mapc #'disable-theme custom-enabled-themes)
   (should (eq 'dark (drgnx-look-variant))))
 
+(defun drgnx-themes-test--defface-inherits ()
+  "(FACE . INHERITS) for every `defface' at the top level of drgnx's Lisp whose spec's first clause inherits: read,
+not loaded, so a module's faces count without its setup."
+  (let (found)
+    (dolist (dir '("core" "wb" "modules"))
+      (dolist (file (directory-files-recursively (expand-file-name dir drgnx-dir) "\\.el\\'"))
+        (with-temp-buffer
+          (insert-file-contents file)
+          (condition-case nil
+              (while t
+                (let ((form (read (current-buffer))))
+                  (when (and (eq (car-safe form) 'defface) (eq (car-safe (nth 2 form)) 'quote))
+                    (let* ((clause (car (cadr (nth 2 form))))
+                           (plist (if (consp (cadr clause)) (cadr clause) (cdr clause)))
+                           (inherit (plist-get plist :inherit)))
+                      (when inherit (push (cons (nth 1 form) (ensure-list inherit)) found))))))
+            ((end-of-file invalid-read-syntax) nil)))))
+    found))
+
+(defconst drgnx-themes-test--inherited-attrs
+  '(:family :height :weight :slant :width :foreground :background :underline :overline :strike-through :box
+            :inverse-video :extend)
+  "The attributes a dropped parent face could have given.")
+
+(defconst drgnx-themes-test--dropped-on-purpose
+  '(;; the defface inherits `region' for a theme that is not drgnx's colour; a button ends with its label
+    (drgnx-control-primary region :extend)
+    ;; how far the selection reaches is the look's highlight step's (drgnx-selected is a row's colour, not the region)
+    (drgnx-selected region :extend))
+  "(FACE PARENT ATTRIBUTE): what drgnx's themes drop from a defface's parent on purpose.")
+
+(ert-deftest drgnx-themes/a-theme-spec-keeps-the-defface-inherit ()
+  "A theme's spec for a face replaces the defface's whole, its `:inherit' too (the keycaps lost the caption role
+that way and fell back to the code font).  So for every face drgnx's themes set whose defface inherits, each
+attribute a parent gave (`default' aside) is still given: by the theme's spec, by a parent it keeps, or it is
+dropped on purpose (`drgnx-themes-test--dropped-on-purpose')."
+  (let ((inherits (drgnx-themes-test--defface-inherits)) (lost nil))
+    (should (assq 'drgnx-keycap inherits))           ; the reader finds the faces
+    (pcase-dolist (`(,_ . ,theme) drgnx-themes-test--themes)
+      (drgnx-themes-test--with theme
+        (pcase-dolist (`(,face . ,want) inherits)
+          (when (assq theme (get face 'theme-face))
+            (let* ((spec (drgnx-faces--clause-plist face 'gui))
+                   (have (ensure-list (plist-get spec :inherit))))
+              (dolist (parent (cl-remove-if (lambda (f) (or (eq f 'default) (memq f have))) want))
+                (dolist (attr drgnx-themes-test--inherited-attrs)
+                  (when (and (drgnx-faces--attribute parent attr 'gui 0)
+                             (not (plist-member spec attr))
+                             (not (cl-some (lambda (p) (drgnx-faces--attribute p attr 'gui 0)) have))
+                             (not (member (list face parent attr) drgnx-themes-test--dropped-on-purpose)))
+                    (push (list theme face parent attr) lost)))))))))
+    (should (equal nil (nreverse lost)))))
+
 (provide 'themes-test)
 ;;; themes-test.el ends here
