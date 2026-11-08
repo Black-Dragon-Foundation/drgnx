@@ -222,6 +222,8 @@ pub const GHOSTTY_CELL_WIDE_SPACER_HEAD: i32 = 3;
 /// A cell's place (`GhosttyPoint`): TAG one of the `GHOSTTY_POINT_TAG_*`, the column and row inside that area.
 pub const GHOSTTY_POINT_TAG_ACTIVE: i32 = 0;
 pub const GHOSTTY_POINT_TAG_VIEWPORT: i32 = 1;
+/// The scrollback above the active area: row 0 is the oldest kept.
+pub const GHOSTTY_POINT_TAG_HISTORY: i32 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

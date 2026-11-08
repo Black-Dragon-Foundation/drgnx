@@ -28,7 +28,7 @@ terminal's buffer only shows the screen it sends. So:
   the terminal's scrollback.
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
-  browser. Only links on the screen itself are clickable; scrolled-off rows show their text only.
+  browser, on the screen and in the rows scrolled off it alike.
 - **Programs can copy to the clipboard** (OSC 52, as tmux and neovim over ssh do): the text lands in the kill ring.
   The setting `drgnx-term-clipboard-write` turns that off. Reading the clipboard is always refused.
 - **The shell's directory** (OSC 7) is the buffer's directory, so `C-x C-f` starts where the shell is; the program's

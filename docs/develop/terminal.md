@@ -234,8 +234,9 @@ program runs).
 - **Copy mode** (`drgnx-term-copy-mode`) pauses the view (`drgnx-view-patch-pause`) and swaps in a map with only
   `C-g`; leaving draws the kept patches. `drgnx-term-find` sends `term/search` up from the cursor and enters copy mode
   at the first match, marked by the face `drgnx-term-search-selected`.
-- **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link` (screen rows only: backfilled rows carry
-  none); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
+- **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
+  link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
+  history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
   `find-file-other-window`, anything else with `browse-url`.
 - **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
   (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
