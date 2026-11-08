@@ -168,6 +168,11 @@
  ;; agents-line-motion (the outline's name) alloc 5495, cpu 3.53; -old (`add-log-current-defun' per frame) 5838, 4.15.
  (explorer-git (:alloc :p50) 8555 :report-only ot5) (explorer-git (:cpu_ms :p90) 5.1 :report-only ot5)
  (explorer-git (:rows) 1 :report-only ot5)
+ ;; explorer-git-rows (the hub reads the status; the letters are its rows): alloc 856 is a tenth of explorer-git's 8555, the render
+ ;; offload's target; measured once (2026-11-08, Nidhogg's line image, 4 CPUs, same session): 6542 objects per command against 6589
+ ;; on the old path (the keys are what allocates), cpu p90 3.1, rows 1.  Report-only until the combined pass.
+ (explorer-git-rows (:alloc :p50) 856 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 3.9 :report-only ot5)
+ (explorer-git-rows (:rows) 1 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
  (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)
