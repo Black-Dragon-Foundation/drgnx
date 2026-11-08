@@ -2028,6 +2028,12 @@ Returns the view."
       (drgnx-view-patch--hooks)
       v)))
 
+(defun drgnx-view-patch-detach ()
+  "Make the current buffer no longer hub-fed: its (view, class) pair is forgotten and its instance in Sjá closed.  The
+buffer's view and its rows stay; attach another view type to replace them."
+  (remove-hook 'kill-buffer-hook #'drgnx-view-patch--killed t)
+  (drgnx-view-patch--killed))
+
 (defun drgnx-view-patch-teardown ()
   "Forget every hub-fed buffer's pairing and remove the hub hooks (the owning module's teardown)."
   (maphash (lambda (_ b)

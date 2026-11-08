@@ -106,7 +106,8 @@ ones are counted while the view streams."
         (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
         (drgnx-perf--replace-idle)
         (and (>= drgnx-perf--replace-typed 5)
-             (= 10000 (with-current-buffer (drgnx-perf--replace-view) (length drgnx-replace--matches)))
+             (= 10000 (with-current-buffer (drgnx-perf--replace-view)
+                        (if drgnx-view-patch (or (cdr drgnx-replace--hub-counts) 0) (length drgnx-replace--matches))))
              t))
       (defun drgnx-perf--replace-teardown ()
         (remove-hook 'post-command-hook #'drgnx-perf--replace-key)
@@ -810,6 +811,15 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :measure "(drgnx-perf--retype-measure)"     ; the view draws while the 10k matches stream
        :check "(drgnx-perf--replace-check)"
        :teardown ,(concat "(progn (drgnx-perf--replace-teardown) " kill-fixture ")"))
+      ;; the same, on the rows path: a hub of the workload searches and streams the 10k matches as rows (the old path is
+      ;; `replace-typing': no hub in its session)
+      (replace-typing-rows
+       :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " (drgnx-perf--hub-start nil) " (drgnx-perf-run--replace-setup-form) ")")
+       :each ,(concat "(progn " (drgnx-perf-run--visit-fixture-form) " (drgnx-perf--replace-arm) t)")
+       :actions ,(make-list 2 (funcall type "(setq y 2) "))
+       :measure "(drgnx-perf--retype-measure)"
+       :check "(and (drgnx-perf--replace-check) (buffer-local-value 'drgnx-view-patch (drgnx-perf--replace-view)) t)"
+       :teardown ,(concat "(progn (drgnx-perf--replace-teardown) (drgnx-perf--hub-stop) " kill-fixture ")"))
       ;; retyping the replacement over 10k listed matches: the rows are patched in place, in slices
       (replace-retype
        :setup ,(drgnx-perf-run--replace-setup-form)
