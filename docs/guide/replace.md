@@ -100,6 +100,12 @@ the matches over the file rows, wrapping; a tick box unticks a match (its file's
 when the hub redraws the row; Replace All writes the ticked matches from the model's fields, then searches again.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
 
+The hub keeps every match but sends the view a window of the rows, the first 200 (the agent panel's shape), and the
+totals with `search-grep-done`; the view asks for the next window when its window nears the end of the rows
+(`search/grep-look` with `more`), and for the rows up to a match when Next Match or Previous Match goes beyond them
+(`upto`; point goes to the row when it arrives).  Replace All and the tick boxes read the model, so they act on every
+match, not only the rows sent; the file watches follow the model's files too.
+
 With the hub up, the search itself goes to the hub too: a text search is `search/grep` (the view `search`, the fields' text and
 toggles, the folder or file, the include and exclude globs, the replacement), and the results are the hub's rows, a
 reset and then each file's header and matches, inserted below the fields by `drgnx-view-apply-patch`.  A new search

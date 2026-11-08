@@ -301,6 +301,7 @@ params! {
     SearchFiles(search::FilesParams),
     SearchSymbolAt(search::SymbolAtParams),
     SearchGrepReplace(search::GrepReplaceParams),
+    SearchGrepLook(search::GrepLookParams),
     ExplorerSubscribe(search::ExplorerParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),

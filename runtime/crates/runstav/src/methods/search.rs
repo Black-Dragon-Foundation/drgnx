@@ -396,6 +396,22 @@ pub struct GrepReplaceParams {
     pub replace: String,
 }
 
+/// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
+/// its matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.
+/// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
+/// (`upto`: the row's key, and 100 rows after it come too).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GrepLookParams {
+    pub view: String,
+    /// One more window (200 rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub more: Option<bool>,
+    /// The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upto: Option<String>,
+}
+
 /// `search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
 /// run. A search a newer one stopped says nothing.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -531,6 +547,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,
             classes: [User], writes: false,
             doc: "the replacement a view's grep rows preview changed: the rows are patched, nothing is searched again; false when the view has no search",
+        ),
+        method!(
+            "search/grep-look", SearchGrepLook(GrepLookParams) -> bool,
+            classes: [User], writes: false,
+            doc: "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
         ),
         method!(
             "explorer/subscribe", ExplorerSubscribe(ExplorerParams) -> ExplorerStarted,

@@ -145,4 +145,69 @@ matches, and again ticks them all; a hub patch that redraws a row keeps its box 
       (should (equal '(("/r/a.txt" 2) ("/r/b.txt" 5))
                      (mapcar (lambda (m) (list (plist-get m :file) (plist-get m :line))) (cdar applied)))))))
 
+(defun drgnx-replace-rows-nav-test--drop-b ()
+  "The hub sent a window of the rows that stops after a.txt: b.txt's rows are not in the view (its nodes are in the model)."
+  (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 1 :version 2
+                                :env_epoch 1 :model 1 :ops (list (list :remove (list "f:/r/b.txt" "m:/r/b.txt:5:4")))))
+  (drgnx-view-draw-now drgnx-view)
+  (should-not (gethash "m:/r/b.txt:5:4" (drgnx-view-patch-rows drgnx-view-patch))))
+
+(ert-deftest drgnx-replace-rows/next-match-beyond-the-rows-asks-the-hub-for-its-row ()
+  "Pattern D: the model holds every match, the hub sends a window of the rows: Next Match to a match whose row is not
+in the view selects it from the model, shows it in the editor and asks the hub for the rows up to it (`upto'); a match
+whose row is in the view asks nothing."
+  (drgnx-replace-rows-nav-test--with
+    (drgnx-replace-rows-nav-test--drop-b)
+    (let ((asked nil) (shown nil))
+      (cl-letf (((symbol-function 'drgnx-replace--look) (lambda (params) (push params asked)))
+                ((symbol-function 'drgnx-replace--show-match) (lambda (m _select) (push m shown))))
+        (drgnx-replace-next)
+        (drgnx-replace-next)
+        (should-not asked)
+        (drgnx-replace-next)
+        (should (equal "m:/r/b.txt:5:4" (drgnx-view-nav-selection)))
+        (should (equal '((:upto "m:/r/b.txt:5:4")) asked))
+        (should (equal '(:file "/r/b.txt" :line 5 :col 4 :end 10 :text "needle") (car shown)))
+        ;; the row arrives: point goes to it
+        (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 2 :version 3
+                                      :env_epoch 1 :model 1
+                                      :ops (list (list :insert (list :after "m:/r/a.txt:2:4"
+                                                                     :rows (list (drgnx-replace-rows-nav-test--row "f:/r/b.txt" "[x] b.txt" 0)
+                                                                                 (drgnx-replace-rows-nav-test--row "m:/r/b.txt:5:4" "  [x] let needle;" 2)))))))
+        (drgnx-view-draw-now drgnx-view)
+        (should (equal "m:/r/b.txt:5:4" (get-text-property (line-beginning-position) 'drgnx-work-id)))))))
+
+(ert-deftest drgnx-replace-rows/replace-all-writes-the-matches-beyond-the-rows ()
+  "Pattern D: Replace All reads the model, not the rows: with b.txt's rows not in the view, its match is written too."
+  (drgnx-replace-rows-nav-test--with
+    (drgnx-replace-rows-nav-test--drop-b)
+    (let ((applied nil))
+      (cl-letf (((symbol-function 'drgnx-replace-apply) (lambda (ms _new) (setq applied ms)
+                                                          (list :written (length ms) :files 2 :skipped nil :undo nil)))
+                ((symbol-function 'drgnx-replace--search-now) #'ignore)
+                ((symbol-function 'drgnx-replace--message) #'ignore))
+        (drgnx-replace--rows-replace-all "pin")
+        (should (equal '("/r/a.txt" "/r/a.txt" "/r/b.txt") (mapcar (lambda (m) (plist-get m :file)) applied)))))))
+
+(ert-deftest drgnx-replace-rows/the-end-of-the-rows-asks-for-more-once-per-growth ()
+  "Pattern D: when the window shows the end of the rows the view asks the hub for one more window (`more'); it asks
+again only when the rows have grown since, so a hub with no more is not asked over and over."
+  (drgnx-replace-rows-nav-test--with
+    (let ((asked nil) (win (selected-window)) (old (window-buffer (selected-window))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-replace--look) (lambda (params) (push params asked))))
+            (set-window-buffer win (current-buffer))
+            (drgnx-replace--look-more win)
+            (drgnx-replace--look-more win)
+            (should (equal '((:more t)) asked))
+            (drgnx-view-apply-patch (list :view (drgnx-view-patch-view drgnx-view-patch) :class "c" :hub 7 :base 1 :version 2
+                                          :env_epoch 1 :model 1
+                                          :ops (list (list :insert (list :after "m:/r/b.txt:5:4"
+                                                                         :rows (list (drgnx-replace-rows-nav-test--row
+                                                                                      "m:/r/b.txt:6:4" "  [x] let needle;" 2)))))))
+            (drgnx-view-draw-now drgnx-view)
+            (drgnx-replace--look-more win)
+            (should (equal '((:more t) (:more t)) asked)))
+        (set-window-buffer win old)))))
+
 ;;; replace-rows-nav-test.el ends here
