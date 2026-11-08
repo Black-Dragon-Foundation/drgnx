@@ -397,7 +397,8 @@ every root-frame window — buffer, `window-start`, point, pixel edges, header-l
 selected — plus the minibuffer height, and also records `window-scroll-functions` calls, redisplays and GC.
 It snapshots the signatures **just before and right after every command** (`pre-`/`post-command-hook`) and
 **every timer** (advice on `timer-event-handler`), and polls once per tick, so each change is attributed to its
-cause: the innermost command or timer running when it happened (`command:NAME`, `timer:FUNCTION` — a timer
+cause: the innermost command or timer running when it happened (`command:NAME`, or `command:<lambda>` /
+`command:<keymap>` for a command that is not a symbol, never its printed form; `timer:FUNCTION` — a timer
 that runs inside another timer's or a command's `sit-for` keeps its own changes), or `other` when neither ran
 (process output — filters and sentinels are called from C and cannot be intercepted — or redisplay). An `other`
 change seen while the frame's pixel size changed is `wm:resize`: the window manager resized the frame; a resize
@@ -532,7 +533,8 @@ How it works:
   `gateway-test.el` modified, `jobs-test.el` untracked, the lock file ignored, and a shell script with a Python
   heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
   `drgnx-job.el`, Magit's status and the Explorer.
-- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
+- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`. The last,
+  `start-page`, has no mockup: it is judged against the components' spec (buttons, keycaps, the shield).
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
   written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's

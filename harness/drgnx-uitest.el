@@ -487,12 +487,21 @@ else `other' (process output, redisplay, …)."
   "Tick poll: changes no timer claimed — the running command's, or `other'."
   (drgnx-uitest-record--snapshot (drgnx-uitest-record--ambient-cause)))
 
+(defun drgnx-uitest-record--command-name (cmd)
+  "CMD as a cause: \"command:NAME\" for a symbol, else a short tag of its type (a closure or a keymap can hold a
+keymap that is a prefix of itself, `mouse-drag-line''s, whose printed form ran to hundreds of MB)."
+  (concat "command:"
+          (cond ((symbolp cmd) (symbol-name cmd))
+                ((keymapp cmd) "<keymap>")
+                ((functionp cmd) "<lambda>")
+                (t (format "<%s>" (type-of cmd))))))
+
 (defun drgnx-uitest-record--before-command ()
   (drgnx-uitest-record--snapshot "other")      ; whatever happened between commands
-  (setq drgnx-uitest-record--command (format "command:%s" this-command)))
+  (setq drgnx-uitest-record--command (drgnx-uitest-record--command-name this-command)))
 
 (defun drgnx-uitest-record--after-command ()
-  (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (format "command:%s" this-command)))
+  (drgnx-uitest-record--snapshot (or drgnx-uitest-record--command (drgnx-uitest-record--command-name this-command)))
   (drgnx-uitest--note-target (selected-window))      ; a window the input moved focus to is aimed at
   (setq drgnx-uitest-record--command nil))
 
