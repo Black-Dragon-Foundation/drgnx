@@ -1375,6 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
@@ -1620,6 +1621,7 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `exec-progress` | jobs (the front) | `{id, file, plan}` or `{id, file, step}`: a `--progress` job's plan or step file changed ([Jobs](#jobs-exec), "Progress") |
 | `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
@@ -2920,6 +2922,12 @@ optional; an older file with numbers reads as before), the `ExecRow` has no `tim
 a time box of 0. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
 `docs/guide/jobs.md`, "The editor's jobs").
 
+**Progress** (`exec/progress.rs`): a job whose command line has `--progress FILE` (the Extensions view's jobs) is
+watched while it runs. Every 250 ms the hub reads `FILE.plan.json` and then `FILE` (each up to `MAX_BYTES`), and for
+each that changed since the last look and holds a JSON object it broadcasts `exec-progress {id, file, plan}` or
+`{id, file, step}`; one last look runs before `exec-done`, so the final step is never lost. The editor's jobs take
+these events instead of watching and reading the files themselves.
+
 ## Runners: the transport
 
 `drgnx-ratatoskr/src/runners/` reaches the user's other machines (runners) over the user's own OpenSSH
@@ -3536,12 +3544,21 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
 - **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
   its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
   (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
-- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows` and
-  `extensions/modules` are the user's.
+- **The list as rows** (`extensions/list`, `view/extensions.rs`): the Extensions view sends its sections (name,
+  title, a search each, at most 8; `minus_updates` drops the rows the updates section shows), `dense`, its glyphs
+  (`{kind, gui, tty}` each) and the ids that need a restart. The hub runs the searches, builds the rows (a bold header
+  `Title (N)` per section, then a line per row with glyph, name, version, state chip and "restart to use", and unless
+  `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
+  `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
+  publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
+  last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
+  `extensions/list` and `extensions/modules` are the user's.
 
-Tests: `extensions::catalog::` [D, one every-order test A] and `extensions::rank::` [D]; conformance
-`extensions/search-ranks-the-fixture`, `details-of-an-installed-package`, `rows-keep-their-order`,
-`a-new-catalog-is-read-on-the-next-call` and `an-agent-may-search-but-not-send-modules` [B].
+Tests: `extensions::catalog::` [D, one every-order test A], `extensions::rank::` [D] and
+`view::extensions::` [D]; conformance `extensions/search-ranks-the-fixture`, `details-of-an-installed-package`,
+`rows-keep-their-order`, `a-new-catalog-is-read-on-the-next-call`, `an-agent-may-search-but-not-send-modules` and
+`extensions/rows` [B].
 
 ## Plugins
 

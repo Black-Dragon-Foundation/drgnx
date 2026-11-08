@@ -859,6 +859,7 @@ impl Front {
             p @ (Params::ExtensionsSearch(_)
             | Params::ExtensionsDetails(_)
             | Params::ExtensionsRows(_)
+            | Params::ExtensionsList(_)
             | Params::ExtensionsModules(_)) => crate::extensions::methods::serve(self, &caller, p)
                 .await
                 .unwrap_or_else(|_| unserved(method)),

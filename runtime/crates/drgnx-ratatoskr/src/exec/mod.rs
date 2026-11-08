@@ -14,6 +14,7 @@ pub mod container;
 pub(crate) mod hostgrants;
 pub mod net;
 pub mod packages;
+pub mod progress;
 pub mod summary;
 pub mod unit;
 
@@ -162,6 +163,10 @@ impl Live {
         self.0.lock().unwrap().remove(id);
     }
 
+    fn has(&self, id: &str) -> bool {
+        self.0.lock().unwrap().contains_key(id)
+    }
+
     /// Job ID of SESSION runs, as a start records it (for the tests of the modules that read the running jobs).
     #[cfg(test)]
     pub(crate) fn started(&self, id: &str, session: &str) {
@@ -265,6 +270,8 @@ struct Inner {
     queue: Arc<Queue>,
     /// The running networked jobs' stop doors: a graceful hub stop ends each `infra: proxy` ([`Runner::end_networked`]).
     nets: Mutex<std::collections::HashMap<String, NetStop>>,
+    /// The running jobs that write a progress file (`--progress FILE`): the file and what the editors were sent of it.
+    progress: Mutex<std::collections::HashMap<String, (PathBuf, progress::Watch)>>,
 }
 
 /// What ends a networked job from outside its watch: the reason, and who to tell once its end is recorded.
@@ -475,6 +482,7 @@ impl Runner {
                 queue,
                 finishing: Mutex::new(HashSet::new()),
                 nets: Mutex::default(),
+                progress: Mutex::default(),
                 live: self.live.clone(),
                 events: self.events.clone(),
             });
@@ -1323,6 +1331,7 @@ impl Inner {
         let id = id.to_string();
         // counted as running before the starter hears of its id
         self.live.add(&id, meta.session.clone());
+        self.watch_progress(&id, &spec.argv);
         // a networked job's relay answers for as long as the job runs; a graceful hub stop ends it through `nets`
         let relay = relay.map(|net| {
             let (tx, stop) = tokio::sync::oneshot::channel();
@@ -1337,6 +1346,57 @@ impl Inner {
             me.pump();
         });
         Ok(())
+    }
+
+    /// Job ID's progress file, when ARGV names one and an editor listens: looked at every [`progress::EVERY`] while
+    /// the job runs (its end looks once more, before `exec-done`).
+    fn watch_progress(self: &Arc<Self>, id: &str, argv: &[String]) {
+        let Some(file) = progress::file_of(argv) else {
+            return;
+        };
+        if self.hooks.editors.is_none() {
+            return;
+        }
+        self.progress
+            .lock()
+            .unwrap()
+            .insert(id.to_owned(), (file, progress::Watch::default()));
+        let me = self.clone();
+        let id = id.to_owned();
+        crate::clock::spawn("exec:progress", async move {
+            while me.live.has(&id) && me.look_progress(&id, false) {
+                crate::clock::sleep(progress::EVERY).await;
+            }
+            // a job that left the table without its end (lost) takes its watch with it
+            me.progress.lock().unwrap().remove(&id);
+        });
+    }
+
+    /// One look at job ID's progress: what changed goes to the editors as `exec-progress`. LAST: the job ended, its
+    /// watch goes. False when the job has no watch (any more).
+    fn look_progress(&self, id: &str, last: bool) -> bool {
+        let mut all = self.progress.lock().unwrap();
+        let Some((file, watch)) = all.get_mut(id) else {
+            return false;
+        };
+        let mut events = watch.look(
+            id,
+            progress::read(file),
+            progress::read(&progress::plan_of(file)),
+        );
+        for e in &mut events {
+            e["file"] = json!(file.display().to_string());
+        }
+        if last {
+            all.remove(id);
+        }
+        drop(all);
+        if let Some(ed) = &self.hooks.editors {
+            for e in events {
+                ed.broadcast("exec-progress", e);
+            }
+        }
+        !last
     }
 
     /// The graph entity of a job that starts (best effort: a store that is not ready loses the record, not the job).
@@ -1527,6 +1587,8 @@ impl Inner {
             exit,
             summary: end.summary,
         };
+        // the job's last step goes before its end
+        self.look_progress(id, true);
         if let Some(ed) = &self.hooks.editors {
             ed.broadcast("exec-done", json!(done));
         }

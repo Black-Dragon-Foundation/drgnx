@@ -40,7 +40,7 @@
 (declare-function drgnx-extensions-details--fetch "drgnx-extensions-details")
 (declare-function drgnx-pkg-staged-file "drgnx-pkg")
 (declare-function diff-mode "diff-mode")
-(defvar drgnx-extensions-list--rows)
+(declare-function drgnx-extensions-list-row "drgnx-extensions-list" (id))
 (defvar drgnx-extensions-review)
 (defvar drgnx-extensions-jobs-done-functions)
 (defvar drgnx-extensions-details--id)
@@ -123,7 +123,7 @@ properties, KIND `diff' only diff-mode's faces.  Called when the text arrives, n
 
 (defun drgnx-extensions-trust--known-row (id)
   "ID's row as the list or an open page has it, or nil."
-  (or (and (boundp 'drgnx-extensions-list--rows) (gethash id drgnx-extensions-list--rows))
+  (or (and (fboundp 'drgnx-extensions-list-row) (drgnx-extensions-list-row id))
       (cl-loop for b in (buffer-list)
                when (and (equal (buffer-local-value 'drgnx-extensions-details--id b) id)
                          (plist-get (buffer-local-value 'drgnx-extensions-details--info b) :row))

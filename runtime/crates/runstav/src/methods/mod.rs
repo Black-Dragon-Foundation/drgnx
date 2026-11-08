@@ -331,6 +331,7 @@ params! {
     ExtensionsSearch(extensions::SearchParams),
     ExtensionsDetails(extensions::DetailsParams),
     ExtensionsRows(extensions::RowsParams),
+    ExtensionsList(extensions::ListParams),
     ExtensionsModules(extensions::ModulesParams),
     PluginsList(Empty),
     PluginsApprove(plugins::ApproveParams),

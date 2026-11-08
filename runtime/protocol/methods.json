@@ -12996,6 +12996,301 @@
       "classes": [
         "user"
       ],
+      "doc": "the Extensions list as the view's rows: each section's search, in order, its header and rows built in the hub and sent as `view-patch` to every class of VIEW after its model; answers each section's total",
+      "name": "extensions/list",
+      "params": {
+        "$defs": {
+          "Filters": {
+            "description": "What a search keeps; every field off or absent keeps everything.",
+            "properties": {
+              "archive": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "builtin": {
+                "default": false,
+                "type": "boolean"
+              },
+              "disabled": {
+                "default": false,
+                "description": "Modules that are off.",
+                "type": "boolean"
+              },
+              "enabled": {
+                "default": false,
+                "description": "Modules that are on.",
+                "type": "boolean"
+              },
+              "ids": {
+                "description": "Only these rows (`@failed`, `@restart`, `@this-project` and `@recommended` arrive this way: the editor knows\nthem).",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "installed": {
+                "default": false,
+                "type": "boolean"
+              },
+              "keyword": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Kind"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "plugins": {
+                "default": false,
+                "type": "boolean"
+              },
+              "unsigned": {
+                "default": false,
+                "description": "Packages from an archive that does not sign.",
+                "type": "boolean"
+              },
+              "updates": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "Glyph": {
+            "description": "A kind's glyph in a graphical and in a terminal class.",
+            "properties": {
+              "gui": {
+                "type": "string"
+              },
+              "kind": {
+                "description": "`package`, `plugin` or `module`.",
+                "type": "string"
+              },
+              "tty": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "gui",
+              "tty"
+            ],
+            "type": "object"
+          },
+          "Kind": {
+            "description": "What a row is.",
+            "enum": [
+              "package",
+              "plugin",
+              "module",
+              "emacs"
+            ],
+            "type": "string"
+          },
+          "ListSection": {
+            "description": "One section of the list: a search, its header's title.",
+            "properties": {
+              "minus_updates": {
+                "default": false,
+                "description": "Leave out the rows whose state is `update` (Installed: they wait in Updates).",
+                "type": "boolean"
+              },
+              "name": {
+                "description": "The section's name (`installed`, `updates`, `search`, …): its header row is `section:NAME`.",
+                "type": "string"
+              },
+              "search": {
+                "$ref": "#/$defs/SearchParams",
+                "description": "Its search; `limit` may be up to 20000 here (every page the list loaded)."
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "title",
+              "search"
+            ],
+            "type": "object"
+          },
+          "SearchParams": {
+            "properties": {
+              "filters": {
+                "$ref": "#/$defs/Filters",
+                "default": {
+                  "builtin": false,
+                  "disabled": false,
+                  "enabled": false,
+                  "installed": false,
+                  "plugins": false,
+                  "unsigned": false,
+                  "updates": false
+                }
+              },
+              "limit": {
+                "description": "1 to 500; default 200.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "offset": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "query": {
+                "default": "",
+                "description": "Words; a row matches when every word is a prefix of a word of its name, or inside its name, keywords or\nsummary.  Empty keeps all rows.",
+                "type": "string"
+              },
+              "sort": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Sort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "Sort": {
+            "description": "How the rows are ordered.",
+            "oneOf": [
+              {
+                "enum": [
+                  "name",
+                  "downloads",
+                  "installed"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "relevance",
+                "description": "The query's rank, then installed first, then downloads, then name (the default).",
+                "type": "string"
+              },
+              {
+                "const": "updated",
+                "description": "Newest version first (an archive's version strings carry the date).",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "dense": {
+            "default": false,
+            "description": "One line per row (no summary line).",
+            "type": "boolean"
+          },
+          "glyphs": {
+            "default": [],
+            "description": "Each kind's glyph (`package`, `plugin`, `module`).",
+            "items": {
+              "$ref": "#/$defs/Glyph"
+            },
+            "type": "array"
+          },
+          "restart": {
+            "default": [],
+            "description": "The ids that wait for a restart (the editor knows them).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sections": {
+            "description": "In order; a row an earlier section holds is not shown again, and a section left with none has no header.",
+            "items": {
+              "$ref": "#/$defs/ListSection"
+            },
+            "type": "array"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "sections"
+        ],
+        "title": "ListParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "ListTotal": {
+            "additionalProperties": false,
+            "description": "What one section matched and how many of its rows the list holds.",
+            "properties": {
+              "loaded": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "total": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "total",
+              "loaded"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "sections": {
+            "items": {
+              "$ref": "#/$defs/ListTotal"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sections"
+        ],
+        "title": "ListResult",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "the editor's module table (name, doc, packages, flags, state), held in memory so the list can show modules; replaces the last table",
       "name": "extensions/modules",
       "params": {

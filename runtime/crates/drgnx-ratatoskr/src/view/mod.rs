@@ -18,6 +18,7 @@
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
 pub mod explorer;
+pub mod extensions;
 pub mod files;
 pub mod fonts;
 pub mod git;
@@ -366,6 +367,8 @@ pub struct Views {
     files: files::Files,
     /// The Explorer's listings (`explorer/subscribe`).
     explorers: explorer::Explorers,
+    /// The Extensions lists (`extensions/list`).
+    lists: extensions::Lists,
     /// The agent panels' rows (`agent-panel/SESSION`).
     pub panels: Arc<panel::Panels>,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
@@ -382,6 +385,7 @@ impl Default for Views {
             letters: git::Letters::default(),
             files: files::Files::default(),
             explorers: explorer::Explorers::default(),
+            lists: extensions::Lists::default(),
             panels: Arc::default(),
             front: OnceLock::new(),
         }
@@ -400,6 +404,7 @@ impl Views {
             || self.git_build(f, key)
             || self.files_build(f, key)
             || self.explorer_build(f, key)
+            || self.extensions_build(f, key)
             || f.core.presence.here_build(f, key.0, &key.1)
         {
             return;
@@ -613,6 +618,7 @@ impl Views {
         self.letters.gone(conn);
         self.files.gone(conn);
         self.explorers.gone(conn);
+        self.lists.gone(conn);
         self.panels.gone(conn, None);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
@@ -711,6 +717,7 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.letters.stop(c.conn_id, &p.view);
     views.files.stop(c.conn_id, &p.view);
     views.explorers.stop(c.conn_id, &p.view);
+    views.lists.stop(c.conn_id, &p.view);
     views.panels.gone(c.conn_id, Some(&p.view));
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();

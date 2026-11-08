@@ -67,6 +67,7 @@
   "exec/stop": ["user"],
   "explorer/subscribe": ["user"],
   "extensions/details": ["user", "agent"],
+  "extensions/list": ["user"],
   "extensions/modules": ["user"],
   "extensions/rows": ["user"],
   "extensions/search": ["user", "agent"],

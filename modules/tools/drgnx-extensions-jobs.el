@@ -432,8 +432,14 @@ job ended), tell `drgnx-extensions-jobs-plan-gone-functions'.  A job of this ses
 (defun drgnx-extensions-jobs--read-step (token file)
   "Read FILE, job TOKEN's progress, when this session follows that job; the ids that changed."
   (when-let* ((job (drgnx-extensions-jobs--job token))
+              ((eq (plist-get job :status) 'running)))
+    (drgnx-extensions-jobs--take-step token (drgnx-extensions-jobs--json file))))
+
+(defun drgnx-extensions-jobs--take-step (token step)
+  "STEP (a plist, or nil) is job TOKEN's progress now, when this session follows that job; the ids that changed."
+  (when-let* ((job (drgnx-extensions-jobs--job token))
               ((eq (plist-get job :status) 'running))
-              (step (drgnx-extensions-jobs--json file)))
+              (step))
     (let* ((name (plist-get step :step))
            (s (if (and (stringp name) (string-match-p "\\`[a-z]+\\'" name)) (intern name) name)))
       (drgnx-extensions-jobs--job-put token :step s :pkg (plist-get step :pkg) :i (plist-get step :i) :n (plist-get step :n))
@@ -455,9 +461,13 @@ queue are the ones it took).  Its clicks still queued get a job of their own; th
     (append (drgnx-extensions-jobs--refresh-job token) (drgnx-extensions-jobs--reconcile))))
 
 (defun drgnx-extensions-jobs--read-plan (file)
-  "Run `drgnx-extensions-jobs-plan-functions' for plan FILE when its `seq' is new; a plan of a job this session follows
-also keeps the package directories it adds."
-  (when-let* ((plan (drgnx-extensions-jobs--json file))
+  "Run `drgnx-extensions-jobs-plan-functions' for plan FILE when its `seq' is new (see `drgnx-extensions-jobs--take-plan')."
+  (drgnx-extensions-jobs--take-plan file (drgnx-extensions-jobs--json file)))
+
+(defun drgnx-extensions-jobs--take-plan (file plan)
+  "Run `drgnx-extensions-jobs-plan-functions' for PLAN, plan FILE's contents, when its `seq' is new; a plan of a job
+this session follows also keeps the package directories it adds."
+  (when-let* ((plan)
               (seq (plist-get plan :seq))
               ((natnump seq))
               ((> seq (gethash file drgnx-extensions-jobs--plans 0))))
@@ -530,8 +540,8 @@ file that does not byte-compile is a warning, never a failure."
 are deleted, the done hook runs, and a click left in the queue gets a job."
   (when-let* ((job (drgnx-extensions-jobs--job token)))
     (let ((file (drgnx-extensions-jobs--file token)) (ids nil))
-      (when (file-exists-p (concat file ".plan.json"))  ; a plan no read saw: its hook still runs, once
-        (drgnx-extensions-jobs--read-plan (concat file ".plan.json")))
+      (when (and (drgnx-extensions-jobs--files-p) (file-exists-p (concat file ".plan.json")))
+        (drgnx-extensions-jobs--read-plan (concat file ".plan.json")))  ; a plan no read saw: its hook still runs, once
       (let* ((job (drgnx-extensions-jobs--job token))
              (status (if (memq status '(done failed stopped)) status 'failed))
              (result (drgnx-extensions-jobs--result status summary)))
@@ -560,12 +570,40 @@ are deleted, the done hook runs, and a click left in the queue gets a job."
                               (append result (list :kind (plist-get job :kind) :plan (concat file ".plan.json"))))
         (drgnx-extensions-jobs--changed (append ids (drgnx-extensions-jobs--reconcile)))))))
 
+(defun drgnx-extensions-jobs--files-p ()
+  "Non-nil when the steps come from the progress files (`drgnx-view-old-path'); else the hub sends them as
+`exec-progress' events and no progress file is read while a job runs."
+  (bound-and-true-p drgnx-view-old-path))
+
+(defvar drgnx-extensions-jobs--others (make-hash-table :test #'equal)
+  "Job id → the plan file its `exec-progress' named, for the jobs of other sessions: their end says the plan went.
+An entry goes with its job's `exec-done'.")
+
+(defun drgnx-extensions-jobs--progress (data)
+  "The hub's `exec-progress' DATA (:id :file and :step or :plan): a step of a job this session follows, or a plan of
+any job."
+  (let* ((id (plist-get data :id)) (token (gethash id drgnx-extensions-jobs--ids)))
+    (when-let* ((plan (plist-get data :plan))
+                ((or token (equal (file-name-directory (or (plist-get data :file) "")) (drgnx-extensions-jobs-dir)))))
+      (let ((file (concat (if token (drgnx-extensions-jobs--file token) (plist-get data :file)) ".plan.json")))
+        (unless token (puthash id file drgnx-extensions-jobs--others))
+        (drgnx-extensions-jobs--take-plan file plan)))
+    (when-let* ((token) (step (plist-get data :step)))
+      (drgnx-extensions-jobs--changed (drgnx-extensions-jobs--take-step token step)))))
+
 (defun drgnx-extensions-jobs--event (event data)
-  "An event from the hub (`drgnx-hub-event-functions'): an Extensions job this session follows ended."
-  (when (and drgnx-extensions-jobs--on (equal event "exec-done"))
-    (when-let* ((token (gethash (plist-get data :id) drgnx-extensions-jobs--ids)))
-      (drgnx-extensions-jobs--ended token (drgnx-extensions-jobs--exit-status (plist-get data :status) (plist-get data :exit))
-                                    (plist-get data :summary)))))
+  "An event from the hub (`drgnx-hub-event-functions'): an Extensions job this session follows ended, or (off
+`drgnx-view-old-path') a job's progress."
+  (when drgnx-extensions-jobs--on
+    (pcase event
+      ("exec-done"
+       (if-let* ((token (gethash (plist-get data :id) drgnx-extensions-jobs--ids)))
+           (drgnx-extensions-jobs--ended token (drgnx-extensions-jobs--exit-status (plist-get data :status) (plist-get data :exit))
+                                         (plist-get data :summary))
+         (when-let* ((file (gethash (plist-get data :id) drgnx-extensions-jobs--others)))
+           (remhash (plist-get data :id) drgnx-extensions-jobs--others)
+           (drgnx-extensions-jobs--plan-gone file))))
+      ("exec-progress" (unless (drgnx-extensions-jobs--files-p) (drgnx-extensions-jobs--progress data))))))
 
 ;;;; Setup
 
@@ -615,9 +653,10 @@ events and, once its job list has answered, give a job to any click left in the 
     (make-directory (drgnx-extensions-jobs-dir) t)
     (drgnx-extensions-jobs--sweep)
     (setq drgnx-extensions-jobs--watch
-          (condition-case nil
-              (file-notify-add-watch (drgnx-extensions-jobs-dir) '(change) #'drgnx-extensions-jobs--notify)
-            (error nil)))                       ; no backend: rows show the elapsed time, the end comes from the hub
+          (and (drgnx-extensions-jobs--files-p)   ; else the hub sends the steps
+               (condition-case nil
+                   (file-notify-add-watch (drgnx-extensions-jobs-dir) '(change) #'drgnx-extensions-jobs--notify)
+                 (error nil))))                 ; no backend: rows show the elapsed time, the end comes from the hub
     (add-hook 'drgnx-hub-event-functions #'drgnx-extensions-jobs--event)
     (add-hook 'drgnx-exec-listed-hook #'drgnx-extensions-jobs--listed)
     (drgnx-exec-sync)))
@@ -632,7 +671,7 @@ running in the hub; the next setup follows them again."
   (setq drgnx-extensions-jobs--on nil drgnx-extensions-jobs--listed nil drgnx-extensions-jobs--watch nil
         drgnx-extensions-jobs--owner :core drgnx-extensions-jobs--named nil)
   (dolist (table (list drgnx-extensions-jobs--jobs drgnx-extensions-jobs--ids drgnx-extensions-jobs--tickets
-                       drgnx-extensions-jobs--state drgnx-extensions-jobs--plans))
+                       drgnx-extensions-jobs--state drgnx-extensions-jobs--plans drgnx-extensions-jobs--others))
     (clrhash table)))
 
 (provide 'drgnx-extensions-jobs)

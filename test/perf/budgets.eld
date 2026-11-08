@@ -191,6 +191,10 @@
  (extensions-details (:open_ms) 50 :report-only ext-pass)
  (extensions-progress (:reads_too_close) 0 :report-only ext-pass) (extensions-progress (:last_unread) 0 :report-only ext-pass)
  (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
+ ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs: a tenth of the old path's
+ ;; objects on open (167507 for 200 rows) and per job step (the file read's 2624; on the rows path the event's).
+ ;; Measured on the rows path: 119930 on open (404 lines: the rows and their summaries), 2073 per step.
+ (extensions-open (:alloc) 16751 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
  (install-overhead (:overhead_ms) 3000 :report-only ext-pass)
