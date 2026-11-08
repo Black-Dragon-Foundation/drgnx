@@ -813,6 +813,46 @@ in the packages directory itself: an .eln's name hashes its source's path."
             (error (drgnx-pkg--warn "%s: %s does not compile to native code (%s; it runs byte-compiled)"
                                     pkg (file-name-nondirectory f) (error-message-string err)))))))))
 
+;;;; The Emacs build that compiled the packages
+
+(defconst drgnx-pkg-build-file "drgnx-built-by.eld"
+  "The file in the packages directory that names the Emacs build that byte-compiled its packages.")
+
+(defun drgnx-pkg-emacs-build ()
+  "This Emacs build as a string: version, configuration, native-code ABI and build time.  An .elc holds the macro
+expansions of the Emacs that compiled it, so packages another build compiled are compiled again (`drgnx-pkg-sync')."
+  (string-join (delq nil (list emacs-version system-configuration
+                               (and (boundp 'comp-native-version-dir) comp-native-version-dir)
+                               (and emacs-build-time (format-time-string "%FT%T" emacs-build-time t))))
+               " "))
+
+(defun drgnx-pkg-elpa-build (&optional dir)
+  "The build that compiled the packages of DIR (default the packages directory), from its `drgnx-pkg-build-file';
+nil when nothing says (a directory from before the record)."
+  (let ((f (expand-file-name drgnx-pkg-build-file (or dir (drgnx-elpa-dir)))))
+    (when (file-exists-p f)
+      (let ((v (ignore-errors (car (read-from-string (drgnx-pkg--file-string f))))))
+        (and (stringp v) v)))))
+
+(defun drgnx-pkg--recompile (dir)
+  "Byte-compile every package of DIR again for this Emacs, dependencies first, after deleting every .elc there (a
+`require' during a compile must never load another build's file).  A file that does not compile is a warning."
+  (require 'bytecomp)
+  (let ((package-user-dir dir) (package-alist nil) (package-directory-list nil) (load-path load-path))
+    (package-load-all-descriptors)
+    (let* ((descs (drgnx-pkg--deps-first (mapcar #'cadr package-alist))) (n (length descs)) (i 0))
+      (dolist (d descs)
+        (dolist (f (directory-files-recursively (package-desc-dir d) "\\.elc\\'")) (delete-file f))
+        (push (package-desc-dir d) load-path))
+      (dolist (d descs)
+        (drgnx-pkg--progress "compiling %s again for this Emacs" (package-desc-full-name d))
+        (drgnx-pkg-progress 'byte :pkg (symbol-name (package-desc-name d)) :i (setq i (1+ i)) :n n)
+        (let ((save-silently t) (byte-compile-warnings nil))
+          (dolist (f (directory-files-recursively (package-desc-dir d) "\\`[^.].*\\.el\\'"))
+            (unless (ignore-errors (byte-compile-file f))   ; `no-byte-compile' (autoloads, -pkg) is not nil
+              (drgnx-pkg--warn "%s: %s does not byte-compile (it runs uncompiled)"
+                               (package-desc-full-name d) (file-name-nondirectory f)))))))))
+
 (defun drgnx-pkg-quickstart-file () (expand-file-name "drgnx-quickstart.el" (drgnx-elpa-dir)))
 
 (defun drgnx-pkg--quickstart ()
@@ -1313,6 +1353,9 @@ load byte-compiled, and the next sync compiles what is missing."
               (when (file-exists-p staging) (delete-directory staging t))
               (if (file-directory-p (drgnx-elpa-dir)) (drgnx-pkg--copy-dir (drgnx-elpa-dir) staging) (make-directory staging t))
               (when seed (drgnx-pkg--seed (expand-file-name seed)))
+              ;; another Emacs build compiled them (or nothing says which): every package is compiled again
+              (unless (equal (drgnx-pkg-elpa-build staging) (drgnx-pkg-emacs-build))
+                (drgnx-pkg--recompile staging))
               (package-load-all-descriptors)
               (when package-archives (drgnx-pkg--refresh))
               (let* ((plain (not (or upgrade offline)))
@@ -1417,6 +1460,8 @@ load byte-compiled, and the next sync compiles what is missing."
               (dolist (f '("archives" "unused-quickstart.el" "unused-quickstart.elc"))
                 (let ((p (expand-file-name f staging)))
                   (cond ((file-directory-p p) (delete-directory p t)) ((file-exists-p p) (delete-file p)))))
+              (drgnx-file-write-text (expand-file-name drgnx-pkg-build-file staging)
+                                     (concat (prin1-to-string (drgnx-pkg-emacs-build)) "\n"))
               (drgnx-pkg-progress 'swap :seq drgnx-pkg--plan-seq)
               (drgnx-pkg--swap-in staging)))
         (when (file-exists-p staging) (delete-directory staging t))
@@ -1676,14 +1721,19 @@ when there is an icon to name, and a `StartupWMClass=' line is added when it has
 ;;;; Status (for the doctor)
 
 (defun drgnx-pkg-status (&optional modules-dir)
-  "(:manifest :installed :lock :generations), or (:error MESSAGE)."
+  "(:manifest :installed :lock :generations :build-stale), or (:error MESSAGE).  :build-stale names the other Emacs
+build that compiled the installed packages (\"an unknown build\" when nothing says), nil when this one did."
   (condition-case err
-      (list :manifest (drgnx-pkg-manifest modules-dir)
-            :installed (let ((package-user-dir (drgnx-elpa-dir)) (package-alist nil) (package-directory-list nil))
+      (let ((installed (let ((package-user-dir (drgnx-elpa-dir)) (package-alist nil) (package-directory-list nil))
                          (when (file-directory-p package-user-dir) (package-load-all-descriptors))
-                         (sort (mapcar #'car package-alist) (lambda (a b) (string< a b))))
-            :lock (progn (drgnx-pkg-read-lock) (file-exists-p (drgnx-pkg-lock-file)))
-            :generations (length (drgnx-pkg-generations)))
+                         (sort (mapcar #'car package-alist) (lambda (a b) (string< a b))))))
+        (list :manifest (drgnx-pkg-manifest modules-dir)
+              :installed installed
+              :lock (progn (drgnx-pkg-read-lock) (file-exists-p (drgnx-pkg-lock-file)))
+              :generations (length (drgnx-pkg-generations))
+              :build-stale (when installed
+                             (let ((b (drgnx-pkg-elpa-build)))
+                               (unless (equal b (drgnx-pkg-emacs-build)) (or b "an unknown build"))))))
     (drgnx-pkg-error (list :error (cadr err)))))
 
 ;;;; CLI (bin/drgnx sync | upgrade | rollback | generations | lock | bisect | service-unit)

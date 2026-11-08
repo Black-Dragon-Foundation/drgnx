@@ -77,6 +77,12 @@ partial file; what a killed sync left (`*.part` in the cache, `.drgnx.lock.eld.t
 installed, runs that file less compiled, and the sync prints a `WARNING` line naming the package and the file (compat's per-version files for versions your Emacs already has, such as `compat-29.el` on Emacs 30, are never
 loaded and are not compiled to native code, so they never warn).
 
+The installed packages remember which Emacs build compiled them (`drgnx-built-by.eld` in the packages folder: the
+version, the system, the native-code ABI and the build time). When you move to another Emacs build (a new Nidhogg,
+or from GNU Emacs 30), the next `drgnx sync` deletes every package's `.elc` and compiles them all again for this
+build, dependencies first: byte code an older Emacs compiled can expand an older version of a macro (diff-hl's
+global mode, for one, then reads a variable the old code never defines, and every buffer's mode hook fails).
+
 A plain sync never removes a package: one that left the manifest (a module turned off) or was installed by hand
 stays and is locked too. `drgnx sync --prune` removes them: every installed package the manifest does not name and
 no package of the manifest requires — hand-installed ones included. Packages that `use-package … :ensure` or an
@@ -337,7 +343,8 @@ after a reboot does not hold it, and of two commands taking over the same stale 
   with `settings.el`'s values for packages and Emacs off (`DRGNX_PACKAGE_SETTINGS=off`; drgnx's own settings
   stay) and says when they are the cause (docs/guide/settings.md, "Safe mode and Turn Off Package Settings").
 - `drgnx doctor` reports packages the manifest needs that are not installed (not those your Emacs ships, such as
-  `eglot`), a missing or unreadable lock, and the generations kept.
+  `eglot`), a missing or unreadable lock, and the generations kept. It warns when another Emacs build compiled the installed
+  packages; `drgnx sync` compiles them again, then restart drgnx.
 
 ## Running drgnx as a daemon
 

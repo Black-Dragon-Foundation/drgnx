@@ -1155,6 +1155,10 @@ a last check that failed; otherwise `ok', with the last check's start time and p
                                 (cond ((plist-get p :error) (list 'fail (plist-get p :error) "fix or remove the file named; drgnx sync rewrites the lock"))
                                       (missing (list 'warn (format "not installed: %s" (mapconcat #'symbol-name missing " "))
                                                      "drgnx sync installs them (their modules wait until then)"))
+                                      ((plist-get p :build-stale)
+                                       (list 'warn (format "the packages were compiled by another Emacs build (%s): their old code can break modes and hooks"
+                                                           (plist-get p :build-stale))
+                                             "drgnx sync compiles them again for this Emacs; then restart drgnx"))
                                       ((and (plist-get p :manifest) (not (plist-get p :lock)))
                                        (list 'warn "no lock (drgnx.lock.eld)" "drgnx sync writes it; commit it with your configuration"))
                                       ((null (plist-get p :manifest)) (list 'ok "no packages needed" nil))

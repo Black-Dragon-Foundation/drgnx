@@ -1241,4 +1241,56 @@ fy with a newer fa 2.0.  Returns (FX FY FA-1.0-ENTRY)."
         (seed) (sync)
         (should (eat-p))))))
 
+(defun drgnx-pkg-test--stale-elc (file)
+  "Put an .elc at FILE that another build compiled: its `fa-hello' says \"stale\"."
+  (let ((src (make-temp-file "drgnx-stale" nil ".el")))
+    (unwind-protect
+        (progn (write-region "(defun fa-hello () \"stale\")\n(provide 'fa)\n" nil src nil 'silent)
+               (let ((byte-compile-dest-file-function (lambda (_) file))) (byte-compile-file src)))
+      (delete-file src))))
+
+(defun drgnx-pkg-test--hello-of (elc)
+  "What `fa-hello' says after loading ELC."
+  (fmakunbound 'fa-hello)
+  (load elc nil t t)
+  (fa-hello))
+
+(ert-deftest drgnx-pkg/a-new-emacs-build-recompiles-every-package ()
+  ;; A package compiled by another Emacs build (an older Nidhogg, a stock Emacs) loads its old macro expansions:
+  ;; diff-hl's from Emacs 30 next to the JIT's newer functions gave `diff-hl-mode--set-explicitly' void in every hook.
+  ;; A sync notices the packages directory was compiled by another build and compiles every package again.
+  (drgnx-pkg-test--with root
+    (let ((arch (drgnx-pkg-test--archive (concat root "arch") '((fa "1.0") (fb "1.0" ((fa "1.0"))))))
+          (elc (lambda () (expand-file-name "fa-1.0/fa.elc" (drgnx-elpa-dir)))))
+      (drgnx-pkg-test--want root 'fb)
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build)))          ; the sync records the build
+      ;; the same build: a sync leaves the compiled files alone
+      (drgnx-pkg-test--stale-elc (funcall elc))
+      (should (plist-get (drgnx-pkg-test--sync root :archives `(("fx" . ,arch))) :ok))
+      (should (equal (drgnx-pkg-test--hello-of (funcall elc)) "stale"))
+      ;; another build compiled them (or nothing says which one did): the next sync compiles them all again
+      (drgnx-file-write-text (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)) "\"30.2 another build\"\n")
+      (should-not (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build)))
+      (should (plist-get (drgnx-pkg-test--sync root :offline t) :ok))
+      (should (equal (drgnx-pkg-test--hello-of (funcall elc)) "1.0"))
+      (should (file-exists-p (expand-file-name "fb-1.0/fb.elc" (drgnx-elpa-dir))))
+      (should (equal (drgnx-pkg-elpa-build) (drgnx-pkg-emacs-build))))))
+
+(ert-deftest drgnx-pkg/the-doctor-says-when-another-build-compiled-the-packages ()
+  (let ((check (lambda (p) (drgnx-doctor-check 'packages (list :packages p)))))
+    (let ((r (funcall check '(:manifest (fa) :installed (fa) :lock t :generations 1 :build-stale "30.2"))))
+      (should (eq (car r) 'warn))
+      (should (string-search "30.2" (nth 1 r)))
+      (should (string-search "drgnx sync" (nth 2 r))))
+    (should (eq (car (funcall check '(:manifest (fa) :installed (fa) :lock t :generations 1 :build-stale nil))) 'ok)))
+  (drgnx-pkg-test--with root
+    (drgnx-pkg-test--want root 'fa)
+    (drgnx-pkg-test--sync root :archives `(("fx" . ,(drgnx-pkg-test--archive (concat root "arch") '((fa "1.0"))))))
+    (should-not (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale))
+    (drgnx-file-write-text (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)) "\"30.2 another build\"\n")
+    (should (equal (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale) "30.2 another build"))
+    (delete-file (expand-file-name drgnx-pkg-build-file (drgnx-elpa-dir)))   ; a directory from before the record
+    (should (equal (plist-get (drgnx-pkg-status (concat root "mods")) :build-stale) "an unknown build"))))
+
 ;;; pkg-test.el ends here
