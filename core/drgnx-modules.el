@@ -378,7 +378,11 @@ never stops Emacs — nothing is installed (the module waits for the package, as
   ;; external modules load before them (the end of the stage re-applies keys), the last runs the stage hook.
   (let* ((ran nil)
          (steps (append (list #'drgnx-modules-load-external)
-                        (mapcar (lambda (m) (lambda () (when (drgnx-modules--run-one (car m) (cdr m) 'idle) (setq ran t))))
+                        ;; a module something started before its tick keeps running: a second setup would tear
+                        ;; down what it made (the agent panel's tick closed a panel opened before it)
+                        (mapcar (lambda (m) (lambda () (when (and (not (drgnx-module-running-p (car m)))
+                                                                  (drgnx-modules--run-one (car m) (cdr m) 'idle))
+                                                         (setq ran t))))
                                 (drgnx-modules--in-order 'idle))
                         (list (lambda ()
                                 (when ran (run-hook-with-args 'drgnx-modules-after-stage-functions 'idle)))))))
