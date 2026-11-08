@@ -2355,8 +2355,12 @@ the search itself is `hrafn::grep`).
   Match went to a match beyond them): the rows up to it and 100 after it. A search still streaming fills the room a
   look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
   the rows sent only.
-- **The model's cadence:** a model send carries the whole `order` list, so after the rows' window is full the model is
-  sent when the search has doubled it, and whole before `search-grep-done`; while rows go out it is sent with each file.
+- **The model's cadence:** the model is sent with each file's batch, and a send carries that batch's nodes and ids alone:
+  the `order` list grew at its end, so the diff against what the editor holds is one `splice` there
+  (`Doc::diff`: any changed list is sent as the splice of what lies between its common prefix and suffix, or whole when
+  that is shorter, when its window's `from` moved, or when its total moved by other than the ids added less those
+  removed; Sjá moves a window's total by exactly that). Past 20,000 entries the list is a window whose total grows with
+  no id to carry it, so each send is the window whole. The model is whole before `search-grep-done`.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
