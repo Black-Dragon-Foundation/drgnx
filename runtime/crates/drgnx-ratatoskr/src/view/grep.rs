@@ -46,6 +46,9 @@ pub(super) struct Run {
     limit: usize,
     /// The rows sent so far: the first `sent` rows of `files`.
     sent: usize,
+    /// The entries (files and matches) the model last sent held: the model grows when the search has doubled it (each
+    /// send carries the whole list of ids), when rows go out, and at the end.
+    model_sent: usize,
     cancel: Arc<AtomicBool>,
 }
 
@@ -74,6 +77,7 @@ impl Greps {
             files: Vec::new(),
             limit: WINDOW,
             sent: 0,
+            model_sent: 0,
             cancel: cancel.clone(),
         };
         if let Some(old) = lock(&self.runs).insert((conn, view.to_owned()), run) {
@@ -165,6 +169,11 @@ fn match_id(m: &Match) -> String {
 /// The entries (files and matches) a search's model holds; past them its list `order` is a window of the first ones
 /// (Sjá takes no longer list unwindowed).
 const MODEL_WINDOW: usize = 20_000;
+
+/// The entries (files and matches) of FILES.
+fn entries_of(files: &[(String, Vec<Match>)]) -> usize {
+    files.iter().map(|(_, ms)| 1 + ms.len()).sum()
+}
 
 /// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
 fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
@@ -374,9 +383,15 @@ fn batch_patches(
 ) -> (Option<ViewModel>, Vec<Patch>) {
     let mut rows = file_rows(run, &file, &ms);
     run.files.push((file, ms));
-    let model = store.publish_model(conn, view, grep_doc(&run.files));
     // only what the window still has room for
     rows.truncate(run.limit.saturating_sub(run.sent));
+    let entries = entries_of(&run.files);
+    let model = if !rows.is_empty() || entries >= 2 * run.model_sent {
+        run.model_sent = entries;
+        store.publish_model(conn, view, grep_doc(&run.files))
+    } else {
+        None
+    };
     if rows.is_empty() {
         return (model, Vec::new());
     }
@@ -477,6 +492,11 @@ impl Views {
 
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
+            // the model is whole before the search is done
+            if run.model_sent < entries_of(&run.files) {
+                run.model_sent = entries_of(&run.files);
+                self.publish_model(f, conn, view, grep_doc(&run.files));
+            }
             let done = GrepDone {
                 view: view.to_owned(),
                 query: id,

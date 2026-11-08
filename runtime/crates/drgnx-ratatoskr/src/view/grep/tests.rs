@@ -447,3 +447,28 @@ fn replace_previews_the_window_only() {
         .sum();
     assert!(n > 0 && n <= WINDOW, "{n}");
 }
+
+/// Each model send carries the whole list of ids, so once the rows' window is full the model is sent when the search
+/// has doubled it, not after every file (100 files send a few models, not 100).
+#[test]
+fn the_model_grows_by_doubling_once_the_window_is_full() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let mut sent = 0;
+    for f in 0..100 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms = (1..=100)
+            .map(|l| m(&file, l, "a ", "needle", " in"))
+            .collect();
+        let (model, _) = greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+            })
+            .unwrap();
+        sent += usize::from(model.is_some());
+    }
+    assert!(sent <= 20, "{sent} models for 100 files");
+    assert!(sent >= 3, "{sent}");
+}
