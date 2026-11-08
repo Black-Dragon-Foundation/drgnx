@@ -1,0 +1,14 @@
+{"scenario": "container/a-user-u-login-is-refused-with-the-reason", "requires": ["v1", "linux", "selinux-user-t"], "doc": "On a login confined as SELinux user_u (user_t), rootless podman can't run (it needs newuidmap, which the stock policy denies user_t), so a container job is refused at its start with that reason and what an admin would change; a plain job still runs. Runs on the Fedora VM gate as a user_u login without a subuid entry; skipped elsewhere."}
+{"do": "root"}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/work; printf '(drgnx-settings :version 1 (drgnx-agents-container-images ((\"busybox\" . \"docker.io/library/busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000\"))))\\n' > $CONFIG/settings.el; chmod 600 $CONFIG/settings.el"], "expect_code": 0}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "exec/start", "params": {"argv": ["true"], "cwd": "$ROOT/work", "kind": "container", "image": "busybox"}}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "error": {"code": "not-allowed", "message": "$capture:why"}}, "within_ms": 10000}
+{"do": "run", "bin": "/bin/sh", "args": ["-c", "case \"$WHY\" in *user_u*user_t*newuidmap*'semanage login'*subuid*) exit 0;; *) echo \"the refusal: $WHY\"; exit 1;; esac"], "env": {"WHY": "$why"}, "expect_code": 0}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "exec/start", "params": {"argv": ["sh", "-c", "echo plain-job-runs"], "cwd": "$ROOT/work"}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": {"id": "$capture:job", "text": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "exec-done", "data": {"id": "$job", "status": "done", "summary": {"exit": 0, "lines": {"$contains": ["plain-job-runs"]}}}}, "within_ms": 60000}

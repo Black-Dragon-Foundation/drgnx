@@ -1372,6 +1372,10 @@ least recently used quarter goes.")
 (defvar drgnx-view-patch-measure-function #'drgnx-view-text-width
   "Called with a string to measure it, in px, in the view's buffer (the fit guard); tests count it.")
 
+(defvar-local drgnx-view-patch-guard-function #'drgnx-view-patch--fit-guard
+  "Called by RENDER with (STATE TEXT STOPS) for a row that has stops: the new text, or nil to keep TEXT.  The default
+is the fit guard; a terminal's buffer sets its own (each wide cell drawn within its two cells, never an ellipsis).")
+
 (defvar-local drgnx-view-patch-apply-function #'drgnx-view-patch--apply-ops
   "Called with (STATE VIEW PATCH) to put an applied patch's rows in the buffer's view.  A buffer that keeps a view of
 its own (`drgnx-view-patch-attach' with KEEP) places the hub's rows among its own rows with a function of its own.")
@@ -1939,7 +1943,7 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
   "RENDER of `drgnx-view-rows': KEY's stored row as text, in the current (the view's) buffer."
   (let* ((state drgnx-view-patch) (row (gethash key (drgnx-view-patch-rows state)))
          (text (plist-get row :text)) (stops (plist-get row :stops)))
-    (setq text (or (drgnx-view-patch--fit-guard state text stops) (copy-sequence text)))
+    (setq text (or (and stops (funcall drgnx-view-patch-guard-function state text stops)) (copy-sequence text)))
     (dolist (run (plist-get row :runs))
       (when-let* ((name (nth 2 run))
                   (face (let ((id (drgnx-view-patch--style-id name)))

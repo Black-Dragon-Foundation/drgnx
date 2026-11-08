@@ -874,8 +874,15 @@ impl Inner {
                     .map(|r| r.to_string())
             });
         }
-        // a runner's proxy reaches what the job's grant reaches here
+        // a runner's proxy reaches what the job's grant reaches here, pins aside: it gets none (a pin names an address
+        // on this machine's network), so a job that reaches a pinned name stays here
         place.net_hosts = net_hosts_of(spec.container.as_ref());
+        if let Some(c) = &spec.container
+            && let Some(h) = pinned_host(&place.net_hosts, &c.caps.pins)
+        {
+            tracing::info!("job {id} runs on this machine only: it reaches {h}, a pinned name");
+            place.local_only = true;
+        }
         let fspec = spec.forseti_spec(id, &self.hooks.memory);
         // inputs frozen at submit, for a job a runner could take: what it syncs, whatever the worktree holds later.
         // One that can't be frozen (not a git worktree, a submodule's change) stays on this machine.
@@ -2178,6 +2185,36 @@ fn net_hosts_of(c: Option<&ContainerJob>) -> Vec<String> {
     .unwrap_or_default()
 }
 
+/// Why a job with KEYS that reaches HOSTS can't run anywhere, given PINS: a keyed job runs only on a runner (its keys
+/// reach a runner's job only), and one that reaches a pinned name only here (a runner gets no pins).
+fn keyed_and_pinned(
+    keys: &[String],
+    hosts: &[String],
+    pins: &[(String, std::net::IpAddr)],
+) -> Option<String> {
+    if keys.is_empty() {
+        return None;
+    }
+    pinned_host(hosts, pins).map(|h| {
+        format!(
+            "this job has keys, so it runs only on a runner, but it reaches {h}, a pinned name on this machine's \
+             network that no runner reaches"
+        )
+    })
+}
+
+/// The first of HOSTS (`host:port`) whose name PINS pins (names compared as hosts are: case and a trailing dot aside).
+fn pinned_host(hosts: &[String], pins: &[(String, std::net::IpAddr)]) -> Option<String> {
+    let norm = |n: &str| n.trim_end_matches('.').to_ascii_lowercase();
+    hosts
+        .iter()
+        .find(|h| {
+            let name = h.rsplit_once(':').map_or(h.as_str(), |(n, _)| n);
+            pins.iter().any(|(p, _)| norm(p) == norm(name))
+        })
+        .cloned()
+}
+
 /// The request's `rows` as the queue's suite.
 fn suite_of(p: &StartParams) -> Option<queue::Suite> {
     p.rows.as_ref().map(|r| queue::Suite {
@@ -2350,6 +2387,12 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         gate_session_job(f, sid, &cwd, &argv, action).await?;
     }
     job_keys(f, c, &p, &cwd).await?;
+    // a confined user_u login can't run rootless podman: refused here, with the cause and an admin's fix
+    if kind == CheckKind::Container
+        && let Some(why) = sleipnir::linux::confined::refusal()
+    {
+        return Err(error(ErrorCode::NotAllowed, why));
+    }
     // The Network cell: an Allow gives the job its proxy (never a network of its own), a Never leaves it with none, an
     // Ask refuses the start with the card (the matrix keeps one open card per question, so a start while it is open
     // finds it and makes no second).  A job the user starts has no cell: it gets the proxy only when it asks.
@@ -2388,6 +2431,11 @@ pub async fn start(f: &Front, c: &Caller, p: StartParams) -> Result<Started, Err
         _ => None,
     };
     let place = placement(f, c, &p, machine, runners).await;
+    if let Some(c) = &container
+        && let Some(why) = keyed_and_pinned(&place.keys, &net_hosts_of(Some(c)), &c.caps.pins)
+    {
+        return Err(error(ErrorCode::InvalidParams, why));
+    }
     let spec = ExecSpec {
         starter: c.sid.clone().map_or(Starter::User, Starter::Session),
         cwd,

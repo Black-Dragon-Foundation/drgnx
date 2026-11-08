@@ -61,6 +61,8 @@ pub enum In {
     Frame(Frame),
     /// The sidecar accepted a job connection.
     LocalOpen,
+    /// The sidecar accepted a connection on its key listener (`@drgnx-key`): a key stream.
+    LocalOpenKey,
     /// Bytes read from the stream's consumer, never more than [`Mux::credit`].
     LocalData {
         stream: u32,
@@ -94,6 +96,8 @@ pub enum Out {
     Send(Frame),
     /// The peer opened a stream (owner).
     NewStream { stream: u32 },
+    /// The peer opened a key stream (owner, keyed only).
+    NewKeyStream { stream: u32 },
     /// Append to the stream's queue; never awaited.
     Deliver { stream: u32, bytes: Vec<u8> },
     /// The peer's half-close: end the consumer's writing once the queue is drained.
@@ -136,6 +140,8 @@ pub enum StreamViolation {
     TooMany,
     /// A local open at the cap: a bug of the shell.
     LocalTooMany,
+    /// A key stream on a channel whose job has no keys.
+    KeyStreamUnkeyed(u32),
 }
 
 impl fmt::Display for StreamViolation {
@@ -159,6 +165,9 @@ impl fmt::Display for StreamViolation {
             StreamViolation::TooMany => write!(f, "OPEN past {MAX_STREAMS} unwritten refusals"),
             StreamViolation::LocalTooMany => {
                 write!(f, "a local open at {MAX_STREAMS} counted streams")
+            }
+            StreamViolation::KeyStreamUnkeyed(s) => {
+                write!(f, "key stream {s} on a channel whose job has no keys")
             }
         }
     }
@@ -255,6 +264,8 @@ pub struct Mux {
     refusing: HashSet<u32>,
     events: EventGate,
     now: Duration,
+    /// The job has keys: key streams are allowed.
+    keys: bool,
 }
 
 impl Mux {
@@ -270,7 +281,14 @@ impl Mux {
             refusing: HashSet::new(),
             events: EventGate::default(),
             now: Duration::ZERO,
+            keys: false,
         }
+    }
+
+    /// The job has keys: key streams are allowed on this channel (both ends set it, or the first key stream is a
+    /// violation).
+    pub fn allow_keys(&mut self) {
+        self.keys = true;
     }
 
     /// The monotonic time the foreign-source rate cap reads; the shell sets it before stepping.
@@ -299,7 +317,8 @@ impl Mux {
         let mut out = Vec::new();
         match ev {
             In::Frame(f) => self.frame(f, &mut out)?,
-            In::LocalOpen => self.local_open(&mut out)?,
+            In::LocalOpen => self.local_open(false, &mut out)?,
+            In::LocalOpenKey => self.local_open(true, &mut out)?,
             In::LocalData { stream, bytes } => self.local_data(stream, bytes, &mut out)?,
             In::LocalEof { stream } => self.local_eof(stream, &mut out),
             In::LocalDrained { stream, n } => self.local_drained(stream, n, &mut out),
@@ -342,7 +361,7 @@ impl Mux {
                     }
                 }
             }
-            Kind::Open => self.peer_open(f.stream, out)?,
+            Kind::Open => self.peer_open(f.stream, f.is_key_open(), out)?,
             Kind::Data | Kind::Credit | Kind::Fin | Kind::Rst => self.peer_stream(f, out)?,
         }
         Ok(())
@@ -356,9 +375,12 @@ impl Mux {
         }
     }
 
-    fn peer_open(&mut self, s: u32, out: &mut Vec<Out>) -> Result<(), StreamViolation> {
+    fn peer_open(&mut self, s: u32, key: bool, out: &mut Vec<Out>) -> Result<(), StreamViolation> {
         if u64::from(s) != self.next_id() {
             return Err(StreamViolation::NotRisingByTwo(s));
+        }
+        if key && !self.keys {
+            return Err(StreamViolation::KeyStreamUnkeyed(s));
         }
         if self.counted() >= MAX_STREAMS {
             if self.refusing.len() >= MAX_STREAMS {
@@ -373,7 +395,11 @@ impl Mux {
         }
         self.highest = s;
         self.open.insert(s, Stream::new());
-        out.push(Out::NewStream { stream: s });
+        out.push(if key {
+            Out::NewKeyStream { stream: s }
+        } else {
+            Out::NewStream { stream: s }
+        });
         Ok(())
     }
 
@@ -477,9 +503,14 @@ impl Mux {
         }
     }
 
-    fn local_open(&mut self, out: &mut Vec<Out>) -> Result<(), StreamViolation> {
+    fn local_open(&mut self, key: bool, out: &mut Vec<Out>) -> Result<(), StreamViolation> {
         if self.side != Side::Sidecar {
             return Err(StreamViolation::WrongSide(Kind::Open));
+        }
+        if key && !self.keys {
+            return Err(StreamViolation::KeyStreamUnkeyed(
+                u32::try_from(self.next_id()).unwrap_or(u32::MAX),
+            ));
         }
         if self.counted() >= MAX_STREAMS {
             return Err(StreamViolation::LocalTooMany);
@@ -492,7 +523,11 @@ impl Mux {
         let s = next as u32;
         self.highest = s;
         self.open.insert(s, Stream::new());
-        out.push(Out::Send(Frame::empty(s, Kind::Open)));
+        out.push(Out::Send(if key {
+            Frame::open_key(s)
+        } else {
+            Frame::empty(s, Kind::Open)
+        }));
         Ok(())
     }
 

@@ -32,6 +32,7 @@
 (require 'drgnx-state)
 (require 'url-util)
 (require 'drgnx-color)
+(require 'drgnx-pixels)
 (require 'drgnx-term-settings (expand-file-name "drgnx-term-settings" (file-name-directory (macroexp-file-name))))
 (defvar drgnx-keys-last)
 (defvar drgnx-term-copy-mode)
@@ -931,6 +932,81 @@ learns the new colours (a program reads them back)."
   (dolist (b (drgnx-term-buffers)) (drgnx-view-patch-repaint b))
   (drgnx-term--apply-config))
 
+;;;; Wide cells: each glyph within its two cells
+
+;; The worker ends each wide character with a stop at its second cell's end (`(space :align-to (PX))'), so the
+;; columns after it keep their place whatever width the font gives it.  A glyph wider than its two cells (an emoji
+;; at ~19 px over 2 × 8 in a 13 px monospace) would still push the rest of its row right, up to the next stop.  The
+;; guard below (the buffer's `drgnx-view-patch-guard-function') measures each wide cluster once per cell width and
+;; draws one that overflows at a smaller height (a `(height F)' display over the cluster's characters, so a joined
+;; emoji stays one glyph).  The fit guard of other views (an ellipsis) never runs on a terminal's rows: a terminal's
+;; text is the program's.
+
+(defvar drgnx-term-cell-width-function #'drgnx-term--cell-width
+  "Called with no argument: a cell's width in px, or nil where glyphs are cells (a text terminal).  Tests set it.")
+
+(defvar drgnx-term-cell-measure-function #'drgnx-term--cell-measure
+  "Called with a string (with its display properties): its width in px as the terminal draws it.  Tests set it.")
+
+(defvar drgnx-term--cell-scales (make-hash-table :test #'equal)
+  "Wide cluster (a character, or a string of several) → (LIMIT . SPEC): the `(height F)' that draws it within LIMIT
+px, or nil when it fits as it is.  Emptied when it holds 4,096 entries.")
+
+(defun drgnx-term--cell-width ()
+  "The cell's width in px on a graphical frame (its character width, as `term/open' sends it), else nil."
+  (and (display-graphic-p) (frame-char-width)))
+
+(defun drgnx-term--cell-measure (s)
+  "S's width in px in the terminal's face (`drgnx-look-pixel-width': the glyphs' advances)."
+  (drgnx-look-pixel-width s 'drgnx-term-default))
+
+(defsubst drgnx-term--cluster-char-p (c)
+  "Non-nil when C belongs to a wide cluster: a wide character, a joiner or selector, a regional indicator or a tag."
+  (or (>= (char-width c) 2) (memq c '(#x200d #xfe0f #x20e3)) (<= #x1f1e6 c #x1f1ff) (<= #xe0020 c #xe007f)))
+
+(defun drgnx-term--cluster-start (text lo end)
+  "Where the wide cluster that ends before the stop at END starts in TEXT, not before LO (END: none).  A selector
+\(❤️, 1️⃣) takes the narrow character before it."
+  (let ((s end))
+    (while (and (> s lo) (drgnx-term--cluster-char-p (aref text (1- s)))) (setq s (1- s)))
+    (when (and (< s end) (> s lo) (memq (aref text s) '(#xfe0f #x20e3))) (setq s (1- s)))
+    s))
+
+(defun drgnx-term--cell-scale (cluster limit)
+  "The `(height F)' display that draws CLUSTER (a character or a string) within LIMIT px, or nil when it fits.  F
+is the ratio rounded down to a hundredth, lowered by 0.05 while the scaled cluster still measures wider (font sizes
+round).  Memoised in `drgnx-term--cell-scales'."
+  (let ((hit (gethash cluster drgnx-term--cell-scales)))
+    (if (eql (car hit) limit)
+        (cdr hit)
+      (when (>= (hash-table-count drgnx-term--cell-scales) 4096) (clrhash drgnx-term--cell-scales))
+      (let* ((s (if (characterp cluster) (string cluster) cluster))
+             (w (funcall drgnx-term-cell-measure-function s))
+             (spec (when (> w limit)
+                     (let* ((f (/ (floor (* 100 limit) w) 100.0)) (sp (list 'height f)))
+                       (while (and (> f 0.3) (> (funcall drgnx-term-cell-measure-function (propertize s 'display sp))
+                                                limit))
+                         (setq f (- f 0.05) sp (list 'height f)))
+                       sp))))
+        (puthash cluster (cons limit spec) drgnx-term--cell-scales)
+        spec))))
+
+(defun drgnx-term--cell-guard (_state text stops)
+  "The terminal's guard over a row's STOPS (`drgnx-view-patch-guard-function'): each wide cluster before a stop
+that is wider than two cells gets the `(height F)' display that draws it within them.  Returns the new text, or nil
+when every cluster fits (or glyphs are cells)."
+  (when-let* ((cell (funcall drgnx-term-cell-width-function)))
+    (let ((limit (* 2 cell)) (lo 0) out)
+      (dolist (stop stops)
+        (let* ((end (car stop)) (s (drgnx-term--cluster-start text lo end)))
+          (when-let* (((< s end))
+                      (spec (drgnx-term--cell-scale (if (= (1+ s) end) (aref text s) (substring-no-properties text s end))
+                                                    limit)))
+            (unless out (setq out (copy-sequence text)))
+            (put-text-property s end 'display spec out))
+          (setq lo (1+ end))))
+      out)))
+
 ;;;; The mode and the start
 
 (define-derived-mode drgnx-term-mode nil "Terminal"
@@ -940,6 +1016,7 @@ Typing goes to the program (`drgnx-term-mode-map')."
   (setq-local scroll-margin 0)
   (setq-local hscroll-margin 0)
   (face-remap-add-relative 'default 'drgnx-term-default)
+  (setq-local drgnx-view-patch-guard-function #'drgnx-term--cell-guard)
   (drgnx-term--set-locals)
   (add-hook 'kill-buffer-query-functions #'drgnx-term--confirm-close nil t)
   (add-hook 'window-scroll-functions #'drgnx-term--scrolled nil t)

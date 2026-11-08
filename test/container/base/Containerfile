@@ -1,6 +1,7 @@
 # Batch test tier, base: only the Fedora packages (the image on it adds Nidhogg: ../Containerfile). diffutils for the
 # review tests; zsh and fish for the shell-file and completion tests (bash is already there); procps-ng for
-# pgrep/pkill (the lease and stress tests); binutils for `as` (native-compiling a trampoline).  Built and published as
+# pgrep/pkill (the lease and stress tests); binutils for `as` (native-compiling a trampoline); vttest for the terminal
+# worker's vttest goldens (runtime/crates/drgnx-term/tests/vttest.rs).  Built and published as
 # drgnx-base-test, tagged by the hash of this file (../image-tag.sh); a change here re-tags every image on it.
 FROM registry.fedoraproject.org/fedora:45
-RUN dnf -y install diffutils git zsh fish procps-ng binutils && dnf clean all
+RUN dnf -y install diffutils git zsh fish procps-ng binutils vttest && dnf clean all

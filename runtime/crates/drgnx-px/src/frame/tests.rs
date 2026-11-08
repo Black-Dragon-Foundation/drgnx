@@ -160,12 +160,15 @@ fn credit_0_is_a_violation() {
     );
 }
 
-/// [D] `OPEN`, `FIN`, `RST` and `BEAT` carry nothing.
+/// [D] `OPEN`, `FIN`, `RST` and `BEAT` carry nothing (an `OPEN` carries the key mark or nothing: next test).
 #[test]
 fn open_fin_rst_beat_have_no_payload() {
+    assert_eq!(
+        decode(&raw(1, 1, &[])).unwrap(),
+        vec![Frame::empty(1, Kind::Open)]
+    );
     for (stream, b, kind) in [
-        (1u32, 1u8, Kind::Open),
-        (1, 4, Kind::Fin),
+        (1u32, 4u8, Kind::Fin),
         (1, 5, Kind::Rst),
         (0, 6, Kind::Beat),
     ] {
@@ -178,6 +181,42 @@ fn open_fin_rst_beat_have_no_payload() {
             Err(Violation::Length { kind, len: 1 })
         );
     }
+}
+
+/// [D] An `OPEN` carries nothing (a stream for the proxy) or exactly the one byte [`KEY_MARK`] (a key stream); any
+/// other byte, or a second one, is a violation, and only the sidecar's frames reach the decoder of the owner.
+#[test]
+fn open_carries_nothing_or_exactly_the_key_mark() {
+    assert_eq!(
+        decode(&raw(1, 1, &[KEY_MARK])).unwrap(),
+        vec![Frame::open_key(1)]
+    );
+    assert_eq!(Frame::open_key(1).payload, [KEY_MARK]);
+    assert!(Frame::open_key(1).is_key_open());
+    assert!(!Frame::empty(1, Kind::Open).is_key_open());
+    for other in [0u8, 2, b'k', 0xff] {
+        assert_ne!(other, KEY_MARK);
+        assert_eq!(
+            decode(&raw(1, 1, &[other])),
+            Err(Violation::BadPayload(Kind::Open)),
+            "{other}"
+        );
+    }
+    assert_eq!(
+        decode(&raw(1, 1, &[KEY_MARK, KEY_MARK])),
+        Err(Violation::Length {
+            kind: Kind::Open,
+            len: 2
+        })
+    );
+    // the mark on another kind is that kind's own rule
+    assert_eq!(
+        decode(&raw(1, 4, &[KEY_MARK])),
+        Err(Violation::Length {
+            kind: Kind::Fin,
+            len: 1
+        })
+    );
 }
 
 /// [D] The high bit of a stream id is never set.

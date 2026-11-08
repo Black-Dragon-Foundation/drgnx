@@ -637,6 +637,7 @@ impl Engine {
                 (&raw mut full).cast(),
             );
             let full = full == GHOSTTY_RENDER_STATE_DIRTY_FULL;
+            let hist = self.scrollback_rows();
             let mut it = self.rows;
             if ghostty_render_state_get(
                 self.rs,
@@ -671,6 +672,7 @@ impl Engine {
                     palette: &self.palette,
                     term: self.term,
                     y,
+                    hist,
                 };
                 f(id.bits, dirty || full, y, &mut r);
             }
@@ -855,16 +857,26 @@ pub struct CellReader<'a> {
     term: GhosttyTerminal,
     /// The row's viewport y (negative above the screen).
     y: i32,
+    /// The rows of scrollback above the screen (the viewport stays at the bottom).
+    hist: usize,
 }
 
 impl CellReader<'_> {
-    /// The URI of the OSC 8 link on the screen's cell X of this row; none above the screen (no point reaches it).
+    /// The URI of the OSC 8 link on cell X of this row: a viewport point on the screen, a history point above it (the
+    /// viewport never scrolls, so viewport row -N is history row HIST - N).
     fn link(&self, x: usize) -> Option<String> {
-        let (Ok(y), Ok(x)) = (u32::try_from(self.y), u16::try_from(x)) else {
+        let Ok(x) = u16::try_from(x) else {
             return None;
         };
+        let (tag, y) = match u32::try_from(self.y) {
+            Ok(y) => (GHOSTTY_POINT_TAG_VIEWPORT, y),
+            Err(_) => (
+                GHOSTTY_POINT_TAG_HISTORY,
+                u32::try_from(self.hist.checked_sub(self.y.unsigned_abs() as usize)?).ok()?,
+            ),
+        };
         let point = GhosttyPoint {
-            tag: GHOSTTY_POINT_TAG_VIEWPORT,
+            tag,
             value: GhosttyPointValue {
                 coordinate: GhosttyPointCoordinate { x, y },
             },

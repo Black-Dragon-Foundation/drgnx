@@ -200,6 +200,23 @@ pub fn stop_detached(root: &Root) {
     }
 }
 
+/// Removes the containers a scenario left in ROOT's own podman store (its `XDG_DATA_HOME`): a row that fails before
+/// its last step leaves its fixtures running, and once the root is gone no podman can see them, so they keep their
+/// host ports and the next rows' fixtures can't bind them.
+pub fn remove_containers(root: &Root) {
+    if !root.path().join("xdg-data/containers").is_dir() {
+        return;
+    }
+    let _ = std::process::Command::new("podman")
+        .args(["rm", "--all", "--force", "--time", "0"])
+        .env_clear()
+        .envs(root.base_env(vec![]))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 // ---------------------------------------------------------------- hubs
 
 pub struct Hub {

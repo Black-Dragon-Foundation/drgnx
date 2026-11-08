@@ -455,3 +455,134 @@ fn it_prints_its_version() {
         concat!("drgnx-px ", env!("CARGO_PKG_VERSION"), "\n")
     );
 }
+
+/// A name of the keys' listener this test alone uses (the tests share the host's network namespace).
+fn key_name(test: &str) -> String {
+    format!("drgnx-key-test-{}-{test}", std::process::id())
+}
+
+fn abstract_addr(name: &str) -> std::os::unix::net::SocketAddr {
+    use std::os::linux::net::SocketAddrExt;
+    std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap()
+}
+
+/// [C] A keyed sidecar has its keys' name bound by its `READY`; a connection there opens a key stream (the `OPEN`
+/// carries the key mark), and its bytes and the owner's answer cross it; a connection to the relay port still opens
+/// a plain stream.
+#[tokio::test]
+async fn a_keyed_sidecar_opens_a_key_stream_per_key_connection() {
+    let name = key_name("open");
+    let mut px = Px::start(&["--keys", &name]).await;
+    // READY has come: the name is bound
+    let mut k = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&name))
+        .expect("the keys' name is bound by READY");
+    let open = px.next_not_credit().await;
+    assert!(open.is_key_open(), "{open:?}");
+    assert_eq!(open.stream, 1);
+    use std::io::{Read, Write};
+    k.write_all(b"get A\n").unwrap();
+    let data = px.next_not_credit().await;
+    assert_eq!((data.stream, data.kind), (1, Kind::Data));
+    assert_eq!(data.payload, b"get A\n");
+    px.send(Frame::data(1, b"ok 1\nx".to_vec())).await;
+    px.send(Frame::empty(1, Kind::Fin)).await;
+    let mut got = Vec::new();
+    k.read_to_end(&mut got).unwrap();
+    assert_eq!(got, b"ok 1\nx");
+    let _plain = connect_from("127.0.0.3", px.listen).await;
+    let open = loop {
+        let f = px.next_not_credit().await;
+        if f.kind == Kind::Open {
+            break f;
+        }
+    };
+    assert!(!open.is_key_open(), "{open:?}");
+    px.close_stdin();
+    assert_eq!(px.exit().await, Some(0));
+}
+
+/// [C] A name taken before the sidecar starts (a squat) is never served: the sidecar exits 2 without a `READY`. An
+/// unkeyed sidecar binds no name at all.
+#[tokio::test]
+async fn a_squatted_keys_name_exits_2_before_ready() {
+    let name = key_name("squat");
+    let _squat = std::os::unix::net::UnixListener::bind_addr(&abstract_addr(&name)).unwrap();
+    let mut child = Command::new(PX)
+        .args([
+            "--listen",
+            "127.0.0.2:0",
+            "--job-ip",
+            "127.0.0.3",
+            "--keys",
+            &name,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut out = Vec::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_end(&mut out)
+        .await
+        .unwrap();
+    let st = timeout(BOUND, child.wait()).await.unwrap().unwrap();
+    assert_eq!(st.code(), Some(2));
+    assert!(out.is_empty(), "the sidecar wrote {} bytes", out.len());
+
+    let other = key_name("unkeyed");
+    let mut px = Px::start(&[]).await;
+    let e = std::os::unix::net::UnixStream::connect_addr(&abstract_addr(&other)).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
+    px.close_stdin();
+    assert_eq!(px.exit().await, Some(0));
+}
+
+/// [C] The sidecar can't dump core: its `RLIMIT_CORE` is 1, and it isn't dumpable (its /proc files are root's; seen
+/// when the test isn't root itself).
+#[tokio::test]
+async fn the_sidecar_has_no_core_dump() {
+    let mut px = Px::start(&[]).await;
+    let pid = px.child.id().unwrap();
+    let limits = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
+    let core = limits
+        .lines()
+        .find(|l| l.starts_with("Max core file size"))
+        .expect("the core limit");
+    assert!(core.split_whitespace().nth(4) == Some("1"), "{core}");
+    use std::os::unix::fs::MetadataExt;
+    let me = std::fs::metadata("/proc/self").unwrap().uid();
+    if me != 0 {
+        // a process that isn't dumpable has its /proc files owned by root
+        assert_eq!(
+            std::fs::metadata(format!("/proc/{pid}/environ"))
+                .unwrap()
+                .uid(),
+            0,
+            "not dumpable"
+        );
+    }
+    px.close_stdin();
+    assert_eq!(px.exit().await, Some(0));
+}
+
+/// [C] The binary built without the test hooks (the one an image ships) refuses their flags.
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn without_test_hooks_their_flags_are_refused() {
+    for flag in ["--test-log-frames", "--test-panic-on-beat"] {
+        let out = std::process::Command::new(PX)
+            .args(["--listen", "127.0.0.2:0", "--job-ip", "127.0.0.3", flag])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{flag}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("unknown argument"),
+            "{flag}"
+        );
+    }
+}

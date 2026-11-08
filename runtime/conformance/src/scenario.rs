@@ -66,7 +66,7 @@ pub struct ParseError {
     pub msg: String,
 }
 
-pub const TAGS: [&str; 13] = [
+pub const TAGS: [&str; 14] = [
     "v1",
     "sudo",
     "test-hooks",
@@ -80,6 +80,7 @@ pub const TAGS: [&str; 13] = [
     "playwright-mcp",
     "internet",
     "rootless",
+    "selinux-user-t",
 ];
 
 fn err(line: usize, msg: impl Into<String>) -> ParseError {
@@ -216,6 +217,8 @@ pub struct Host {
     pub podman: bool,
     /// Why the `rootless` rows cannot run here (podman is not rootless, or `podman info` fails); `None`: rootless.
     pub no_rootless: Option<String>,
+    /// This login runs in SELinux's confined `user_t` (a `user_u` login), for the `selinux-user-t` rows.
+    pub user_t: bool,
     /// The harness has `CAP_SYS_PTRACE` and no `setpriv` to run a `drop_ptrace` step without it.
     pub ptrace_stays: bool,
     /// Why a `real-sandbox` row cannot run here (the hub has test hooks, so its sessions start unsandboxed, or its
@@ -269,6 +272,9 @@ pub fn gate(s: &Scenario, h: &Host) -> Gate {
     {
         return skip(why, true);
     }
+    if has("selinux-user-t") && !h.user_t {
+        return skip("needs a confined SELinux user_u login (user_t)", true);
+    }
     if has("perf") && !h.perf {
         return skip("needs --perf", true); // a mode of the run, not a missing capability: --require-all lets it be
     }
@@ -317,6 +323,13 @@ pub fn ptrace_effective() -> bool {
                 .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
         })
         .is_some_and(|caps| caps & (1 << 19) != 0)
+}
+
+/// Does this process run in SELinux's `user_t` (the type, third field of `/proc/self/attr/current`)?  False without
+/// SELinux.
+pub fn selinux_user_t() -> bool {
+    std::fs::read_to_string("/proc/self/attr/current")
+        .is_ok_and(|c| c.trim_end_matches(['\0', '\n']).split(':').nth(2) == Some("user_t"))
 }
 
 /// Can `setpriv` run here?
@@ -586,6 +599,28 @@ mod tests {
             ..Host::default()
         };
         assert_eq!(gate(&s, &with), Gate::Run);
+    }
+
+    #[test]
+    fn a_user_t_row_runs_only_on_a_user_t_login() {
+        let s = row("\"linux\", \"selinux-user-t\"");
+        let other = Host {
+            linux: true,
+            ..Host::default()
+        };
+        assert_eq!(
+            gate(&s, &other),
+            Gate::Skip {
+                reason: "needs a confined SELinux user_u login (user_t)".into(),
+                excused: true
+            }
+        );
+        let confined = Host {
+            linux: true,
+            user_t: true,
+            ..Host::default()
+        };
+        assert_eq!(gate(&s, &confined), Gate::Run);
     }
 
     #[test]

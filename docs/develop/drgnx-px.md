@@ -16,7 +16,7 @@ u32 stream id (big-endian; the high bit is 0) | u8 kind | u32 payload length (bi
 | Kind | Way | Stream | Payload |
 |---|---|---|---|
 | `READY` 0 | sidecar → owner | 0 | JSON `{"version":1,"listen":"<ip:port>"}`, the address the sidecar bound |
-| `OPEN` 1 | sidecar → owner | odd | none: a new job connection |
+| `OPEN` 1 | sidecar → owner | odd | none: a new job connection; or the one byte `KEY_MARK` (`0x4b`): a key request ("Key streams") |
 | `DATA` 2 | both | odd | 1–16384 bytes |
 | `CREDIT` 3 | both | odd | a u32 (big-endian), never 0: more bytes the receiver may now send on the stream |
 | `FIN` 4 | both | odd | none: this side's half-close |
@@ -35,7 +35,7 @@ frame shows on its own, and any of these closes the channel (`frame::Violation`)
 - `READY`, `BEAT` or `EVENT` off stream 0, or any other kind on it (`WrongStream`);
 - a length the kind doesn't allow (`Length`), judged from the header before any payload is held;
 - a payload of the wrong form (`BadPayload`): `READY` that isn't exactly version 1 and an `ip:port`, an `EVENT` whose
-  `foreign_source` doesn't parse as an IP address (it is never passed on as text), a `CREDIT` of 0.
+  `foreign_source` doesn't parse as an IP address (it is never passed on as text), a `CREDIT` of 0, an `OPEN` carrying anything but nothing or exactly `KEY_MARK`.
 
 What depends on the channel's state (which streams are open, credit, which side may send a kind) belongs to the relay
 core.
@@ -104,8 +104,12 @@ still there is aborted.
 ## The sidecar (`sidecar`, the binary)
 
 ```
-drgnx-px --listen <ip:port> --job-ip <ip>
+drgnx-px --listen <ip:port> --job-ip <ip> [--keys NAME]
 ```
+
+Before anything else it sets `RLIMIT_CORE` to 1 and `PR_SET_DUMPABLE` 0: no core of it is written (a piped
+`core_pattern`, as systemd-coredump's, honours a limit of 1 but not 0), and its `/proc` files are root's, so nothing
+else in the container reads its memory. Its podman line sets `--ulimit core=1` too.
 
 It binds the listen address with backlog 128 and never `SO_REUSEPORT` (a job running as the same uid could otherwise
 bind the port beside it), sends `READY` with the bound address, and accepts while fewer than 64 streams are counted:
@@ -122,7 +126,7 @@ blocking stdin); stdout carries frames only, and logs and panics go to stderr. A
 |---|---|
 | 0 | stdin ended |
 | 1 | bad arguments, stdio that isn't a pipe, or the channel's pipe failed |
-| 2 | the listen address can't be bound |
+| 2 | the listen address, or the `--keys` name, can't be bound |
 | 3 | 60 s without a `BEAT` |
 | 4 | a violation |
 | 5 | a channel write without progress for 60 s |
@@ -130,8 +134,28 @@ blocking stdin); stdout carries frames only, and logs and panics go to stderr. A
 | 101 | a panic |
 
 The feature `test-hooks` adds `--test-log-frames` (a log line per frame) and `--test-panic-on-beat`; a shipped build
-has neither. `sidecar::serve` is the channel the binary runs on its fds 0, 1 and 2, callable on any pipes (the
+has neither, and refuses them as unknown arguments (exit 1). `sidecar::serve` is the channel the binary runs on its fds 0, 1 and 2, callable on any pipes (the
 small-pipe tests run it in-process).
+
+## Key streams
+
+A job with keys reads them through its sidecar (docs/develop/sleipnir.md, "Keys"). With `--keys NAME` the sidecar
+binds the abstract Unix socket `@NAME` (a plain name of at most 64 bytes) in its network namespace, which the job
+shares, before it sends `READY`: a name already taken (a job can't start before its sidecar's `READY`, but a bind that
+fails for any reason) exits 2, so nothing else answers on that name. Each connection to it opens a stream with `OPEN`
+and `KEY_MARK`; it is carried like any other stream and counts against the 64.
+
+- Only a keyed channel takes them: a key stream's `OPEN` on a channel started without keys (`Mux::allow_keys` not
+  called; the sidecar without `--keys`, the owner's `run`) is a violation (`KeyStreamUnkeyed`) and ends the channel.
+- The owner gives a key stream to its `KeySource` (`owner::run_keyed`), never to the proxy, and a proxy stream never to
+  the `KeySource`. The stream carries one request: one line of at most `KEY_REQUEST` (512) bytes, UTF-8, ending in a
+  newline. Anything longer, or not UTF-8, resets the stream unread. The source's answer (`KeyAnswer`) is sent from the
+  memory it was built in (the job helper's `Locked` buffer) and dropped when sent; the stream then ends.
+- Every buffer a stream's bytes pass through on either side (the reader's and decoder's, a frame's payload once
+  encoded, the writer's, the copy loops') is zeroed (`zeroize`) before it is freed or reused.
+
+Who owns the channel: the job helper, for every job with keys (all of them are runner jobs: a keyed job never runs on
+the hub's machine); the hub's `JobNetwork` for its own networked exec jobs, which never have keys and run `owner::run`.
 
 ## The owner (`owner`)
 
@@ -140,7 +164,7 @@ The owner's end runs where the job's proxy is (the hub, or a runner's job helper
 - `owner::wait_ready(out, want, limit)` reads exactly the first frame (nothing past it) and wants a `READY` naming
   `want` within `limit` (10 s, `READY_LIMIT`). Otherwise `End::Ready` with the reason: none in time, the relay gone
   before it, another frame first, another address.
-- `owner::run(out, inp, streams, events, beat, stall, log)` then carries the channel on the shell with `Side::Owner`
+- `owner::run(out, inp, streams, events, beat, stall, log)` (or `owner::run_keyed` with a `KeySource` as well) then carries the channel on the shell with `Side::Owner`
   and returns how it ended (`End`: `Eof`, also for a pipe error or the sidecar's output ending mid-frame, logged as
   "the relay ended mid-frame"; `Violation`; `Stalled`; `IdsUsedUp`). It sends a `BEAT` every `beat` (10 s); a write
   without progress for `stall` (60 s) ends it. It takes `out` and `inp` by value and drops them before it returns.

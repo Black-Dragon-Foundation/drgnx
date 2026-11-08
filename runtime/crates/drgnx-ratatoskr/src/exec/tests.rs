@@ -335,6 +335,47 @@ fn a_container_jobs_grant_is_the_hosts_a_runner_gets() {
     assert!(net_hosts_of(None).is_empty());
 }
 
+/// [D] pure: a runner gets no proxy pins (a pin names an address on this machine's network, and a runner's proxy
+/// reaches only public addresses), so a job whose granted hosts include a pinned name stays on this machine, where
+/// the pin means what it says; a job reaching only unpinned names may go. Names compare as hosts do (case, a trailing
+/// dot); the port is the grant's own.
+#[test]
+fn a_job_reaching_a_pinned_host_stays_here() {
+    let pins = vec![("registry.corp".to_string(), "10.0.0.5".parse().unwrap())];
+    let hosts = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        pinned_host(&hosts(&["crates.io:443", "Registry.Corp.:5000"]), &pins),
+        Some("Registry.Corp.:5000".to_string())
+    );
+    assert_eq!(
+        pinned_host(&hosts(&["crates.io:443", "corp:443"]), &pins),
+        None
+    );
+    assert_eq!(pinned_host(&[], &pins), None);
+    assert_eq!(pinned_host(&hosts(&["registry.corp:443"]), &[]), None);
+}
+
+/// [D] pure: a job with keys runs only on a runner, and one reaching a pinned name only here: both is refused with
+/// the reason, never queued where nothing can take it.
+#[test]
+fn a_keyed_job_reaching_a_pinned_host_is_refused() {
+    let pins = vec![("registry.corp".to_string(), "10.0.0.5".parse().unwrap())];
+    let v = |h: &[&str]| h.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let why = keyed_and_pinned(&v(&["TOKEN"]), &v(&["registry.corp:443"]), &pins).expect("refused");
+    assert!(
+        why.contains("registry.corp:443") && why.contains("runner"),
+        "{why}"
+    );
+    assert_eq!(
+        keyed_and_pinned(&[], &v(&["registry.corp:443"]), &pins),
+        None
+    );
+    assert_eq!(
+        keyed_and_pinned(&v(&["TOKEN"]), &v(&["crates.io:443"]), &pins),
+        None
+    );
+}
+
 /// [D] pure: `rows` reaches the queue as the job's suite; a run here takes every row in place of `{rows}`, and a
 /// request without rows runs as it is.
 #[test]

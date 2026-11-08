@@ -1347,6 +1347,7 @@ dependencies = [
  "skuld",
  "tempfile",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]

@@ -1602,6 +1602,12 @@ The builder is `sleipnir::linux::podman::argv`, shared with the runners ([sleipn
   `http_proxy` and `https_proxy` are `http://127.0.0.1:3128`. The only route out is the proxy, whose allow-list is the
   setting `agents-net-hosts` (by default the package hosts of crates.io, npm and PyPI, port 443). A job granted a
   network whose relay can't start is refused.
+- **Keys over the sidecar.** A runner job with keys always has a sidecar, networked or not (then its allow-list is
+  empty), started with `--keys drgnx-key`: `drgnx-key` in the job asks on the abstract socket `@drgnx-key` in the
+  namespace it shares with the sidecar, which carries each request to the job helper as a key stream
+  ([drgnx-px.md](drgnx-px.md#key-streams), [sleipnir.md](sleipnir.md#keys)). No socket file, mount or SELinux label is
+  involved, so confined `staff_u` logins run keyed jobs as unconfined ones do. The hub's own container jobs carry no
+  keys.
 - **The shape built (Q8).** The sidecar runs `--network=none --user 65534:65534` in podman's default rootless user
   namespace, so that namespace owns the network namespace the job joins (`--userns=keep-id`): `lo` only, no route,
   no `--dns`, `--sysctl` or `--add-host`; root in the job's user namespace can't change it. The barrier between jobs is

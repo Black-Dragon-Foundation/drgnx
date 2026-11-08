@@ -530,6 +530,49 @@ fn osc8_link_is_a_row_prop() {
 }
 
 #[test]
+fn osc8_links_survive_scrolling_and_backfill() {
+    let link = |i: usize| format!("file:///tmp/{i:03}.txt");
+    let line = |i: usize| format!("l{i:03} \x1b]8;;{}\x1b\\f{i:03}\x1b]8;;\x1b\\\r\n", link(i));
+    let (mut w, mut m) = (worker(30, 3, 100), Model::default());
+    draw(&mut w, &mut m, 0);
+    // two rows scroll off between frames: the frame reads them again above the screen
+    w.output((0..4).map(line).collect::<String>().as_bytes(), 100);
+    draw(&mut w, &mut m, 100);
+    // a flood: forty rows scroll past unseen, the backfill brings them back
+    w.output((4..44).map(line).collect::<String>().as_bytes(), 1000);
+    draw(&mut w, &mut m, 1000);
+    let mut t = 1200;
+    while w.next(t) == Next::Backfill {
+        assert!(t < 2000, "backfill does not end");
+        draw(&mut w, &mut m, t);
+        t += 1;
+    }
+    let mut seen = 0;
+    for r in &m.rows {
+        let Some(i) = r
+            .text
+            .strip_prefix('l')
+            .and_then(|s| s.get(..3)?.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        assert_eq!(
+            r.props,
+            vec![(
+                5,
+                9,
+                "drgnx-term-link".to_owned(),
+                serde_json::json!(link(i))
+            )],
+            "row {:?} keeps its link",
+            r.text
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 44, "every row is held: {:?}", m.texts());
+}
+
+#[test]
 fn scroll_by_prompts_rows_and_to_the_bottom() {
     let mut w = worker(20, 3, 100);
     let mut m = Model::default();

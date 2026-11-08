@@ -52,6 +52,7 @@ that lacks any item is refused with the whole list, each with its fix:
 
 | Item | Fix shown |
 |---|---|
+| a login not confined as SELinux `user_u` (`user_t`, read from `/proc/self/attr/current`: `linux::confined`) | map the login to another SELinux user (`semanage login -m -s staff_u LOGIN`), or a subuid range plus a local policy module letting `user_t` run `newuidmap` |
 | a systemd user manager | log in, or `loginctl enable-linger` |
 | rootless podman ≥ 5 | install or upgrade podman; connect as an ordinary user |
 | cgroup v2 | the unified hierarchy (the default on current distributions) |
@@ -59,7 +60,8 @@ that lacks any item is refused with the whole list, each with its fix:
 | `memory pids cpu` delegated to the user | a `user@.service.d/delegate.conf` drop-in, then log in again |
 | git | install git |
 
-There is no reduced mode. Linger is a fact, not a refusal: without it, jobs end when the link drops, and the runner
+There is no reduced mode. A `user_u` runner that passed once (its login remapped later) is refused at each job's start
+too: the attempt ends `infra: setup` with the same reason. Linger is a fact, not a refusal: without it, jobs end when the link drops, and the runner
 list says so. The facts: architecture, OS (`ID VERSION_ID`), cores, memory, disk free, podman's version, linger, the
 Landlock ABI, a graphical session, a battery, whether `memory.swap.max` can be set, whether systemd writes cpusets,
 and the other schedulers present.
@@ -100,10 +102,11 @@ is not the one `net_names` gives this job.
 
 `net_names(ra, job)` gives the sidecar's name, `drgnx-px-<tag>-<job>` on a hub and `<prefix>-px-<job>` on a runner (a
 runner prefix that could reach the hub's `drgnx-job-` or `drgnx-px-` names, or another runner's `…-px-` sidecars, is
-refused), and the labels. `sidecar_argv(names, ra, image)` is the sidecar's line: `run -i --rm --pull=never
+refused), and the labels. `sidecar_argv(names, ra, image, keys)` is the sidecar's line: `run -i --rm --pull=never
 --log-driver=none --detach-keys= --user 65534:65534`, no capabilities, read-only, 32 pids, `128m` memory and swap, one
-CPU, `--network=none`, never `-t` (a tty would rewrite the frames' bytes), and `--listen 127.0.0.1:3128 --job-ip
-127.0.0.1` after the image. `--detach-keys=` stays: podman scans a piped stdin for its detach sequence, and a match
+CPU, `--ulimit core=1` (no core: below), `--network=none`, never `-t` (a tty would rewrite the frames' bytes), and
+`--listen 127.0.0.1:3128 --job-ip 127.0.0.1` after the image, plus `--keys drgnx-key` for a job with keys ("Keys").
+A job with keys always gets a sidecar, with network or without (then its proxy's allow-list is empty). `--detach-keys=` stays: podman scans a piped stdin for its detach sequence, and a match
 would close the channel. The sidecar runs in podman's default user namespace (no `keep-id`).
 
 On a runner (`RunnerArgs::runner(prefix, hub_id, slice)`) the container is named `<prefix>-<id>`, labelled
@@ -116,7 +119,7 @@ exactly this set (`RunnerMounts`), nothing else:
 | the source: the slot, or a writer's private copy | `/work` | `ro,z` (`rw,Z` for a `writes_tree` copy) |
 | the slot's target dir | `/target` (`CARGO_TARGET_DIR`) | `rw,Z` |
 | each cache the suite declares | its own absolute path, never under `/work`, `/target`, `/tmp` or `/run/drgnx` | `rw,Z` |
-| the key socket and `drgnx-key` | `/run/drgnx/key.sock`, `/run/drgnx/key` | `ro,Z` |
+| `drgnx-key` | `/run/drgnx/key` | `ro,Z` |
 
 A keyed job (`KeyMounts.vars`, each `(key name, variable)`) runs as `drgnx-key exec NAME=VAR… -- CMD`: `drgnx-key` is
 the entrypoint, with or without network.
@@ -232,26 +235,17 @@ One per attempt, owning what the job may use and must never keep. job-exec start
 its slice, capped at no swap), and it reads job-exec's pipe: when job-exec ends, or the unit stops, the helper goes
 with it. Nothing outlives the job, so no daemon is left behind, and `serve` may end with the link while it runs. It:
 
-- sets `PR_SET_DUMPABLE=0` and `RLIMIT_CORE` 0 first: no core dump (a piped `core_pattern` ignores `RLIMIT_CORE`),
-  and no other process of the user can read its memory or `/proc` files;
-- serves the job's keys on `D/key.sock` and takes them from `serve` on `D/helper.sock` (both 0600, this user only;
-  "Keys" below);
-- on an SELinux host (`selinux` in `/sys/kernel/security/lsm` and selinuxfs mounted; an AppArmor host is neither),
-  creates `D/key.sock` with the context `<its own SELinux user>:system_r:container_t:s0` (k1, `helper::selinux`): a
-  keyed job runs `container_t` with its own categories (its argv pins the type, `--security-opt
-  label=type:container_t`), the stock policy lets `container_t` connect to a `container_t` socket, and the `:Z` mount's
-  categories keep every other job off it. The context is per thread and inherited, so it is written to
-  `/proc/thread-self/attr/sockcreate`, the socket bound, the empty reset written and read back on a throwaway thread
-  of its own, never a pool thread; a reset that fails or reads back non-empty refuses the job and removes the socket.
-  No libselinux. `drgnx doctor`'s `key sockets:` line runs the create half on the hub's host (bind labelled, read the
-  socket's `security.selinux` back, expect `container_t`), and `serve`'s `probe-result` carries the same check, run in
-  the runner folder, as `key_socket` (why a keyed job would be refused; the hub's runner check and `runner add` fail on
-  it, as on `check_limits`). The `#[ignore = "selinux"]` rows in `tests/runner_host_helper.rs` (`selinux::`) run on
-  the VM gate: a keyed job reads its key, another job's categories are refused, the peer is `container_t`;
-- with `--hub-allow`, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the `job.json`'s
-  `helper.sidecar_argv`, named `helper.net.sidecar`, `<prefix>-px-<id>`), waits for its `READY` before its own `ready`
-  line, and runs Gleipnir's CONNECT proxy on the relay's streams (`Listener::Streams`, `max_conns` 128) with the hub's
-  allow-list. A relay that ends before the job writes `kill_reason` `infra: proxy: <reason>` (the sidecar's exit code
+- sets `PR_SET_DUMPABLE=0` and `RLIMIT_CORE` 1 (soft and hard) first: no core dump (a piped `core_pattern`, as
+  systemd-coredump's, ignores a limit of 0 but honours 1, and with `fs.suid_dumpable` 2 dumps a process that isn't
+  dumpable), and no other process of the user can read its memory or `/proc` files. Its children inherit the limit
+  (so the sidecar's `--ulimit core=1` is not a raise, which crun would be refused);
+- takes the job's keys from `serve` on `D/helper.sock` (0600, this user only) and answers the job's requests for them
+  through the job's relay sidecar ("Keys" below);
+- with `--hub-allow`, or for a job with keys, starts the job's relay sidecar (`helper::net::Relay`: `podman` with the
+  `job.json`'s `helper.sidecar_argv`, named `helper.net.sidecar`, `<prefix>-px-<id>`), waits for its `READY` before its
+  own `ready` line, and runs Gleipnir's CONNECT proxy on the relay's proxy streams (`Listener::Streams`, `max_conns`
+  128) with the hub's allow-list (empty for a job with keys and no network), and the key answers on its key streams
+  (`owner::run_keyed` with `net::KeyServer`). A relay that ends before the job writes `kill_reason` `infra: proxy: <reason>` (the sidecar's exit code
   and its meaning, its last stderr line), removes the job's container, then stops the sidecar; at the job's end the
   helper removes the job's container before the sidecar. An
   entry naming `metadata.google.internal`, `169.254.169.254`, `fd00:ec2::254` or any address that isn't public is
@@ -263,7 +257,7 @@ with it. Nothing outlives the job, so no daemon is left behind, and `serve` may 
   when its helper started (`disk-start`); every helper sums the same running attempts, so only one acts per reading
   and they agree which. In a test build the floor reads the folder's `test-machine.json` too.
 
-Its sockets appear at once (bound under a temporary name, then renamed); then it writes `helper.pid` and prints
+Its socket appears at once (bound under a temporary name, then renamed); then it writes `helper.pid` and prints
 `ready <pid>`. Its own messages go to `D/helper.log`, never a key's value.
 
 ## Keys
@@ -277,10 +271,17 @@ A key reaches a job without touching disk (design 6.6):
 2. The helper takes only the names the job's spec lists, and holds each value in a `Locked` buffer: an anonymous
    mapping, `mlock`ed and `MADV_DONTDUMP`, zeroed and unmapped when it goes (at the job's end, or when the store is
    cleared). A test build's probe (`keys::probe::last_zeroed`) reads the buffer just before it is unmapped.
-3. `drgnx-key` (std only, so its static build starts in any image) asks on `/run/drgnx/key.sock` (`DRGNX_KEY_SOCK`
-   names another socket, as for a job that stays on the hub's machine):
+3. `drgnx-key` (std only, so its static build starts in any image) asks on the abstract socket `@drgnx-key`
+   (`DRGNX_KEY_SOCK` names another: `@NAME` or a path):
    - `drgnx-key exec NAME=VAR… -- CMD` reads each key into VAR, in its own environment only, and execs CMD;
    - `drgnx-key get NAME` writes one key to stdout.
+   The job's sidecar (`--keys drgnx-key`) binds that name in the network namespace it shares with the job, before its
+   `READY` (a name already taken exits 2, so a job can never squat it first), and carries each connection to the
+   helper as a key stream (docs/develop/drgnx-px.md, "Key streams"): one request of at most 512 bytes, one answer. An
+   abstract name lives in its network namespace only, so no other job, no other namespace and nothing on the host
+   reaches it, and no file, socket label or SELinux rule is involved: it works the same for an unconfined user and a
+   confined `staff_u`. The helper builds each answer (`keys::answer`: `ok LEN` and the value) in a `Locked` buffer,
+   sends it, and zeroes it; px zeroes every buffer a key stream's bytes pass through.
    A request waits for its key up to 60 s. When it doesn't come, the helper records the name in `D/key-timeout`
    first, then answers `timeout`, and `drgnx-key` exits 75; `result.json` reads the record as `infra: key not
    delivered`. A name the job doesn't list is refused at once (exit 64).
@@ -290,7 +291,9 @@ A key reaches a job without touching disk (design 6.6):
    secrets are used: both end up in podman's stored config or in files.
 
 `serve` gives every keyed job its own copy of the bundle's `drgnx-key` in its attempt folder, since each container
-relabels what it mounts (`Z`). A networked job's sidecar image is imported from the bundle's
+relabels what it mounts (`Z`). The job helper owns the channel of every job with keys: every keyed job is a runner job
+(a keyed job never runs on the hub's machine); the hub's own exec jobs never carry keys, and their network goes through the
+hub's `JobNetwork` (docs/develop/hub.md). A sidecar's image is imported from the bundle's
 `drgnx-px-<arch>-linux-musl` (tagged by content) when `serve` launches it; under Q8 `serve` creates no network.
 
 ## The runner bundle
@@ -564,7 +567,7 @@ does not parse.
 | Frame | Direction | Fields |
 |---|---|---|
 | `hello` / `hello-ok` | hub → runner / back | the version, the hub id; the bundle version, the runner id, the boot id, linger, the attempts in the runner's folder (`{r, state, log_offset}`, state `running`, `finished` or `lost`), what the contract finds missing (re-probed at every hello) |
-| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), why a keyed job would be refused (`key_socket`, k1), the features |
+| `probe` / `probe-result` | hub → runner / back | the facts (`linux::probe::Facts`), what is missing, why container caps don't hold (`check_limits`), the features |
 | `ready` | runner → hub | free memory and CPU, PSI, running attempts, slots and images present |
 | `offer` / `admit` / `refuse` | hub → runner / back | the job spec, its priority, the frozen input key, the grant hint and expected time; the grant; why not (text, and `forseti`'s `WaitReason`) |
 | `head` | hub → runner | the queue's head is reserved here: its start (`at`, 0 when no longer) and its memory and CPU need, which a grow here leaves |
@@ -606,7 +609,7 @@ and threaded (one thread reads frames, the main loop handles them and ticks ever
 |---|---|
 | `attempt.json` | the hub id, the `JobRef` with its nonce, the spec, priority, grant and expected figures, the bundle its job-exec runs from, its unit |
 | `job.json`, `log`, `result.json`, `kill_reason` | job-exec's (above) |
-| `helper.sock`, `key.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
+| `helper.sock`, `helper.pid`, `helper.log`, `disk-start`, `key-use`, `key-timeout` | the job helper's (above) |
 | `drgnx-key`, `net-allow`, `key-use.sent` | the job's own copy of the bundle's `drgnx-key`, the hub's allow-list, the `key-use` lines sent |
 | `src/`, `target/` | an attempt the hub synced nothing for: its (empty) source; the target dir |
 | `tree/` | a synced job that writes its tree: its private copy of the slot |
@@ -655,8 +658,8 @@ with `net_hosts` its proxy, the hosts written to `net-allow` and checked first (
 start (no image, a parser it doesn't know, an allow-list entry that is never reached, a bundle without `drgnx-key` or
 `drgnx-px` for a networked job, and for now container variables) ends `infra: setup`, with the reason in the attempt's log; it is never
 run another way. `key` frames go to the helper ("Keys"), and the helper's `key-use` lines come back as `key-use`
-frames. The pins go into the job's caps (`Caps.pins`, as a local container job's come from
-`drgnx-sandbox-proxy-pinned-addresses`); the job helper's proxy doesn't pin by them yet.
+frames. The hub sends no pins (a pin names an address on the hub machine's network; a job that needs one stays there), and
+the job helper's proxy pins nothing.
 
 **Logs** are read from the attempt's log file by offset, never from a pipe: a new attempt streams from 0, and after a
 reconnect the hub sends `attach {r, log_offset}` with where its own copy ends. When the attempt has its
@@ -817,12 +820,16 @@ keyed job without `memory.swap.max` 0, and a job outliving its starter.
   socket and process are gone; the same after a fetch the origin fails and after a key the agent can't load.
 
 `tests/runner_host_helper.rs` holds the job helper's runner-host rows (`--features test-hooks`, default features),
-each `[C]`: the helper is not dumpable (its `/proc` files aren't its user's, unlike a plain child's); `drgnx-key`
-waits for a key, exits 75 having printed nothing and finds the helper's record there, then gets the key once it is
-handed over; a keyed container's command has the variable in its own `/proc/<pid>/environ` while `podman inspect`, the
-container's stored config and runtime state hold the names only; the helper started by job-exec runs in the job's
-unit and slice and dies with the unit; and below the floor (the folder's `test-machine.json`) the job that grew most is
-stopped `infra: disk` before any other. The unit rows `[D]`: a key frame's value held in a locked buffer that is all
+each `[C]`: the helper is not dumpable (its `/proc` files aren't its user's, unlike a plain child's); the helper
+started by job-exec runs in the job's unit and slice and dies with the unit; and below the floor (the folder's
+`test-machine.json`) the job that grew most is stopped `infra: disk` before any other. The keyed rows (`relay_keys::`,
+`#[ignore = "keys"]`, with the relay's image from `DRGNX_TEST_PX_DIR`) run on the Fedora VM gate, once as an
+unconfined user and once as a confined `staff_u` one: a keyed job's command has the variable in its own
+`/proc/<pid>/environ` and only `lo`, while `podman inspect` and the stored config hold the names only (and the start
+cost is printed); a key that never comes is 75 with the helper's record, an unlisted one is refused; no other
+namespace (none, the host's, a second job's) reaches the name; the job can neither bind the name (px in the job exits
+2) nor get a key from the proxy port; and the sidecar has `RLIMIT_CORE` 1, is not dumpable, refuses the test-hooks
+flags, and leaves no core when it aborts. The unit rows `[D]`: a key frame's value held in a locked buffer that is all
 zeros just before it is unmapped, only listed names taken or served, the allow-list's metadata and link-local refusals
 and the proxy's `403` for a listed name that resolves link-local, the disk watch's pick, the key-timeout record's
 verdict, and `drgnx-key exec` in the argv with names only.

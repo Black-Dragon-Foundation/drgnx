@@ -341,8 +341,6 @@ struct Probe {
     facts: Option<sleipnir::proto::Facts>,
     missing: Vec<Missing>,
     limits: Option<String>,
-    /// Why a keyed container job would be refused there (the key socket's SELinux self-check), if it would.
-    key_socket: Option<String>,
     features: Vec<String>,
 }
 
@@ -524,9 +522,8 @@ impl Registry {
                         facts,
                         missing,
                         limits,
-                        key_socket,
                         features,
-                    })) => result = Some((facts, missing, limits, key_socket, features)),
+                    })) => result = Some((facts, missing, limits, features)),
                     Ok(Some(_)) => {}
                     Ok(None) => {
                         return Err(failed(format!("{name}: serve ended before it answered")));
@@ -536,7 +533,7 @@ impl Registry {
             }
             Ok((hello.expect("hello-ok"), result.expect("probe-result")))
         };
-        let ((boot_id, linger, mut missing), (facts, more, limits, key_socket, features)) =
+        let ((boot_id, linger, mut missing), (facts, more, limits, features)) =
             crate::clock::timeout(PROBE, read).await.map_err(|_| {
                 failed(format!(
                     "{}: serve didn't answer in {} s",
@@ -562,7 +559,6 @@ impl Registry {
             facts,
             missing,
             limits,
-            key_socket,
             features,
         })
     }
@@ -1066,24 +1062,13 @@ fn host_facts(f: &sleipnir::proto::Facts) -> HostFacts {
     }
 }
 
-/// Everything a probe found missing, `limits` and `key_socket` included.
+/// Everything a probe found missing, `limits` included.
 fn all_missing(p: &Probe) -> Vec<Missing> {
     let mut m = p.missing.clone();
     if let Some(why) = &p.limits {
         m.push(Missing {
             what: format!("container jobs can't be capped here: {why}"),
             fix: "run podman on the systemd cgroup manager with the memory, pids and cpu controllers delegated to the user".into(),
-        });
-    }
-    if let Some(why) = &p.key_socket {
-        m.push(Missing {
-            what: format!(
-                "keyed container jobs would be refused here: this host's SELinux policy did not let a socket be \
-                 created container_t: {why}"
-            ),
-            fix: "use the distribution's container-selinux policy, which lets a user create container_t sockets \
-                  (`ausearch -m avc -ts recent` names the denial)"
-                .into(),
         });
     }
     if p.facts.is_none() && m.is_empty() {
@@ -1164,26 +1149,6 @@ mod tests {
         for want in ["cgroup v2", "enable delegation", "git", "install git"] {
             assert!(t.contains(want), "{want}: {t}");
         }
-    }
-
-    // [D] pure: a runner whose key socket can't be labelled for its jobs is refused with the reason and the fix, as
-    // one that can't cap its containers is
-    #[test]
-    fn a_key_socket_the_policy_refuses_is_missing() {
-        let p = Probe {
-            boot_id: String::new(),
-            linger: true,
-            facts: Some(sleipnir::proto::Facts::default()),
-            missing: vec![],
-            limits: None,
-            key_socket: Some("the socket was not labelled: Permission denied".into()),
-            features: vec![],
-        };
-        let m = all_missing(&p);
-        assert_eq!(m.len(), 1, "{m:?}");
-        assert!(m[0].what.contains("keyed container jobs"), "{m:?}");
-        assert!(m[0].what.contains("Permission denied"), "{m:?}");
-        assert!(m[0].fix.contains("container_t"), "{m:?}");
     }
 
     // [D] pure
