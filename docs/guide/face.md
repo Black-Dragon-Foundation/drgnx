@@ -462,11 +462,16 @@ three keys that open everything (the files, the commands, all keys — the same 
 active profile: `C-p`, `C-S-p` and `C-k C-r` in VS Code's) and has four buttons: **Open a folder…**, **Open the work
 graph**, **All keys** and **Don't show this again**. The page is set in the look's type faces: the name in the title
 face (`drgnx-ui-title`), the keys in the heading face, the sentences in the UI text face, muted; the labels are in
-sentence case. `Tab` and `Shift-Tab` move between the buttons, `Return` presses one. A button whose command is not there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than the block shows it from the left
-edge), with plain bullets before the keys. In a graphical window that shows JPEG images, the Black Dragon logo (the
+sentence case. `Tab` and `Shift-Tab` move between the buttons, `Return` presses one; in a graphical window the
+button you are on is ringed in the accent (`drgnx-focus`) and the page shows no cursor. A button whose command is not
+there (its module is off) is left out. The block is centred in the window, whatever its width (a window narrower than
+the block shows it from the left edge). In a graphical window the keys are a table, keycaps then what they do, the
+descriptions starting 16 px after the widest keys, and the buttons sit in one row, 8 px apart; a terminal puts a bullet
+before each key and each button on a line of its own. In a graphical window that shows JPEG images, the Black Dragon logo (the
 dragon, wings spread) sits above the name, on the block's left edge like every line under it: nine lines of your
 default font tall (so it grows with the font and the display's scaling), lower when a narrow window would otherwise
-cut it off. It carries its own dark background, so a light theme shows it as a dark tile. It is drgnx's
+cut it off. It carries its own dark background, so a light theme shows it as a dark tile, with the cards' 10 px
+corners where Emacs draws SVG (square otherwise). It is drgnx's
 `etc/images/drgnx-logo.jpg`, made once per size and kept; if the file is missing the page shows without it. A
 terminal, or a build without JPEG support, shows the page without the logo. Its bottom line is the status bar's quiet form (the folder, the branch,
 agents, jobs and tests, nothing about a cursor position), never Emacs's raw mode line.
@@ -504,7 +509,8 @@ them in the UI text role, with 12 px of room at either end and 26 px tall on a g
 contrast rings it in its text colour, with the same room. A keycap (`drgnx-keycap`) is
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
 start page show keys this way. The rings' colours come from the theme (a box's colour cannot be inherited), so a
-theme that is not drgnx's draws them in the text colour.
+theme that is not drgnx's draws them in the text colour. A theme's spec for a face replaces the face's own, its
+`:inherit` too, so drgnx's themes repeat the keycap's caption role in theirs.
 
 ### Faces for theme authors
 

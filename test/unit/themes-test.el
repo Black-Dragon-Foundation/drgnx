@@ -105,7 +105,7 @@ defface's `:inherit')."
       (pcase-dolist (`(,role . ,faces)
                      '((drgnx-ui-text tab-bar tab-bar-tab tab-bar-tab-inactive tab-line tab-line-tab
                                       tab-line-tab-current tab-line-tab-inactive tab-line-tab-special header-line)
-                       (drgnx-ui-caption mode-line mode-line-active mode-line-inactive)))
+                       (drgnx-ui-caption mode-line mode-line-active mode-line-inactive drgnx-keycap)))
         (dolist (face faces)
           (should (equal (list face role)
                          (list face (let ((i (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))

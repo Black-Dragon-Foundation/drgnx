@@ -17,10 +17,12 @@
 (add-to-list 'custom-theme-load-path (expand-file-name "themes" drgnx-look-components-ui-test--repo))
 (require 'drgnx)
 (require 'drgnx-ui-kit)
+(require 'drgnx-palette)
 (load (expand-file-name "modules/ui/drgnx-decor" drgnx-look-components-ui-test--repo) nil t)
 
 (declare-function drgnx-look-token "drgnx-theme-gen")
 (declare-function drgnx-decor-chip "drgnx-decor")
+(declare-function glitnir-active-p "glitnir")
 
 (defun drgnx-look-components-ui-test--rgb (hex)
   "HEX as the (A R G B) a snapshot gives."
@@ -62,6 +64,45 @@ ring), and the inside of the button is the theme's fill: the quiet selection, th
                                (list label (line-pixel-height))))
                 (should (equal (list label (drgnx-look-components-ui-test--rgb (drgnx-look-token token 'dark)))
                                (list label (drgnx-uitest-pixel snap x y))))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-components/keycaps-and-buttons-are-in-the-ui-font ()
+  "In a buffer whose default font is the code font (the start page's), a keycap is drawn in the caption role's family
+and a button in the UI text role's; under Glitnir a button's corner is rounded (its corner pixel is not its fill)."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-components-fonts*")))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (switch-to-buffer buf)
+          (erase-buffer)
+          (insert "\n" (drgnx-palette-keycaps "C-p") "\n\n")
+          ;; after a space, as on the start page (centred); at a row's first glyph Glitnir fills the left corners
+          (insert " " (drgnx-ui-button "Open a folder…" #'ignore :face 'drgnx-ui-button-primary) "\n")
+          (goto-char (point-min))
+          (drgnx-test-wait-presented)
+          (let ((family (lambda (s) (goto-char (point-min)) (search-forward s)
+                          (symbol-name (font-get (font-at (1- (point))) :family)))))
+            (should (equal (list 'button (face-attribute 'drgnx-ui-text :family nil t))
+                           (list 'button (funcall family "folder"))))
+            (should (equal (list 'keycap (face-attribute 'drgnx-ui-caption :family nil t))
+                           (list 'keycap (funcall family "Ctrl")))))
+          (when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
+            (goto-char (point-min)) (search-forward "Open")
+            (let* ((frame (selected-frame)) (s (drgnx-uitest-device-scale frame)) (edges (window-inside-pixel-edges))
+                   (start (posn-x-y (posn-at-point (1+ (line-beginning-position)))))   ; past the space
+                   (end (posn-x-y (posn-at-point (line-end-position))))
+                   (snap (drgnx-uitest-snapshot))
+                   (y (round (* s (+ (cadr edges) (cdr start)))))
+                   (fill (drgnx-look-components-ui-test--rgb (drgnx-look-token 'accent-fill 'dark))))
+              (should (equal fill (drgnx-uitest-pixel snap (round (* s (+ (car edges) (car start) (drgnx-px 8))))
+                                                      (+ y (drgnx-px 8)))))
+              (pcase-dolist (`(,corner ,x) `((left ,(round (* s (+ (car edges) (car start)))))
+                                             (right ,(1- (round (* s (+ (car edges) (car end))))))))
+                (should-not (equal (list corner fill) (list corner (drgnx-uitest-pixel snap x y))))))))
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 

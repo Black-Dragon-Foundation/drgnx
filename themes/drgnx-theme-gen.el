@@ -98,7 +98,7 @@ A tint is composited over the variant's `editor'."
          (drgnx-control-primary :foreground ,(c 'on-accent) :background ,(c 'accent-fill)
                                 :box (:line-width (1 . 1) :color ,(c 'accent-fill)
                                                   ,@(and (featurep 'glitnir) '(:corner-radius 6))))
-         (drgnx-keycap :foreground ,(c 'subtle)
+         (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
                        :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4)))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
