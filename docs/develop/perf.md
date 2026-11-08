@@ -845,8 +845,9 @@ DRGNX_PERF_PROFILE=1 DRGNX_PERF_RESULTS=out/run.eld DRGNX_PERF_WORKLOADS=panel-r
 
 Per profile, memory (bytes sampled) then CPU (1 ms samples), the report has the call paths, callers above callees,
 and the functions sampled most with up to three of their callers; a path under 1% of its profile's samples is left
-out. Only the measure is profiled (not the setup, nor a workload's typed input), the last of its repeats; the report
-is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
+out. A workload without typed input profiles its measure; one with typed input (typing, the terminal and panel
+floods, Replace) profiles from before its first key to the end of its completion wait, the measure not wrapped again.
+The setup is never profiled. The report is the last of the repeats, and is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
 the budgets: read the report, then run the workload again without it.
 
 ## Tests

@@ -370,4 +370,17 @@ thunk signals too; the profilers are off after."
           (should-not (profiler-memory-running-p)))
       (when (file-exists-p file) (delete-file file)))))
 
+(ert-deftest drgnx-perf/a-profile-can-start-and-end-in-separate-calls ()
+  "Pattern D: `drgnx-perf-profile-begin' and `drgnx-perf-profile-end' bracket work that spans several calls (a
+workload's typed keys), and the report names what allocated in between."
+  (let ((file (make-temp-file "drgnx-perf-profile" nil ".txt")))
+    (unwind-protect
+        (progn
+          (drgnx-perf-profile-begin)
+          (drgnx-perf-test--allocate)
+          (drgnx-perf-profile-end file)
+          (should-not (profiler-memory-running-p))
+          (should (string-match-p "drgnx-perf-test--allocate$" (with-temp-buffer (insert-file-contents file) (buffer-string)))))
+      (when (file-exists-p file) (delete-file file)))))
+
 ;;; perf-test.el ends here

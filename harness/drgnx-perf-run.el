@@ -1260,8 +1260,11 @@ RESULTS-NAME.profile.txt (else in the temp directory); nil without it."
 (defun drgnx-perf-run-workload (sess spec &optional audit)
   "Run workload SPEC in SESS: its setup, then :repeat (3) runs, the medians of their numbers.  AUDIT:
 the hook audit on (its rows under :audit).  The probes, the audit and the teardown are undone even
-when a step fails.  With `drgnx-perf-run--profile', its measure runs under the profilers."
-  (let ((actions (plist-get spec :actions)) (measure (drgnx-perf-run--profiled (plist-get spec :measure))))
+when a step fails.  With `drgnx-perf-run--profile', its measure runs under the profilers, and a workload with typed
+actions is profiled from its first key to the end of the completion wait instead."
+  (let* ((actions (plist-get spec :actions))
+         (keys-profile (and actions drgnx-perf-run--profile))   ; typed keys: profiled from the first key to the end of the wait
+         (measure (if keys-profile (plist-get spec :measure) (drgnx-perf-run--profiled (plist-get spec :measure)))))
     (if (plist-get spec :daemon) (drgnx-perf-run-daemon-startup)
       (unwind-protect
           (progn
@@ -1271,10 +1274,13 @@ when a step fails.  With `drgnx-perf-run--profile', its measure runs under the p
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
                     (push (drgnx-perf-run--call sess measure 120) runs)
+                  (when keys-profile (drgnx-perf-run--call sess "(drgnx-perf-profile-begin)"))
                   (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec audit))
                   (drgnx-ui-measure sess actions)
                   (push (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
-                                (drgnx-perf-run--extras sess spec)
+                                (prog1 (drgnx-perf-run--extras sess spec)
+                                  (when keys-profile
+                                    (drgnx-perf-run--call sess (format "(drgnx-perf-profile-end %S)" drgnx-perf-run--profile))))
                                 (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
                         runs)
                   (when audit

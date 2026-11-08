@@ -329,6 +329,24 @@ file; without it the measure is as written."
           (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
       (should (member "(m)" forms)))))
 
+(ert-deftest drgnx-perf-run/a-profile-covers-the-typed-keys-of-a-workload-with-actions ()
+  "Pattern D: a workload with typed actions is profiled from before its first key to after the work it started is done
+\(the profilers start before the recording and stop after the completion wait), not only its measure."
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &rest _) (push f forms) (list :x 1)))
+              ((symbol-function 'drgnx-perf-run--extras) (lambda (_s _spec) (push "extras" forms) nil))
+              ((symbol-function 'drgnx-ui-measure) (lambda (_s a) (push (format "keys %S" a) forms))))
+      (let ((drgnx-perf-run--profile "/out/run-w.profile.txt"))
+        (drgnx-perf-run-workload 'sess '(:actions (a) :measure "(m)" :repeat 1)))
+      (setq forms (nreverse forms))
+      (let ((begin (seq-position forms "(drgnx-perf-profile-begin)"))
+            (keys (seq-position forms "keys (a)"))
+            (extras (seq-position forms "extras"))
+            (end (seq-position forms "(drgnx-perf-profile-end \"/out/run-w.profile.txt\")")))
+        (should (and begin keys extras end (< begin keys extras end))))
+      (should (member "(m)" forms))                         ; the measure itself is not wrapped again
+      (should-not (cl-some (lambda (f) (string-prefix-p "(drgnx-perf-profiled" f)) forms)))))
+
 (ert-deftest drgnx-perf-run/a-tree-of-sources-is-built-before-the-run ()
   "Pattern D: a tree with a Lisp file whose .elc is missing or older than it is built before the sessions start (a
 run of sources measures the interpreter); a compiled tree is not."
