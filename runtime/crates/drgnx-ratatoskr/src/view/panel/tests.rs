@@ -364,3 +364,155 @@ fn two_classes_get_two_versions() {
         matches!(last("tty").ops.as_slice(), [Op::Replace(r)] if r.iter().all(|r| r.key.starts_with("e:1")))
     );
 }
+
+#[test]
+fn the_model_holds_the_steps_and_a_new_one_changes_only_its_own() {
+    // pattern D (pure)
+    let diff = json!({"content": [{"type": "diff", "path": "a", "oldText": "x", "newText": "y"}]});
+    let paired = json!({"rawInput": {"path": "b", "old": "x", "new": "y"}});
+    let entries = [
+        entry(EntryType::User, json!({"text": "one"})),
+        entry(EntryType::Tool, diff),
+        entry(EntryType::Thought, json!({"text": "hm"})),
+        entry(EntryType::Agent, json!({"text": "ok"})),
+        entry(EntryType::Plan, json!({})),
+        entry(EntryType::Tool, json!({"title": "ls"})),
+        entry(EntryType::User, json!({"text": "two"})),
+        entry(EntryType::Tool, paired),
+    ];
+    let tail: Vec<(usize, &Entry)> = entries.iter().enumerate().collect();
+    // the thought folds under its tool call, the plan draws no row
+    let d = super::panel_doc(&super::heads_of(&tail));
+    assert_eq!(d.descriptor["scheme"], "list");
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        d.nodes.keys().cloned().collect::<Vec<_>>(),
+        ids(&["e:0", "e:1", "e:3", "e:5", "e:6", "e:7"])
+    );
+    assert!(
+        d.lists.is_empty(),
+        "no list: Sjá sends one whole each time it changes"
+    );
+    assert_eq!(d.nodes["e:5"]["kind"], "tool");
+    assert_eq!(d.nodes["e:6"]["kind"], "user");
+    let diff_of = |id: &str| d.nodes[id]["fields"][1].clone();
+    assert_eq!(diff_of("e:1"), json!(["diff", 1]));
+    assert_eq!(diff_of("e:5"), json!(["diff", 0]));
+    assert_eq!(diff_of("e:7"), json!(["diff", 1]), "a paired chat's edit");
+    // a new step adds its node; nothing else changes
+    for extra in [3, 5] {
+        let more: Vec<(usize, &Entry)> = entries
+            .iter()
+            .chain([&entries[extra]])
+            .enumerate()
+            .collect();
+        let ops = super::panel_doc(&super::heads_of(&more)).diff(&d);
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(
+            ops[0]["nodes"].as_array().map(|n| n[0]["id"].clone()),
+            Some(json!("e:8"))
+        );
+        assert_eq!(ops[0]["nodes"].as_array().map(Vec::len), Some(1));
+    }
+}
+
+#[test]
+fn rows_name_the_step_they_draw() {
+    // pattern D (pure: the store and the builder, no clock)
+    let mut w = World::new();
+    w.act(Act::Env("gui", 1, 400));
+    w.act(Act::Tool);
+    w.act(Act::Thought);
+    w.act(Act::Say);
+    let rows = build(&w.panels, &w.entries, "gui", &env("gui", 1, 400), None);
+    for r in &rows {
+        let head = if r.key.starts_with("e:1") || r.key.starts_with("e:0") {
+            "e:0"
+        } else {
+            "e:2"
+        };
+        assert!(
+            r.props
+                .iter()
+                .any(|p| p.2 == "drgnx-work-id" && p.3 == json!(head)),
+            "{} names {head}: {:?}",
+            r.key,
+            r.props
+        );
+    }
+}
+
+#[test]
+fn the_model_is_made_again_only_when_a_step_can_change() {
+    // pattern D (pure)
+    let p = Panels::default();
+    assert_eq!(p.model_due(1, "v", 3, false, None), Some(0), "the first");
+    assert_eq!(
+        p.model_due(1, "v", 3, false, None),
+        None,
+        "a streamed chunk of a message"
+    );
+    assert_eq!(p.model_due(1, "v", 3, true, None), Some(0), "a full build");
+    assert_eq!(p.model_due(1, "v", 4, false, None), Some(0), "a new entry");
+    assert_eq!(
+        p.model_due(2, "v", 4, false, None),
+        Some(0),
+        "another connection"
+    );
+}
+
+#[test]
+fn an_appended_step_extends_the_model() {
+    // pattern D (pure): the steps from the last one on are made again, not the whole transcript
+    use super::Made;
+    use EntryType::{Agent, Tool, User};
+    let p = Panels::default();
+    let three = vec![(0, User, false), (1, Tool, false), (2, Agent, false)];
+    assert_eq!(p.model_due(1, "v", 3, false, None), Some(0));
+    assert_eq!(p.model_made(1, "v", 0, three.clone()), Made::Whole(three));
+    assert_eq!(
+        p.model_due(1, "v", 5, false, None),
+        Some(2),
+        "new entries: from the last step"
+    );
+    assert_eq!(
+        p.model_made(1, "v", 2, vec![(2, Agent, false), (4, User, false)]),
+        Made::Steps(vec![(4, User, false)]),
+        "the last step is unchanged"
+    );
+    assert_eq!(
+        p.model_due(1, "v", 5, false, Some(1)),
+        Some(1),
+        "a tool call changed: from it"
+    );
+    assert_eq!(
+        p.model_made(
+            1,
+            "v",
+            1,
+            vec![(1, Tool, true), (2, Agent, false), (4, User, false)]
+        ),
+        Made::Steps(vec![(1, Tool, true)])
+    );
+    assert_eq!(
+        p.model_due(1, "v", 6, false, None),
+        Some(4),
+        "from the last step"
+    );
+    let all = vec![
+        (0, User, false),
+        (1, Tool, true),
+        (2, Agent, false),
+        (5, Agent, false),
+    ];
+    assert_eq!(
+        p.model_made(1, "v", 4, vec![(5, Agent, false)]),
+        Made::Whole(all),
+        "a step went: the whole"
+    );
+    assert_eq!(
+        p.model_due(1, "v", 6, true, None),
+        Some(0),
+        "a full build: the whole"
+    );
+}

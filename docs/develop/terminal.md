@@ -65,10 +65,11 @@ until it ends (it may span writes) and writes it without 40. A request for 40 al
 
 **The wire** (`src/proto.rs`) is one JSON object per line, tagged by `t`. The hub sends `attach {view, class, hub,
 env_epoch}`, `env`, `key {key, mods, text, unshifted}`, `text`, `paste`, `focus {in}`, `mouse {kind, button, col, row,
-mods}`, `resize {cols, rows, cell_px}`, `ack {version}`, `resync`, `config {config: [[name, value]…]}` and `close
-{signal}`. The worker sends `hello {proto, pid, shell_pid}` on every connection, `patch {patch}` (a whole
-[`drgnx-rows` patch](hub.md#rows)), `title`, `cwd`, `bell`, `notify`, `progress`, `clipboard-write`, `prompt` (OSC 133)
-and `exit {code, signal}`. A new connection replaces the last (a restarted hub); until it attaches nothing is drawn,
+mods}`, `resize {cols, rows, cell_px}`, `ack {version}`, `resync {model?}`, `config {config: [[name, value]…]}` and
+`close {signal}`. The worker sends `hello {proto, pid, shell_pid}` on every connection, `patch {patch}` (a whole
+[`drgnx-rows` patch](hub.md#rows)), `model {model}` (a whole `view-model` event: Find's matches, "The editor's side"),
+`title`, `cwd`, `bell`, `notify`, `progress`, `clipboard-write`, `prompt` (OSC 133) and `exit {code, signal}`. A new
+connection replaces the last (a restarted hub); until it attaches nothing is drawn,
 and its attach starts with a reset. The hub going away never ends the program.
 
 **Frames** (`src/frame.rs`, a pure clock the tests drive with fake time):
@@ -181,7 +182,7 @@ The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`
 | `term/resize` | `id`, `cols`, `rows`, `cell_px` | `true`; the next patch is a reset |
 | `term/scroll` | `id`, `to: "bottom"`, or `delta` / `prompt_delta` from `from` (a row key; default the cursor's row) | `{key}` of the row to show, or none |
 | `term/fetch` | `id`, `before_key?`, `max_bytes?` | `{version}` of the backfill patch sent now (none: nothing missing) |
-| `term/search` | `id`, `query`, `dir?` (`up`, `down`) | `{matches: [[key, col, len]…]}`; no key for a row the buffer lacks |
+| `term/search` | `id`, `query`, `dir?` (`up`, `down`) | `{found, held, model}`: every match, those in rows the buffer holds, and the version of the view's model that holds these (a `view-model` sent first: list `matches`, newest first for `up`, nodes `KEY:COL` with fields `key`, `col`, `len`, at most 20,000; none with no editor attached) |
 | `term/text-range` | `id`, `from_key?`, `to_key?` | `{text}`; with no `from_key` from the oldest row the engine holds |
 | `term/close` | `id`, `signal?` | `true`, then `term/exit` |
 | `term/list` | | `[{id, pid, running, cwd, title, old}…]`; 200 ms per worker, a silent one counts as running |
@@ -288,8 +289,15 @@ program runs).
   `mouse_tracking`; then `term/mouse` carries the cell (`drgnx-term--mouse-cell`: the screen row counts from the
   buffer's last `rows` lines). Focus changes (`window-selection-change-functions`, buffer-local) send `term/focus`.
 - **Copy mode** (`drgnx-term-copy-mode`) pauses the view (`drgnx-view-patch-pause`) and swaps in a map with only
-  `C-g`; leaving draws the kept patches. `drgnx-term-find` sends `term/search` up from the cursor and enters copy mode
-  at the first match, marked by the face `drgnx-term-search-selected`.
+  `C-g`; leaving draws the kept patches. `drgnx-term-find` sends `term/search` up from the cursor; the worker sends the
+  matches in the buffer's rows as the view's model (a `view-model` reset: list `matches`) before it answers. The
+  event and the answer come on different paths, in either order: the first match is shown once both are here (the
+  answer names the model's version; `drgnx-view-model-functions` says when a model is queued, and
+  `drgnx-view-model-apply-queued` applies it at once, since a terminal's rows name no model). It enters copy mode
+  at the first match, marked by the face `drgnx-term-search-selected`. Find again with the same text in copy mode,
+  `drgnx-term-find-next` and `drgnx-term-find-previous` walk the list in Sjá (`drgnx-view-nav`, wrapping) and read the
+  match's `key`, `col` and `len` fields: no hub call; a match whose row the buffer no longer draws is passed over. A
+  `view/resync` with `model` sends the last model again as a reset, rows untouched; an attach starts the model again.
 - **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
   link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
   history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with

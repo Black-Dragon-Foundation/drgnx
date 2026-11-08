@@ -6,7 +6,7 @@ use drgnx_rows::Patch;
 use serde::{Deserialize, Serialize};
 
 /// The `term` protocol version: a newer hub adopts a worker of the same major version.
-pub const PROTO: (u32, u32) = (1, 0);
+pub const PROTO: (u32, u32) = (1, 1);
 
 /// From the hub.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -65,8 +65,12 @@ pub enum In {
     Ack {
         version: u64,
     },
-    /// The editor lost track: the next patch is a reset.
-    Resync,
+    /// The editor lost track: the next patch is a reset; with MODEL, only its replica did: the last `model` again, as a
+    /// reset.
+    Resync {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        model: bool,
+    },
     /// Live settings, `[name, value]`.
     Config {
         config: Vec<(String, serde_json::Value)>,
@@ -97,9 +101,9 @@ pub enum In {
         #[serde(default)]
         max_bytes: Option<usize>,
     },
-    /// QUERY in every row the engine holds, the window's and above it: answered by `answer` `{matches: [[key, col,
-    /// len]…]}`, newest first for DIR `up` (the default), oldest first for `down`; a row the editor does not hold has no
-    /// key.
+    /// QUERY in every row the engine holds, the window's and above it. The matches in rows the editor holds go first
+    /// as the view's `model` (a list `matches`, newest first for DIR `up`, the default, oldest first for `down`); then
+    /// `answer` `{found, held, model}`: all the matches, those in the model, and its version (none: no view attached).
     Search {
         req: u64,
         query: String,
@@ -133,6 +137,11 @@ pub enum Out {
     },
     Patch {
         patch: Box<Patch>,
+    },
+    /// A `view-model` event for the attached view, whole (`{view, hub, base, version, reset, model}`): the matches
+    /// of the last `search` (docs/develop/terminal.md, "The editor's side").
+    Model {
+        model: serde_json::Value,
     },
     Title {
         title: String,

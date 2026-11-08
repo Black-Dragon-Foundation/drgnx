@@ -65,6 +65,7 @@ after another (the last repeats).  Binds `history' (the history file) and `start
           (loads ,loads) (started 0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-perf-load) (lambda () (if (cdr loads) (pop loads) (car loads))))
+                   ((symbol-function 'drgnx-perf-run--compiled) #'ignore)   ; no tree to build: the session is fake
                    ((symbol-function 'drgnx-ui-state-root) (lambda () dir))
                    ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq started (1+ started)) '(:name "fake")))
                    ((symbol-function 'drgnx-ui-own-session) (lambda (_) 'sess))
@@ -299,7 +300,6 @@ no `forward-sexp' of the font-lock goes past the form that holds it."
       (delete-file drgnx-perf-run--fixture))))
 
 
-;;; perf-run-test.el ends here
 
 (ert-deftest drgnx-perf-run/the-typing-workloads-cpu-rows-catch-a-key-spike ()
   "Pattern D.  The typing workloads' CPU rows were 350-420 ms at p90 while one key in ten cost 100-200 ms; with that
@@ -311,3 +311,42 @@ run, also before `DRGNX_PERF_CPU_FACTOR'."
         (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
           (should b)
           (should (<= (nth 2 b) (cdr row))))))))
+
+(ert-deftest drgnx-perf-run/a-profile-wraps-the-measure-and-goes-next-to-the-results ()
+  "Pattern D: with $DRGNX_PERF_PROFILE the measure runs under `drgnx-perf-profiled', its report beside the results
+file; without it the measure is as written."
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &rest _) (push f forms) (list :x 1))))
+      (with-environment-variables (("DRGNX_PERF_PROFILE" "1") ("DRGNX_PERF_RESULTS" "/out/run.eld"))
+        (should (equal (drgnx-perf-run--profile-file "panel-replay") "/out/run-panel-replay.profile.txt"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(drgnx-perf-profiled \"/out/run-panel-replay.profile.txt\" (lambda () (m)))" forms))
+      (setq forms nil)
+      (with-environment-variables (("DRGNX_PERF_PROFILE" nil))
+        (should-not (drgnx-perf-run--profile-file "panel-replay"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(m)" forms)))))
+
+(ert-deftest drgnx-perf-run/a-tree-of-sources-is-built-before-the-run ()
+  "Pattern D: a tree with a Lisp file whose .elc is missing or older than it is built before the sessions start (a
+run of sources measures the interpreter); a compiled tree is not."
+  (let* ((root (make-temp-file "perf-tree" t)) (el (expand-file-name "core/a.el" root)) built)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-perf-ab--build) (lambda (tree) (push tree built))))
+          (make-directory (file-name-directory el))
+          (write-region "" nil el nil 'silent)
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root)))
+          (write-region "" nil (concat el "c") nil 'silent)
+          (set-file-times el (time-subtract nil 60))       ; backdated: file times sit on coarse ticks
+          (setq built nil)
+          (drgnx-perf-run--compiled root)
+          (should-not built)
+          (set-file-times (concat el "c") (time-subtract nil 120))
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root))))
+      (delete-directory root t))))
+
+;;; perf-run-test.el ends here

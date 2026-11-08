@@ -1,0 +1,10 @@
+{"scenario": "term/search-sends-a-list-model", "requires": ["v1", "linux"], "doc": "term/search sends the matches in rows the editor holds as the view's model (a `view-model` reset, list `matches`) before it answers how many it found and held, and the model's version."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "echo NEEDLE-7; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "NEEDLE-7"}}, "expect": {"id": 3, "result": {"found": 1, "held": 1, "model": "$capture:v"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "$tv", "hub": "$number", "base": "$any", "version": "$v", "reset": true, "model": "$any"}}, "within_ms": 10000}

@@ -25,6 +25,7 @@
 (require 'drgnx-setting)
 (require 'drgnx-timer)
 (require 'drgnx-view)
+(require 'drgnx-view-nav)                ; Find's matches move through the replica
 (require 'drgnx-hub-client)
 (require 'drgnx-registry)
 (require 'drgnx-notice)
@@ -591,8 +592,11 @@ window scrolled away from the cursor stays where it is unless ALL or `drgnx-term
     m)
   "Copy mode's keymap: Emacs's own keys (isearch, the region, copying); quitting leaves copy mode.")
 
-(defvar-local drgnx-term--find nil "The last Find in Terminal: (QUERY . the index of the match shown).")
+(defvar-local drgnx-term--find nil
+  "The last Find in Terminal: (QUERY . the number of its matches in the view's model).")
 (defvar-local drgnx-term--find-overlay nil "The match Find in Terminal shows.")
+(defvar-local drgnx-term--find-pending nil
+  "A Find answered before its model came: (QUERY HELD VERSION), shown when the view's model reaches VERSION.")
 
 (define-minor-mode drgnx-term-copy-mode
   "Copy mode: the terminal stops drawing and its buffer takes Emacs's keys, so isearch, the region and
@@ -614,34 +618,73 @@ meanwhile."
 
 (defun drgnx-term-find (query)
   "Find QUERY in everything the terminal remembers, newest first: point goes to the match, in copy mode.  Asked again
-with the same text, it goes to the next older match."
+with the same text in copy mode (the screen still), it goes to the next older match (`drgnx-term-find-next')."
   (interactive (list (read-string "Find in terminal: " (car drgnx-term--find))))
   (unless (string-empty-p query)
-    (let ((buffer (current-buffer))
-          (index (if (equal query (car drgnx-term--find)) (1+ (cdr drgnx-term--find)) 0)))
-      (when (and drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
-        (drgnx-hub--call-on drgnx-hub--events "term/search" (list :id drgnx-term--id :query query :dir "up")
-                            (lambda (r _e) (drgnx-term--found buffer query index (plist-get r :matches))))))))
+    (if (and drgnx-term-copy-mode (equal query (car drgnx-term--find)))
+        (drgnx-term-find-next)
+      (let ((buffer (current-buffer)))
+        (when (and drgnx-term--id (eq drgnx-term--state 'open) (drgnx-term--up-p))
+          (drgnx-hub--call-on drgnx-hub--events "term/search" (list :id drgnx-term--id :query query :dir "up")
+                              (lambda (r _e) (drgnx-term--found buffer query r))))))))
 
-(defun drgnx-term--found (buffer query index matches)
-  "Show match INDEX of MATCHES (`[key, col, len]' each, newest first) of QUERY in BUFFER; those of rows the buffer
-does not hold are passed over."
+(defun drgnx-term--found (buffer query result)
+  "The worker answered Find for QUERY in BUFFER with RESULT (`{found, held, model}'): the matches go to the view as
+its model, a list `matches' newest first, whose first entry is shown once that model is here."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
-      (let* ((held (seq-filter (lambda (m) (and (stringp (car m)) (drgnx-view-row-start drgnx-view (car m))))
-                               matches))
-             (i (if (< index (length held)) index 0)))
-        (if (null held)
-            (message "Find in terminal: no %s" query)
-          (let* ((m (nth i held)) (beg (+ (drgnx-view-row-start drgnx-view (nth 0 m)) (nth 1 m))))
-            (setq drgnx-term--find (cons query i))
-            (unless drgnx-term-copy-mode (drgnx-term-copy-mode 1))
-            (if drgnx-term--find-overlay
-                (move-overlay drgnx-term--find-overlay beg (+ beg (nth 2 m)))
-              (setq drgnx-term--find-overlay (make-overlay beg (+ beg (nth 2 m))))
-              (overlay-put drgnx-term--find-overlay 'face 'drgnx-term-search-selected))
-            (goto-char beg)
-            (dolist (w (get-buffer-window-list nil nil t)) (set-window-point w beg))))))))
+      (let ((held (or (plist-get result :held) 0)) (version (plist-get result :model)))
+        (setq drgnx-term--find-pending nil)
+        (if (or (zerop held) (not version))
+            (progn (setq drgnx-term--find nil) (message "Find in terminal: no %s" query))
+          (setq drgnx-term--find-pending (list query held version))
+          (drgnx-term--find-show-pending))))))
+
+(defun drgnx-term--find-show-pending ()
+  "The pending Find's first match, once the view's model stream reached its version (the model and the answer come
+on different paths, in either order)."
+  (when-let* ((pending drgnx-term--find-pending) (state drgnx-view-patch)
+              (at (drgnx-view-model-apply-queued (drgnx-view-patch-view state)))
+              ((>= at (nth 2 pending))))
+    (setq drgnx-term--find-pending nil drgnx-term--find (cons (nth 0 pending) (nth 1 pending)))
+    (drgnx-term--find-step 'walk-to 0)))
+
+(defun drgnx-term--model-queued (view _version)
+  "A `drgnx-view-model-functions' handler: a terminal's model came after its Find's answer."
+  (when-let* (((string-prefix-p "term:" view))
+              (b (gethash (substring view 5) drgnx-term--buffers))
+              ((buffer-live-p b)))
+    (with-current-buffer b (drgnx-term--find-show-pending))))
+
+(defun drgnx-term-find-next ()
+  "Go to the next older match of the last Find in Terminal, wrapping, from the matches the editor holds."
+  (interactive)
+  (drgnx-term--find-step 'walk 1))
+
+(defun drgnx-term-find-previous ()
+  "Go to the next newer match of the last Find in Terminal, wrapping."
+  (interactive)
+  (drgnx-term--find-step 'walk -1))
+
+(defun drgnx-term--find-step (verb n)
+  "Move Find's selection by VERB (`walk' N steps, or `walk-to' N) in the view's model and show it; a match in a row
+this buffer no longer draws is passed over in the same direction."
+  (if (not drgnx-term--find)
+      (user-error "Find in Terminal first")
+    (let ((tries (cdr drgnx-term--find)) (id (drgnx-view-nav verb "matches" n)) (beg nil))
+      (while (and id (not (setq beg (drgnx-view-row-start drgnx-view (drgnx-view-nav-field "key"))))
+                  (> (cl-decf tries) 0))
+        (setq id (drgnx-view-nav 'walk "matches" (if (< n 0) -1 1))))
+      (if (not beg)
+          (message "Find in terminal: no %s on screen" (car drgnx-term--find))
+        (let* ((beg (+ beg (drgnx-view-nav-field "col"))) (end (+ beg (drgnx-view-nav-field "len"))))
+          (unless drgnx-term-copy-mode (drgnx-term-copy-mode 1))
+          (if drgnx-term--find-overlay
+              (move-overlay drgnx-term--find-overlay beg end)
+            (setq drgnx-term--find-overlay (make-overlay beg end))
+            (overlay-put drgnx-term--find-overlay 'face 'drgnx-term-search-selected))
+          (goto-char beg)
+          (dolist (w (get-buffer-window-list nil nil t)) (set-window-point w beg)))))))
 
 ;;;; Rows above the buffer
 
@@ -1121,7 +1164,19 @@ and the next Emacs of the session adopts them."
                                              :map '(drgnx-term . drgnx-term-mode-map)
                                              :when #'drgnx-terminal--in-terminal-p
                                              :doc "Find text in everything the terminal remembers, newest first")
+                       (drgnx-command-define 'terminal-find-next :category "Terminal" :title "Find Next in Terminal"
+                                             :scope 'editing :command #'drgnx-term-find-next
+                                             :map '(drgnx-term . drgnx-term-copy-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Go to the next older match of the last Find in Terminal")
+                       (drgnx-command-define 'terminal-find-previous :category "Terminal"
+                                             :title "Find Previous in Terminal"
+                                             :scope 'editing :command #'drgnx-term-find-previous
+                                             :map '(drgnx-term . drgnx-term-copy-mode-map)
+                                             :when #'drgnx-terminal--in-terminal-p
+                                             :doc "Go to the next newer match of the last Find in Terminal")
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
+                       (add-hook 'drgnx-view-model-functions #'drgnx-term--model-queued)
                        (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)
                        (add-hook 'disable-theme-functions #'drgnx-term--theme-changed)))
 

@@ -184,10 +184,13 @@ pub struct TermSearch {
     pub dir: Option<String>,
 }
 
-/// `term/search`'s answer: `[key, col, len]` per match, in characters; a row the buffer does not hold has no key.
+/// `term/search`'s answer: FOUND matches, HELD of them in rows the buffer holds; those went first to the terminal's
+/// view as its `view-model` MODEL (a list `matches`; none when no editor is attached).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct TermMatches {
-    pub matches: Vec<(Option<String>, u32, u32)>,
+    pub found: u32,
+    pub held: u32,
+    pub model: Option<u64>,
 }
 
 /// `term/text-range`: the text from row FROM_KEY to row TO_KEY (none: the oldest row the terminal holds, beyond the

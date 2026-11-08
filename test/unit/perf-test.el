@@ -348,4 +348,26 @@ is complete when the hook returns.  Pattern D: no turn of the event loop between
     (should-not (drgnx-perf-regressions (make-temp-name (expand-file-name "no-history" temporary-file-directory))
                                         results '((:relayout :p95))))))
 
+(defun drgnx-perf-test--allocate ()
+  "Make about 40 MB of lists, for the memory profiler to sample."
+  (dotimes (_ 50) (make-list 50000 'x)))
+
+(ert-deftest drgnx-perf/profiled-reports-where-memory-went-even-when-it-signals ()
+  "Pattern D: the profile report names the function that allocated, under its caller, and is written when the
+thunk signals too; the profilers are off after."
+  (let ((file (make-temp-file "drgnx-perf-profile" nil ".txt")))
+    (unwind-protect
+        (progn
+          (should (eq 'done (drgnx-perf-profiled file (lambda () (drgnx-perf-test--allocate) 'done))))
+          (should-not (profiler-memory-running-p))
+          (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+            (should (string-match-p "^== Memory: call paths$" text))
+            (should (string-match-p "^== Memory: most sampled, with their callers$" text))
+            (should (string-match-p "%  +[0-9]+  .*drgnx-perf-test--allocate$" text)))
+          (delete-file file)
+          (should-error (drgnx-perf-profiled file (lambda () (drgnx-perf-test--allocate) (error "Boom"))))
+          (should (file-exists-p file))
+          (should-not (profiler-memory-running-p)))
+      (when (file-exists-p file) (delete-file file)))))
+
 ;;; perf-test.el ends here

@@ -2663,6 +2663,22 @@ impl Session {
             .collect()
     }
 
+    /// The agent panel's steps from FROM on, for its model ([`crate::view::panel::heads_of`]).
+    pub(crate) fn panel_heads(&self, from: usize) -> Vec<crate::view::panel::Head> {
+        let st = lock(&self.state);
+        let tail: Vec<(usize, &Entry)> = st.entries.iter().enumerate().skip(from).collect();
+        crate::view::panel::heads_of(&tail)
+    }
+
+    /// The first of the entries at INDEXES that is a tool call.
+    pub(crate) fn first_tool(&self, indexes: &BTreeSet<usize>) -> Option<usize> {
+        let st = lock(&self.state);
+        indexes
+            .iter()
+            .copied()
+            .find(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
+    }
+
     /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).
     pub(crate) fn always_covers(&self, e: &Entry) -> bool {
         let title = e.rest.get("title").and_then(Value::as_str);

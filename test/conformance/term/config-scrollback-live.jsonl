@@ -6,7 +6,7 @@
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "seq 1 30; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1", "window": 0}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
-{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "30"}}, "expect": {"id": 3, "result": {"matches": [["$any", 0, 2]]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "30"}}, "expect": {"id": 3, "result": {"found": 1, "held": "$any", "model": "$any"}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "view/resync", "params": {"view": "$tv", "class": "gui-1", "version": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "version": "$capture:v2", "ops": [{"reset": "$any"}]}}, "within_ms": 10000}

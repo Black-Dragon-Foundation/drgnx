@@ -140,4 +140,17 @@ patch, the draw and the key, once all have run, a's span has the selected face a
       (should (= 1 (length messages)))
       (should (string-match-p "broke" (car messages))))))
 
+(ert-deftest drgnx-view-nav/class-step-makes-nothing-per-node-drawn-elsewhere ()
+  "Pattern D: a draw that replaced one row gives that row's nodes their classes again; the nodes drawn in other rows
+cost it no object (a panel draws a node per step: a closure each was 100 kB a draw)."
+  (drgnx-view-nav-test--with
+    (let ((ids (drgnx-view-patch-ids drgnx-view-patch)))
+      (cl-flet ((cells (n)
+                  (dotimes (i n) (puthash (format "x%d" i) (list (format "k%d" i)) ids))
+                  (let ((v0 (nth 2 (memory-use-counts))))
+                    (drgnx-view-nav-class-step view '("r"))
+                    (- (nth 2 (memory-use-counts)) v0))))
+        (let* ((few (cells 10)) (many (cells 1000)))
+          (should (< (- many few) 100)))))))
+
 ;;; view-nav-test.el ends here

@@ -8,4 +8,4 @@
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "term/text", "params": {"id": "$t", "text": "echo `expr 40 + 2`x\r"}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": true}}
-{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/search", "params": {"id": "$t", "query": "42x"}}, "expect": {"id": 4, "result": {"matches": [["$any", 0, 3]]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/search", "params": {"id": "$t", "query": "42x"}}, "expect": {"id": 4, "result": {"found": 1, "held": "$any", "model": "$any"}}, "within_ms": 10000}

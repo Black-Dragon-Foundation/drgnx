@@ -113,6 +113,22 @@ impl Store {
         Some(Self::model_event(hub, view, out))
     }
 
+    /// CONN's VIEW's model gains NODES, new or changed: the `view-model` of those alone (none when none changed), or
+    /// `None` when there is no model to extend (none sent, or a reset due) and the builder sends the whole.
+    pub fn extend_model(
+        &mut self,
+        conn: u64,
+        view: &str,
+        nodes: Vec<serde_json::Value>,
+    ) -> Option<Option<ViewModel>> {
+        let hub = self.hub;
+        let s = self.models.get_mut(&(conn, view.to_owned()))?;
+        if !s.extendable() {
+            return None;
+        }
+        Some(s.extend(nodes).map(|out| Self::model_event(hub, view, out)))
+    }
+
     /// CONN's editor asks for VIEW's model again: a reset of what it was last sent.
     pub fn resync_model(&mut self, conn: u64, view: &str) -> Option<ViewModel> {
         let hub = self.hub;
@@ -501,6 +517,24 @@ impl Views {
     pub fn publish_model(&self, f: &Front, conn: u64, view: &str, doc: model::Doc) -> bool {
         let out = lock(&self.store).publish_model(conn, view, doc);
         out.is_some_and(|m| f.send_to(conn, "view-model", json!(m)))
+    }
+
+    /// CONN's VIEW's model gains NODES ([`Store::extend_model`]); false when there is no model to extend, and the
+    /// builder publishes the whole.
+    pub fn extend_model(
+        &self,
+        f: &Front,
+        conn: u64,
+        view: &str,
+        nodes: Vec<serde_json::Value>,
+    ) -> bool {
+        let Some(out) = lock(&self.store).extend_model(conn, view, nodes) else {
+            return false;
+        };
+        if let Some(m) = out {
+            f.send_to(conn, "view-model", json!(m));
+        }
+        true
     }
 
     /// CONN's VIEW was hidden: its next model is a reset.

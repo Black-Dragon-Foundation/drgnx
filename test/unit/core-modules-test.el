@@ -281,6 +281,28 @@
            (should-not (drgnx-modules-test--idle-keys)))           ; one-shots: nothing left
        (drgnx-timer-reset)))))
 
+(ert-deftest drgnx-modules/an-idle-module-started-early-is-left-alone-by-its-tick ()
+  :tags '(:cond)
+  ;; A module of the idle stage that something started before its tick (a command, `drgnx-modules-run') keeps
+  ;; running when the tick fires: no second setup, and no teardown of what it made (the agent panel's tick closed a
+  ;; panel opened before it).
+  (drgnx-modules-test--with-config
+   (let* ((log nil) (timers nil) (drgnx-first-gui-frame-hook nil) (drgnx-first-file-hook nil) (drgnx-first-input-hook nil))
+     (drgnx-module-define 'test/i1 :doc "1" :stage 'idle :setup (lambda () (push 'setup log))
+                          :teardown (lambda () (push 'teardown log)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'run-with-idle-timer)
+                    (lambda (secs _repeat fn &rest args) (push (list secs fn args) timers)))
+                   ((symbol-function 'drgnx-modules-load-external) #'ignore))
+           (drgnx-modules-start cfg)
+           (drgnx-modules-run 'idle)
+           (should (equal log '(setup)))
+           (pcase-dolist (`(,_ ,fn ,args) (sort timers (lambda (a b) (< (car a) (car b))))) (apply fn args))
+           (should (equal log '(setup)))
+           (should (drgnx-module-running-p 'test/i1)))
+       (drgnx-module-teardown 'test/i1)
+       (drgnx-timer-reset)))))
+
 (ert-deftest drgnx-modules/a-load-error-names-the-file-that-failed ()
   ;; M4-9: an error inside a library the module file loads names that library, not only the module.
   (drgnx-test--fresh-modules

@@ -673,9 +673,10 @@ impl Front {
             }
             Params::ViewResync(p) if crate::term::methods::view_id(&p.view).is_some() => {
                 let id = crate::term::methods::view_id(&p.view).unwrap_or_default();
-                Ok(json!(
-                    self.core.terms.send(id, &drgnx_term::proto::In::Resync)
-                ))
+                Ok(json!(self.core.terms.send(
+                    id,
+                    &drgnx_term::proto::In::Resync { model: p.model }
+                )))
             }
             Params::ViewAck(p) if crate::term::methods::view_id(&p.view).is_some() => {
                 let id = crate::term::methods::view_id(&p.view).unwrap_or_default();

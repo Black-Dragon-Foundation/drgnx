@@ -903,7 +903,8 @@ so two modules defining one context, and a user's own definition on top, undo in
 ```
 
 Module files are `modules/<category>/drgnx-<name>.el`. Stages: `startup` (during `drgnx-init`) and `idle` (once
-Emacs is idle). Each setup runs under its own error guard and is timed; a file that fails to load is reported as
+Emacs is idle, one idle tick per module; a module something started before its tick keeps running, as a second setup
+would tear down what it made). Each setup runs under its own error guard and is timed; a file that fails to load is reported as
 a module too. "Help: Module Report" (`drgnx-modules-show-report`) lists stage, milliseconds and errors. Flags,
 settings, doctor checks, more stages and the modules index come with M4.
 

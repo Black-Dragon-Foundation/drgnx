@@ -632,6 +632,68 @@ with the load on the machine; wall clock does.  :compose is Glitnir's record sin
         (maphash (lambda (k v) (push (cons k v) out)) counts)
         (seq-take (sort out (lambda (a b) (> (cdr a) (cdr b)))) (or top 20))))))
 
+;;;; Profile report: where a workload's time and memory went
+
+(declare-function profiler-cpu-running-p "profiler.c")
+(declare-function profiler-memory-log "profiler.c")
+(declare-function profiler-memory-start "profiler.c")
+(declare-function profiler-memory-stop "profiler.c")
+(declare-function profiler-calltree-build "profiler")
+(declare-function profiler-calltree-sort "profiler")
+(declare-function profiler-calltree-children "profiler")
+(declare-function profiler-calltree-count "profiler")
+(declare-function profiler-calltree-entry "profiler")
+(declare-function profiler-calltree-count> "profiler")
+
+(defconst drgnx-perf-profile-min-percent 1.0
+  "A call path with less than this share of its profile's samples is left out of a profile report.")
+
+(defconst drgnx-perf-profile-caller-depth 3
+  "How many callers above each most-sampled function a profile report shows.")
+
+(defun drgnx-perf--profile-lines (log reverse)
+  "LOG's call tree as lines \"PCT% SAMPLES NAME\", indented by depth, the heaviest first and each at least
+`drgnx-perf-profile-min-percent' of the samples: callers above callees, or with REVERSE the functions sampled
+themselves, each with its callers (`drgnx-perf-profile-caller-depth' deep)."
+  (require 'profiler)
+  (let* ((tree (profiler-calltree-build log :reverse reverse))
+         (total (apply #'+ (mapcar #'profiler-calltree-count (profiler-calltree-children tree))))
+         lines)
+    (profiler-calltree-sort tree #'profiler-calltree-count>)
+    (when (> total 0)
+      (cl-labels ((walk (node depth)
+                    (dolist (c (profiler-calltree-children node))
+                      (let ((pct (/ (* 100.0 (profiler-calltree-count c)) total)))
+                        (when (>= pct drgnx-perf-profile-min-percent)
+                          (push (format "%6.1f%% %14d  %s%s" pct (profiler-calltree-count c) (make-string (* 2 depth) ?\s)
+                                        (drgnx-perf--name (profiler-calltree-entry c)))
+                                lines)
+                          (when (or (not reverse) (< depth drgnx-perf-profile-caller-depth))
+                            (walk c (1+ depth))))))))
+        (walk tree 0)))
+    (nreverse lines)))
+
+(defun drgnx-perf-profiled (file thunk)
+  "THUNK's value, run under the CPU and the memory profiler.  FILE gets the report even when THUNK signals: for
+memory (bytes sampled) and CPU (1 ms samples), the call paths callers above callees, then the functions sampled
+most with their callers (`drgnx-perf--profile-lines')."
+  (require 'profiler)
+  (profiler-memory-start)
+  (when (fboundp 'profiler-cpu-start) (profiler-cpu-start 1000000))   ; 1 ms
+  (unwind-protect (funcall thunk)
+    (let ((cpu (and (fboundp 'profiler-cpu-running-p) (profiler-cpu-running-p) (profiler-cpu-log)))
+          (mem (profiler-memory-log)))
+      (when (fboundp 'profiler-cpu-stop) (profiler-cpu-stop))
+      (profiler-memory-stop)
+      (with-temp-file file
+        (pcase-dolist (`(,title . ,log) (list (cons "Memory" mem) (cons "CPU" cpu)))
+          (when (hash-table-p log)
+            (insert "== " title ": call paths\n")
+            (dolist (l (drgnx-perf--profile-lines log nil)) (insert l "\n"))
+            (insert "\n== " title ": most sampled, with their callers\n")
+            (dolist (l (drgnx-perf--profile-lines log t)) (insert l "\n"))
+            (insert "\n")))))))
+
 ;;;; Hook audit
 
 (defconst drgnx-perf-busy-hooks

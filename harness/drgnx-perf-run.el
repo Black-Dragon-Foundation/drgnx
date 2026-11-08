@@ -13,6 +13,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'drgnx-build)
 (require 'drgnx-ui)
 (require 'drgnx-perf)
 (require 'drgnx-perf-settings)
@@ -1216,11 +1217,30 @@ filter-call arguments or a message sequence)."
                (list :digest (plist-get (drgnx-perf-run--call sess (format "(list :digest (format \"%%s\" %s))" (plist-get spec :digest)))
                                         :digest)))))
 
+(defvar drgnx-perf-run--profile nil
+  "While a workload runs: the file its measure's profile report goes to (`drgnx-perf-run--profile-file'), or nil.")
+
+(defun drgnx-perf-run--profile-file (name)
+  "With $DRGNX_PERF_PROFILE set, where workload NAME's profile report goes: next to $DRGNX_PERF_RESULTS, as
+RESULTS-NAME.profile.txt (else in the temp directory); nil without it."
+  (unless (member (getenv "DRGNX_PERF_PROFILE") '(nil ""))
+    (let ((results (getenv "DRGNX_PERF_RESULTS")))
+      (if (member results '(nil ""))
+          (expand-file-name (format "drgnx-perf-%s.profile.txt" name) temporary-file-directory)
+        (format "%s-%s.profile.txt" (file-name-sans-extension results) name)))))
+
+(defun drgnx-perf-run--profiled (form)
+  "FORM (a workload's measure), run under the profilers when `drgnx-perf-run--profile' names a report
+\(`drgnx-perf-profiled')."
+  (if (and form drgnx-perf-run--profile)
+      (format "(drgnx-perf-profiled %S (lambda () %s))" drgnx-perf-run--profile form)
+    form))
+
 (defun drgnx-perf-run-workload (sess spec &optional audit)
   "Run workload SPEC in SESS: its setup, then :repeat (3) runs, the medians of their numbers.  AUDIT:
 the hook audit on (its rows under :audit).  The probes, the audit and the teardown are undone even
-when a step fails."
-  (let ((actions (plist-get spec :actions)) (measure (plist-get spec :measure)))
+when a step fails.  With `drgnx-perf-run--profile', its measure runs under the profilers."
+  (let ((actions (plist-get spec :actions)) (measure (drgnx-perf-run--profiled (plist-get spec :measure))))
     (if (plist-get spec :daemon) (drgnx-perf-run-daemon-startup)
       (unwind-protect
           (progn
@@ -1386,8 +1406,19 @@ its own cost to the other numbers)."
   "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
 to the eln cache while it runs, and the wall clock pays for it).  A plain run waits too, before its first workload.")
 
+(defun drgnx-perf-run--compiled (root)
+  "ROOT built (`drgnx-perf-ab--build') when one of the files `drgnx build' compiles has no .elc as new as it: a
+session would load it as source, and a run of sources measures the interpreter (a replay fell behind its own stream
+and a draw made twice the objects; a fresh clone and a synced copy have no .elc)."
+  (when-let* ((el (seq-find (lambda (el) (let ((elc (concat el "c")))
+                                           (or (not (file-exists-p elc)) (file-newer-than-file-p el elc))))
+                            (drgnx-build-files root))))
+    (princ (format "perf: %s is not compiled: building the tree first\n" (file-relative-name el root)))
+    (drgnx-perf-ab--build root)))
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
+  (drgnx-perf-run--compiled drgnx-ui-repo-dir)
   (let* ((loads (list (drgnx-perf-load)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))
@@ -1401,7 +1432,8 @@ to the eln cache while it runs, and the wall clock pays for it).  A plain run wa
                 (princ (format "perf: %s skipped in the container — %s\n" (car w) why))
               (message "perf: %s…" (car w))
               (let* ((cal (drgnx-perf-run--call sess "(drgnx-perf-calibrate)"))
-                     (r (condition-case err (drgnx-perf-run-workload sess (cdr w) audit)
+                     (r (condition-case err (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file (car w))))
+                                              (drgnx-perf-run-workload sess (cdr w) audit))
                           (error (list :error (error-message-string err))))))
                 (push (cons (car w) (if (plist-get r :error) r (plist-put r :calibration cal))) results))
               (push (drgnx-perf-load) loads))))
