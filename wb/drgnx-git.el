@@ -455,12 +455,12 @@ running is overtaken by the hub: the newer read wins."
          (before (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))))
     (setq drgnx-git--letters-order (cons root (delete root drgnx-git--letters-order)))
     (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
-    (condition-case nil
+    (condition-case err
         ;; on the subscribed connection: the rows go to the connection that asks
         (drgnx-hub--call-on drgnx-hub--events "git/letters" (list :view view :root (directory-file-name root)
                                                                   :shown (vconcat (drgnx-git--letters-shown root)))
-                            #'ignore)
-      (error nil))
+                            (lambda (_result error) (when error (drgnx-git--letters-failed root error))))
+      (error (drgnx-git--letters-failed root (error-message-string err))))
     (when wait
       (let ((deadline (+ (float-time) 10)))
         (while (and (buffer-live-p buf) (< (float-time) deadline)
@@ -471,14 +471,18 @@ running is overtaken by the hub: the newer read wins."
   "The hub is up again: its letters for VIEW were lost, ask again."
   (when-let* ((root (gethash view drgnx-git--letters-views))) (drgnx-git--letters-refresh root)))
 
+(defun drgnx-git--letters-failed (root message)
+  "ROOT's status could not be had from the hub (MESSAGE): a warning notice and a line in the errors buffer."
+  (drgnx-git--stderr nil (format "%s: %s\n" root message))
+  (drgnx-notify 'wb 'warn (format "git status of %s: %s" (abbreviate-file-name root) message)
+                :id (list 'git-letters-error root)))
+
 (defun drgnx-git--hub-event (event data)
   "`drgnx-hub-event-functions': after a patch of a letters view (the view's own handler ran first), the panels
 read the status again."
   (when (equal event "git-letters-error")
     (when-let* ((root (gethash (plist-get data :view) drgnx-git--letters-views)))
-      (drgnx-git--stderr nil (format "%s: %s\n" root (plist-get data :error)))
-      (drgnx-notify 'wb 'warn (format "git status of %s: %s" (abbreviate-file-name root) (plist-get data :error))
-                    :id (list 'git-letters-error root))))
+      (drgnx-git--letters-failed root (plist-get data :error))))
   (when (equal event "view-patch")
     (when-let* ((root (gethash (plist-get data :view) drgnx-git--letters-views)))
       (run-hook-with-args 'drgnx-git-changed-functions root))))
