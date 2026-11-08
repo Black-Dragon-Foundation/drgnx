@@ -448,10 +448,11 @@ fn replace_previews_the_window_only() {
     assert!(n > 0 && n <= WINDOW, "{n}");
 }
 
-/// Every file batch sends the model, and a send carries that batch's nodes and ids alone (a list that grew by
-/// appending is a splice at its end), so all the sends together cost about one whole model, not one per file.
+/// Once the rows' window is full the model is sent when the search has doubled it (each send is a delta, but each send
+/// costs the editor a redisplay and a queue entry: 101 sends cost five times the CPU of 9), and what is sent in all is
+/// about one whole model, since a list that grew by appending goes as a splice at its end.
 #[test]
-fn every_file_batch_sends_a_model_that_costs_its_own_matches() {
+fn the_model_grows_by_doubling_and_costs_about_one_whole_model() {
     let mut s = store();
     let greps = Greps::default();
     let id = run_of(&greps, "");
@@ -472,7 +473,7 @@ fn every_file_batch_sends_a_model_that_costs_its_own_matches() {
             bytes += json!(model)["model"].as_str().unwrap().len();
         }
     }
-    assert_eq!(sends, 100, "a model per file batch");
+    assert!((3..=20).contains(&sends), "{sends} models for 100 files");
     let whole = greps
         .current(CONN, "s", |run| {
             grep_doc(&run.files).reset().to_string().len()
