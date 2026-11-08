@@ -30,9 +30,10 @@ fn refuse(message: impl Into<String>) -> Refusal {
 pub const WORK: &str = "/work";
 /// Where a runner job's target dir appears; `CARGO_TARGET_DIR` names it.
 pub const TARGET: &str = "/target";
-/// Where the key socket and `drgnx-key` appear.
-pub const KEY_SOCKET: &str = "/run/drgnx/key.sock";
+/// Where `drgnx-key` appears.
 pub const KEY_HELPER: &str = "/run/drgnx/key";
+/// The abstract socket name a keyed job's sidecar listens on for `drgnx-key`, in the namespace the job joins.
+pub const KEY_NAME: &str = "drgnx-key";
 /// The port the relay sidecar listens on, on the loopback of the namespace it shares with its job.
 pub const PROXY_PORT: u16 = 3128;
 /// The sidecar's limits (design §5.2): its worst case is about 50 MiB.
@@ -63,7 +64,8 @@ pub struct Caps {
     pub memory: String,
     pub cpus: u32,
     pub pids: u32,
-    /// The relay sidecar a job that was granted network shares its network namespace with; none: a grant is refused.
+    /// The relay sidecar a job that was granted network, or has keys, shares its network namespace with; none: such
+    /// a job is refused.
     pub proxy: Option<JobNet>,
     /// The hosts (`host:port`) a granted network reaches, by tier name.
     pub net_hosts: Vec<(String, Vec<String>)>,
@@ -100,7 +102,7 @@ pub struct ContainerReq {
 }
 
 /// A runner job's mount set, exactly: the source `ro,z` (`rw,Z` for a `writes_tree` copy), the slot's
-/// target dir `rw,Z`, one mount per declared cache `rw,Z`, and the key socket and `drgnx-key` `ro,Z`. Nothing else.
+/// target dir `rw,Z`, one mount per declared cache `rw,Z`, and `drgnx-key` `ro,Z`. Nothing else.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunnerMounts {
     /// The source is the job's private copy, which it may write.
@@ -118,12 +120,11 @@ pub struct CacheMount {
     pub inside: String,
 }
 
-/// The job's key socket and its own copy of the `drgnx-key` binary on the host, and the keys it reads: each
-/// `(key name, variable)`. The command then runs as `drgnx-key exec NAME=VAR… -- CMD`, so podman's argv and stored
-/// config hold the names only, never a value.
+/// The job's own copy of the `drgnx-key` binary on the host, and the keys it reads: each `(key name, variable)`. The
+/// command then runs as `drgnx-key exec NAME=VAR… -- CMD`, so podman's argv and stored config hold the names only,
+/// never a value. `drgnx-key` reads them from the job's sidecar (`@drgnx-key` in the namespace the job joins).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyMounts {
-    pub socket: PathBuf,
     pub helper: PathBuf,
     pub vars: Vec<(String, String)>,
 }
@@ -283,8 +284,14 @@ fn slice_arg(slice: &str) -> Result<OsString, Refusal> {
 
 /// The `podman run` arguments (without the program) for the relay sidecar N names, from IMAGE
 /// (`localhost/drgnx-px:<hash>`): attached with `-i` (the channel is its stdin and stdout, never a tty), no network at
-/// all, the loopback its job shares, and nothing but the relay's flags after the image.
-pub fn sidecar_argv(n: &NetNames, ra: &RunnerArgs, image: &str) -> Result<Vec<OsString>, Refusal> {
+/// all, the loopback its job shares, no core dump (`--ulimit core=1`: a piped `core_pattern` honours 1, not 0), and
+/// nothing but the relay's flags after the image; KEYS (a keyed job) adds `--keys drgnx-key`, its keys' listener.
+pub fn sidecar_argv(
+    n: &NetNames,
+    ra: &RunnerArgs,
+    image: &str,
+    keys: bool,
+) -> Result<Vec<OsString>, Refusal> {
     if image.is_empty() || image.starts_with('-') || image.contains(char::is_whitespace) {
         return Err(refuse(format!(
             "the sidecar's image {image:?} is not an image name"
@@ -310,6 +317,8 @@ pub fn sidecar_argv(n: &NetNames, ra: &RunnerArgs, image: &str) -> Result<Vec<Os
         SIDECAR_MEMORY,
         "--cpus",
         "1",
+        "--ulimit",
+        "core=1",
     ]
     .iter()
     .map(OsString::from)
@@ -333,6 +342,9 @@ pub fn sidecar_argv(n: &NetNames, ra: &RunnerArgs, image: &str) -> Result<Vec<Os
         ]
         .map(OsString::from),
     );
+    if keys {
+        a.extend(["--keys", KEY_NAME].map(OsString::from));
+    }
     Ok(a)
 }
 
@@ -393,11 +405,17 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
             "agents-job-memory, agents-job-cpus: a limit that fits podman",
         ));
     }
-    let sidecar = match req.net {
+    // a keyed job reads its keys through its sidecar, networked or not
+    let keyed = req.runner.as_ref().is_some_and(|m| m.keys.is_some());
+    let sidecar = match req.net || keyed {
         false => None,
         true => {
             let p = caps.proxy.as_ref().ok_or_else(|| {
-                refuse("this job was granted network access, but it has no proxy to go through")
+                refuse(if req.net {
+                    "this job was granted network access, but it has no proxy to go through"
+                } else {
+                    "this job has keys, but no sidecar to read them through"
+                })
             })?;
             // the sidecar is this job's own: a name from anywhere else is never joined
             if p.sidecar != net_names(ra, &req.job)?.sidecar {
@@ -495,11 +513,6 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
                 a.push(format!("{}:{inside}:rw,Z", mount_source(&c.host)?).into());
             }
             if let Some(k) = &m.keys {
-                // the key socket is created container_t on an SELinux host (k1): the job's type is pinned to match
-                a.push("--security-opt".into());
-                a.push("label=type:container_t".into());
-                a.push("-v".into());
-                a.push(format!("{}:{KEY_SOCKET}:ro,Z", mount_source(&k.socket)?).into());
                 a.push("-v".into());
                 a.push(format!("{}:{KEY_HELPER}:ro,Z", mount_source(&k.helper)?).into());
             }
@@ -511,7 +524,7 @@ pub fn argv(req: &ContainerReq, caps: &Caps, ra: &RunnerArgs) -> Result<Vec<OsSt
     } else {
         Path::new(WORK).join(&req.subdir).into_os_string()
     });
-    if sidecar.is_some() {
+    if sidecar.is_some() && req.net {
         // the job shares the sidecar's loopback, where the relay listens
         let url = format!("http://127.0.0.1:{PROXY_PORT}");
         for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
@@ -886,7 +899,6 @@ mod tests {
                     inside: "/cache/cargo".into(),
                 }],
                 keys: Some(KeyMounts {
-                    socket: "/r/jobs/x1a.1/key.sock".into(),
                     helper: "/r/bin/0.1.0/drgnx-key".into(),
                     vars: vec![],
                 }),
@@ -904,7 +916,7 @@ mod tests {
             ("CRATES_IO".into(), "CARGO_REGISTRY_TOKEN".into()),
             ("gh-token".into(), "GH_TOKEN".into()),
         ];
-        let a = on_runner(&r, &caps()).unwrap();
+        let a = on_runner(&r, &rcaps()).unwrap();
         let image = a.iter().position(|s| s == REF).unwrap();
         assert_eq!(a[image - 2..image], ["--entrypoint", "/run/drgnx/key"]);
         assert_eq!(
@@ -933,28 +945,88 @@ mod tests {
             let mut r = runner_req(&["ls"]);
             r.runner.as_mut().unwrap().keys.as_mut().unwrap().vars =
                 vec![(name.into(), var.into())];
-            assert!(on_runner(&r, &caps()).is_err(), "{name:?} {var:?}");
+            assert!(on_runner(&r, &rcaps()).is_err(), "{name:?} {var:?}");
         }
     }
 
-    /// [D] k1: a keyed job's type is pinned to the key socket's.
+    /// [D] A keyed job reads its keys through its own sidecar (`@drgnx-key` in the network namespace it joins), with
+    /// or without a network grant: it joins the sidecar named for it, gets the proxy variables only when granted a
+    /// network, and its argv holds no key socket and no label override. A keyed job with no sidecar, or another
+    /// job's, is refused.
     #[test]
-    fn keyed_jobs_pin_the_container_type() {
-        let a = on_runner(&runner_req(&["ls"]), &caps()).unwrap();
-        let i = a
-            .iter()
-            .position(|s| s == "label=type:container_t")
-            .unwrap();
-        assert_eq!(a[i - 1], "--security-opt");
-        assert!(i < a.iter().position(|s| s == REF).unwrap());
+    fn a_keyed_job_reads_its_keys_through_its_own_sidecar() {
+        let r = runner_req(&["ls"]);
+        assert!(!r.net);
+        let a = on_runner(&r, &rcaps()).unwrap();
+        assert!(a.contains(&"--network=container:drgnx-run-px-x1a".to_string()));
+        assert!(!a.iter().any(|s| s.contains("PROXY")), "{a:?}");
+        assert!(
+            !a.iter()
+                .any(|s| s.contains(concat!("key", ".sock")) || s.starts_with("label=")),
+            "{a:?}"
+        );
+        let mut net = runner_req(&["ls"]);
+        net.net = true;
+        let a = on_runner(&net, &rcaps()).unwrap();
+        assert!(a.contains(&"--network=container:drgnx-run-px-x1a".to_string()));
+        assert!(a.iter().any(|s| s == "HTTPS_PROXY=http://127.0.0.1:3128"));
+        let none = Caps {
+            proxy: None,
+            ..caps()
+        };
+        let e = on_runner(&r, &none).unwrap_err();
+        assert!(e.message.contains("keys"), "{}", e.message);
+        // caps() names the hub's sidecar for x1a, not this runner's
+        assert!(on_runner(&r, &caps()).is_err());
+        // an unkeyed job without a grant joins nothing
+        let mut plain = runner_req(&["ls"]);
+        plain.runner.as_mut().unwrap().keys = None;
+        let a = on_runner(&plain, &rcaps()).unwrap();
+        assert!(a.contains(&"--network=none".to_string()));
     }
 
-    /// [D]
+    /// [D] lint: nothing makes or mounts a key socket any more (keys go over the sidecar's `@drgnx-key`): no
+    /// write to the thread's socket-create attribute and no key socket file in the sources of the runner, the hub, the
+    /// relay or the sandbox.
     #[test]
-    fn unkeyed_jobs_have_no_pin() {
+    fn no_source_makes_or_mounts_a_key_socket() {
+        fn walk(d: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        let needles = [concat!("sock", "create"), concat!("key", ".sock")];
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut files = vec![];
+        for c in ["sleipnir", "drgnx-ratatoskr", "drgnx-px", "gleipnir"] {
+            walk(&crates.join(c).join("src"), &mut files);
+            walk(&crates.join(c).join("tests"), &mut files);
+        }
+        assert!(files.len() > 20, "the sources: {}", files.len());
+        let mut hits = vec![];
+        for f in files {
+            let text = std::fs::read_to_string(&f).unwrap();
+            for (i, l) in text.lines().enumerate() {
+                if needles.iter().any(|n| l.contains(n)) {
+                    hits.push(format!("{}:{}: {}", f.display(), i + 1, l.trim()));
+                }
+            }
+        }
+        assert!(hits.is_empty(), "{hits:#?}");
+    }
+
+    /// [D] No job, keyed or not, here or on a runner, carries a label override.
+    #[test]
+    fn no_job_carries_a_label_override() {
         let mut r = runner_req(&["ls"]);
         r.runner.as_mut().unwrap().keys = None;
         for a in [
+            on_runner(&runner_req(&["ls"]), &rcaps()).unwrap(),
             on_runner(&r, &caps()).unwrap(),
             local(&req(&["ls"]), &caps()).unwrap(),
         ] {
@@ -1052,7 +1124,14 @@ mod tests {
             };
             for a in [
                 local(&req(&["ls"]), &c).unwrap(),
-                on_runner(&runner_req(&["ls"]), &c).unwrap(),
+                on_runner(
+                    &runner_req(&["ls"]),
+                    &Caps {
+                        memory: m.into(),
+                        ..rcaps()
+                    },
+                )
+                .unwrap(),
             ] {
                 assert!(a.windows(2).any(|w| w == ["--memory", m]));
                 assert!(a.windows(2).any(|w| w == ["--memory-swap", m]));
@@ -1105,14 +1184,13 @@ mod tests {
                 .map(|w| w[1].clone())
                 .collect()
         };
-        let a = on_runner(&runner_req(&["make"]), &caps()).unwrap();
+        let a = on_runner(&runner_req(&["make"]), &rcaps()).unwrap();
         assert_eq!(
             mounts(&a),
             [
                 "/r/slots/k1:/work:ro,z",
                 "/r/slots/k1-target:/target:rw,Z",
                 "/r/cache/p/public/cargo:/cache/cargo:rw,Z",
-                "/r/jobs/x1a.1/key.sock:/run/drgnx/key.sock:ro,Z",
                 "/r/bin/0.1.0/drgnx-key:/run/drgnx/key:ro,Z",
             ]
         );
@@ -1148,9 +1226,11 @@ mod tests {
         ] {
             let mut r = runner_req(&["make"]);
             r.runner.as_mut().unwrap().caches[0].inside = inside.into();
-            assert!(on_runner(&r, &caps()).is_err(), "{inside}");
+            assert!(on_runner(&r, &rcaps()).is_err(), "{inside}");
         }
-        // a slice or hub id podman would read as more than one value is refused
+        // a slice or hub id podman would read as more than one value is refused (unkeyed: no sidecar name to match)
+        let mut unkeyed = runner_req(&["ls"]);
+        unkeyed.runner.as_mut().unwrap().keys = None;
         for (slice, hub) in [
             ("x.slice --privileged", "h"),
             ("x", "h"),
@@ -1159,7 +1239,7 @@ mod tests {
         ] {
             assert!(
                 argv(
-                    &runner_req(&["ls"]),
+                    &unkeyed,
                     &caps(),
                     &RunnerArgs::runner("drgnx-run", hub, slice)
                 )
@@ -1203,7 +1283,7 @@ mod tests {
         let nasty = ["--privileged", "-v", "/:/host", "--network=host", "--rm"];
         for (a, mounts) in [
             (local(&req(&nasty), &caps()).unwrap(), 1),
-            (on_runner(&runner_req(&nasty), &caps()).unwrap(), 5),
+            (on_runner(&runner_req(&nasty), &rcaps()).unwrap(), 4),
         ] {
             let at = a.iter().position(|s| s == REF).unwrap();
             assert_eq!(a[at + 1..], nasty.map(String::from));
@@ -1417,7 +1497,7 @@ mod tests {
 
     fn sidecar(ra: &RunnerArgs, job: &str) -> Result<Vec<String>, Refusal> {
         let n = net_names(ra, job)?;
-        sidecar_argv(&n, ra, "localhost/drgnx-px:0123456789abcdef").map(strs)
+        sidecar_argv(&n, ra, "localhost/drgnx-px:0123456789abcdef", false).map(strs)
     }
 
     /// [D] The sidecar: attached, no tty, the detach keys off (a one-byte read of the default sequence must not detach
@@ -1458,6 +1538,8 @@ mod tests {
             "128m",
             "--cpus",
             "1",
+            "--ulimit",
+            "core=1",
         ]
         .map(String::from)
         .to_vec();
@@ -1515,8 +1597,13 @@ mod tests {
         let ra = RunnerArgs::local(TAG);
         let n = net_names(&ra, "x1a").unwrap();
         for bad in ["", "-v", "a b"] {
-            assert!(sidecar_argv(&n, &ra, bad).is_err(), "{bad:?}");
+            assert!(sidecar_argv(&n, &ra, bad, false).is_err(), "{bad:?}");
         }
+        // a keyed job's sidecar also takes its keys' listener: `--keys`, last
+        let k = strs(sidecar_argv(&n, &ra, "localhost/drgnx-px:0123456789abcdef", true).unwrap());
+        let mut plain = a.clone();
+        plain.extend(["--keys".into(), KEY_NAME.into()]);
+        assert_eq!(k, plain);
     }
 
     /// [D] The laptop is a hub and a runner at once, with jobs of the same id: no container name is shared, and a

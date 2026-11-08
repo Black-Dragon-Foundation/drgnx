@@ -18,6 +18,9 @@ pub const WINDOW: u32 = 262_144;
 pub const MAX_STREAMS: usize = 64;
 /// The header's length: stream id, kind, payload length.
 pub const HEADER: usize = 9;
+/// An `OPEN`'s whole payload when the stream is a key stream (a connection to the sidecar's `@drgnx-key`); a stream
+/// for the proxy's `OPEN` carries nothing. Any other payload is a violation.
+pub const KEY_MARK: u8 = 0x4b;
 
 /// A frame's kind, its byte on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -60,7 +63,8 @@ impl Kind {
             Kind::Data => (1..=MAX_DATA as u32).contains(&len),
             Kind::Credit => len == 4,
             Kind::Ready | Kind::Event => len <= MAX_CONTROL as u32,
-            Kind::Open | Kind::Fin | Kind::Rst | Kind::Beat => len == 0,
+            Kind::Open => len <= 1,
+            Kind::Fin | Kind::Rst | Kind::Beat => len == 0,
         }
     }
 }
@@ -81,6 +85,20 @@ impl Frame {
             kind,
             payload: Vec::new(),
         }
+    }
+
+    /// A key stream's `OPEN`: the payload is [`KEY_MARK`].
+    pub fn open_key(stream: u32) -> Frame {
+        Frame {
+            stream,
+            kind: Kind::Open,
+            payload: vec![KEY_MARK],
+        }
+    }
+
+    /// Whether this is a key stream's `OPEN`.
+    pub fn is_key_open(&self) -> bool {
+        self.kind == Kind::Open && self.payload == [KEY_MARK]
     }
 
     /// A `DATA` frame.
@@ -257,7 +275,8 @@ fn payload_ok(kind: Kind, payload: &[u8]) -> bool {
         Kind::Credit => payload != [0, 0, 0, 0],
         Kind::Ready => Ready::parse(payload).is_some(),
         Kind::Event => ForeignSource::parse(payload).is_some(),
-        Kind::Open | Kind::Data | Kind::Fin | Kind::Rst | Kind::Beat => true,
+        Kind::Open => payload.is_empty() || payload == [KEY_MARK],
+        Kind::Data | Kind::Fin | Kind::Rst | Kind::Beat => true,
     }
 }
 
@@ -295,7 +314,7 @@ impl Decoder {
                 return Ok(out);
             }
             let payload = self.buf[HEADER..].to_vec();
-            self.buf.clear();
+            zeroize::Zeroize::zeroize(&mut self.buf);
             if !payload_ok(kind, &payload) {
                 return Err(Violation::BadPayload(kind));
             }

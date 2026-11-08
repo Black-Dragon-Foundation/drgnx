@@ -6,18 +6,30 @@
 //! goes to the proxy by `try_send` (a full or closed channel resets it), and so does each foreign-source event (a full
 //! channel counts it). [`Sidecar`] starts the sidecar's container through podman, drains its stderr as it comes, and
 //! stops it.
+//!
+//! A keyed job's channel ([`run_keyed`]) also carries key streams (an `OPEN` with the key mark: a connection to the
+//! sidecar's `@drgnx-key`). Each is answered by the [`KeySource`]: one request line of at most [`KEY_REQUEST`] bytes,
+//! then the answer, then the stream's end; a longer line, or one that isn't UTF-8, resets the stream unread. The
+//! answer is read straight from the source's buffer (locked memory in the job helper), never through a pipe of its
+//! own. A key stream on an unkeyed channel is a violation that ends it.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
+use std::future::Future;
+use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use gleipnir::net::proxy::Relayed;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, DuplexStream, ReadHalf, WriteHalf};
+use tokio::io::{
+    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader, DuplexStream, ReadBuf,
+};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -36,6 +48,22 @@ pub const BEAT: Duration = Duration::from_secs(10);
 pub const STOP_LIMIT: Duration = Duration::from_secs(10);
 /// The sidecar's stderr kept for refusal texts: its last 4 KiB.
 pub const STDERR_KEEP: usize = 4096;
+/// The longest key request, its newline included.
+pub const KEY_REQUEST: usize = 512;
+
+/// A key request's answer, as the key source holds it (locked memory, zeroed when dropped).
+pub trait KeyAnswer: Send + Sync {
+    fn bytes(&self) -> &[u8];
+}
+
+/// The answer to come.
+pub type AnswerFuture = Pin<Box<dyn Future<Output = Box<dyn KeyAnswer>> + Send>>;
+
+/// What answers a key stream's request: the job helper's key store.
+pub trait KeySource: Send + Sync + 'static {
+    /// The answer to REQUEST, one line without its newline.
+    fn answer(&self, request: &str) -> AnswerFuture;
+}
 
 /// What the sidecar's exit CODE means (the exit codes of `drgnx-px`).
 pub fn exit_meaning(code: i32) -> &'static str {
@@ -138,11 +166,11 @@ async fn read_ready(out: &mut (impl AsyncRead + Unpin)) -> Result<SocketAddr, En
         .ok_or_else(|| End::Violation("READY's payload isn't an address".into()))
 }
 
-/// A stream's owner side: its end of the `duplex` whose other end the proxy holds, and the sender of the proxy's
-/// `gone`.
-struct Stream {
-    io: DuplexStream,
-    alive: Alive,
+/// A stream's owner side: for the proxy, its end of the `duplex` whose other end the proxy holds, and the sender of
+/// the proxy's `gone`; for a key stream, the key source.
+enum Stream {
+    Proxy { io: DuplexStream, alive: Alive },
+    Key(Arc<dyn KeySource>),
 }
 
 /// The sender of a stream's `gone`, which lives in the shell's abort. An abort (a reset either way, the channel's end)
@@ -170,12 +198,84 @@ impl Drop for Alive {
 }
 
 impl Consumer for Stream {
-    type R = ReadHalf<DuplexStream>;
-    type W = WriteHalf<DuplexStream>;
+    type R = Box<dyn AsyncRead + Unpin + Send>;
+    type W = Box<dyn AsyncWrite + Unpin + Send>;
     fn split(self) -> (Self::R, Self::W, Abort) {
-        let (r, w) = tokio::io::split(self.io);
-        let mut alive = self.alive;
-        (r, w, Box::new(move || drop(alive.tx.take())))
+        match self {
+            Stream::Proxy { io, alive } => {
+                let (r, w) = tokio::io::split(io);
+                let mut alive = alive;
+                (
+                    Box::new(r),
+                    Box::new(w),
+                    Box::new(move || drop(alive.tx.take())),
+                )
+            }
+            Stream::Key(keys) => {
+                // the request goes through a pipe just long enough for one line; the answer never does
+                let (w, r) = tokio::io::duplex(KEY_REQUEST);
+                let pending: AnswerFuture2 = Box::pin(async move {
+                    let mut line = Vec::with_capacity(KEY_REQUEST);
+                    BufReader::new(r)
+                        .take(KEY_REQUEST as u64)
+                        .read_until(b'\n', &mut line)
+                        .await?;
+                    if line.pop() != Some(b'\n') {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "no key request line within its limit",
+                        ));
+                    }
+                    let req = String::from_utf8(line)
+                        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "not UTF-8"))?;
+                    Ok(keys.answer(&req).await)
+                });
+                let reply = KeyReply {
+                    pending: Some(pending),
+                    answer: None,
+                    off: 0,
+                };
+                (Box::new(reply), Box::new(w), Box::new(|| {}))
+            }
+        }
+    }
+}
+
+type AnswerFuture2 = Pin<Box<dyn Future<Output = io::Result<Box<dyn KeyAnswer>>> + Send>>;
+
+/// A key stream's read side: the request read and answered first, then the answer's bytes straight from the source's
+/// buffer, then the end. A request that can't be read is an error, which resets the stream.
+struct KeyReply {
+    pending: Option<AnswerFuture2>,
+    answer: Option<Box<dyn KeyAnswer>>,
+    off: usize,
+}
+
+impl AsyncRead for KeyReply {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if let Some(p) = self.pending.as_mut() {
+            let a = ready!(p.as_mut().poll(cx));
+            self.pending = None;
+            self.answer = Some(a?);
+        }
+        let off = self.off;
+        let Some(a) = self.answer.as_ref() else {
+            return Poll::Ready(Ok(()));
+        };
+        let bytes = a.bytes();
+        let n = (bytes.len() - off).min(buf.remaining());
+        buf.put_slice(&bytes[off..off + n]);
+        if off + n == bytes.len() {
+            // dropped (and zeroed by its source) once it is all handed over
+            self.answer = None;
+        } else {
+            self.off = off + n;
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -192,8 +292,38 @@ pub async fn run(
     stall: Duration,
     log: Log,
 ) -> End {
+    carry(out, inp, streams, None, events, beat, stall, log).await
+}
+
+/// [`run`] for a keyed job: its key streams are answered by KEYS.
+#[allow(clippy::too_many_arguments, reason = "run's arguments and the keys")]
+pub async fn run_keyed(
+    out: impl AsyncRead + Unpin,
+    inp: impl AsyncWrite + Unpin,
+    streams: mpsc::Sender<Relayed>,
+    keys: Arc<dyn KeySource>,
+    events: mpsc::Sender<OwnerEvent>,
+    beat: Duration,
+    stall: Duration,
+    log: Log,
+) -> End {
+    carry(out, inp, streams, Some(keys), events, beat, stall, log).await
+}
+
+#[allow(clippy::too_many_arguments, reason = "run's arguments and the keys")]
+async fn carry(
+    out: impl AsyncRead + Unpin,
+    inp: impl AsyncWrite + Unpin,
+    streams: mpsc::Sender<Relayed>,
+    keys: Option<Arc<dyn KeySource>>,
+    events: mpsc::Sender<OwnerEvent>,
+    beat: Duration,
+    stall: Duration,
+    log: Log,
+) -> End {
     let mut cfg = Config::new(Side::Owner);
     cfg.stall = stall;
+    cfg.keys = keys.is_some();
     let shell: Shell<Stream> = Shell::new(cfg, log.clone());
     shell.ready_read();
     // dropped when `run` returns: every `gone` still held after a graceful close fires then
@@ -207,8 +337,11 @@ pub async fn run(
             tx: Some(tx),
             ended: ended.clone(),
         };
-        Some(Stream { io: ours, alive })
+        Some(Stream::Proxy { io: ours, alive })
     });
+    if let Some(keys) = keys {
+        shell.on_new_key_stream(move |_| Some(Stream::Key(keys.clone())));
+    }
     let dropped = Arc::new(AtomicU64::new(0));
     let held = dropped.clone();
     let hook_log = log.clone();

@@ -205,7 +205,7 @@ impl End {
                     }
                     self.pending.push(f);
                 }
-                Out::NewStream { stream } => {
+                Out::NewStream { stream } | Out::NewKeyStream { stream } => {
                     self.known.insert(stream);
                     if self.reset_wanted.remove(&stream) {
                         self.step(In::LocalReset { stream });

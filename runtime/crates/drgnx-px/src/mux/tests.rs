@@ -540,3 +540,39 @@ fn the_seen_set_holds_256_then_counts() {
         "still seen"
     );
 }
+
+/// [D] A key stream (an `OPEN` with the key mark) on an owner whose job has no keys is a violation, which ends the
+/// channel; on a keyed owner it is a key stream, never one for the proxy, and a plain `OPEN` stays the proxy's. The
+/// sidecar opens a key stream only when it is keyed itself.
+#[test]
+fn a_key_stream_needs_a_keyed_channel() {
+    let mut m = Mux::new(Side::Owner);
+    ok(&mut m, In::Frame(ready()));
+    assert_eq!(
+        rx(&mut m, Frame::open_key(1)),
+        Err(StreamViolation::KeyStreamUnkeyed(1))
+    );
+    let mut m = Mux::new(Side::Owner);
+    m.allow_keys();
+    ok(&mut m, In::Frame(ready()));
+    assert_eq!(
+        ok(&mut m, In::Frame(Frame::open_key(1))),
+        vec![Out::NewKeyStream { stream: 1 }]
+    );
+    assert_eq!(
+        ok(&mut m, In::Frame(open(3))),
+        vec![Out::NewStream { stream: 3 }]
+    );
+    let mut s = Mux::new(Side::Sidecar);
+    assert_eq!(
+        s.step(In::LocalOpenKey),
+        Err(StreamViolation::KeyStreamUnkeyed(1))
+    );
+    let mut s = Mux::new(Side::Sidecar);
+    s.allow_keys();
+    assert_eq!(
+        ok(&mut s, In::LocalOpenKey),
+        vec![Out::Send(Frame::open_key(1))]
+    );
+    assert_eq!(ok(&mut s, In::LocalOpen), vec![Out::Send(open(3))]);
+}

@@ -161,8 +161,6 @@ pub struct Facts {
     pub missing: Vec<String>,
     /// Why container jobs can't be capped there (`check_limits`), if they can't.
     pub limits: Option<String>,
-    /// Why a keyed container job would be refused there (the key socket's SELinux self-check), if it would.
-    pub key_socket: Option<String>,
     pub disk_free_gb: u64,
     pub disk_total_gb: u64,
     /// The canary's verdict.
@@ -189,9 +187,6 @@ pub fn judge(f: &Facts) -> Result<(), String> {
         }
         if let Some(why) = &f.limits {
             failed.push(format!("container jobs can't be capped: {why}"));
-        }
-        if let Some(why) = &f.key_socket {
-            failed.push(format!("keyed container jobs would be refused: {why}"));
         }
         let floor = DISK_FLOOR_GB.max((f.disk_total_gb * DISK_FLOOR_PCT).div_ceil(100));
         if f.disk_free_gb < floor {
@@ -326,7 +321,6 @@ mod tests {
             probed: true,
             missing: vec![],
             limits: None,
-            key_socket: None,
             disk_free_gb: 100,
             disk_total_gb: 200,
             canary: Some(Verdict::Pass),
@@ -357,13 +351,6 @@ mod tests {
                 ..ok.clone()
             },
             "capped",
-        );
-        fails(
-            Facts {
-                key_socket: Some("Permission denied".into()),
-                ..ok.clone()
-            },
-            "keyed container jobs would be refused",
         );
         // the floor is 20 GB and 10 %: 25 GB of 400 is under 40
         fails(

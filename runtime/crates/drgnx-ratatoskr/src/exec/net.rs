@@ -249,7 +249,7 @@ pub async fn prepare_net(
     .await
     .map_err(|e| setup(format!("the proxy image: {e}")))?
     .map_err(setup)?;
-    let argv = podman::sidecar_argv(&names, &ra, &image).map_err(|r| setup(r.message))?;
+    let argv = podman::sidecar_argv(&names, &ra, &image, false).map_err(|r| setup(r.message))?;
     let (p, reference) = (podman.to_path_buf(), reference.to_string());
     let checks_shell = shell.clone();
     let (started, checked) = tokio::join!(

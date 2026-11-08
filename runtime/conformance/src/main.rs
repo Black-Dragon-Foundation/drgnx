@@ -240,6 +240,7 @@ fn main() -> ExitCode {
         no_rootless: selected_need("rootless")
             .then(scenario::no_rootless)
             .flatten(),
+        user_t: scenario::selinux_user_t(),
         ptrace_stays: scenario::ptrace_effective() && !scenario::setpriv_available(),
         no_real_sandbox: selected_need("real-sandbox")
             .then(|| no_real_sandbox(&args.hub_bin))

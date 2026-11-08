@@ -55,7 +55,7 @@ impl End {
                     }
                     self.pending.push(f);
                 }
-                Out::NewStream { stream } => {
+                Out::NewStream { stream } | Out::NewKeyStream { stream } => {
                     self.open.insert(stream);
                 }
                 Out::Deliver { stream, bytes } => {

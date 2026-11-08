@@ -130,6 +130,14 @@ impl Drop for Runner<'_> {
             let _ = c.kill();
             let _ = c.wait();
         }
+        // the containers the scenario's runs and hubs left in its roots' podman stores
+        let mut roots: Vec<&Arc<hub::Root>> = self.hubs.iter().map(|h| &h.root).collect();
+        roots.extend(&self.active_root);
+        for (i, r) in roots.iter().enumerate() {
+            if !roots[..i].iter().any(|o| Arc::ptr_eq(o, r)) {
+                hub::remove_containers(r);
+            }
+        }
     }
 }
 

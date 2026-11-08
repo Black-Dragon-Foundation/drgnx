@@ -658,6 +658,8 @@ pub struct Observed {
     pub linger: bool,
     pub cpuset_by_systemd: bool,
     pub files: FileFacts,
+    /// The login's SELinux context (`/proc/self/attr/current`), none without SELinux.
+    pub selinux: Option<String>,
 }
 
 /// The controllers the caps need delegated: `--memory`, `--pids-limit`, `--cpus`.
@@ -672,6 +674,16 @@ pub fn judge(o: &Observed) -> Result<Facts, Vec<Missing>> {
             fix: fix.to_string(),
         })
     };
+    if let Some(ctx) = &o.selinux
+        && super::confined::is_user_t(ctx)
+    {
+        miss(
+            format!(
+                "a login that may run rootless podman (this one is the confined SELinux user user_u, {ctx}: podman needs newuidmap, which the stock policy denies user_t)"
+            ),
+            "map the login to another SELinux user (`semanage login -m -s staff_u LOGIN`, then log in again), or give it a subuid and subgid range and a local policy module that lets user_t run newuidmap",
+        );
+    }
     if let Err(e) = &o.systemd_user {
         miss(
             format!("a systemd user manager ({e})"),
@@ -820,6 +832,7 @@ pub fn contract(probe: &Probe, podman: &Path) -> Result<Facts, Vec<Missing>> {
         linger,
         cpuset_by_systemd,
         files: probe.file_facts(),
+        selinux: super::confined::context(),
     })
 }
 
@@ -848,6 +861,7 @@ mod tests {
             git: Ok("git version 2.51.0".into()),
             linger: true,
             cpuset_by_systemd: true,
+            selinux: None,
             files: FileFacts {
                 arch: "x86_64".into(),
                 os: "fedora 45".into(),
@@ -855,6 +869,29 @@ mod tests {
                 ..Default::default()
             },
         }
+    }
+
+    /// [D] A login confined as SELinux user_u (user_t) is refused by the contract with the cause and an admin's fix,
+    /// even where podman answers; staff_u and a host without SELinux are not.
+    #[test]
+    fn a_user_u_login_fails_the_contract_with_the_cause() {
+        let good = info("5.6.1", true, "v2", "systemd", &["cpu", "memory", "pids"]);
+        let mut o = observed(Ok(good));
+        o.selinux = Some("user_u:user_r:user_t:s0".into());
+        let m = judge(&o).unwrap_err();
+        assert_eq!(m.len(), 1, "{m:?}");
+        assert!(
+            m[0].what.contains("user_u") && m[0].what.contains("newuidmap"),
+            "{m:?}"
+        );
+        assert!(
+            m[0].fix.contains("semanage login") && m[0].fix.contains("subuid"),
+            "{m:?}"
+        );
+        o.selinux = Some("staff_u:staff_r:staff_t:s0-s0:c0.c1023".into());
+        assert!(judge(&o).is_ok());
+        o.selinux = None;
+        assert!(judge(&o).is_ok());
     }
 
     /// [D] A host that meets the contract reports its facts; one that lacks items gets every one of them, each with

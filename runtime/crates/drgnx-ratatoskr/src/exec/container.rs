@@ -370,26 +370,22 @@ mod tests {
 #[cfg(test)]
 mod name_and_pull_tests {
     use super::*;
-    use std::io::Write;
     use std::path::PathBuf;
 
-    /// A fake podman at DIR/podman running BODY, written by a `sh` child: never through a file this process holds open
-    /// for writing, which another test's fork here would inherit, so that the exec of the script failed as busy
-    /// (ETXTBSY).
+    /// A fake `podman` running BODY. Written under another name and put in place by `install`, a process of its own:
+    /// a write fd to it held here would be inherited by a child another test thread forks meanwhile, and exec'ing the
+    /// script while that child holds it fails with ETXTBSY ("Text file busy").
     fn script(dir: &Path, body: &str) -> PathBuf {
+        let src = dir.join("podman.src");
+        std::fs::write(&src, format!("#!/bin/sh\n{body}\n")).unwrap();
         let p = dir.join("podman");
-        let mut sh = std::process::Command::new("sh")
-            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+        let ok = std::process::Command::new("install")
+            .arg("-m755")
+            .arg(&src)
             .arg(&p)
-            .stdin(std::process::Stdio::piped())
-            .spawn()
+            .status()
             .unwrap();
-        let mut stdin = sh.stdin.take().unwrap();
-        stdin
-            .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
-            .unwrap();
-        drop(stdin);
-        assert!(sh.wait().unwrap().success());
+        assert!(ok.success(), "install the fake podman");
         p
     }
 

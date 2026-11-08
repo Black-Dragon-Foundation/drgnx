@@ -3,11 +3,12 @@
 //! owns what the job may use and must never keep:
 //!
 //! - the job's keys ([`keys`]): `serve` hands them over `D/helper.sock`, the helper holds them in locked memory (no
-//!   swap, no core dump: the process is not dumpable) and serves them to `drgnx-key` on `D/key.sock`, zeroed at the
-//!   end;
-//! - the job's network ([`net`], with the `runner` feature): its relay sidecar (`drgnx-px`, started here before the
-//!   job, whose namespace the job joins) and Gleipnir's CONNECT proxy on the relay's streams with the hub's
-//!   allow-list, never a link-local or cloud metadata address; a relay that ends before the job ends it `infra: proxy`;
+//!   swap, no core dump: the process is not dumpable) and answers `drgnx-key`'s requests, which come as key streams
+//!   of the job's relay (its sidecar's `@drgnx-key`), zeroed at the end;
+//! - the job's relay ([`net`], with the `runner` feature), for a networked or keyed job: its sidecar (`drgnx-px`,
+//!   started here before the job, whose namespace the job joins), Gleipnir's CONNECT proxy on the relay's streams with
+//!   the hub's allow-list (empty for a job without network), never a link-local or cloud metadata address, and the
+//!   key streams; a relay that ends before the job ends it `infra: proxy`;
 //! - the disk watch ([`disk`]): below the runner folder's floor the job that grew most since its start is stopped,
 //!   `infra: disk`.
 //!
@@ -19,7 +20,6 @@ pub mod disk;
 pub mod keys;
 #[cfg(feature = "runner")]
 pub mod net;
-pub mod selinux;
 
 use crate::linux::jobexec::JobExec;
 use std::io::{self, Read, Write};
@@ -72,19 +72,21 @@ impl Args {
     }
 }
 
-/// No core dump and no ptrace by another process of this user: `PR_SET_DUMPABLE` 0 (a piped `core_pattern` ignores
-/// `RLIMIT_CORE`), and `RLIMIT_CORE` 0 besides.
+/// No core dump and no ptrace by another process of this user: `PR_SET_DUMPABLE` 0, and `RLIMIT_CORE` 1 (soft and
+/// hard): a piped `core_pattern` (systemd-coredump) ignores a limit of 0 but skips a process whose limit is 1, and
+/// with `fs.suid_dumpable` 2 a process that isn't dumpable is still dumped there. Its children inherit the limit, so
+/// it must be 1 for them too: crun can't raise a hard limit of 0 to the sidecar's `--ulimit core=1`.
 pub fn harden() -> io::Result<()> {
     // SAFETY: plain prctl/setrlimit calls with constant arguments
     unsafe {
         if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
-        let none = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
+        let one = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
         };
-        if libc::setrlimit(libc::RLIMIT_CORE, &none) != 0 {
+        if libc::setrlimit(libc::RLIMIT_CORE, &one) != 0 {
             return Err(io::Error::last_os_error());
         }
     }
@@ -116,34 +118,47 @@ fn serve(a: &Args) -> Result<(), String> {
     let spec = JobExec::read(&a.dir).map_err(|e| format!("job.json: {e}"))?;
     let h = spec.helper.unwrap_or_default();
     let store = Arc::new(keys::KeyStore::new(h.keys.clone()));
-    let hub = keys::bind(&a.dir, keys::HELPER_SOCK, None)
-        .map_err(|e| format!("{}: {e}", keys::HELPER_SOCK))?;
-    // on an SELinux host the job (container_t, its own categories) may connect only to a container_t socket (k1)
-    let ctx = selinux::job_context().map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
-    let job = keys::bind(&a.dir, keys::KEY_SOCK, ctx.as_deref())
-        .map_err(|e| format!("{}: {e}", keys::KEY_SOCK))?;
+    let hub =
+        keys::bind(&a.dir, keys::HELPER_SOCK).map_err(|e| format!("{}: {e}", keys::HELPER_SOCK))?;
+    let keyed = !h.keys.is_empty();
     #[cfg(feature = "runner")]
-    let relay = match (&a.hub_allow, &h.net) {
-        (None, _) => None,
-        (Some(_), None) => return Err("a networked job's spec names no sidecar".into()),
-        (Some(f), Some(n)) => {
-            let text = std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
-            let allow = net::allow_list(&text)?;
+    let relay = match (a.hub_allow.is_some() || keyed, &h.net) {
+        (false, _) => None,
+        (true, None) => return Err("a networked or keyed job's spec names no sidecar".into()),
+        (true, Some(n)) => {
+            let allow = match &a.hub_allow {
+                Some(f) => {
+                    let text =
+                        std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()))?;
+                    net::allow_list(&text)?
+                }
+                // a keyed job without network: the relay carries its keys, and its proxy reaches nothing
+                None => vec![],
+            };
+            let keys = keyed.then(|| {
+                Arc::new(net::KeyServer {
+                    store: store.clone(),
+                    dir: a.dir.clone(),
+                    wait: a.key_wait,
+                }) as Arc<dyn drgnx_px::owner::KeySource>
+            });
             Some(net::Relay::start(
                 &a.dir,
                 allow,
                 &h.sidecar_argv,
                 &n.sidecar,
                 h.container.clone(),
+                keys,
             )?)
         }
     };
     #[cfg(not(feature = "runner"))]
-    if a.hub_allow.is_some() {
-        return Err("this sleipnir has no proxy (built without the runner feature)".into());
+    if a.hub_allow.is_some() || keyed {
+        return Err(
+            "this sleipnir has no relay for a job's network or keys (built without the runner feature)".into(),
+        );
     }
     keys::serve_hub(hub, store.clone());
-    keys::serve_job(job, store.clone(), a.dir.clone(), a.key_wait);
     if !h.root.as_os_str().is_empty() {
         disk::watch(h.root.clone(), a.dir.clone(), h.container.clone());
     }
@@ -162,8 +177,6 @@ fn serve(a: &Args) -> Result<(), String> {
         r.end();
     }
     store.clear();
-    for s in [keys::HELPER_SOCK, keys::KEY_SOCK] {
-        let _ = std::fs::remove_file(a.dir.join(s));
-    }
+    let _ = std::fs::remove_file(a.dir.join(keys::HELPER_SOCK));
     Ok(())
 }
