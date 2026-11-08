@@ -34,6 +34,8 @@
 
 (drgnx-module-define 'extra/guides
                      :doc "Indent guides in code and YAML on graphical frames (indent-bars; the theme's colours)."
+                     ;; off until chosen: the approved look's code has no guides (docs/guide/look.md)
+                     :default 'off
                      :stage 'first-frame :packages '(indent-bars)
                      :teardown #'drgnx-guides--teardown
                      :setup (lambda ()

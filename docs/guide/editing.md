@@ -61,8 +61,9 @@ right, so the panel stays the workbench's. Module `extra/debug`, package `dape`.
 
 Thin vertical guides at each indentation level of code and YAML, on graphical frames, drawn by indent-bars (stipples,
 not characters: they cost little and the cursor never lands on them; with tree-sitter they follow the code's
-structure). Their colour comes from the theme — the `highlight` face, blended — so they follow theme changes.
-**Toggle Indent Guides** for this buffer. Module `extra/guides`, package `indent-bars`.
+structure). Their colour comes from the theme — the `shadow` face, blended — so they follow theme changes.
+**Toggle Indent Guides** for this buffer. Module `extra/guides`, package `indent-bars`: **off until you choose it**
+(Settings → Modules, or `extra/guides` in modules.eld), as the look's code shows no guides.
 
 ## Smooth scrolling
 
