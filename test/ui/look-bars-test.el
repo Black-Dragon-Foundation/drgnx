@@ -264,13 +264,9 @@ the `gap' token's colour."
 (ert-deftest drgnx-ui-look-bars/title-row-controls-take-a-real-click ()
   "Design §4: the title row's window controls are buttons.  A real pointer (mutter's virtual one, through the
 compositor and the shell as a mouse's motion and buttons go; `drgnx-uitest-pointer-click') on Minimise runs its
-registry command, Minimize Window.
-Skipped, saying why, on Nidhogg's native Wayland shell until its tab bar takes real presses (DEFERRED
-NH-TITLE-CLICK-1): there they reach Emacs without the tab bar's item, with no area, or not at all, while motion and
-text-area clicks arrive."
+registry command, Minimize Window.  On Nidhogg's native shell this needs its line from 0f89eff4 (the tab bar takes a
+real press with its item: NH-TITLE-CLICK-1); the .6 tarball predates it."
   (skip-unless (display-graphic-p))
-  (when (featurep 'nidhogg-wayland)
-    (ert-skip "NH-TITLE-CLICK-1: the native shell's tab bar does not take a real press (no item, no area, or no event)"))
   (skip-unless (drgnx-uitest-pointer-available-p))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*look-bars-controls*")) (frame (selected-frame)) (ran nil)
@@ -292,10 +288,9 @@ text-area clicks arrive."
                  (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-minimize keys)) measure))
                  (x (+ before (round (* (drgnx-pixels-scale frame) (+ 4 13)))))   ; the 4 px gap, then the middle
                  (y (/ (tab-bar-height frame t) 2)))
-            (should (equal (list :ran t) (list :ran (drgnx-uitest-pointer-click x y (lambda () ran))
-                                               :keys drgnx-uitest-pointer-keys
-                                               :item (car (drgnx-topline--event-item
-                                                           (list 'mouse-1 (list frame 'tab-bar (cons x y) 0)))))))))
+            (let ((got (drgnx-uitest-pointer-click x y (lambda () ran))))
+              (ert-info ((format "keys %S" drgnx-uitest-pointer-keys))
+                (should (eq t got))))))
       (setq drgnx-face-title-bar was)
       (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
       (drgnx-topline--off)

@@ -279,5 +279,32 @@ card's left edge, halfway down.  Pattern D (read after `drgnx-test-wait-presente
       (drgnx-look-derive-off)
       (mapc #'disable-theme custom-enabled-themes))))
 
+(ert-deftest drgnx-ui-card-panels/a-drag-released-over-a-fringe-ends ()
+  "Dragging the dock card's side edge (its right fringe, `drgnx-look-edge-drag') 60 px to the right widens the dock,
+and the release, over the fringe that moved with the pointer, ends the drag: no `<right-fringe> <drag-mouse-1> is
+undefined', and no drag map is left to go on resizing with every later movement.  Needs Nidhogg's `mouse-drag-line'
+that takes the fringes' releases (drgnx keeps no workaround of its own)."
+  (drgnx-card-panels-ui-test--with-explorer
+    (let ((was (lookup-key global-map [right-fringe down-mouse-1])))
+      (unwind-protect
+          (let* ((_ (define-key global-map [right-fringe down-mouse-1] #'drgnx-look-edge-drag))
+                 (f (selected-frame)) (dock (car (drgnx-wb--dock-windows)))
+                 (edges (window-pixel-edges dock))
+                 (x (- (nth 2 edges) (window-right-divider-width dock) 2))
+                 (y (/ (+ (nth 1 edges) (nth 3 edges)) 2))
+                 (from (posn-at-x-y x y f))
+                 (before (window-pixel-width dock))
+                 (m0 (with-current-buffer "*Messages*" (point-max))))
+            (should (eq (posn-area from) 'right-fringe))
+            (drgnx-uitest-run (drgnx-uitest-drag-events from (posn-at-x-y (+ x 60) y f) :lazy t :steps 8))
+            (let ((msgs (with-current-buffer "*Messages*"
+                          (buffer-substring-no-properties (min m0 (point-max)) (point-max)))))
+              (should (> (window-pixel-width dock) (+ before 40)))
+              (should-not (string-search "is undefined" msgs))
+              (should-not (and (consp overriding-terminal-local-map)
+                               (seq-find (lambda (m) (and (keymapp m) (eq (lookup-key m [right-divider]) m)))
+                                         (cdr overriding-terminal-local-map))))))
+        (define-key global-map [right-fringe down-mouse-1] was)))))
+
 (provide 'card-panels-test)
 ;;; card-panels-test.el ends here

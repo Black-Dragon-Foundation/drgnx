@@ -356,8 +356,9 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
-it (**Move Window by the Title Row**, `title-row-drag`: a press runs it, so it is not in the palette). With the system's own title bar (the default) those buttons would be a second set, so they are not there. The
-buttons are commands like any other, in the palette too: **Minimize Window** (`title-row-minimize`), **Maximize or
+it (**Move Window by the Title Row**, `title-row-drag`: a press runs it, so it is not in the palette). With the system's own title bar (the default) those buttons would be a second set, so they are not there. A
+click runs the item it carries (the tab bar's `menu-item`, which Nidhogg's native shell attaches too); a click that
+carries none runs nothing. The buttons are commands like any other, in the palette too: **Minimize Window** (`title-row-minimize`), **Maximize or
 Restore Window** (`title-row-maximize`) and **Close Window** (`title-row-close`); each one lights up under the mouse.
 
 On a graphical frame the line is the window's title row, 38 pixels tall at the normal density (34 compact, 42

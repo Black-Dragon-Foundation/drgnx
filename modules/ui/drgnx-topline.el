@@ -218,27 +218,12 @@ count is positive."
                                   "Agents at work"))))))
 
 (defun drgnx-topline--event-item (event)
-  "The title row's item under mouse EVENT, found by its x in the row's own layout (the widths it was made with).
-The native Wayland shell's clicks on the tab bar carry no item (it never asks the tab bar which one was hit), so the
-row finds it itself.  An event that carries its item (the caption's `menu-item', as Emacs's own tab bar attaches it)
-is believed instead: the x is only the fallback, so a click never finds two items."
+  "The title row's item under mouse EVENT: the one its position's caption names (the `menu-item' Emacs's tab bar, and
+Nidhogg's native shell, attach to a tab-bar click), or nil."
   (let* ((posn (event-start event))
          (key (car-safe (and (car-safe (posn-string posn))
-                             (get-text-property (or (cdr (posn-string posn)) 0) 'menu-item (car (posn-string posn))))))
-         (x (car-safe (posn-x-y posn))))
-    (if key
-        (assq key (drgnx-topline--line))
-      (when x (drgnx-topline--item-at x)))))
-
-(defun drgnx-topline--item-at (x)
-  "The title row's item at X, in the row's own layout (the widths it was made with)."
-  (let ((measure (and (display-graphic-p) (drgnx-statusbar--measure-fn nil 'tab-bar))) (left 0))
-    (catch 'found
-      (dolist (item (drgnx-topline--line))
-        (let ((w (drgnx-topline--width (list item) measure)))
-          (when (< x (+ left w)) (throw 'found item))
-          (setq left (+ left w))))
-      nil)))
+                             (get-text-property (or (cdr (posn-string posn)) 0) 'menu-item (car (posn-string posn)))))))
+    (and key (assq key (drgnx-topline--line)))))
 
 (defun drgnx-topline-mouse-down (event)
   "A press on the title row (EVENT): on its empty part it drags the window; on an item the release decides."

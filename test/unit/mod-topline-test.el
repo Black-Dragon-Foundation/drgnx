@@ -246,28 +246,30 @@ owned) and torn down after (the watchers go, the memo empties)."
                    (hint-w (- (string-width (string-trim-right text)) start)))
               (should (<= (abs (- start (- width hint-w start))) 1)))))))))
 
-(ert-deftest drgnx-topline/a-click-finds-its-item-by-x ()
-  "The native Wayland shell's tab-bar clicks carry no item (no caption in the event's position), so the row finds the
-item under the release by its x and runs its command; a press runs nothing but a drag of the empty part."
+(ert-deftest drgnx-topline/a-click-runs-the-item-it-carries ()
+  "A tab-bar click carries its item (the caption's `menu-item', as Emacs's tab bar and Nidhogg's native shell attach
+it): the release runs that item's command, a press runs nothing but a drag of the empty part, and a click that carries
+no item runs nothing (the x is never used to guess one)."
   (drgnx-topline-test--with 'vscode
     (drgnx-topline--on)
     (should (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))
     (let* ((items (drgnx-topline--line))
            (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-palette (mapcar #'car items)))))
-           (at (lambda (kind x) (list kind (list (selected-window) 'tab-bar (cons x 0) 0)))))
-      (drgnx-topline-mouse-down (funcall at 'down-mouse-1 (1+ before)))
+           (at (lambda (kind key)
+                 (let ((caption (and key (propertize "x" 'menu-item
+                                                     (list key (nth 3 (drgnx-topline-test--item key)) nil)))))
+                   (list kind (append (list (selected-window) 'tab-bar (cons (1+ before) 0) 0)
+                                      (and caption (list (cons caption 0)))))))))
+      (drgnx-topline-mouse-down (funcall at 'down-mouse-1 'drgnx-topline-palette))
       (should-not drgnx-topline-test--ran)
-      (drgnx-topline-mouse-up (funcall at 'mouse-1 (1+ before)))
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-palette))
       (should (equal drgnx-topline-test--ran '(palette)))
-      (drgnx-topline-mouse-up (funcall at 'mouse-1 100000))         ; past the row: nothing
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 nil))          ; no item carried: nothing, though x is the palette's
       (should (equal drgnx-topline-test--ran '(palette)))
-      ;; an Emacs that attaches the item (the caption's `menu-item') is believed, not the x: one item, one command
-      (let* ((keys (drgnx-topline-test--item 'drgnx-topline-keys-sheet))
-             (caption (propertize "x" 'menu-item (list 'drgnx-topline-keys-sheet (nth 3 keys) nil)))
-             (ev (list 'mouse-1 (list (selected-window) 'tab-bar (cons (1+ before) 0) 0 (cons caption 0)))))
-        (should (eq (car (drgnx-topline--event-item ev)) 'drgnx-topline-keys-sheet))
-        (drgnx-topline-mouse-up ev)
-        (should (equal drgnx-topline-test--ran '(keys palette)))))
+      (should (eq (car (drgnx-topline--event-item (funcall at 'mouse-1 'drgnx-topline-keys-sheet)))
+                  'drgnx-topline-keys-sheet))
+      (drgnx-topline-mouse-up (funcall at 'mouse-1 'drgnx-topline-keys-sheet))
+      (should (equal drgnx-topline-test--ran '(keys palette))))
     (drgnx-topline--off)
     (should-not (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))))
 
