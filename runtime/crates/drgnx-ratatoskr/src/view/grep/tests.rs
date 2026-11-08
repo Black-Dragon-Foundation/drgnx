@@ -312,3 +312,163 @@ fn an_env_after_rows_gets_all_of_them_as_a_reset() {
     assert_eq!(rows.len(), 2);
     assert_eq!(p[0].env_epoch, 2);
 }
+
+/// A search of 100 files holding 100 matches each, handed in file by file; the rows of every patch sent, counted.
+fn ten_thousand(greps: &Greps, s: &mut Store, id: u64) -> usize {
+    let mut sent = 0;
+    for f in 0..100 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms = (1..=100)
+            .map(|l| m(&file, l, "a ", "needle", " in"))
+            .collect();
+        let (_, patches) = greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(s, CONN, "s", run, file.clone(), ms)
+            })
+            .unwrap();
+        for p in patches {
+            for op in &p.ops {
+                if let Op::Insert { rows, .. } = op {
+                    sent += rows.len();
+                }
+            }
+        }
+    }
+    sent
+}
+
+/// A 10,000-match search sends the window's rows and no more until the editor asks (`search/grep-look`); the model
+/// still holds every match, and the totals are the search's.
+#[test]
+fn ten_thousand_matches_send_only_the_window_until_asked() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let sent = ten_thousand(&greps, &mut s, id);
+    assert!(sent <= WINDOW, "{sent} rows sent, the window is {WINDOW}");
+    assert!(sent >= WINDOW - 1, "{sent}: the window is filled");
+    greps
+        .with(CONN, "s", id, |run| {
+            assert_eq!(run.files.len(), 100);
+            assert_eq!(
+                run.files.iter().map(|(_, ms)| ms.len()).sum::<usize>(),
+                10_000
+            );
+            // the model holds the matches beyond the window
+            let d = grep_doc(&run.files);
+            assert_eq!(d.lists["order"].len(), 10_100);
+        })
+        .unwrap();
+}
+
+/// `more` sends the next window after the last row sent; `upto` a row beyond it (with a margin after it).
+#[test]
+fn look_sends_the_next_rows_and_the_row_asked_for() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    ten_thousand(&greps, &mut s, id);
+    let rows_of = |ps: &[Patch]| -> Vec<(Option<String>, Vec<String>)> {
+        ps.iter()
+            .flat_map(|p| p.ops.iter())
+            .filter_map(|op| match op {
+                Op::Insert { after, rows } => Some((
+                    after.clone(),
+                    rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+                )),
+                _ => None,
+            })
+            .collect()
+    };
+    let last = s
+        .pairs
+        .values()
+        .next()
+        .unwrap()
+        .rows
+        .last()
+        .unwrap()
+        .key
+        .clone();
+    let more = greps
+        .current(CONN, "s", |run| {
+            look_patches(&mut s, CONN, "s", run, Look::More)
+        })
+        .unwrap();
+    let ins = rows_of(&more);
+    assert_eq!(ins.len(), 1);
+    assert_eq!(ins[0].0.as_deref(), Some(last.as_str()));
+    assert_eq!(ins[0].1.len(), WINDOW);
+    // a match 5,000 rows down: the window reaches it and a margin, nothing before is sent twice
+    let key = "m:/r/f050.txt:10:2".to_owned();
+    let upto = greps
+        .current(CONN, "s", |run| {
+            look_patches(&mut s, CONN, "s", run, Look::Upto(&key))
+        })
+        .unwrap();
+    let ins = rows_of(&upto);
+    let flat: Vec<&String> = ins.iter().flat_map(|(_, k)| k).collect();
+    assert!(flat.contains(&&key));
+    assert_eq!(flat.iter().filter(|k| ***k == key).count(), 1);
+    let at = flat.iter().position(|k| **k == key).unwrap();
+    assert_eq!(flat.len() - at - 1, MARGIN);
+    // asking again for a row already sent sends nothing
+    let again = greps
+        .current(CONN, "s", |run| {
+            look_patches(&mut s, CONN, "s", run, Look::Upto(&key))
+        })
+        .unwrap();
+    assert!(again.is_empty());
+}
+
+/// The replacement's preview patches the rows sent, not the ones the window has not reached.
+#[test]
+fn replace_previews_the_window_only() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    ten_thousand(&greps, &mut s, id);
+    let patches = greps
+        .current(CONN, "s", |run| {
+            run.replace = "pin".into();
+            rebuild_patches(&mut s, CONN, "s", run)
+        })
+        .unwrap();
+    let n: usize = patches
+        .iter()
+        .flat_map(|p| p.ops.iter())
+        .map(|op| match op {
+            Op::Replace(rows) => rows.len(),
+            _ => 0,
+        })
+        .sum();
+    assert!(n > 0 && n <= WINDOW, "{n}");
+}
+
+/// Each model send carries the whole list of ids, so once the rows' window is full the model is sent when the search
+/// has doubled it, not after every file (100 files send a few models, not 100).
+#[test]
+fn the_model_grows_by_doubling_once_the_window_is_full() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    let mut sent = 0;
+    for f in 0..100 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms = (1..=100)
+            .map(|l| m(&file, l, "a ", "needle", " in"))
+            .collect();
+        let (model, _) = greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+            })
+            .unwrap();
+        sent += usize::from(model.is_some());
+    }
+    assert!(sent <= 20, "{sent} models for 100 files");
+    assert!(sent >= 3, "{sent}");
+}

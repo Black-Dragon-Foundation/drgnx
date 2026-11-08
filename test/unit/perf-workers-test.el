@@ -106,13 +106,16 @@ Emacs (each form is read and evaluated here), `nidhogg-workers-apply' records."
       (drgnx-perf-complete-poll)
       (setq now 101.0)                  ; later polls do not move it
       (drgnx-perf-complete-poll)
-      (should (equal (drgnx-perf-complete-end) '(:complete-ms 120.0))))
+      (let ((end (drgnx-perf-complete-end)))
+        (should (equal (plist-get end :complete-ms) 120.0))
+        (should (numberp (plist-get end :complete-kb)))     ; the whole operation's allocation and CPU
+        (should (numberp (plist-get end :complete-cpu_ms)))))
     (should-not drgnx-perf--complete)
     ;; never complete: nil
     (cl-letf (((symbol-function 'drgnx-timer-start) #'ignore)
               ((symbol-function 'drgnx-timer-cancel) #'ignore))
       (drgnx-perf-complete-begin (lambda () nil))
-      (should (equal (drgnx-perf-complete-end) '(:complete-ms nil))))))
+      (should (equal (drgnx-perf-complete-end) '(:complete-ms nil :complete-kb nil :complete-cpu_ms nil))))))
 
 (ert-deftest drgnx-perf-workers/extras-await-completion ()
   "The lab reads `:complete-ms' and the digest only once the work is done (or after the wait), not when the keys end."

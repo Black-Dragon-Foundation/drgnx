@@ -111,6 +111,13 @@
  ;; All three are report-only until the combined pass reads them.
  (replace-typing-rows (:alloc :p50) 4134 :report-only rro-scan) (replace-typing-rows (:cpu_ms :p90) 4.0 :report-only rro-scan)
  (replace-typing-rows (:rows) 1 :report-only rro-scan)
+ ;; The whole operation, from the first key to the last row applied (`:complete-kb`, `:complete-cpu_ms`: this process's
+ ;; allocation and CPU, the stream's `accept-process-output` included; the per-key rows above stay, report-only).
+ ;; Measured once each, old path and hub path in one session (2026-11-08, Nidhogg's line image, 4 CPUs), x 1.25.
+ ;; replace-typing (old path) 76189 kB, 391 ms.  replace-typing-rows: 200012 kB, 2887 ms before the hub sent a window of
+ ;; the rows (`search/grep-look`) and the model as it doubles; 17771 kB, 353 ms after.
+ (replace-typing (:complete-kb) 95300 :report-only rro-scan) (replace-typing (:complete-cpu_ms) 500 :report-only rro-scan)
+ (replace-typing-rows (:complete-kb) 22300 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 442 :report-only rro-scan)
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
@@ -166,8 +173,16 @@
  ;; explorer-git-rows (the hub reads the status; the letters are its rows): alloc 856 is a tenth of explorer-git's 8555, the render
  ;; offload's target; measured once (2026-11-08, Nidhogg's line image, 4 CPUs, same session): 6542 objects per command against 6589
  ;; on the old path (the keys are what allocates), cpu p90 3.1, rows 1.  Report-only until the combined pass.
- (explorer-git-rows (:alloc :p50) 856 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 3.9 :report-only ot5)
+ ;; The target is reset: 856 (a tenth of explorer-git's 8555) was seeded before git status was framed in every locale, when
+ ;; the old path cost 10281; the real old-path numbers are 6574 to 6589 objects per command, and the hub path cannot go
+ ;; far below them (the key command and redisplay are the cost, the rows are few).  The target is the measured 6542 x 1.25.
+ (explorer-git-rows (:alloc :p50) 8180 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 3.9 :report-only ot5)
  (explorer-git-rows (:rows) 1 :report-only ot5)
+ ;; explorer-git, the whole operation (first key to the letters applied), same session: old path 1549 kB, 47 ms; hub path
+ ;; 1640 kB, 54 ms (x 1.25 below).  The hub path is no cheaper here: the rows are few (52 for the 25k-file repository) and
+ ;; the cost is the key and its redisplay.
+ (explorer-git (:complete-kb) 1940 :report-only ot5) (explorer-git (:complete-cpu_ms) 59 :report-only ot5)
+ (explorer-git-rows (:complete-kb) 2050 :report-only ot5) (explorer-git-rows (:complete-cpu_ms) 68 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
  (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)

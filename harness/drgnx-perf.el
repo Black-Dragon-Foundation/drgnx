@@ -474,13 +474,25 @@ Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as 
 
 ;;;; Completion metrics: how long until the work a workload started is done
 
-(defvar drgnx-perf--complete nil "While recording: (PREDICATE START-S DONE-MS) of the workload's completion metric.")
+(defvar drgnx-perf--complete nil
+  "While recording: (PREDICATE START-S DONE-MS DONE-KB DONE-CPU-MS START-BYTES START-CPU-MS) of the workload's completion
+metric: its wall time, and the kB allocated and the CPU ms this process spent over the same span (the whole operation,
+the process output that carried its rows included, not only the commands).")
+
+(defun drgnx-perf--alloc-bytes ()
+  "Bytes allocated so far, from `memory-use-counts' (conses and floats 16, vector cells 8, symbols 48, string chars 1,
+intervals 56, strings 32)."
+  (pcase-let ((`(,c ,f ,v ,sy ,sc ,i ,st) (memory-use-counts)))
+    (+ (* 16 (+ c f)) (* 8 v) (* 48 sy) sc (* 56 i) (* 32 st))))
 
 (defun drgnx-perf-complete-poll ()
   "When the predicate holds, note the ms since `drgnx-perf-complete-begin' (once)."
   (when (and drgnx-perf--complete (null (nth 2 drgnx-perf--complete)) (funcall (nth 0 drgnx-perf--complete)))
     (require 'drgnx-timer)
-    (setf (nth 2 drgnx-perf--complete) (drgnx-perf--round (* 1000 (- (drgnx-timer-now) (nth 1 drgnx-perf--complete)))))
+    (let ((bytes (drgnx-perf--alloc-bytes)) (cpu (drgnx-perf--cpu-ms)))
+      (setf (nth 2 drgnx-perf--complete) (drgnx-perf--round (* 1000 (- (drgnx-timer-now) (nth 1 drgnx-perf--complete))))
+            (nth 3 drgnx-perf--complete) (drgnx-perf--round (/ (- bytes (nth 5 drgnx-perf--complete)) 1024.0))
+            (nth 4 drgnx-perf--complete) (drgnx-perf--round (- cpu (nth 6 drgnx-perf--complete)))))
     (drgnx-timer-cancel 'perf-complete)))
 
 (defun drgnx-perf--complete-tick ()
@@ -492,14 +504,16 @@ Nidhogg reports `worker-wait' by reason (a plist): the probe gives its total as 
 10 ms while Emacs is idle, through the timer layer.  Not an idle timer: that runs once per idle period, and the lab's
 own calls after the keys do not end one, so work that finished later in the pause was never seen."
   (require 'drgnx-timer)
-  (setq drgnx-perf--complete (list predicate (drgnx-timer-now) nil))
+  (setq drgnx-perf--complete (list predicate (drgnx-timer-now) nil nil nil (drgnx-perf--alloc-bytes) (drgnx-perf--cpu-ms)))
   (drgnx-timer-start 'perf-complete 0.01 #'drgnx-perf--complete-tick :repeat 0.01 :owner :core))
 
 (defun drgnx-perf-complete-end ()
-  "(:complete-ms MS) since `drgnx-perf-complete-begin', or (:complete-ms nil) when it never held; stops the polling."
+  "(:complete-ms MS :complete-kb KB :complete-cpu_ms MS) since `drgnx-perf-complete-begin': the wall time, the kB
+allocated and the CPU ms until the predicate held (nil when it never did); stops the polling."
   (drgnx-perf-complete-poll)
   (when (fboundp 'drgnx-timer-cancel) (drgnx-timer-cancel 'perf-complete))
-  (prog1 (list :complete-ms (nth 2 drgnx-perf--complete))
+  (prog1 (list :complete-ms (nth 2 drgnx-perf--complete) :complete-kb (nth 3 drgnx-perf--complete)
+               :complete-cpu_ms (nth 4 drgnx-perf--complete))
     (setq drgnx-perf--complete nil)))
 
 (defun drgnx-perf--gc-row (pauses)

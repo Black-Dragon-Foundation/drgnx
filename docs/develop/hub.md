@@ -1485,6 +1485,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
+| `search/grep-look` | user | `{more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2346,6 +2347,16 @@ the search itself is `hrafn::grep`).
   and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
   a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
   20,000 entries (files and matches) the model holds the first 20,000 and `order` is a window `{total, from: 0}`.
+- **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
+  (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
+  the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
+  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, upto?}` goes on:
+  `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
+  Match went to a match beyond them): the rows up to it and 100 after it. A search still streaming fills the room a
+  look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
+  the rows sent only.
+- **The model's cadence:** a model send carries the whole `order` list, so after the rows' window is full the model is
+  sent when the search has doubled it, and whole before `search-grep-done`; while rows go out it is sent with each file.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what

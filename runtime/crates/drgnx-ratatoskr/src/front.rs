@@ -716,6 +716,9 @@ impl Front {
             Params::SearchGrepReplace(p) => {
                 crate::view::grep::replace(self, &caller, p).map(|b| json!(b))
             }
+            Params::SearchGrepLook(p) => {
+                crate::view::grep::look(self, &caller, p).map(|b| json!(b))
+            }
             // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
             Params::ExplorerSubscribe(p) => {
                 crate::view::explorer::subscribe(self, &caller, p).map(|r| json!(r))

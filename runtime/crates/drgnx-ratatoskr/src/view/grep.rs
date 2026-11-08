@@ -14,7 +14,9 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use hrafn::grep::{self, Match, Query};
-use runstav::methods::search::{GrepDone, GrepParams, GrepReplaceParams, GrepStarted};
+use runstav::methods::search::{
+    GrepDone, GrepLookParams, GrepParams, GrepReplaceParams, GrepStarted,
+};
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
 use serde_json::{Value, json};
@@ -22,6 +24,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
+/// `agents/panel/look`); the model holds every match.
+pub(super) const WINDOW: usize = 200;
+
+/// A row asked for with `upto` comes with this many rows after it.
+pub(super) const MARGIN: usize = 100;
 
 /// A preview keeps this much of the text before a match, and cuts longer text to its tail after an ellipsis.
 const BEFORE_KEPT: usize = 16;
@@ -33,6 +42,13 @@ pub(super) struct Run {
     query: Query,
     replace: String,
     files: Vec<(String, Vec<Match>)>,
+    /// The rows the views may have: the first this many of the rows of `files` (see [`WINDOW`]).
+    limit: usize,
+    /// The rows sent so far: the first `sent` rows of `files`.
+    sent: usize,
+    /// The entries (files and matches) the model last sent held: the model grows when the search has doubled it (each
+    /// send carries the whole list of ids), when rows go out, and at the end.
+    model_sent: usize,
     cancel: Arc<AtomicBool>,
 }
 
@@ -59,6 +75,9 @@ impl Greps {
             query,
             replace,
             files: Vec::new(),
+            limit: WINDOW,
+            sent: 0,
+            model_sent: 0,
             cancel: cancel.clone(),
         };
         if let Some(old) = lock(&self.runs).insert((conn, view.to_owned()), run) {
@@ -150,6 +169,11 @@ fn match_id(m: &Match) -> String {
 /// The entries (files and matches) a search's model holds; past them its list `order` is a window of the first ones
 /// (Sjá takes no longer list unwindowed).
 const MODEL_WINDOW: usize = 20_000;
+
+/// The entries (files and matches) of FILES.
+fn entries_of(files: &[(String, Vec<Match>)]) -> usize {
+    files.iter().map(|(_, ms)| 1 + ms.len()).sum()
+}
 
 /// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
 fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
@@ -256,11 +280,47 @@ fn file_rows(run: &Run, file: &str, ms: &[Match]) -> Vec<Row> {
     rows
 }
 
-fn all_rows(run: &Run) -> Vec<Row> {
-    run.files
-        .iter()
-        .flat_map(|(f, ms)| file_rows(run, f, ms))
-        .collect()
+/// The first LIMIT rows of the search's rows (a file's header and its matches, files in the order they were complete).
+fn rows_upto(run: &Run, limit: usize) -> Vec<Row> {
+    let mut rows = Vec::new();
+    'files: for (file, ms) in &run.files {
+        if rows.len() >= limit {
+            break;
+        }
+        rows.push(header(&run.query.root, file));
+        for m in ms {
+            if rows.len() >= limit {
+                break 'files;
+            }
+            rows.push(match_row(&run.query, &run.replace, m));
+        }
+    }
+    rows
+}
+
+/// The rows the views have: the window.  Sets `sent` to their number.
+fn window_rows(run: &mut Run) -> Vec<Row> {
+    let rows = rows_upto(run, run.limit);
+    run.sent = rows.len();
+    rows
+}
+
+/// The position among the search's rows of the row KEY (a file's header or a match), if it is there yet.
+fn row_index(run: &Run, key: &str) -> Option<usize> {
+    let mut at = 0;
+    for (file, ms) in &run.files {
+        if key == file_id(file) {
+            return Some(at);
+        }
+        if key.starts_with(&format!("m:{file}:")) {
+            return ms
+                .iter()
+                .position(|m| match_id(m) == key)
+                .map(|i| at + 1 + i);
+        }
+        at += 1 + ms.len();
+    }
+    None
 }
 
 impl Store {
@@ -321,22 +381,71 @@ fn batch_patches(
     file: String,
     ms: Vec<Match>,
 ) -> (Option<ViewModel>, Vec<Patch>) {
-    let rows = file_rows(run, &file, &ms);
+    let mut rows = file_rows(run, &file, &ms);
     run.files.push((file, ms));
-    let model = store.publish_model(conn, view, grep_doc(&run.files));
+    // only what the window still has room for
+    rows.truncate(run.limit.saturating_sub(run.sent));
+    let entries = entries_of(&run.files);
+    let model = if !rows.is_empty() || entries >= 2 * run.model_sent {
+        run.model_sent = entries;
+        store.publish_model(conn, view, grep_doc(&run.files))
+    } else {
+        None
+    };
+    if rows.is_empty() {
+        return (model, Vec::new());
+    }
+    run.sent += rows.len();
+    let all = rows_upto(run, run.limit);
     let patches = keys(store, conn, view)
         .iter()
         .filter_map(|k| match store.append(k, rows.clone()) {
             Some(p) => Some(p),
-            None => store.publish(k, all_rows(run), &[]),
+            None => store.publish(k, all.clone(), &[]),
         })
         .collect();
     (model, patches)
 }
 
+/// What the editor asks of the window (`search/grep-look`).
+pub(super) enum Look<'a> {
+    /// One window more.
+    More,
+    /// The row with this key, and a margin of rows after it.
+    Upto(&'a str),
+}
+
+/// The window grown as LOOK asks: the rows it gains after the last row sent, an insert for each class.
+fn look_patches(store: &mut Store, conn: u64, view: &str, run: &mut Run, look: Look) -> Vec<Patch> {
+    let want = match look {
+        Look::More => run.limit + WINDOW,
+        Look::Upto(key) => match row_index(run, key) {
+            Some(i) => i + 1 + MARGIN,
+            None => return Vec::new(),
+        },
+    };
+    if want <= run.limit {
+        return Vec::new();
+    }
+    run.limit = want;
+    let all = rows_upto(run, want);
+    if all.len() <= run.sent {
+        return Vec::new();
+    }
+    let new = all[run.sent..].to_vec();
+    run.sent = all.len();
+    keys(store, conn, view)
+        .iter()
+        .filter_map(|k| match store.append(k, new.clone()) {
+            Some(p) => Some(p),
+            None => store.publish(k, all.clone(), &[]),
+        })
+        .collect()
+}
+
 /// The rows as they are now, for the classes whose rows differ (replace text changed, an env arrived).
-fn rebuild_patches(store: &mut Store, conn: u64, view: &str, run: &Run) -> Vec<Patch> {
-    let rows = all_rows(run);
+fn rebuild_patches(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Vec<Patch> {
+    let rows = window_rows(run);
     keys(store, conn, view)
         .iter()
         .filter_map(|k| store.publish(k, rows.clone(), &[]))
@@ -349,7 +458,7 @@ impl Views {
         self.greps
             .current(key.0, &key.1, |run| {
                 self.publish_model(f, key.0, &key.1, grep_doc(&run.files));
-                let rows = all_rows(run);
+                let rows = window_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
                     f.send_to(key.0, "view-patch", json!(p));
                 }
@@ -383,6 +492,11 @@ impl Views {
 
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
+            // the model is whole before the search is done
+            if run.model_sent < entries_of(&run.files) {
+                run.model_sent = entries_of(&run.files);
+                self.publish_model(f, conn, view, grep_doc(&run.files));
+            }
             let done = GrepDone {
                 view: view.to_owned(),
                 query: id,
@@ -456,6 +570,25 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
         })
         .map_err(|e| invalid("view", &e.to_string()))?;
     Ok(GrepStarted { query: id })
+}
+
+/// `search/grep-look`: VIEW's rows go on, as P asks (the editor scrolled to the end of them, or went to a match
+/// beyond them).
+pub fn look(f: &Front, c: &Caller, p: GrepLookParams) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let ask = match (&p.upto, p.more) {
+        (Some(key), _) => Look::Upto(key),
+        (None, Some(true)) => Look::More,
+        _ => return Err(invalid("more", "more, or upto a row's key")),
+    };
+    Ok(views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            for patch in look_patches(&mut lock(&views.store), c.conn_id, &p.view, run, ask) {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+        })
+        .is_some())
 }
 
 /// `search/grep-replace`: VIEW's rows preview P's replacement from now on.
