@@ -23,6 +23,8 @@
 (declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
 (defvar package-directory-list)
+(defvar magit-save-repository-buffers)
+(declare-function drgnx-chrome--note "drgnx-chrome")
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
@@ -132,15 +134,31 @@ and test/unit/gateway-test.el modified, test/unit/jobs-test.el untracked, drgnx.
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
                  "drgnx-job.el is not a preview (italic) tab: only transient buffers preview")
-    (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel")
+    (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
+                 "the panel opens as a tab of the editor group, not the right island (look step 8)"
+                 "the mock agent's panel shows no turn yet (replay idle): look step 8")
+    (magit "the scene's repository is the window mockups' (main, nothing staged, one commit); the Magit mockup's
+branch gateway-queue, staged file and history come with the Magit adapter (look step 7)"
+           "the mockup's right-hand org card and floating transient are not opened by the scene")
     (palette "the mockup's palette rows come from its own commands; the line lists the registry's"))
   "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
 changed to hide a gap: the gap is named here instead.")
 
+(defun drgnx-look-scene--no-prompt (&rest args)
+  "A prompt in a scene's setup is an error naming it (ARGS: the prompt's), not a session waiting for an answer."
+  (error "Prompted: %S" (substring-no-properties (format "%s" (car args)))))
+
 (defmacro drgnx-look-scene--try (what &rest body)
-  "Run BODY; an error is kept in `drgnx-look-scene--errors' under WHAT, not raised."
+  "Run BODY; an error, a prompt included, is kept in `drgnx-look-scene--errors' under WHAT, not raised."
   (declare (indent 1))
-  `(condition-case err (progn ,@body)
+  `(condition-case err
+       (cl-letf (((symbol-function 'yes-or-no-p) #'drgnx-look-scene--no-prompt)
+                 ((symbol-function 'y-or-n-p) #'drgnx-look-scene--no-prompt)
+                 ((symbol-function 'read-from-minibuffer) #'drgnx-look-scene--no-prompt)
+                 ((symbol-function 'completing-read) #'drgnx-look-scene--no-prompt)
+                 ((symbol-function 'read-char-choice) #'drgnx-look-scene--no-prompt)
+                 ((symbol-function 'read-key) #'drgnx-look-scene--no-prompt))
+         ,@body)
      (error (push (format "%s: %s" ,what (error-message-string err)) drgnx-look-scene--errors) nil)))
 
 (defun drgnx-look-scene--answer (&rest more)
@@ -166,9 +184,18 @@ changed to hide a gap: the gap is named here instead.")
         (add-to-list 'load-path d))
       (drgnx-modules-retry-waiting))))
 
+(defun drgnx-look-scene--show (buffer)
+  "Show BUFFER in the selected window as a tab, as a command opening it would (tabs are noted between commands)."
+  (switch-to-buffer buffer)
+  (when (fboundp 'drgnx-chrome--note) (drgnx-chrome--note (selected-window))))
+
+(defun drgnx-look-scene--open (file)
+  "The project's FILE opened in the selected window, as a tab."
+  (drgnx-look-scene--show (find-file-noselect (expand-file-name file drgnx-look-scene--project))))
+
 (defun drgnx-look-scene--goto (file line column start)
   "FILE of the project shown in the editor at LINE and COLUMN, the window starting at line START."
-  (find-file (expand-file-name file drgnx-look-scene--project))
+  (drgnx-look-scene--open file)
   (goto-char (point-min)) (forward-line (1- start))
   (set-window-start (selected-window) (point))
   (forward-line (- line start)) (move-to-column column))
@@ -183,12 +210,14 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
   (drgnx-look-scene--try "focus" (drgnx-wb-focus-editor))
   (drgnx-look-scene--try "open"
     (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201)
-    (find-file (expand-file-name "test/unit/gateway-test.el" drgnx-look-scene--project))
+    (drgnx-look-scene--open "test/unit/gateway-test.el")
     (goto-char (point-max)) (insert ";; next\n")                  ; changed, not saved: the tab's dot
-    (find-file (expand-file-name "core/drgnx-job.el" drgnx-look-scene--project)))
+    (drgnx-look-scene--open "core/drgnx-job.el"))
   (drgnx-look-scene--try "magit"
     (require 'magit)
-    (magit-status-setup-buffer drgnx-look-scene--project))
+    (let ((magit-save-repository-buffers nil))                    ; gateway-test.el stays unsaved
+      (magit-status-setup-buffer drgnx-look-scene--project))
+    (drgnx-look-scene--show (current-buffer)))
   (drgnx-look-scene--try "explorer" (drgnx-wb-view-explorer))
   (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201))
   (drgnx-look-scene--answer :project drgnx-look-scene--project))
@@ -223,9 +252,12 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
 (defun drgnx-look-scene-agent-panel ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "panel"
-    (if-let* ((w (and (buffer-live-p drgnx-look-scene--panel) (get-buffer-window drgnx-look-scene--panel))))
+    (unless (buffer-live-p drgnx-look-scene--panel) (error "No agent panel (the mock agent did not run)"))
+    (if-let* ((w (get-buffer-window drgnx-look-scene--panel)))
         (select-window w)
-      (error "The agent panel is not in a window")))
+      ;; where the line puts it today: a tab of the editor (the limit says so)
+      (drgnx-wb-focus-editor)
+      (drgnx-look-scene--show drgnx-look-scene--panel)))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-palette ()
@@ -249,7 +281,9 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
   (drgnx-look-scene--try "magit"
     (require 'magit)
     (drgnx-wb-focus-editor)
-    (magit-status-setup-buffer drgnx-look-scene--project))
+    (let ((magit-save-repository-buffers nil))
+      (magit-status-setup-buffer drgnx-look-scene--project))
+    (drgnx-look-scene--show (current-buffer)))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-shell-heredoc ()
