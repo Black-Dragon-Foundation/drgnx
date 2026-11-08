@@ -196,6 +196,10 @@ impl Store {
     pub fn env(&mut self, conn: u64, env: ViewEnv) {
         let key = (conn, env.view.clone(), env.class.clone());
         let epoch_reset = self.opts_of(conn, &env.view).epoch_reset;
+        // the first env of a new buffer: what the hub believes the editor holds went with the old buffer
+        if env.attach {
+            self.pairs.remove(&key);
+        }
         match self.pairs.get_mut(&key) {
             // a new epoch is a new look: the next patch is a reset (unless the view repaints in place); the same epoch
             // (a width) is answered by a diff

@@ -277,6 +277,7 @@ mod tests {
             tty_widths: vec![],
             tz: String::new(),
             reduced_motion: false,
+            attach: false,
         };
         let mut a = card("task:a", "needs-input", Some("s1"));
         a.progress = Some((1, 3));

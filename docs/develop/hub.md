@@ -1523,7 +1523,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `timeline/get` | user | `{before?: natnum, id: string, limit?: natnum, rollup?: boolean, scope: "session" \| "task" \| "plan" \| "project", since?: natnum}` | `{next?: natnum, rollup?: Rollup, steps?: [Step]}` | no |
 | `view/ack` | user | `{class: string, version: natnum, view: string}` | `boolean` | no |
 | `view/close` | user | `{view: string}` | `boolean` | no |
-| `view/env` | user | `{cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
+| `view/env` | user | `{attach?: boolean, cell: [natnum, natnum], class: string, display: "gui" \| "tty", epoch: natnum, fonts?: [[string, string \| null, natnum, number, number, number, number, number]], palette?: [[string, string]], reduced_motion?: boolean, scale: number, tty_widths?: [[natnum, natnum, natnum]], tz?: string, view: string, width_px: natnum}` | `boolean` | no |
 | `view/glyphs` | user | `{class: string, glyphs: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/measured` | user | `{class: string, measured: [[string, string, number]], view: string}` | `boolean` | no |
 | `view/resync` | user | `{class?: string, model?: boolean, version?: natnum, view: string}` | `boolean` | no |
@@ -2213,8 +2213,10 @@ All of it is in memory only.
 
 - **Methods** (user connections, sent on the editor's subscribed connection, which the patches come back on).
   `view/env {view, class, epoch, display, scale, fonts: [[role, file, index, px, ascent, descent, avg, space]], cell,
-  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion}` keeps the env of (view,
-  class) and builds its rows again. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
+  width_px, palette: [[role, colour]], tty_widths: [[from, to, width]], tz, reduced_motion, attach?}` keeps the env of (view,
+  class) and builds its rows again.  `attach: true` (the editor sends it with the first env of a new buffer) makes the hub
+  drop a pair it already holds for the connection, with no `view/close` between (a buffer killed without its hook, an
+  Emacs restarted on the same connection), and start over: the rows go out whole, a reset from version 1. `view/resync {view, class, version}` answers a reset (with `model: true`, a reset
   of the view's model: below). `view/glyphs {view, class,
   glyphs: [[role, char, px]]}` answers the event `view-glyphs {view, class, ask: [[role, char]]}`. `view/measured
   {view, class, measured: [[role, string, px]]}` is the editor's fit guard's report. `view/ack {view, class,

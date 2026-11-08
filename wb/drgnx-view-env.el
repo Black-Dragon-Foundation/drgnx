@@ -194,7 +194,8 @@ forgotten."
         (push key live)
         (when (or force (null old) (/= epoch (nth 0 old)) (not (equal (plist-get params :width_px) (nth 2 old))))
           (puthash key (list epoch look (plist-get params :width_px)) drgnx-view-env--sent)
-          (funcall drgnx-view-env-send-function "view/env" (append params (list :epoch epoch)))
+          (funcall drgnx-view-env-send-function "view/env"
+                   (append params (list :epoch epoch) (and (null old) (list :attach t))))   ; a new buffer: the hub starts the pair over
           ;; the inserter holds patches of an older epoch from now on
           (when (fboundp 'drgnx-view-patch-env-sent) (drgnx-view-patch-env-sent view (car c) epoch)))))
     (let ((gone nil))
