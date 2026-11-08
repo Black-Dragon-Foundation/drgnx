@@ -523,13 +523,17 @@ mockup it is compared with (`window-dark-s1.png`, `palette-s2.png`, …). The co
 Nidhogg build under test, once with `DRGNX_UI_SCALE=1` and once with `2`.
 
 How it works:
-- It makes a git project from a copy of drgnx's `core`, `wb`, `themes` and `test/unit`, on branch `main`. Two files
-  are modified, one is untracked, and there is a shell script with a Python heredoc.
-- It starts a session with the drgnx configuration at 1500×1000 logical pixels.
-- It loads `harness/drgnx-look-scenes-session.el` into the session and calls each scene's `drgnx-look-scene-NAME`.
-  The scenes, in order, are listed in `drgnx-look-scenes`.
-- It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows and the
-  modules. It also writes `scenes-sN.eld`, with the shots and each scene's errors.
+- It starts a session with the drgnx configuration at 1440×900 logical pixels, the mockups' window.
+- It loads `harness/drgnx-look-scenes-session.el` into the session. The session makes the mockups' project at
+  `~/code/drgnx` (in the session's own HOME), on branch `main`: the files the mockups name, `drgnx-gateway.el` and
+  `gateway-test.el` modified, `jobs-test.el` untracked, the lock file ignored, and a shell script with a Python
+  heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
+  `drgnx-job.el`, Magit's status and the Explorer.
+- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
+- It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
+  modules, and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
+  written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's
+  errors.
 
 What it reads from the environment:
 - `DRGNX_LOOK_ELPA`: a package directory to activate (Magit, Vertico, diff-hl, …). A session has no packages of its

@@ -20,13 +20,122 @@
 (declare-function drgnx-modules-report "drgnx-modules")
 (declare-function drgnx-panel-replay-up "panel-replay-fixture")
 (declare-function drgnx-work-space-open "drgnx-work-space")
-(declare-function magit-status "magit-status")
+(declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
 (defvar package-directory-list)
+
+;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
+;; has the two lines the agent changed (215-217) as they were before
+(defconst drgnx-look-scene--gateway-tail
+  ";;;; Replies
+
+(defvar drgnx-gateway--pending (make-hash-table :test #'eq)
+  \"Client process → the replies still to send, oldest first.\")
+
+(defun drgnx-gateway--queue (p reply)
+  \"Keep REPLY for P until P can take it.\"
+  (let ((old (gethash p drgnx-gateway--pending)))
+    (puthash p (nconc (gethash p drgnx-gateway--pending) (list reply))
+             drgnx-gateway--pending)))
+
+;; Send the reply, unless the client went away.
+(defun drgnx-gateway--reply (p reply)
+  \"Send REPLY to the client process P.\"
+  (if (process-live-p p)
+      (process-send-string p reply)
+    (drgnx-gateway--queue p reply)))
+
+(defun drgnx-gateway--accept (server client _msg)
+  \"Take CLIENT from SERVER: a filter, a sentinel, nothing else.\"
+  (set-process-filter client #'drgnx-gateway--filter)
+  (set-process-sentinel client #'drgnx-gateway--gone)
+  (process-put client 'drgnx-server server))
+
+(defun drgnx-gateway--gone (p _event)
+  \"Forget P's queue once it closed.\"
+  (unless (process-live-p p)
+    (remhash p drgnx-gateway--pending)
+    (drgnx-gateway--log 'closed p)))
+
+(provide 'drgnx-gateway)
+;;; drgnx-gateway.el ends here
+"
+  "The mockup's lines 201-232 of core/drgnx-gateway.el.")
+
+(defun drgnx-look-scene--gateway (committed)
+  "core/drgnx-gateway.el: 200 lines of a gateway, then the mockup's tail (COMMITTED: as before the agent's edit)."
+  (let ((head (list ";;; drgnx-gateway.el --- The hub's client gateway -*- lexical-binding: t -*-" ""
+                    ";;; Commentary:" ";; Clients connect, send requests and take replies." "" ";;; Code:" "")))
+    (dotimes (i 34)
+      (setq head (append head (list (format "(defun drgnx-gateway--step-%d (p msg)" i)
+                                    (format "  \"Handle step %d of MSG from P.\"" i)
+                                    "  (when (process-live-p p)"
+                                    (format "    (process-put p 'drgnx-step %d)" i)
+                                    "    (drgnx-gateway--reply p msg)))" ""))))
+    (setq head (seq-take head 200))
+    (concat (mapconcat #'identity head "\n") "\n"
+            (if committed
+                (string-replace "  (if (process-live-p p)\n      (process-send-string p reply)\n    (drgnx-gateway--queue p reply)))"
+                                "  (when (process-live-p p)\n      (process-send-string p reply)))"
+                                drgnx-look-scene--gateway-tail)
+              drgnx-look-scene--gateway-tail))))
+
+(defconst drgnx-look-scene--files
+  '(("core/drgnx-agents.el" . ";;; drgnx-agents.el --- Agents -*- lexical-binding: t -*-\n(provide 'drgnx-agents)\n")
+    ("core/drgnx-job.el" . ";;; drgnx-job.el --- Jobs -*- lexical-binding: t -*-\n(provide 'drgnx-job)\n")
+    ("core/drgnx-palette.el" . ";;; drgnx-palette.el --- The palette -*- lexical-binding: t -*-\n(provide 'drgnx-palette)\n")
+    ("core/drgnx-ui-kit.el" . ";;; drgnx-ui-kit.el --- The UI kit -*- lexical-binding: t -*-\n(provide 'drgnx-ui-kit)\n")
+    ("docs/index.md" . "# drgnx\n")
+    ("modules/README.md" . "# Modules\n")
+    ("runtime/Cargo.toml" . "[workspace]\n")
+    ("test/unit/gateway-test.el" . ";;; gateway-test.el --- The gateway's tests -*- lexical-binding: t -*-\n(require 'ert)\n")
+    ("test/unit/hub-test.el" . ";;; hub-test.el --- The hub's tests -*- lexical-binding: t -*-\n(require 'ert)\n")
+    ("wb/drgnx-wb.el" . ";;; drgnx-wb.el --- The workbench -*- lexical-binding: t -*-\n(provide 'drgnx-wb)\n")
+    ("Makefile" . "all:\n\tbin/drgnx build\n")
+    ("README.md" . "# drgnx\n")
+    (".gitignore" . "drgnx.lock.eld\n")
+    ("docs/p2-verify.sh" . "#!/bin/sh\nL=/tmp/l\npython3 - <<PY\nimport ast, subprocess\nFILES=[\"a.py\",\"b.py\"]\ndef els(src):\n    out={}; imp=[]\n    return out\nfor p in FILES:\n    print(\"moved\", p)\nPY\necho \"AST check: $(head -1 $L/ast.log)\"\ngit diff --quiet HEAD -- docs; echo \"changed: $?\"\n"))
+  "The project's other files (path . text), committed; the shell script with a heredoc is the user's case.")
+
+(defun drgnx-look-scene--git (dir &rest args)
+  (let ((default-directory dir))
+    (unless (zerop (apply #'call-process "git" nil nil nil "-c" "user.name=you" "-c" "user.email=you@localhost"
+                          "-c" "commit.gpgsign=false" args))
+      (error "git %S failed in %s" args dir))))
+
+(defun drgnx-look-scene-project (dir)
+  "Make the mockups' project in DIR (a directory named drgnx) and return it: on branch main, core/drgnx-gateway.el
+and test/unit/gateway-test.el modified, test/unit/jobs-test.el untracked, drgnx.lock.eld ignored."
+  (let ((proj (file-name-as-directory (expand-file-name dir))))
+    (make-directory proj t)
+    (cl-flet ((put (file text) (let ((f (expand-file-name file proj)))
+                                 (make-directory (file-name-directory f) t)
+                                 (write-region text nil f nil 'silent))))
+      (pcase-dolist (`(,file . ,text) drgnx-look-scene--files) (put file text))
+      (put "core/drgnx-gateway.el" (drgnx-look-scene--gateway t))
+      (drgnx-look-scene--git proj "init" "-q" "-b" "main")
+      (drgnx-look-scene--git proj "add" "-A")
+      (drgnx-look-scene--git proj "commit" "-q" "-m" "init")
+      (put "core/drgnx-gateway.el" (drgnx-look-scene--gateway nil))
+      (put "test/unit/gateway-test.el"
+           (concat (cdr (assoc "test/unit/gateway-test.el" drgnx-look-scene--files))
+                   "(ert-deftest gateway/reply-after-close () (should t))\n"))
+      (put "test/unit/jobs-test.el" ";;; jobs-test.el --- The jobs' tests -*- lexical-binding: t -*-\n")
+      (put "drgnx.lock.eld" "()\n"))
+    proj))
 
 (defvar drgnx-look-scene--project nil "The scene's project directory (a git repository).")
 (defvar drgnx-look-scene--errors nil "The errors of the current step, newest first.")
 (defvar drgnx-look-scene--panel nil "The agent panel's buffer, once the mock agent ran.")
+
+(defvar drgnx-look-scene-limits
+  '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
+                 "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
+                 "drgnx-job.el is not a preview (italic) tab: only transient buffers preview")
+    (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel")
+    (palette "the mockup's palette rows come from its own commands; the line lists the registry's"))
+  "What the line cannot show of each scene's mockup yet, written to the scene's facts (:limits).  A scene is never
+changed to hide a gap: the gap is named here instead.")
 
 (defmacro drgnx-look-scene--try (what &rest body)
   "Run BODY; an error is kept in `drgnx-look-scene--errors' under WHAT, not raised."
@@ -57,18 +166,32 @@
         (add-to-list 'load-path d))
       (drgnx-modules-retry-waiting))))
 
-(defun drgnx-look-scene-setup (project elpa)
-  "PROJECT trusted, three of its files open, the Explorer shown, the editor focused; ELPA's packages active."
-  (setq drgnx-look-scene--project (file-name-as-directory project))
+(defun drgnx-look-scene--goto (file line column start)
+  "FILE of the project shown in the editor at LINE and COLUMN, the window starting at line START."
+  (find-file (expand-file-name file drgnx-look-scene--project))
+  (goto-char (point-min)) (forward-line (1- start))
+  (set-window-start (selected-window) (point))
+  (forward-line (- line start)) (move-to-column column))
+
+(defun drgnx-look-scene-setup (elpa)
+  "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
+gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgnx-gateway.el at 216:34, from 201."
   (drgnx-look-scene--packages elpa)
+  (drgnx-look-scene--try "project"
+    (setq drgnx-look-scene--project (drgnx-look-scene-project (expand-file-name "~/code/drgnx"))))
   (drgnx-look-scene--try "trust" (drgnx-trust-folder drgnx-look-scene--project))
-  (drgnx-look-scene--try "open"
-    (dolist (f '("test/unit/lint-teardown-test.el" "core/drgnx-palette-frame.el" "core/drgnx-palette.el"))
-      (find-file (expand-file-name f drgnx-look-scene--project)))
-    (goto-char (point-min)) (forward-line 120) (recenter 12))
-  (drgnx-look-scene--try "explorer" (drgnx-wb-view-explorer))
   (drgnx-look-scene--try "focus" (drgnx-wb-focus-editor))
-  (drgnx-look-scene--answer))
+  (drgnx-look-scene--try "open"
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201)
+    (find-file (expand-file-name "test/unit/gateway-test.el" drgnx-look-scene--project))
+    (goto-char (point-max)) (insert ";; next\n")                  ; changed, not saved: the tab's dot
+    (find-file (expand-file-name "core/drgnx-job.el" drgnx-look-scene--project)))
+  (drgnx-look-scene--try "magit"
+    (require 'magit)
+    (magit-status-setup-buffer drgnx-look-scene--project))
+  (drgnx-look-scene--try "explorer" (drgnx-wb-view-explorer))
+  (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201))
+  (drgnx-look-scene--answer :project drgnx-look-scene--project))
 
 (defun drgnx-look-scene-agent (bin)
   "A mock agent (BIN: a test-hooks ratatoskr with ratatoskr-mock beside it) reads, runs, edits and asks."
@@ -79,18 +202,18 @@
       (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
-          (concat "tool:read src/main.el\\nsay Reading the gateway: the replies queue is never drained after a close.\\n"
-                  "tool:exec git status --short\\nsay Found it: the sentinel never runs the queue.\\n"
-                  "tool:edit src/main.el\\nsay Running the tests again.\\ntool:exec echo 9 of 14 passed\\n"
+          (concat "tool:read src/main.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
+                  "tool:exec echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
+                  "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
+                  "tool:exec echo 9 of 14 passed\\n"
                   "ask:permission execute\nsay done")))
       (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
   (drgnx-look-scene--try "editor"
-    (let ((b (find-buffer-visiting (expand-file-name "core/drgnx-palette.el" drgnx-look-scene--project))))
-      (drgnx-wb-focus-editor)
-      (when b (switch-to-buffer b)))))
+    (drgnx-wb-focus-editor)
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201)))
 
 (defun drgnx-look-scene-window-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
@@ -126,7 +249,7 @@
   (drgnx-look-scene--try "magit"
     (require 'magit)
     (drgnx-wb-focus-editor)
-    (magit-status drgnx-look-scene--project))
+    (magit-status-setup-buffer drgnx-look-scene--project))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-shell-heredoc ()
@@ -134,7 +257,7 @@
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "heredoc"
     (drgnx-wb-focus-editor)
-    (find-file (expand-file-name "p2-verify.sh" drgnx-look-scene--project))
+    (find-file (expand-file-name "docs/p2-verify.sh" drgnx-look-scene--project))
     (goto-char (point-max)))
   (drgnx-look-scene--answer))
 
@@ -143,12 +266,14 @@
   (drgnx-look-scene--try "work space" (drgnx-work-space-open))
   (drgnx-look-scene--answer))
 
-(defun drgnx-look-scene-facts (file)
-  "Write what the scene realised to FILE: themes, fonts of the chrome faces, frame metrics, windows, modules."
+(defun drgnx-look-scene-facts (file &optional scene)
+  "Write what SCENE realised to FILE: what the line cannot show yet (`drgnx-look-scene-limits'), themes, fonts of the
+chrome faces, frame metrics, windows, modules."
   (drgnx-look-scene--try "facts"
     (let* ((f (selected-frame)) (print-length nil) (print-level nil))
       (with-temp-file file
-        (pp (list :themes custom-enabled-themes
+        (pp (list :limits (cdr (assq scene drgnx-look-scene-limits))
+                  :themes custom-enabled-themes
                   :fonts (mapcar (lambda (fc) (list fc (ignore-errors (face-font fc f))))
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
