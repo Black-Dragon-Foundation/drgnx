@@ -79,7 +79,7 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
   (with-current-buffer "*drgnx start*"
     (goto-char (point-min))
     (let ((b (cl-loop for pos = (next-button (point)) then (next-button (button-end pos))
-                      while pos when (string= (button-label pos) label) return pos)))
+                      while pos when (string= (string-trim (button-label pos)) label) return pos)))
       (should b)
       (push-button (button-start b)))))
 
@@ -119,6 +119,20 @@ window showing `*scratch*'.  `y-or-n-p' and every `read-*' fail: nothing here ma
       (should (equal (get-text-property (point-min) 'line-prefix) drgnx-start--centre))
       (should (equal (get-text-property (1- (point-max)) 'wrap-prefix) drgnx-start--centre))
       (should (equal (car drgnx-start--centre) 'space)))))
+
+(ert-deftest drgnx-start/actions-are-buttons-and-keys-are-keycaps ()
+  "Design §3.5: the start page's actions are the look's buttons (the first, Open a folder, the primary one, filled
+with the accent), never underlined links; on a graphical frame the keys are keycaps."
+  (drgnx-start-test--with 'vscode
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t)))
+      (drgnx-start-maybe-show))
+    (with-current-buffer "*drgnx start*"
+      (let ((faces nil) (b (next-button (point-min))))
+        (while b (push (button-get b 'face) faces) (setq b (next-button (button-end b))))
+        (should (equal '(drgnx-control-primary drgnx-control drgnx-control) (nreverse faces))))
+      (goto-char (point-min))
+      (search-forward "Ctrl")
+      (should (eq 'drgnx-keycap (get-text-property (1- (point)) 'face))))))
 
 (defvar drgnx-start-test--width 1600 "The editor window's text width in pixels, as `drgnx-start-test--graphical' says.")
 

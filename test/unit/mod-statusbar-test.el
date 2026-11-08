@@ -965,11 +965,16 @@ names), again only when the cache learns of a root or the buffer's file changes.
       (setq drgnx-trust--state 'trusted)
       (should-not (drgnx-statusbar--seg-trust))
       (setq drgnx-trust--state 'restricted)
-      (should (equal (drgnx-statusbar--seg-trust) "Restricted Mode"))
+      (should (equal (drgnx-statusbar--seg-trust) "Restricted Mode"))   ; a text bar says it
+      ;; a pixel bar: a small shield in the warning colour, the words on hover
+      (cl-letf (((symbol-function 'drgnx-statusbar--pixel-p) (lambda () t))
+                ((symbol-function 'drgnx-look-icon) (lambda (name face _size) (propertize (format "<%s>" name) 'face face))))
+        (should (equal (drgnx-statusbar--seg-trust) "<shield>"))
+        (should (eq 'drgnx-trust-restricted (get-text-property 0 'face (drgnx-statusbar--seg-trust)))))
       (let ((s (drgnx-statusbar--text 'trust)))
         (should (string-match-p "not trusted" (get-text-property 0 'help-echo s)))
         (should (string-match-p "Trust This Folder\\|trust it" (get-text-property 0 'help-echo s)))
-        (should (equal (plist-get (gethash 'trust drgnx-statusbar--segments) :click) 'drgnx-trust-folder))))
+        (should (equal (plist-get (gethash 'trust drgnx-statusbar--segments) :click) 'drgnx-trust-explain))))
     ;; the plain mark in `global-mode-string' is the segment's: `misc' leaves it out
     (should (member '(:eval (drgnx-trust--mark)) drgnx-statusbar-misc-exclude))))
 

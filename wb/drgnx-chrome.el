@@ -5,7 +5,7 @@
 ;;; Commentary:
 ;; Every window's chrome is decided by its role, never by its buffer (invariant I3): an editor
 ;; window has a tab line (the buffers shown in it, in the order they were opened — switching
-;; never reorders them), a breadcrumb header (project › folders › file, ● when unsaved) and a
+;; never reorders them), a breadcrumb header (folders › file from the project's root, ● when unsaved) and a
 ;; mode line; a dock section has its title only; the panel and the right dock have their tab row
 ;; only.  The chrome lives in window parameters, which win over any mode's own
 ;; `header-line-format', `tab-line-format' or `mode-line-format', so no buffer can make a
@@ -359,18 +359,23 @@ An error here must never stop the kill."
 something to say: the agent line).  Re-apply the chrome after the answer changes.")
 
 (defun drgnx-chrome-breadcrumb (w)
-  "W's breadcrumb: project › folders › file (● when unsaved).  A buffer without a file has no path to show and its tab
+  "W's breadcrumb: the folders from the project's root › file (● when unsaved); the project itself is named by the
+Explorer and the title row.  A buffer without a file has no path to show and its tab
 already names it: the row stays (a window's rows never change with its buffer, I3) but is empty."
   (let* ((b (window-buffer w)) (file (buffer-file-name b))
          (frame (window-frame w))
          (height (and (display-graphic-p frame)
                       (round (* (drgnx-pixels-scale frame) drgnx-chrome--breadcrumb-row))))
          (extent (and height (drgnx-pixels-font-extent 'drgnx-ui-caption frame)))
+         ;; window-dark.html `.crumbs': 12 px in (with the fringe's 2), 6 px either side of a `›'
+         (px (lambda (n) (if height (propertize " " 'display `(space :width (,(round (* (drgnx-pixels-scale frame) n)))))
+                           " ")))
+         (sep (concat (funcall px 6) "›" (funcall px 6)))
          (s (concat
              (or (and extent (drgnx-pixels-spacer 'drgnx-ui-caption height
                                                   (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2)) frame))
                  "")
-             " "
+             (funcall px 12)
              (if (not file)
                  ""
                (let* ((short (run-hook-with-args-until-success 'drgnx-chrome-short-breadcrumb-functions w))
@@ -379,11 +384,8 @@ already names it: the row stays (a window's rows never change with its buffer, I
                                  (root (file-relative-name file root))
                                  (t (abbreviate-file-name file))))
                       (parts (split-string rel "/" t)))
-                 (concat (if root (propertize (concat (drgnx-chrome--text (file-name-nondirectory (directory-file-name root))) " › ")
-                                              'face 'drgnx-chrome-crumb)
-                           "")
-                         (propertize (mapconcat #'drgnx-chrome--text (butlast parts) " › ") 'face 'drgnx-chrome-crumb)
-                         (if (cdr parts) (propertize " › " 'face 'drgnx-chrome-crumb) "")
+                 (concat (propertize (mapconcat #'drgnx-chrome--text (butlast parts) sep) 'face 'drgnx-chrome-crumb)
+                         (if (cdr parts) (propertize sep 'face 'drgnx-chrome-crumb) "")
                          (propertize (drgnx-chrome--text (car (last parts))) 'face 'drgnx-text-muted))))
              (if (and file (buffer-modified-p b)) " ●" ""))))
     (add-face-text-property 0 (length s) 'drgnx-ui-caption t s)

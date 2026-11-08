@@ -22,6 +22,10 @@ setup.
   diffs, version-control state, diagnostics and the language server's faces, `outline-1` to `outline-8` (colour only,
   no size change) and the terminal's sixteen `ansi-color-*` colours come from the same table, so a package that
   inherits standard faces looks right with no work of its own.
+- **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
+  `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
+  border, radius 4). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
+  inside it). See [face.md](face.md#faces).
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
 
 ### The three variants

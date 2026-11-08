@@ -127,7 +127,8 @@
     (make-directory (expand-file-name ".git" dir))
     (drgnx-chrome-test--open dir "src/app/main.py")
     (let ((crumb (substring-no-properties (drgnx-chrome-breadcrumb (selected-window)))))
-      (should (string-match-p "src › app › main\\.py" crumb))
+      ;; from the project's root, which the Explorer and the title row name already (window-dark.html `.crumbs')
+      (should (equal "src › app › main.py" (string-trim crumb)))
       (insert "y")
       (should (string-match-p "●" (drgnx-chrome-breadcrumb (selected-window)))))))
 
@@ -562,6 +563,21 @@ Race-proof pattern D."
         (drgnx-chrome-remove-tail-provider #'drgnx-chrome-test--tail-a)
         (drgnx-chrome-apply nil t)
         (should (stringp (window-parameter (selected-window) 'header-line-format)))))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-is-spaced-as-the-mockup ()
+  "window-dark.html `.crumbs': on a graphical frame the row starts 12 px in and its parts are 6 px either side of
+each `›' (the text stays `a › b')."
+  (drgnx-chrome-test--with dir
+    (make-directory (expand-file-name ".git" dir))
+    (drgnx-chrome-test--open dir "src/main.py")
+    (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+              ((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(12 . 4))))
+      (let* ((crumb (drgnx-chrome-breadcrumb (selected-window)))
+             (sep (string-search "›" crumb)))
+        (should (equal "src › main.py" (string-trim (substring-no-properties crumb))))
+        (should (equal '(space :width (6)) (get-text-property (1- sep) 'display crumb)))
+        (should (equal '(space :width (6)) (get-text-property (1+ sep) 'display crumb)))
+        (should (equal '(space :width (12)) (get-text-property (1- (string-search "src" crumb)) 'display crumb)))))))
 
 (ert-deftest drgnx-chrome/the-breadcrumb-shortens-on-request ()
   (drgnx-chrome-test--with dir

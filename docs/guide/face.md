@@ -175,7 +175,7 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | Left | Shows | Click |
 |---|---|---|
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
-| `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
+| `trust` | a small shield in the warning colour (`Restricted Mode` in a text bar) while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **About Restricted Mode**: it explains and offers Trust This Folder |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
 | `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run (a graphical bar: `✓ 41 tests` or `✕ 2 failed`, with the Lucide check and cross) | its output |
 | `jobs` | `◎ 2 jobs` while jobs run (a graphical bar: the layers icon; the Jobs module's: gone when it is off) | What Needs You, every job's |
@@ -491,9 +491,19 @@ drgnx draws with the theme's faces and none of its own colours: the dividers inh
 styles `window-divider` itself keeps its choice, and every colour you see comes from the theme you picked
 (Preferences: Color Theme). The quick help card is `drgnx-quickhelp` (inherits `tooltip`) with the symbol's name in
 `drgnx-quickhelp-title` (inherits `bold`); its border is Emacs's `child-frame-border` face. The start page uses
-`drgnx-start-title` (inherits `bold`), `drgnx-start-key` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`).
-The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`; `drgnx-wb-close`, its old
-name, is the same face). The UI kit's buttons are `drgnx-ui-button` (inherits `button`).
+`drgnx-start-title` (inherits `bold`) and `drgnx-start-quiet` (inherits `shadow`); its actions are buttons (below)
+and, on a graphical frame, its keys keycaps (on a terminal `drgnx-start-key`, inherits `bold`). The × of the panes, popups and dock sections is `drgnx-ui-close` (inherits `shadow`;
+`drgnx-wb-close`, its old name, is the same face).
+
+**Buttons, chips and keycaps** (design §3.5). A button is `drgnx-control`: the quiet selection's fill, a 1 px ring in
+the border colour and, where the compositor rounds boxes (Glitnir), a 6 px radius; the main action of a group is
+`drgnx-control-primary`, filled with the accent. The UI kit's buttons (`drgnx-ui-button`, `drgnx-ui-button-primary`)
+and ui/look's (`drgnx-button`, with `drgnx-button-hover` and `drgnx-button-pressed` changing only the fill) inherit
+them in the UI text role, with 12 px of room at either end and 26 px tall on a graphical frame. A chip (`drgnx-chip`,
+`drgnx-badge`) is a tint with room inside it and no ring, in the caption role, radius 4. A keycap (`drgnx-keycap`) is
+subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
+start page show keys this way. The rings' colours come from the theme (a box's colour cannot be inherited), so a
+theme that is not drgnx's draws them in the text colour.
 
 ### Faces for theme authors
 

@@ -28,6 +28,8 @@
 (require 'drgnx-frame-kind)
 (require 'drgnx-memo)
 (require 'drgnx-paths)
+(require 'drgnx-ui-kit)                 ; `drgnx-ui-button-pad'
+(require 'drgnx-palette)                ; `drgnx-palette-keycaps'
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
 (defvar drgnx-surfaces-starter-commands)
@@ -50,7 +52,7 @@
   :group 'drgnx-start)
 
 (defface drgnx-start-key '((t :inherit (drgnx-ui-heading bold)))
-  "The keys on the start page: the heading type face."
+  "The keys on the start page on a terminal (a graphical frame shows them as keycaps)."
   :group 'drgnx-start)
 
 (defface drgnx-start-quiet '((t :inherit (drgnx-ui-text drgnx-text-muted shadow)))
@@ -137,9 +139,14 @@ LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blan
 (define-button-type 'drgnx-start-button
   'action #'drgnx-start--press 'follow-link t)
 
-(defun drgnx-start--insert-button (id label help)
-  "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP, on a line of its own."
-  (insert-text-button label :type 'drgnx-start-button 'drgnx-start-id id 'help-echo help)
+(defun drgnx-start--insert-button (id label help &optional primary graphic)
+  "Insert the button LABEL for ID (a registry command ID or `dismiss'), resting on HELP, on a line of its own: the
+look's control (design §3.5); PRIMARY: filled with the accent.  On a GRAPHIC frame it has room inside it at either
+end (`drgnx-ui-button-pad'); a terminal shows the label alone."
+  (let* ((face (if primary 'drgnx-control-primary 'drgnx-control))
+         (pad (if graphic (propertize " " 'display (drgnx-ui-button-pad face)) "")))
+    (insert-text-button (concat pad label pad) :type 'drgnx-start-button 'face face 'mouse-face 'highlight
+                        'drgnx-start-id id 'help-echo help))
   (insert "\n"))
 
 (defun drgnx-start--render ()
@@ -147,7 +154,8 @@ LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blan
 The keys are read from the registry now, so a changed profile shows when the page shows again."
   (let* ((inhibit-read-only t) (search (drgnx-start--glyph))
          (window (drgnx-start--window (selected-frame)))
-         (logo (drgnx-start--logo (if (window-live-p window) window (selected-window)))))
+         (logo (drgnx-start--logo (if (window-live-p window) window (selected-window))))
+         (graphic (display-graphic-p (window-frame (if (window-live-p window) window (selected-window))))))
     (erase-buffer)
     (insert (make-string (drgnx-start--top-padding logo) ?\n))
     (when logo (insert (propertize " " 'display logo 'drgnx-start-logo t) "\n\n"))
@@ -157,12 +165,15 @@ The keys are read from the registry now, so a changed profile shows when the pag
     (pcase-dolist (`(,id ,what) drgnx-surfaces-starter-commands)
       (when-let* ((key (drgnx-surfaces-key-label id :any t :short t)))
         (insert (propertize search 'face 'drgnx-start-quiet) " "
-                (propertize (format "%-10s" key) 'face 'drgnx-start-key)
+                (if graphic (drgnx-palette-keycaps key) (propertize (format "%-10s" key) 'face 'drgnx-start-key))
+                (if graphic "  " "")
                 (propertize what 'face 'drgnx-start-quiet) "\n")))
     (insert "\n")
-    (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
-      (when (or (eq id 'dismiss) (drgnx-commands-get id))
-        (drgnx-start--insert-button id label help)))
+    (let ((first t))
+      (pcase-dolist (`(,id ,label ,help) drgnx-start--buttons)
+        (when (or (eq id 'dismiss) (drgnx-commands-get id))
+          (drgnx-start--insert-button id label help first graphic)
+          (setq first nil))))
     (add-text-properties (point-min) (point-max)
                          (list 'line-prefix drgnx-start--centre 'wrap-prefix drgnx-start--centre))
     (goto-char (point-min))

@@ -129,6 +129,23 @@ high contrast, where tints are black, they are ringed in their own colour."
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
 
+;; Design §3.5: a button is a quiet fill in a 1 px hairline (radius 6), the primary one the accent's fill; a keycap is
+;; subtle text in a strong hairline (radius 4)
+(ert-deftest drgnx-themes/buttons-and-keycaps ()
+  "Design §3.5 (`.btn', `.btn.pri', `kbd'): `drgnx-control' is the text colour on the quiet selection, ringed 1 px in
+the border colour; `drgnx-control-primary' is on-accent text on the accent's fill; `drgnx-keycap' is subtle text
+ringed in the strong border, with no fill of its own."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,face ,fg ,bg ,ring) '((drgnx-control fg sel-quiet border)
+                                              (drgnx-control-primary on-accent accent-fill accent-fill)
+                                              (drgnx-keycap subtle nil border-strong)))
+        (let ((box (plist-get (drgnx-faces--clause-plist face 'gui) :box)))
+          (should (equal (list face (drgnx-look-token fg variant) (and bg (drgnx-look-token bg variant))
+                               (drgnx-look-token ring variant) '(1 . 1))
+                         (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui)
+                               (plist-get box :color) (plist-get box :line-width)))))))))
+
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme (should (eq variant (drgnx-look-variant)))))

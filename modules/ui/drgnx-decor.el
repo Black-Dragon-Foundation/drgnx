@@ -14,22 +14,25 @@
 (require 'subr-x)
 (require 'drgnx-timer)
 (require 'drgnx-modules)
+(require 'drgnx-faces)
+(require 'drgnx-type-faces)
 
 (defgroup drgnx-decor nil "Chips, badges, buttons, cards and agent cursors." :group 'drgnx-face)
 
 ;;;; Faces
 
-(defface drgnx-chip '((t :inherit secondary-selection :box (:line-width (1 . -1))))
-  "A small rounded label inside text." :group 'drgnx-decor)
-(defface drgnx-badge '((t :inherit highlight :box (:line-width (1 . -1))))
-  "A pill: a chip with the largest radius." :group 'drgnx-decor)
-(defface drgnx-button '((t :inherit secondary-selection :box (:line-width (1 . -1))))
-  "A clickable text button." :group 'drgnx-decor)
-(defface drgnx-button-hover '((t :inherit highlight :box (:line-width (1 . -1))))
-  "A button under the pointer (its box widths equal `drgnx-button''s: a highlight cannot change metrics)."
+(defface drgnx-chip '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :box (:line-width (7 . 2) :style flat-button)))
+  "A small rounded label inside text (design §3.5 `.chip'): the quiet chip's tint, room inside it (a flat box in its
+own background, never a ring in the text colour), radius 4 where the compositor rounds." :group 'drgnx-decor)
+(defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :box (:line-width (7 . 2) :style flat-button)))
+  "A pill: an accent chip with the largest radius." :group 'drgnx-decor)
+(defface drgnx-button '((t :inherit (drgnx-ui-text drgnx-control)))
+  "A clickable text button: the look's control (`drgnx-control', its fill and hairline)." :group 'drgnx-decor)
+(defface drgnx-button-hover '((t :inherit (highlight drgnx-ui-text drgnx-control)))
+  "A button under the pointer: the hover fill on the control's ring (a highlight cannot change metrics)."
   :group 'drgnx-decor)
-(defface drgnx-button-pressed '((t :inherit region :box (:line-width (1 . -1))))
-  "A button while the mouse button is down." :group 'drgnx-decor)
+(defface drgnx-button-pressed '((t :inherit (drgnx-selected drgnx-ui-text drgnx-control)))
+  "A button while the mouse button is down: the selection's fill on the control's ring." :group 'drgnx-decor)
 (defface drgnx-focus-ring '((t :inherit link :underline nil :box (:line-width 2)))
   "The keyboard focus on a chip or button: a ring in the link colour." :group 'drgnx-decor)
 (defface drgnx-card-top '((t :inherit secondary-selection :box (:line-width 1)))
@@ -42,17 +45,15 @@
   "A card of one row." :group 'drgnx-decor)
 
 (defconst drgnx-decor--boxes
-  '((drgnx-chip :line-width (1 . -1) :corner-radius 6)
-    (drgnx-badge :line-width (1 . -1) :corner-radius 99)
-    (drgnx-button :line-width (1 . -1) :corner-radius 6)
-    (drgnx-button-hover :line-width (1 . -1) :corner-radius 6)
-    (drgnx-button-pressed :line-width (1 . -1) :corner-radius 6)
+  '((drgnx-chip :line-width (7 . 2) :style flat-button :corner-radius 4)
+    (drgnx-badge :line-width (7 . 2) :style flat-button :corner-radius 99)
     (drgnx-focus-ring :line-width 2 :corner-radius 6)
     (drgnx-card-top :line-width 1 :corner-radius 8 :open (bottom))
     (drgnx-card-mid :line-width 1 :corner-radius 8 :open (top bottom))
     (drgnx-card-bottom :line-width 1 :corner-radius 8 :open (top))
     (drgnx-card-single :line-width 1 :corner-radius 8))
-  "Each decoration face and its `:box' under Glitnir.  Without Glitnir the keys after `:line-width' are dropped.")
+  "Each decoration face and its `:box' under Glitnir.  Without Glitnir only `:line-width' and `:style' stay.  The
+buttons are not here: their ring and radius are `drgnx-control''s, from the theme.")
 
 (defun drgnx-decor--glitnir-p ()
   "Non-nil when this Emacs accepts the Glitnir box keys."
@@ -61,7 +62,9 @@
 (defun drgnx-decor-box (face)
   "The `:box' plist of decoration FACE for this Emacs: with the Glitnir keys under Glitnir, plain otherwise."
   (let ((plist (cdr (assq face drgnx-decor--boxes))))
-    (if (drgnx-decor--glitnir-p) (copy-sequence plist) (list :line-width (plist-get plist :line-width)))))
+    (if (drgnx-decor--glitnir-p) (copy-sequence plist)
+      (append (list :line-width (plist-get plist :line-width))
+              (and (plist-get plist :style) (list :style (plist-get plist :style)))))))
 
 (defun drgnx-decor-faces-on ()
   "Give every decoration face its `:box' with the Glitnir keys, through the module's recorded face-spec door

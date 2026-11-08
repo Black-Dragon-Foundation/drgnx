@@ -85,7 +85,16 @@ A tint is composited over the variant's `editor'."
          (drgnx-chip-quiet :foreground ,(c 'muted) :background ,(c 'sel-quiet) ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
-         (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1))))))
+         (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         ;; controls (design §3.5 `.btn', `.btn.pri', `kbd'): a 1 px ring in a colour, so the theme gives it; rounded
+         ;; where the compositor rounds a box (Glitnir)
+         (drgnx-control :foreground ,(c 'fg) :background ,(c 'sel-quiet)
+                        :box (:line-width (1 . 1) :color ,(c 'border) ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         (drgnx-control-primary :foreground ,(c 'on-accent) :background ,(c 'accent-fill)
+                                :box (:line-width (1 . 1) :color ,(c 'accent-fill)
+                                                  ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         (drgnx-keycap :foreground ,(c 'subtle)
+                       :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4)))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))

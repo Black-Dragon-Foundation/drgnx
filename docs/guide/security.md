@@ -25,10 +25,12 @@ Every other folder is untrusted, including the projects you open, until you trus
 
 ## The "Restricted Mode" mark
 
-A file from an untrusted folder shows **Restricted Mode** in the status bar, in a quiet colour from your theme;
-hovering it says what that means (Flymake checkers and symbol shorthands from the folder are off). Click it
-to trust the file's folder: its project's root when the file is in a project (a git repository, for example), else
-the file's own folder. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
+A file from an untrusted folder shows a small shield in the status bar, in your theme's warning colour (a terminal's
+text bar says **Restricted Mode**); hovering it says what that means (Flymake checkers and symbol shorthands from
+the folder are off). Clicking it (**About Restricted Mode** in the palette) says so again and offers to trust the
+file's folder: its project's root when the file is in a project (a git repository, for example), else the file's own
+folder; yes runs Trust This Folder, which shows the folder's code first. For a folder that is never trusted (below)
+it says that and asks nothing. The mark is not shown for remote files, and Trust This Folder refuses a remote folder.
 
 A folder that holds far more than one project is never trusted: `/`, your home folder, the temp folder, `/tmp/`,
 `/var/tmp/` and `/dev/shm/`, or a folder above any of them. A file lying directly in one of them has to move into a

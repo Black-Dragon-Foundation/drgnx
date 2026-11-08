@@ -1846,9 +1846,12 @@ is not scanned: `tab-width'."
             (drgnx-statusbar--indent-width))))
 
 (defun drgnx-statusbar--seg-trust ()
-  "`Restricted Mode' while this file's folder is not trusted (drgnx-trust.el keeps the state; nothing is read)."
+  "While this file's folder is not trusted (drgnx-trust.el keeps the state; nothing is read): in a pixel bar a small
+shield in the warning colour, its words on hover; in a text bar `Restricted Mode'."
   (when (eq (bound-and-true-p drgnx-trust--state) 'restricted)
-    (propertize "Restricted Mode" 'face 'drgnx-trust-restricted)))
+    (if (drgnx-statusbar--pixel-p)
+        (drgnx-look-icon 'shield 'drgnx-trust-restricted 14)
+      (propertize "Restricted Mode" 'face 'drgnx-trust-restricted))))
 
 (defun drgnx-statusbar--seg-folder ()
   "The folder the Explorer shows (the first, and how many more), else `No folder open'."
@@ -1938,7 +1941,7 @@ Click the language in the status bar for it.  A command: it asks; the bar itself
   "Define the segments the bar ships with."
   (drgnx-statusbar-define-segment 'branch :fn #'drgnx-statusbar--seg-branch :click #'drgnx-statusbar--click-branch
                                   :help "Branch; click for the repository status")
-  (drgnx-statusbar-define-segment 'trust :fn #'drgnx-statusbar--seg-trust :click 'drgnx-trust-folder
+  (drgnx-statusbar-define-segment 'trust :fn #'drgnx-statusbar--seg-trust :click 'drgnx-trust-explain
                                   :help (if (boundp 'drgnx-trust--mark-help) drgnx-trust--mark-help
                                           "Restricted Mode: this folder is not trusted; click to trust it"))
   (drgnx-statusbar-define-segment 'folder :fn #'drgnx-statusbar--seg-folder :click 'drgnx-session-open-folder

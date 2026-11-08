@@ -59,6 +59,15 @@
 (defface drgnx-chip-accent '((t :inherit (drgnx-accent drgnx-selected-quiet)))
   "A chip in the accent, on its tint: the agents at work, a mode." :group 'drgnx-look)
 
+;;;; Controls (design §3.5): a button and a keycap.  Their rings take colours, so the themes give them (a box's
+;;;; colour is not inherited); here they are the standard faces' fill and a ring in the text colour.
+
+(defface drgnx-control '((t :inherit secondary-selection :box (:line-width (1 . 1))))
+  "A button: the quiet selection's fill in a 1 px hairline of the border colour, radius 6 where the compositor rounds."
+  :group 'drgnx-look)
+(defface drgnx-control-primary '((t :inherit region :box (:line-width (1 . 1))))
+  "The primary button of a group: on-accent text on the accent's fill." :group 'drgnx-look)
+
 ;;;; Agents
 
 (defface drgnx-agent-1 '((t :inherit default)) "The first agent's colour." :group 'drgnx-look)

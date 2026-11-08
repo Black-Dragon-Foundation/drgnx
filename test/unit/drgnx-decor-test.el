@@ -55,6 +55,18 @@
     (should (eq icon (get-text-property 2 'display c)))
     (should-not (get-text-property 0 'face c))))
 
+(ert-deftest drgnx-decor/chips-and-buttons-are-the-looks-components ()
+  "Design §3.5: a chip is the quiet chip's tint with room inside it (a flat box in its own background: no ring in
+the text colour), in the caption role; a button is the look's control (`drgnx-control': its fill and hairline), in
+the UI text role, and keeps them under the pointer and pressed (only the fill changes)."
+  (let ((box (face-attribute 'drgnx-chip :box nil nil)))
+    (should (eq 'flat-button (plist-get box :style)))
+    (should-not (plist-get box :color)))
+  (should (equal '(drgnx-ui-caption drgnx-chip-quiet) (face-attribute 'drgnx-chip :inherit nil nil)))
+  (dolist (face '(drgnx-button drgnx-button-hover drgnx-button-pressed))
+    (should (memq 'drgnx-control (ensure-list (face-attribute face :inherit nil nil))))
+    (should (eq 'unspecified (face-attribute face :box nil nil)))))
+
 (ert-deftest drgnx-decor/button-has-hover-face-and-keymap ()
   (let ((b (drgnx-decor-button "Go" #'ignore)))
     (should (eq 'drgnx-button (get-text-property 0 'face b)))
