@@ -178,9 +178,22 @@ owned) and torn down after (the watchers go, the memo empties)."
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-minimize)) 'iconify-frame))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-maximize)) 'toggle-frame-maximized))
         (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-close)) 'delete-frame))
-        ;; the empty area drags the frame
-        (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-2)) 'mouse-drag-frame-move))
-        (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-1)) 'mouse-drag-frame-move))))
+        ;; the empty area drags the frame: a command (the tab bar calls an item's binding interactively), which hands
+        ;; the press to `mouse-drag-frame-move'
+        (dolist (gap '(drgnx-topline-gap-1 drgnx-topline-gap-2))
+          (let ((cmd (nth 3 (drgnx-topline-test--item gap))) dragged)
+            (should (eq cmd 'drgnx-topline-drag-window))
+            (should (commandp cmd))
+            (cl-letf (((symbol-function 'mouse-drag-frame-move) (lambda (e) (setq dragged e))))
+              (let ((press (list 'down-mouse-1 (list (selected-window) 'tab-bar '(10 . 5) 0))))
+                (call-interactively cmd nil (vector press))
+                (should (eq dragged press))
+                ;; the row's own press handler drags too; its release runs nothing
+                (setq dragged nil)
+                (cl-letf (((symbol-function 'drgnx-topline--event-item) (lambda (_e) (drgnx-topline-test--item gap))))
+                  (drgnx-topline-mouse-down press)
+                  (should (eq dragged press))
+                  (drgnx-topline-mouse-up press))))))))
     ;; and gone again when the title is not drawn
     (should-not (assq 'drgnx-topline-close (drgnx-topline--line)))
     (should (eq (nth 3 (drgnx-topline-test--item 'drgnx-topline-gap-1)) 'ignore))))
@@ -326,10 +339,10 @@ hover colour.  The hover face has no box (a box would ring the square)."
     (drgnx-memo-forget 'topline)
     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&optional _) t))
               ((symbol-function 'drgnx-tty-sendable-key) (lambda (_frame _key) (error "not on a window"))))
-      ;; a window's row is the design's: the key as it is bound, on the search box's keycap
+      ;; a window's row is the design's: Quick Open's key as it is bound, on the search box's keycap
       (let ((drgnx-look-bars-measure-function (lambda (s &optional _face) (* 10 (string-width s)))))
-        (should (string-match-p "Ctrl Shift P" (mapconcat (lambda (i) (substring-no-properties (nth 2 i)))
-                                                          (drgnx-topline--build (current-buffer) 160 nil 1440) "")))))))
+        (should (string-match-p "Ctrl P" (mapconcat (lambda (i) (substring-no-properties (nth 2 i)))
+                                                    (drgnx-topline--build (current-buffer) 160 nil 1440) "")))))))
 
 (ert-deftest drgnx-topline/glyphs-have-an-ascii-form ()
   (drgnx-topline-test--with 'vscode

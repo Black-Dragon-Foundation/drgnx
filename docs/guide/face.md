@@ -160,8 +160,13 @@ For code: `(drgnx-face-glyph 'close)` is the string for the selected frame, `(dr
 
 ## The status bar
 
-In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) each editor window ends in a quiet bar:
-what you need at a glance, nothing that shouts. It is built from **segments**. Turn it off and on with **Toggle
+In place of Emacs's raw mode line (`-:@--- file All L5 Git-main (YAML)`) the window ends in one quiet bar, across
+the whole window under every pane, as in the design: what you need at a glance, nothing that shouts. It shows the
+editor you used last (the full bar for a file or code, the `mode` bar for Magit, Help and the like), and a click on
+one of its segments acts in that editor. The bar is a window of its own at the frame's bottom that drgnx keeps there
+(a side panel opened later still ends above it); the editors then have no mode line. `drgnx-statusbar-place` set to
+`editors` puts one bar in each editor window instead, as Emacs's mode line is (the other editor groups show the
+compact bar). It is built from **segments**. Turn it off and on with **Toggle
 Status Bar** (View menu, palette); `drgnx-statusbar-mode` is the switch. While it is on, the mode line's own faces
 (`mode-line-active`, `mode-line-inactive`) inherit the caption type face, which the bar's text is in, so Emacs merges no
 other font into each piece of the bar; a buffer that keeps its own mode line shows it in that face too. They do so only
@@ -172,8 +177,8 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 | `branch` | `⑂ main ↑2 ↓1`: the branch, and how many commits it is ahead of and behind its upstream (a count of 0 is left out) | the repository status |
 | `trust` | `Restricted Mode` while the file's folder is not trusted: its Flymake checkers and symbol shorthands are off (hover for what that means) | **Trust This Folder** |
 | `problems` | `✓` when flymake finds nothing, `◐` while a checker has not reported yet, `● 3` (dimmed) when it finds only notes, else `⚠ 1 2`: the errors, then the warnings, each in its own colour | the problems list |
-| `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run | its output |
-| `jobs` | `◎ 2 jobs` while jobs run (the Jobs module's: gone when it is off) | What Needs You, every job's |
+| `tests` | `✓ tests 41/41` or `× tests 2 failed`: the last test run (a graphical bar: `✓ 41 tests` or `✕ 2 failed`, with the Lucide check and cross) | its output |
+| `jobs` | `◎ 2 jobs` while jobs run (a graphical bar: the layers icon; the Jobs module's: gone when it is off) | What Needs You, every job's |
 | `needs-you` | `◐ 2 waiting on you` (in the needs-you colour): the one count of everything that waits for you | the newest item's own command when every item comes from one source, else the Notices list |
 | `drgnx` | `✕ 1`, `⚠ 2` or `✕ 1 ⚠ 2`: drgnx's own failed and warned conditions (a module that did not start …) | the Notices list |
 | `toasts` | `+2`: the notices that wait for a place while three toasts show (notices.md, "Toasts") | the Notices list |
@@ -183,27 +188,29 @@ while the caption's height is absolute, as ui/look writes it: a relative one (ui
 
 | Right | Shows | Click |
 |---|---|---|
-| `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ×` (exited) when eglot manages the buffer | the server's events |
+| `lsp` | `LSP: pyright ●` (connected; the name the server gave), `LSP ○` (starting), `LSP ×` (exited) when eglot manages the buffer; a graphical bar says `● pyright` (`● eglot` before the server names itself), the dot green, or red once the server exited | the server's events |
 | `position` | `Ln 12, Col 4`, and `(15 selected)` with a selection, in the selected window only | go to a line |
-| `indent` | `Spaces: 2` or `Tab Size: 8`: what the file's own first lines use (tabs, or spaces and how many), else the mode's setting | switch what new lines use |
+| `indent` | `Spaces: 2` or `Tab Size: 8` (`Spaces 2`, `Tab Size 8` on a graphical bar): what the file's own first lines use (tabs, or spaces and how many), else the mode's setting | switch what new lines use |
 | `encoding` | `UTF-8` | change it |
 | `eol` | `LF`, `CRLF` or `CR` | change it |
 | `language` | the language as VS Code names it: `Rust`, `Go`, `YAML`, `Python`, `Emacs Lisp`, `Shell Script`, `Plain Text` (`drgnx-statusbar-language-names`, else the mode's own name) | **Change Language Mode**: pick another major mode for the buffer |
 
-**Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face: it is
-`panel-padding` wide at each end (12 logical pixels at the comfortable density), the right-hand segments end one
-padding from the window's edge whatever the font, and when the window is too narrow the segments of
+**Pixels, not columns.** On a graphical frame the bar is laid out in pixels, in the caption type face, as the
+design's: 8 logical pixels at each end, each segment with 6 of room either side (its hover and click target) and 2
+between segments, so the last segment's text ends 14 pixels from the edge whatever the font; when the window is too
+narrow the segments of
 `drgnx-statusbar-drop-order` go by the pixels they take. A terminal frame still counts columns. The bar measures only
 when something it shows changes: zooming with `global-text-scale-adjust`, a scale change (the display's scale), another
 density and a change of a font role each lay it out again, so the right edge never goes stale. `drgnx-look-pixel-width`
 is the function that measures a string in a face.
 
-**The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) on the
-`gap` surface, which is the themes' mode line, and it is `status-bar` high (24 logical pixels at the comfortable
-density, 22 compact, 28 roomy) at any scale. Each segment is a target that lights with `drgnx-hover` under the pointer.
+**The look.** The bar is set in the caption type face (`drgnx-ui-caption`, through the face `drgnx-statusbar`) in the
+muted text colour (`drgnx-text-muted`) on the `gap` surface, which is the themes' mode line, and it is `status-bar` high
+(24 logical pixels at the comfortable density, 22 compact, 28 roomy) at any scale. Each segment is a target that
+lights with `drgnx-statusbar-hover` under the pointer (the hover surface, the text in the body colour).
 On a graphical frame the marks are line icons: `git-branch` before the branch, `circle-x` and `triangle-alert` with the
-error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero is dimmed), `circle-check` or
-`circle-x` before the tests. A terminal keeps the glyphs. Only the `needs-you` segment is in the attention colour
+error and warning counts (in `drgnx-status-fail` and `drgnx-status-warn`; a zero is dimmed), `check` or
+`circle-x` before the tests, `layers` before the jobs. A terminal keeps the glyphs. Only the `needs-you` segment is in the attention colour
 (`drgnx-status-attention`, through `drgnx-statusbar-waiting`); the others use the ok, warn and fail faces.
 
 Windows that are not editors get the bar too: a buffer in a mode derived from one of `drgnx-statusbar-other-modes`
@@ -288,7 +295,7 @@ and a segment of your own that has not called `(drgnx-statusbar-refresh t)`.
 | `drgnx-statusbar-right` | `(lsp position indent encoding eol language)` | segments on the right, in order |
 | `drgnx-statusbar-drop-order` | `(eol indent encoding lsp language misc tests jobs toasts drgnx trust)` | dropped first to last when the window is narrow; `needs-you` is never dropped |
 | `drgnx-statusbar-compact` | `(position language)` | what the other editor groups show |
-| `drgnx-statusbar-place` | `editors` | `editors`; `frame` (one bar across the frame) arrives with the grid |
+| `drgnx-statusbar-place` | `frame` | `frame`: one bar across the window, under every pane; `editors`: one in each editor window. Applies at once |
 | `drgnx-statusbar-indent-vars` | the common indent offsets | the variables `indent` reads, first bound one wins |
 | `drgnx-statusbar-modes` | `(prog-mode text-mode conf-mode)` | the modes (besides file buffers and Untitled editors) that get the bar |
 | `drgnx-statusbar-language-names` | names for the modes whose own name is not the language's | mode → the name the `language` segment shows; worked out once per mode |
@@ -334,7 +341,7 @@ A quiet line along the top of the frame says where you are and where to start:
 On the left, the project and branch of the editor you used last (the folder of the project's root, and the same
 branch the status bar shows, so a new file git does not track yet has it too; with no project it says `drgnx`, with
 no git it leaves the branch out). The branch is a chip of its own on a graphical frame. The search box before the keys
-opens the command palette. At the right end, before the window controls, two chips show while they have something to
+opens Quick Open: files by name, and `>` typed first turns it into the command palette, as in VS Code. At the right end, before the window controls, two chips show while they have something to
 say: `1 needs you` (the count of everything that waits on you; a click opens it) and the agents at work (`N agents`;
 the agents module tells the row how many through `drgnx-topline-agents-function`).
 
@@ -349,15 +356,17 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
-it. With the system's own title bar (the default) those buttons would be a second set, so they are not there. The
+it (**Move Window by the Title Row**, `title-row-drag`: a press runs it, so it is not in the palette). With the system's own title bar (the default) those buttons would be a second set, so they are not there. The
 buttons are commands like any other, in the palette too: **Minimize Window** (`title-row-minimize`), **Maximize or
 Restore Window** (`title-row-maximize`) and **Close Window** (`title-row-close`); each one lights up under the mouse.
 
 On a graphical frame the line is the window's title row, 38 pixels tall at the normal density (34 compact, 42
 comfortable), on the gap colour behind the cards: the drgnx mark and the project, the branch as a quiet chip (`main
-↑2` when two commits wait to be pushed), a search box in the middle (`Search files, commands, symbols…` with the
-palette's key as a keycap; a click opens the palette), the two chips, and the window controls. The search box is
-centred on the window, so it stays put when a chip comes or goes, and leaves when the window is too narrow for it.
+↑2` when two commits wait to be pushed), a search box in the middle (`Search files, commands, symbols…` with Quick
+Open's key in your key profile as a keycap, `Ctrl P` in the VS Code profile; a click opens Quick Open, `>` for
+commands), the two chips, and the window controls. The search box sits where the design has it: centred between the
+left items and the right ones with both chips counted, so it stays put when a chip comes or goes, and leaves when the
+window is too narrow for it.
 Under the mouse a window control gets a round hover, 26 pixels across. Chips, the search box,
 the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row
 height), so they follow every theme, and High Contrast gives the chips an outline instead of a tint. A new width, a

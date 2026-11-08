@@ -83,6 +83,9 @@ The Explorer's and the Buffers panel's own keys (rows, expand, open, close) are 
 A command that lives in a mode's keymap (like those) keeps its keymap in every profile: an entry's `:map` wins,
 else the command's own, else the profile's.
 
+The title row's search box opens Quick Open and shows Quick Open's key in your profile as its keycap (`Ctrl P` in the
+VS Code profile; another profile, or your own binding, shows its own); `>` typed first in Quick Open gives the palette.
+
 "—" means the profile has no key for it; every command is always in the palette. Vim's keys are leader keys in
 drgnx's leader map (`SPC …`), which the Vim engine plugs into its normal, visual and motion states and the panels. On **macOS** the VS Code profile uses Cmd (`s-`) as VS Code does there — see below.
 

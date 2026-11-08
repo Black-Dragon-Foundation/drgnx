@@ -25,8 +25,9 @@
   (drgnx-statusbar-test--with
     (let ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
           (drgnx-statusbar-drop-order '(b a)))
-      ;; widths: A 10, the separator 30, B 10, C 10, the padding 24, two spaces between 20 (one space with no left)
-      (dolist (row '((200 "A" "B" "C") (90 "A" nil "C") (50 nil nil "C")))
+      ;; widths: A, B and C 22 each (a pixel bar's segment has 6 px of room either side), the gap between 2, the
+      ;; padding 2 x 8, two spaces before the right 20 (one with no left): all 104, A and C 80, C alone 48
+      (dolist (row '((200 "A" "B" "C") (90 "A" nil "C") (60 nil nil "C")))
         (let ((plain (drgnx-look-bars-test--plain (drgnx-statusbar-render (car row)))))
           (should (eq (and (string-match-p "A" plain) t) (and (nth 1 row) t)))
           (should (eq (and (string-match-p "B" plain) t) (and (nth 2 row) t)))
@@ -34,12 +35,13 @@
 
 (ert-deftest drgnx-look-bars/right-gap-is-in-pixels ()
   "Pattern D: the gap before the right segments is `(space :align-to (- right (PIXELS)))', PIXELS the right run and
-the padding as measured, less the window's right fringe (`right' in a mode line stops at the fringe)."
+the padding as measured, less the window's right fringe (`right' in a mode line stops at the fringe).  The padding
+is the design's 8 logical pixels; the right run is C with its room either side (22 here)."
   (drgnx-statusbar-test--with
     (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
-           (pad (round (* (drgnx-look-density-value 'panel-padding) (drgnx-statusbar--scale nil))))
+           (pad (round (* 8 (drgnx-statusbar--scale nil))))
            (gap (drgnx-statusbar-test--gap (drgnx-statusbar-render 400))))
-      (should (equal (plist-get (cdr gap) :align-to) `(- right (,(max 0 (- (+ 10 pad) (drgnx-statusbar--right-fringe (selected-window)))))))))))
+      (should (equal (plist-get (cdr gap) :align-to) `(- right (,(max 0 (- (+ 22 pad) (drgnx-statusbar--right-fringe (selected-window)))))))))))
 
 (ert-deftest drgnx-look-bars/key-changes-with-width ()
   "Pattern D: the top line's items are not `equal' for another pixel width or another measure, and are `equal'
@@ -122,7 +124,7 @@ segment showing its `mode-name'; it does not show the stock mode line."
 (defvar drgnx-topline-agents-function)
 
 (ert-deftest drgnx-look-bars/title-row-items ()
-  "Pattern D: the title row's items, in order: the project, the branch chip, the search box (it opens the palette),
+  "Pattern D: the title row's items, in order: the project, the branch chip, the search box (it opens Quick Open),
 the attention chip (\"1 needs you\"), the agents chip, then the window controls when drgnx draws the title."
   (drgnx-topline-test--with 'vscode
     (setq-local vc-mode " Git-main")
@@ -136,7 +138,7 @@ the attention chip (\"1 needs you\"), the agents chip, then the window controls 
         (should (string-match-p "1 needs you" (nth 2 (assq 'drgnx-topline-attention items))))
         (should (string-match-p "2" (nth 2 (assq 'drgnx-topline-agents items))))
         (should (string-match-p "main" (nth 2 (assq 'drgnx-topline-branch items))))
-        (should (eq 'drgnx-topline-test-palette (nth 3 (assq 'drgnx-topline-search items)))))
+        (should (eq 'drgnx-topline-test-files (nth 3 (assq 'drgnx-topline-search items)))))
       ;; nothing waits and no agent runs: no chips; no drawn title: no controls
       (let* ((drgnx-notice--needs-you 0) (drgnx-topline-agents-function (lambda () 0))
              (keys (mapcar #'car (drgnx-topline--build (current-buffer) 160 nil))))
@@ -178,8 +180,10 @@ key as one keycap (it opens the palette), and the attention and agents chips pil
         (should (string-match-p "main ↑2" (funcall text 'drgnx-topline-branch)))
         (should (memq 'drgnx-chip-quiet (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-branch))))
         (should (string-match-p "Search files, commands, symbols" (funcall text 'drgnx-topline-search)))
-        (should (string-match-p "Ctrl Shift P" (funcall text 'drgnx-topline-search)))
-        (should (eq 'drgnx-topline-test-palette (nth 3 (assq 'drgnx-topline-search items))))
+        ;; the search box is Quick Open (`>' for commands): its keycap the profile's Quick Open key
+        (should (string-match-p "Ctrl P" (funcall text 'drgnx-topline-search)))
+        (should-not (string-match-p "Shift" (funcall text 'drgnx-topline-search)))
+        (should (eq 'drgnx-topline-test-files (nth 3 (assq 'drgnx-topline-search items))))
         (should (string-match-p "1 needs you" (funcall text 'drgnx-topline-attention)))
         (should (memq 'drgnx-chip-attention (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-attention))))
         (should (string-match-p "2 agents" (funcall text 'drgnx-topline-agents)))
@@ -188,25 +192,32 @@ key as one keycap (it opens the palette), and the attention and agents chips pil
         (should-not (assq 'drgnx-topline-go-quick-open items))))))
 
 (ert-deftest drgnx-look-bars/title-row-search-is-centred ()
-  "The search box sits in the middle of the window, in pixels, whatever the sides hold: a chip that comes or goes
-never moves it."
+  "The design's place (window-dark.png: `.search' is `margin: 0 auto' in the row's flex, 10 px gaps): with the
+design's chips (`1 needs you', `2 agents') the box is centred between the left items and the right ones, 10 px from
+each; with other chips, or none, it stays where it was."
   (drgnx-topline-test--with 'vscode
-    (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
-           (drgnx-notice--needs-you 3)
-           (items (drgnx-topline--build (current-buffer) 160 t 1440))
-           (width (lambda (i) (or (plist-get (nthcdr 4 i) :drgnx-px) (drgnx-look-bars-test--ten (nth 2 i)))))
-           (keys (mapcar #'car items))
-           (left (seq-take items (cl-position 'drgnx-topline-gap-1 keys)))
-           (right (nthcdr (1+ (cl-position 'drgnx-topline-gap-2 keys)) items))
-           (left-px (apply #'+ (mapcar width left))) (right-px (apply #'+ (mapcar width right)))
-           (box (funcall width (assq 'drgnx-topline-search items)))
-           (gap-1 (funcall width (assq 'drgnx-topline-gap-1 items))))
-      (should (> right-px 0))
-      (should (<= (abs (- (+ left-px gap-1 (/ box 2)) 720)) 1))
-      (should (= 1440 (apply #'+ (mapcar width items))))
-      (let* ((drgnx-notice--needs-you 0)
-             (fewer (drgnx-topline--build (current-buffer) 160 t 1440)))
-        (should (equal (funcall width (assq 'drgnx-topline-gap-1 fewer)) gap-1))))))
+    (cl-letf (((symbol-function 'drgnx-topline--agents-count) (lambda () 2)))
+      (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
+             (drgnx-notice--needs-you 1)
+             (items (drgnx-topline--build (current-buffer) 160 t 1440))
+             (width (lambda (i) (or (plist-get (nthcdr 4 i) :drgnx-px) (drgnx-look-bars-test--ten (nth 2 i)))))
+             (keys (mapcar #'car items))
+             (left (seq-take items (cl-position 'drgnx-topline-gap-1 keys)))
+             (right (nthcdr (1+ (cl-position 'drgnx-topline-gap-2 keys)) items))
+             (left-px (apply #'+ (mapcar width left))) (right-px (apply #'+ (mapcar width right)))
+             (box (funcall width (assq 'drgnx-topline-search items)))
+             (gap-1 (funcall width (assq 'drgnx-topline-gap-1 items)))
+             (gap-2 (funcall width (assq 'drgnx-topline-gap-2 items))))
+        (should (memq 'drgnx-topline-attention keys))
+        (should (memq 'drgnx-topline-agents keys))
+        (should (> right-px 0))
+        (should (<= (abs (- gap-1 gap-2)) 1))
+        (should (= 1440 (+ left-px gap-1 box gap-2 right-px)))
+        (dolist (counts '((0 . 2) (1 . 0) (0 . 0) (12 . 2)))
+          (cl-letf (((symbol-function 'drgnx-topline--agents-count) (lambda () (cdr counts))))
+            (let* ((drgnx-notice--needs-you (car counts))
+                   (other (drgnx-topline--build (current-buffer) 160 t 1440)))
+              (should (equal (list counts (funcall width (assq 'drgnx-topline-gap-1 other))) (list counts gap-1))))))))))
 
 (ert-deftest drgnx-look-bars/double-click-maximises ()
   "Pattern D: a double click on the title row's empty space is bound to the command Maximize or Restore Window
@@ -324,7 +335,7 @@ allocation (building the key of `statusbar-widths' did, for every segment at eve
            (texts (lambda () (mapcar (lambda (id) (cons id (drgnx-statusbar--text id))) '(a b c))))
            (segs (funcall texts)))
       (should (seq-every-p (lambda (s) (eq (cdr s) (cdr (assq (car s) segs)))) (funcall texts)))
-      (should (= 90 (drgnx-statusbar--run-width segs " · ")))   ; three texts of 10, two separators of 30
+      (should (= 126 (drgnx-statusbar--run-width segs " · ")))   ; three texts of 10 with 2 x 6 of room, two separators of 30
       (let ((n (drgnx-memo-fixture-alloc (lambda () (drgnx-statusbar--run-width segs " · "))
                                          'drgnx-statusbar--run-width 'drgnx-statusbar--w 'drgnx-statusbar--kept-width)))
         (message "drgnx-look-bars: the widths of three known texts allocate %d" n)

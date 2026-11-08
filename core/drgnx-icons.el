@@ -33,7 +33,9 @@ then on."
 
 (defconst drgnx-icons-size 16 "An icon's size in logical pixels; dense rows pass 14.")
 
-(defconst drgnx-icons-stroke 1.6 "The stroke width in logical pixels at any size.")
+(defconst drgnx-icons-stroke 1.6
+  "The stroke width in the icon's 24-unit box at any size, as the design's (look.css `svg.i'): about 1.07 logical
+pixels at 16 px, 0.93 at 14.")
 
 (defvar drgnx-icons--cache (make-hash-table :test 'equal)
   "(NAME SIZE SCALE) → the image, or `none' for a name with no file.  A finite set (see the commentary).")
@@ -49,14 +51,14 @@ then on."
 
 (defun drgnx-icons--make (name size scale)
   "The image of icon NAME at SIZE logical pixels, or nil when there is no such file.  The file's 24-unit box is
-sized to SIZE and its stroke to `drgnx-icons-stroke' logical pixels."
+sized to SIZE and its stroke to `drgnx-icons-stroke' of the box's units."
   (let ((file (expand-file-name (format "%s.svg" name) drgnx-icons-dir)))
     (when (file-readable-p file)
       (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
         (setq text (replace-regexp-in-string "width=\"24\" height=\"24\""
                                              (format "width=\"%d\" height=\"%d\"" size size) text t t))
         (setq text (replace-regexp-in-string "stroke-width=\"2\""
-                                             (format "stroke-width=\"%.3f\"" (/ (* drgnx-icons-stroke 24.0) size))
+                                             (format "stroke-width=\"%s\"" drgnx-icons-stroke)
                                              text t t))
         ;; the frame's scale, in the spec (Emacs's image cache draws it again when the scale changes); without
         ;; it Emacs takes `image-scaling-factor', a guess from the font (1.6 at scale 2)

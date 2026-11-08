@@ -20,6 +20,7 @@
 (declare-function drgnx-modules-report "drgnx-modules")
 (declare-function drgnx-panel-replay-up "panel-replay-fixture")
 (declare-function drgnx-work-space-open "drgnx-work-space")
+(declare-function drgnx-statusbar-note-tests "drgnx-statusbar")
 (declare-function magit-status-setup-buffer "magit-status")
 (defvar drgnx-panel-replay-prefix)
 (defvar package-directory-list)
@@ -143,7 +144,10 @@ untracked, drgnx.lock.eld ignored."
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
                  "no `1 needs you' or `2 agents' chips: the mock agent's turn does not run yet (look step 8)"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "drgnx-job.el is not a preview (italic) tab: only transient buffers preview")
+                 "drgnx-job.el is not a preview (italic) tab: only transient buffers preview"
+                 "the status bar has no `1 job', `● Claude editing' or `● 1 needs you': no job or agent turn runs yet (look step 8)"
+                 "the status bar's problems are Flymake's real ones for the file (the mockup's `✕ 1' is made up), and
+no `● eglot': the session runs no language server")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
                  "the panel opens as a tab of the editor group, not the right island (look step 8)"
                  "the mock agent's panel shows no turn yet (replay idle): look step 8")
@@ -204,7 +208,8 @@ changed to hide a gap: the gap is named here instead.")
   (drgnx-look-scene--show (find-file-noselect (expand-file-name file drgnx-look-scene--project))))
 
 (defun drgnx-look-scene--goto (file line column start)
-  "FILE of the project shown in the editor at LINE and COLUMN, the window starting at line START."
+  "FILE of the project shown in the editor at LINE and COLUMN (from 0: the bar says COLUMN + 1, `Col 34' for 33), the
+window starting at line START."
   (drgnx-look-scene--open file)
   (goto-char (point-min)) (forward-line (1- start))
   (set-window-start (selected-window) (point))
@@ -224,7 +229,7 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
   (drgnx-look-scene--try "trust" (drgnx-trust-folder drgnx-look-scene--project))
   (drgnx-look-scene--try "focus" (drgnx-wb-focus-editor))
   (drgnx-look-scene--try "open"
-    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201)
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201)
     (drgnx-look-scene--open "test/unit/gateway-test.el")
     (goto-char (point-max)) (insert ";; next\n")                  ; changed, not saved: the tab's dot
     (drgnx-look-scene--open "core/drgnx-job.el"))
@@ -234,7 +239,9 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
       (magit-status-setup-buffer drgnx-look-scene--project))
     (drgnx-look-scene--show (current-buffer)))
   (drgnx-look-scene--try "explorer" (drgnx-wb-view-explorer))
-  (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201))
+  ;; the mockups' last test run, as a run reports it (`213 tests' in the status bar)
+  (drgnx-look-scene--try "tests" (drgnx-statusbar-note-tests 213 0))
+  (drgnx-look-scene--try "back" (drgnx-wb-focus-editor) (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201))
   (drgnx-look-scene--answer :project drgnx-look-scene--project))
 
 (defun drgnx-look-scene-agent (bin)
@@ -257,7 +264,7 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
 (defun drgnx-look-scene--editor ()
   (drgnx-look-scene--try "editor"
     (drgnx-wb-focus-editor)
-    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 34 201)))
+    (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201)))
 
 (defun drgnx-look-scene-window-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)

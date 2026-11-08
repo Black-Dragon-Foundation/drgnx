@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'drgnx-jank-guard)
 (declare-function dbus-call-method "dbus")
+(declare-function dbus-call-method-asynchronously "dbus")
 (declare-function dbus-list-names "dbus")
 
 (defvar drgnx-uitest-record--last-change)
@@ -738,6 +739,13 @@ with redisplay between them, while the test waits.  The plist has :settled."
   (apply #'dbus-call-method :session drgnx-uitest--rd drgnx-uitest--pointer-session
          (concat drgnx-uitest--rd ".Session") method args))
 
+(defun drgnx-uitest--pointer-send (method &rest args)
+  "Send METHOD with ARGS to the RemoteDesktop session without waiting for its answer.  A press or release goes this
+way: `dbus-call-method' waits in `read-event' under its own binding of `unread-command-events', and the click event
+that arrives meanwhile is pushed into that binding and lost.  The session is the one a motion started."
+  (apply #'dbus-call-method-asynchronously :session drgnx-uitest--rd drgnx-uitest--pointer-session
+         (concat drgnx-uitest--rd ".Session") method nil args))
+
 (defun drgnx-uitest--pointer-by (dx dy)
   "Move the virtual pointer by DX, DY logical pixels."
   (drgnx-uitest--pointer-call "NotifyPointerMotionRelative" :double (float dx) :double (float dy)))
@@ -780,8 +788,8 @@ A nested command loop (`recursive-edit', as `drgnx-uitest-run') reads none of a 
 runs from the session's server, so the keys are read here."
   (drgnx-uitest-pointer-move x y)
   (while (read-event nil nil 0.2))                          ; the motion's own events
-  (drgnx-uitest--pointer-call "NotifyPointerButton" :int32 272 t)     ; BTN_LEFT
-  (drgnx-uitest--pointer-call "NotifyPointerButton" :int32 272 nil)
+  (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 t)     ; BTN_LEFT
+  (drgnx-uitest--pointer-send "NotifyPointerButton" :int32 272 nil)
   (let ((deadline (+ (float-time) (or timeout 5))) (result nil))
     (setq drgnx-uitest-pointer-keys nil)
     (while (and (not (setq result (and until (funcall until)))) (< (float-time) deadline))

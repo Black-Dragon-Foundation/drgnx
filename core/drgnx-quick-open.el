@@ -19,7 +19,8 @@
 ;; input, those whose file name contains them all first, then the shorter, then by name.  The highlighted candidate
 ;; is kept by its identity (its name): a batch adds candidates and re-sorts, and the highlight stays on the same
 ;; file wherever it moves to; it moves only on `input' (to the best match) and `move'.  The shell below feeds the
-;; core and vertico.  See docs/guide/modules.md ("Quick Open").
+;; core and vertico.  As in VS Code, `>' typed first leaves the files for the command palette, with what follows it
+;; typed already.  See docs/guide/modules.md ("Quick Open").
 
 ;;; Code:
 (require 'cl-lib)
@@ -31,6 +32,7 @@
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
 (declare-function drgnx-view-env-unregister "drgnx-view-env")
+(declare-function drgnx-palette "drgnx-palette")
 
 ;;;; The core
 
@@ -157,9 +159,29 @@ update can break them, so each is checked and an error only reports.  Without ve
 (defun drgnx-quick-open--input-changed (&rest _)
   (drgnx-quick-open--feed (list 'input (minibuffer-contents-no-properties))))
 
+(defvar drgnx-quick-open--commands nil
+  "The text after `>' once Quick Open turned into the command palette (VS Code's `>'), else nil.")
+
+(defun drgnx-quick-open--command-mode (&rest _)
+  "Quick Open's minibuffer `after-change-functions' (the first, before the listing hears it): input that starts with
+`>' asks for a command, so Quick Open ends and the palette opens with the rest (`drgnx-quick-open--then')."
+  (let ((input (minibuffer-contents-no-properties)))
+    (when (string-prefix-p ">" input)
+      (setq drgnx-quick-open--commands (string-trim-left (substring input 1)))
+      ;; out of the minibuffer to the catch around it
+      (throw 'drgnx-quick-open--commands nil))))
+
+(defun drgnx-quick-open--then (choice root)
+  "After Quick Open of ROOT read CHOICE: the palette when `>' asked for it, else the file opened."
+  (if drgnx-quick-open--commands
+      (progn (unless (fboundp 'drgnx-palette) (require 'drgnx-palette))
+             (drgnx-palette drgnx-quick-open--commands))
+    (find-file (expand-file-name choice root))))
+
 (defun drgnx-quick-open--setup ()
   (setq drgnx-quick-open--buffer (current-buffer))
-  (add-hook 'after-change-functions #'drgnx-quick-open--input-changed nil t))
+  (add-hook 'after-change-functions #'drgnx-quick-open--input-changed nil t)
+  (add-hook 'after-change-functions #'drgnx-quick-open--command-mode -10 t))
 
 (defun drgnx-quick-open--root ()
   (require 'project)
@@ -284,21 +306,23 @@ patch."
   (require 'drgnx-view-env)
   (drgnx-view-env-register (drgnx-quick-open--rows-view drgnx-quick-open--current) (current-buffer))
   (add-hook 'after-change-functions #'drgnx-quick-open--rows-input nil t)
+  (add-hook 'after-change-functions #'drgnx-quick-open--command-mode -10 t)
   (drgnx-quick-open--rows-query drgnx-quick-open--current ""))
 
 (defun drgnx-quick-open--read-rows (root)
   "Quick Open of ROOT ranked by the hub; the file chosen is opened."
   (let* ((view (format "quick-open-%d" (cl-incf drgnx-quick-open--views)))
          (drgnx-quick-open--current (drgnx-quick-open--rows-make view root))
-         (drgnx-quick-open--buffer nil))
+         (drgnx-quick-open--buffer nil) (drgnx-quick-open--commands nil))
     (add-hook 'drgnx-hub-event-functions #'drgnx-quick-open--rows-event)
     (unwind-protect
-        (let ((choice (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
-                            (completion-styles '(drgnx-quick-open))
-                            (completion-category-overrides nil) (completion-category-defaults nil))
-                        (minibuffer-with-setup-hook #'drgnx-quick-open--rows-setup
-                          (completing-read "Quick Open: " #'drgnx-quick-open--rows-table nil t)))))
-          (find-file (expand-file-name choice root)))
+        (let ((choice (catch 'drgnx-quick-open--commands
+                        (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
+                              (completion-styles '(drgnx-quick-open))
+                              (completion-category-overrides nil) (completion-category-defaults nil))
+                          (minibuffer-with-setup-hook #'drgnx-quick-open--rows-setup
+                            (completing-read "Quick Open: " #'drgnx-quick-open--rows-table nil t))))))
+          (drgnx-quick-open--then choice root))
       (remove-hook 'drgnx-hub-event-functions #'drgnx-quick-open--rows-event)
       (drgnx-view-env-unregister view)
       (funcall drgnx-quick-open-send-function "view/close" (list :view view)))))
@@ -317,7 +341,7 @@ remote folder) this is `project-find-file'."
 (defun drgnx-quick-open--read-stream (root)
   "Quick Open of ROOT while its listing streams (the path without the hub)."
   (let* ((drgnx-quick-open--state (drgnx-quick-open--init))
-         (drgnx-quick-open--buffer nil)
+         (drgnx-quick-open--buffer nil) (drgnx-quick-open--commands nil)
          (drgnx-quick-open--stream
           (drgnx-file-stream-start root
                                    (lambda (names)
@@ -327,12 +351,13 @@ remote folder) this is `project-find-file'."
     (if (not drgnx-quick-open--stream)
         (call-interactively #'project-find-file)
       (unwind-protect
-          (let ((choice (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
-                              (completion-styles '(drgnx-quick-open))
-                              (completion-category-overrides nil) (completion-category-defaults nil))
-                          (minibuffer-with-setup-hook #'drgnx-quick-open--setup
-                            (completing-read "Quick Open: " #'drgnx-quick-open--table nil t)))))
-            (find-file (expand-file-name choice root)))
+          (let ((choice (catch 'drgnx-quick-open--commands
+                          (let ((completion-styles-alist (cons drgnx-quick-open--style completion-styles-alist))
+                                (completion-styles '(drgnx-quick-open))
+                                (completion-category-overrides nil) (completion-category-defaults nil))
+                            (minibuffer-with-setup-hook #'drgnx-quick-open--setup
+                              (completing-read "Quick Open: " #'drgnx-quick-open--table nil t))))))
+            (drgnx-quick-open--then choice root))
         (drgnx-file-stream-stop drgnx-quick-open--stream)))))
 
 (provide 'drgnx-quick-open)

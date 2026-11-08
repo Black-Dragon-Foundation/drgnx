@@ -160,8 +160,7 @@ when the cache changed."
 Real spaces, not an `:align-to' display property on one: the tab bar redraws only when its items are not `equal',
 and `equal' ignores text properties, so a new width would have left the old gap on the screen."
   (drgnx-topline--item key (propertize (make-string (max 0 columns) ?\s) 'face 'drgnx-topline)
-                       (and drag (fboundp 'mouse-drag-frame-move) 'mouse-drag-frame-move)
-                       (and drag "Drag to move the window")))
+                       (and drag 'drgnx-topline-drag-window) (and drag "Drag to move the window")))
 
 (defun drgnx-topline--limit (width)
   "The columns (or units) the project and the branch may take together on a line WIDTH wide."
@@ -244,14 +243,20 @@ is believed instead: the x is only the fallback, so a click never finds two item
 (defun drgnx-topline-mouse-down (event)
   "A press on the title row (EVENT): on its empty part it drags the window; on an item the release decides."
   (interactive "e")
-  (when (eq (nth 3 (drgnx-topline--event-item event)) 'mouse-drag-frame-move)
-    (mouse-drag-frame-move event)))
+  (when (eq (nth 3 (drgnx-topline--event-item event)) 'drgnx-topline-drag-window)
+    (drgnx-topline-drag-window event)))
+
+(defun drgnx-topline-drag-window (event)
+  "Move the window by dragging the title row's empty part from the press EVENT (`title-row-drag').
+`mouse-drag-frame-move' is a function, not a command: the tab bar calls an item's binding interactively."
+  (interactive "e")
+  (when (fboundp 'mouse-drag-frame-move) (mouse-drag-frame-move event)))
 
 (defun drgnx-topline-mouse-up (event)
   "A release on the title row (EVENT): run the command of the item under it, as a button does."
   (interactive "e")
   (let ((cmd (nth 3 (drgnx-topline--event-item event))))
-    (unless (memq cmd '(nil ignore mouse-drag-frame-move))
+    (unless (memq cmd '(nil ignore drgnx-topline-drag-window))
       (call-interactively cmd))))
 
 (defun drgnx-topline-toggle-maximized ()
@@ -279,8 +284,8 @@ left out), each one running its command.  nil when none has a key."
     (when items
       (cons (drgnx-topline--item 'drgnx-topline-search
                                  (drgnx-topline--text (concat (drgnx-topline--glyph 'search "/") " ") 'drgnx-topline)
-                                 (when-let* ((cmd (drgnx-commands-get 'palette))) (drgnx-cmd-command cmd))
-                                 "Search: the command palette")
+                                 (when-let* ((cmd (drgnx-commands-get 'go-quick-open))) (drgnx-cmd-command cmd))
+                                 "Search: Quick Open; > for commands")
             (nreverse items)))))
 
 (defun drgnx-topline--controls ()
@@ -309,14 +314,13 @@ left out), each one running its command.  nil when none has a key."
   "An item of PIXELS width.  Its PIXELS are also in the item (`:drgnx-px'): the tab bar redraws only when its items
 are not `equal', and `equal' ignores the text properties the width is in."
   (append (drgnx-topline--item key (propertize " " 'face 'drgnx-topline 'display `(space :width (,(max 0 pixels))))
-                               (and drag (fboundp 'mouse-drag-frame-move) 'mouse-drag-frame-move)
-                               (and drag "Drag to move the window"))
+                               (and drag 'drgnx-topline-drag-window) (and drag "Drag to move the window"))
           (list :drgnx-px (max 0 pixels))))
 
 ;;;; The title row of a graphical frame (design §4, "The window frame"; mockup window-dark.png)
-;; 38 px on the gap: the project's mark and name, the branch chip, the search box in the middle (it opens the palette;
-;; its key as a keycap), the attention and agents chips, the window controls.  Sizes are logical pixels times the
-;; frame's scale.  The mark and the search box are SVG images made from the theme's faces (a gradient, and a field
+;; 38 px on the gap: the project's mark and name, the branch chip, the search box in the middle (it opens Quick Open,
+;; `>' for commands; its key as a keycap), the attention and agents chips, the window controls.  Sizes are logical
+;; pixels times the frame's scale.  The mark and the search box are SVG images made from the theme's faces (a gradient, and a field
 ;; with a hairline and a keycap inside, which text runs cannot draw); without SVG they are text.
 
 (defconst drgnx-topline--search-size '(440 . 26) "The search box's width and height, logical pixels.")
@@ -401,16 +405,17 @@ as a keycap at the right (a hairline in the strong border, two pixels at the bot
      "</svg>")))
 
 (defun drgnx-topline--search-box ()
-  "The search box's item: it opens the palette; nil without a palette command."
-  (when-let* ((cmd (drgnx-commands-get 'palette)))
-    (let* ((key (drgnx-topline--keycap 'palette))
+  "The search box's item: it opens Quick Open (files; `>' for commands, as in VS Code), its keycap Quick Open's key
+in the key profile; nil without the command."
+  (when-let* ((cmd (drgnx-commands-get 'go-quick-open)))
+    (let* ((key (drgnx-topline--keycap 'go-quick-open))
            (text (concat "  " drgnx-topline--search-text "  " (or key "") "  ")))
       (drgnx-topline--item 'drgnx-topline-search
                            (drgnx-topline--image (drgnx-topline--search-svg key)
                                                  ;; the image's corners show the face's background: the row's
                                                  (propertize text 'face 'drgnx-topline))
                            (drgnx-cmd-command cmd)
-                           (if key (format "Search: the command palette (%s)" key) "Search: the command palette")))))
+                           (if key (format "Search: Quick Open (%s); > for commands" key) "Search: Quick Open; > for commands")))))
 
 (defun drgnx-topline--icon-svg (name x y size color)
   "Icon NAME (etc/icons) as an SVG element at X, Y, SIZE logical pixels, stroked in COLOR; \"\" without the file."
@@ -423,8 +428,7 @@ as a keycap at the right (a hairline in the strong border, two pixels at the bot
                                              (format "x=\"%s\" y=\"%s\" width=\"%d\" height=\"%d\"" x y size size)
                                              text t t))
         (setq text (replace-regexp-in-string "stroke-width=\"2\""
-                                             (format "stroke-width=\"%.3f\"" (/ (* drgnx-icons-stroke 24.0) size))
-                                             text t t))
+                                             (format "stroke-width=\"%s\"" drgnx-icons-stroke) text t t))
         (replace-regexp-in-string "currentColor" color text t t)))))
 
 (defun drgnx-topline--text-px (text face)
@@ -496,10 +500,10 @@ cards' gap, `internal-border-width')."
                            (concat (drgnx-topline--space 10) (drgnx-topline--chip parts 'drgnx-chip-quiet 20 4 'git-branch))
                            nil "The branch"))))
 
-(defun drgnx-topline--pills ()
+(defun drgnx-topline--pills (&optional need agents)
   "The attention and agents chips of a graphical row (pills on their tints), each after 10 px, each only while its
-count is positive."
-  (let ((need (drgnx-topline--attention-count)) (agents (drgnx-topline--agents-count)))
+count is positive.  NEED and AGENTS stand for the counts (the room the row keeps for them: the design's 1 and 2)."
+  (let ((need (or need (drgnx-topline--attention-count))) (agents (or agents (drgnx-topline--agents-count))))
     (append
      (when (> need 0)
        (list (drgnx-topline--item 'drgnx-topline-attention
@@ -556,7 +560,9 @@ colour under the pointer where the row draws a `mouse-face')."
 
 (defun drgnx-topline--build-pixels (buffer pixels drawn)
   "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
-centred on the frame and left out when it would touch the sides; the controls sit 8 px from the right edge."
+centred between the left items and the right ones as the design has them, both chips included (`1 needs you',
+`2 agents'), whether or not they show: a chip that comes or goes never moves it.  It is left out when it would touch
+the sides; the controls sit 8 px from the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
          (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
          (right (append (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
@@ -565,7 +571,12 @@ centred on the frame and left out when it would touch the sides; the controls si
          (right-px (drgnx-topline--width right measure))
          (search (drgnx-topline--search-box))
          (search-px (if search (funcall measure (nth 2 search)) 0))
-         (start (/ (- pixels search-px) 2))   ; the window's middle: a chip that comes or goes never moves it
+         ;; the design's right end: both chips, then the controls
+         (room-px (drgnx-topline--width (append (drgnx-topline--pills 1 2) (and drawn (drgnx-topline--control-buttons))
+                                                (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil)))
+                                        measure))
+         (gap (drgnx-topline--px 10))
+         (start (+ left-px gap (/ (- pixels left-px gap search-px gap room-px) 2)))
          (search (and search (>= start (+ left-px (drgnx-topline--px 10)))
                       (<= (+ start search-px (drgnx-topline--px 10) right-px) pixels)
                       search)))
@@ -876,6 +887,9 @@ their watchers go, and the memo empties, when `ui/face' is turned off)."
                         :doc "Maximise the window, or restore it (also a double click on the empty part of the title row)")
   (drgnx-command-define 'title-row-close :category "Window" :title "Close Window" :command #'delete-frame
                         :doc "Close the window (the title row's last window control)")
+  (drgnx-command-define 'title-row-drag :category "Window" :title "Move Window by the Title Row"
+                        :command #'drgnx-topline-drag-window :when #'ignore   ; a press runs it, never the palette
+                        :doc "Move the window: a press on the empty part of the title row, dragged")
   (setq drgnx-topline--active t)
   (drgnx-topline--apply))
 

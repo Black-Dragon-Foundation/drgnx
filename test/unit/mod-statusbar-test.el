@@ -100,7 +100,7 @@ active (`drgnx-statusbar-test--epochs')."
   (let ((pos 0) found)
     (while (and (not found) (setq pos (next-single-property-change pos 'display s)))
       (let ((d (get-text-property pos 'display s)))
-        (when (and (consp d) (eq (car d) 'space)) (setq found d))))
+        (when (and (consp d) (eq (car d) 'space) (plist-get (cdr d) :align-to)) (setq found d))))
     (or found (and (get-text-property 0 'display s) (get-text-property 0 'display s)))))
 
 (ert-deftest drgnx-statusbar/segments-render-in-order ()
@@ -770,6 +770,51 @@ follow it when the fonts change."
           (should (equal (drgnx-statusbar--seg-lsp) "LSP ●"))              ; a server that did not say its name
           (setq alive nil)
           (should (equal (drgnx-statusbar--seg-lsp) "LSP ×")))))))         ; exited
+
+(ert-deftest drgnx-statusbar/a-pixel-bar-says-it-as-the-design-does ()
+  "Design §4 (window-dark.png): a pixel bar's segments are `● eglot' (the state as a coloured dot before the server),
+`Spaces 2', `213 tests' after a check, `2 failed' after a cross; a terminal's keep their texts."
+  (drgnx-statusbar-test--with
+    (let ((drgnx-statusbar--measure (lambda (s) (* 10 (string-width s)))) (alive t) (info '(:name "pyright")))
+      (cl-letf (((symbol-function 'jsonrpc-running-p) (lambda (_s) alive))
+                ((symbol-function 'eglot--server-info) (lambda (_s) info))
+                ((symbol-function 'drgnx-look-icon) (lambda (name &rest _) (format "<%s>" name))))
+        (with-temp-buffer
+          (emacs-lisp-mode)
+          (setq-local indent-tabs-mode nil)
+          (insert "(a\n  b)\n")
+          (setq-local eglot--managed-mode t eglot--cached-server 'server)
+          (let ((lsp (drgnx-statusbar--seg-lsp)))
+            (should (equal (substring-no-properties lsp) "● pyright"))
+            (should (eq (get-text-property 0 'face lsp) 'drgnx-status-ok)))
+          (setq info nil)
+          (should (equal (substring-no-properties (drgnx-statusbar--seg-lsp)) "● eglot"))
+          (setq alive nil)
+          (should (eq (get-text-property 0 'face (drgnx-statusbar--seg-lsp)) 'drgnx-status-fail))
+          (should (equal (drgnx-statusbar--seg-indent) "Spaces 2"))
+          (let ((drgnx-statusbar-tests-state '(:passed 213 :failed 0)))
+            (drgnx-statusbar--bump)
+            (should (equal (substring-no-properties (drgnx-statusbar--seg-tests)) "<check> 213 tests")))
+          (let ((drgnx-statusbar-tests-state '(:passed 211 :failed 2)))
+            (drgnx-statusbar--bump)
+            (should (equal (substring-no-properties (drgnx-statusbar--seg-tests)) "<circle-x> 2 failed")))))
+      ;; a segment of a pixel bar is a hover target: room either side, inside its click and hover
+      (let* ((drgnx-look-bars-measure-function (lambda (s &optional _f) (* 10 (string-width s))))
+             (bar (drgnx-statusbar-render 400))
+             (pos (text-property-any 0 (length bar) 'drgnx-statusbar-segment 'a bar)))
+        (should (equal (get-text-property pos 'display bar) `(space :width (,(drgnx-statusbar--segment-pad)))))
+        (should (eq (get-text-property pos 'mouse-face bar) 'drgnx-statusbar-hover)))
+      ;; its width is its text's and the room's exact pixels; a cut shortens the text and keeps the room
+      (let* ((drgnx-look-bars-measure-function (lambda (s &optional _f) (* 10 (string-width s))))
+             (pad (drgnx-statusbar--segment-pad))
+             (drgnx-statusbar--measure (drgnx-statusbar--measure-fn (selected-frame)))
+             (s (progn (drgnx-statusbar-define-segment 'a :fn (lambda () "ABCDEFGHIJ")) (drgnx-statusbar--text 'a)))
+             (cut (drgnx-statusbar--cut s 80)))
+        (should (= (+ 100 (* 2 pad)) (drgnx-statusbar--w s)))
+        (should (<= (drgnx-statusbar--w cut) 80))
+        (should (equal (get-text-property 0 'display cut) `(space :width (,pad))))
+        (should (equal (get-text-property (1- (length cut)) 'display cut) `(space :width (,pad))))
+        (should (string-suffix-p (truncate-string-ellipsis) (substring-no-properties cut 0 -1)))))))
 
 (ert-deftest drgnx-statusbar/position-indent-encoding-eol-language ()
   (drgnx-statusbar-test--with
@@ -1705,8 +1750,8 @@ the six epochs and plain values."
                                                  drgnx-statusbar--which-func)))
     (should (equal (sort epochs #'string<) '(buffer-look eglot flymake git misc-info statusbar)))
     ;; 6 epochs, 8 values of the window (the shown position, not the point), 7 hot plain values, the notice tick,
-    ;; the waiting toasts, the layout key
-    (should (= 24 (length keys)))))
+    ;; the waiting toasts, the layout key, the window the bar is drawn in (across the frame)
+    (should (= 25 (length keys)))))
 
 (ert-deftest drgnx-statusbar/memoised-on-the-notice-tick ()
   "A change of the notice model builds the bar again; nothing else of it does."

@@ -128,7 +128,8 @@ names that look like secrets (`.env`, `*.pem`): `"index"` (the default) leaves t
 `"real"` lists them. Without the hub, in a big project the files are listed in the background and the list fills in
 while they arrive (with Nidhogg's framing on, `nidhogg-workers-framing`; a remote folder, or no framing, lists them
 first as before), and the file you have highlighted in Quick Open stays highlighted wherever the new ones sort. On a
-remote folder Quick Open is Emacs's `project-find-file`.
+remote folder Quick Open is Emacs's `project-find-file`. As in VS Code, `>` typed first turns Quick Open into the
+command palette, with what you type after it (the title row's search box opens Quick Open).
 
 **Live**: files created, deleted or renamed outside Emacs appear within ~150 ms (only the changed folder is read
 again; the view and selection stay; nothing changes while a mouse button is held — a press whose release never
