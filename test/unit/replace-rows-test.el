@@ -180,6 +180,31 @@ Replace All writes the buffer's match."
         (dolist (x bufs) (with-current-buffer x (set-buffer-modified-p nil)) (kill-buffer x))
         (delete-directory dir t)))))
 
+(ert-deftest drgnx-replace-rows/next-match-walks-the-unsaved-buffer-rows ()
+  "Pattern A: Next Match and Previous Match go through the rows Emacs scanned in a modified buffer (they are not in the
+hub's model), wrapping, and show each match from the buffer's scan."
+  (drgnx-replace-rows-test--with
+    (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-next" t)))
+           (a (expand-file-name "a.txt" dir)) buf (shown nil))
+      (unwind-protect
+          (progn
+            (write-region "nothing here\n" nil a nil 'silent)
+            (setq buf (find-file-noselect a))
+            (with-current-buffer buf (goto-char (point-max)) (insert "one needle\ntwo needle\n"))
+            (setq drgnx-replace--root dir)
+            (drgnx-replace--fill 'find "needle")
+            (drgnx-replace--search-now)
+            (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
+            (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 0 :matches 0))
+            (cl-letf (((symbol-function 'drgnx-replace--show-match) (lambda (m _select) (push (plist-get m :line) shown))))
+              (drgnx-replace-next)
+              (drgnx-replace-next)
+              (drgnx-replace-next)
+              (drgnx-replace-prev))
+            (should (equal '(3 2 3 2) shown)))
+        (when buf (with-current-buffer buf (set-buffer-modified-p nil)) (kill-buffer buf))
+        (delete-directory dir t)))))
+
 (ert-deftest drgnx-replace-rows/old-path-switch-still-searches ()
   "Pattern D: with `drgnx-view-old-path' the view is not hub-fed and a search runs the engine in Emacs, no hub call."
   (let ((drgnx-view-old-path t) (asked nil) (calls nil) (drgnx-replace-view "rr-old") (drgnx-view--types drgnx-view--types))

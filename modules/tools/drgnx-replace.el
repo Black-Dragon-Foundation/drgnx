@@ -1505,8 +1505,29 @@ every one was unticked, else unticked)."
       (nidhogg-view-set h 'tick id))
     (drgnx-replace--rows-boxes drgnx-view (cons file ms))))
 
+(defvar-local drgnx-replace--local-at nil "(KEY . SELECTION): the rescanned row Next Match is on, and the model's selection then.")
+
 (defun drgnx-replace--rows-step (dir)
-  "Select the next (DIR 1) or previous (DIR -1) shown match, wrapping: its id, or nil when there is none."
+  "Select the next (DIR 1) or previous (DIR -1) shown match, wrapping: its id, or nil when there is none.  The model's
+matches come first, then the rows Emacs scanned in modified buffers (`drgnx-replace--local-ids'), which the model
+does not hold; Next Match walks both."
+  (if (zerop (hash-table-count (or drgnx-replace--local-ids (make-hash-table))))
+      (drgnx-replace--rows-step-model dir)
+    (let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (sel (drgnx-view-nav-selection))
+           (cur (and drgnx-replace--local-at (equal (cdr drgnx-replace--local-at) sel) (car drgnx-replace--local-at)))
+           (local (let (ks) (maphash (lambda (k _) (push k ks)) drgnx-replace--local-ids) (nreverse ks)))
+           (all (append (cl-remove-if-not (lambda (i) (drgnx-replace--rows-kind-p i "match"))
+                                          (append (nidhogg-view-get h 'list "visible") nil))
+                        local))
+           (pos (seq-position all (or cur sel)))
+           (next (nth (mod (+ (or pos (if (> dir 0) -1 0)) dir) (length all)) all)))
+      (if (gethash next drgnx-replace--local-ids)
+          (progn (setq drgnx-replace--local-at (cons next sel)) next)
+        (setq drgnx-replace--local-at nil)
+        (drgnx-view-nav 'select next)))))
+
+(defun drgnx-replace--rows-step-model (dir)
+  "`drgnx-replace--rows-step' over the model's matches alone."
   (let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (before (drgnx-view-nav-selection))
          (id (drgnx-view-nav 'follow (if (> dir 0) "down:match" "up:match"))))
     (if (and id (not (equal id before)) (drgnx-replace--rows-kind-p id "match"))
@@ -1878,9 +1899,10 @@ text is sent too: the hub empties the rows and stops the search before."
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-step dir))
     (with-current-buffer (drgnx-replace--live-view)
       (if (drgnx-replace--rows-p)
-          (drgnx-replace--show-match (drgnx-replace--rows-match (or (drgnx-replace--rows-step dir)
-                                                                    (user-error "No matches")))
-                                     nil)
+          (let ((id (or (drgnx-replace--rows-step dir) (user-error "No matches"))))
+            (drgnx-replace--show-match (or (and drgnx-replace--local-ids (gethash id drgnx-replace--local-ids))
+                                           (drgnx-replace--rows-match id))
+                                       nil))
         (let* ((win (get-buffer-window (current-buffer)))
                (pos (drgnx-replace--next-row (if win (window-point win) (point)) dir)))
           (unless pos (user-error "No matches"))
