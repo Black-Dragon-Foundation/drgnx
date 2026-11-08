@@ -143,7 +143,8 @@ later key.
 The nearest exchange is the one on the same route whose keyed object differs in the fewest places; the path is the
 first place it differs. The request (scrubbed) and that path are appended to `misses.jsonl` in the replay's scratch
 directory (`$DRGNX_RUN_TMP/replay/`, else `$TMPDIR/replay/`), never into the recording. It never improvises an
-answer.
+answer. A replayed hub makes no entity vectors (the `embed` round): its `tei` provider is the replayer, and the
+vectors of a run are not part of what is recorded, so the round would only miss.
 
 **Partial streams.** The replayer answers chunked, so a drop is visible: `dropped` and an exchange with no `end` send
 their chunks and then drop the connection; `client-left` sends the chunks up to where the client left and waits for it

@@ -835,6 +835,10 @@ async fn watch_schema(front: Arc<Front>) {
 /// The entity embedder (`embed`): a round after a quiet minute, when the store is ready and a `tei` provider is in the
 /// table.  It never starts the provider; the round runs on its own task.
 fn embed_idle(front: &Arc<Front>, timer: &Arc<std::sync::Mutex<crate::embed::Timer>>) {
+    // a replayed run makes no entity vectors: its `tei` is the replayer, which has nothing recorded to answer with
+    if crate::recording::replaying() {
+        return;
+    }
     let Some(g) = front.tools.graph() else { return };
     let st = g.writer.status();
     if !matches!(st.last_open, Some(urdr::graph::OpenOutcome::Ready { .. })) {
