@@ -299,7 +299,6 @@ no `forward-sexp' of the font-lock goes past the form that holds it."
       (delete-file drgnx-perf-run--fixture))))
 
 
-;;; perf-run-test.el ends here
 
 (ert-deftest drgnx-perf-run/the-typing-workloads-cpu-rows-catch-a-key-spike ()
   "Pattern D.  The typing workloads' CPU rows were 350-420 ms at p90 while one key in ten cost 100-200 ms; with that
@@ -311,3 +310,22 @@ run, also before `DRGNX_PERF_CPU_FACTOR'."
         (let ((b (seq-find (lambda (b) (and (eq (car b) w) (equal (cadr b) (car row)))) budgets)))
           (should b)
           (should (<= (nth 2 b) (cdr row))))))))
+
+(ert-deftest drgnx-perf-run/a-profile-wraps-the-measure-and-goes-next-to-the-results ()
+  "Pattern D: with $DRGNX_PERF_PROFILE the measure runs under `drgnx-perf-profiled', its report beside the results
+file; without it the measure is as written."
+  (let (forms)
+    (cl-letf (((symbol-function 'drgnx-perf-run--call) (lambda (_s f &rest _) (push f forms) (list :x 1))))
+      (with-environment-variables (("DRGNX_PERF_PROFILE" "1") ("DRGNX_PERF_RESULTS" "/out/run.eld"))
+        (should (equal (drgnx-perf-run--profile-file "panel-replay") "/out/run-panel-replay.profile.txt"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(drgnx-perf-profiled \"/out/run-panel-replay.profile.txt\" (lambda () (m)))" forms))
+      (setq forms nil)
+      (with-environment-variables (("DRGNX_PERF_PROFILE" nil))
+        (should-not (drgnx-perf-run--profile-file "panel-replay"))
+        (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
+          (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
+      (should (member "(m)" forms)))))
+
+;;; perf-run-test.el ends here

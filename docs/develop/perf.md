@@ -866,6 +866,22 @@ emacsclient -s SERVER -e '(progn (profiler-stop) (format "%S" (seq-take (drgnx-p
 The audit lists the hook functions that ran while the frame opened (`after-make-frame-functions`,
 `server-after-make-frame-hook`, window hooks …), costliest first.
 
+## Profiling a workload
+
+When a number moves and reading the code does not say why, profile the workload: with `DRGNX_PERF_PROFILE=1`, each
+workload's measure runs under Emacs's CPU and memory profilers (`drgnx-perf-profiled`), and its report goes next to
+the results file as `RESULTS-WORKLOAD.profile.txt` (in the temp directory without `DRGNX_PERF_RESULTS`):
+
+```sh
+DRGNX_PERF_PROFILE=1 DRGNX_PERF_RESULTS=out/run.eld DRGNX_PERF_WORKLOADS=panel-replay bin/drgnx test --container --perf
+```
+
+Per profile, memory (bytes sampled) then CPU (1 ms samples), the report has the call paths, callers above callees,
+and the functions sampled most with up to three of their callers; a path under 1% of its profile's samples is left
+out. Only the measure is profiled (not the setup, nor a workload's typed input), the last of its repeats; the report
+is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
+the budgets: read the report, then run the workload again without it.
+
 ## Tests
 
 `test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_WORKLOADS`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
