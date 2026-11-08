@@ -30,6 +30,8 @@
 
 (declare-function drgnx-module-running-p "drgnx-modules" (module))
 (declare-function drgnx-user-dir "drgnx-paths" ())
+(declare-function drgnx-state-dir "drgnx-paths" ())
+(declare-function drgnx-file-write "drgnx-file")
 
 ;;;; The roles
 
@@ -400,20 +402,28 @@ role's first face."
            (face-spec-set face (cadr orig) 'face-defface-spec)
            (setq drgnx-look-fonts--orig (assq-delete-all face drgnx-look-fonts--orig))))))
 
+(defun drgnx-look-fonts--set-alternatives (entries)
+  "Make ENTRIES, (FAMILY FALLBACK...) lists, this module's part of `face-font-family-alternatives', and give the
+font lookup the result: it reads only what `internal-set-alternative-font-family-alist' was given (the variable's
+own setter calls it), never the variable.  Nothing happens when ENTRIES are the ones there already."
+  (unless (equal entries drgnx-look-fonts--alternatives)
+    (dolist (e drgnx-look-fonts--alternatives)
+      (setq face-font-family-alternatives (delq e face-font-family-alternatives)))
+    (setq drgnx-look-fonts--alternatives entries)
+    (dolist (e (reverse entries)) (push e face-font-family-alternatives))
+    (internal-set-alternative-font-family-alist face-font-family-alternatives)))
+
 (defun drgnx-look-fonts--apply-alternatives ()
   "Each family of the code and UI roles falls back down its list, natively (`face-font-family-alternatives')."
-  (dolist (e drgnx-look-fonts--alternatives)
-    (setq face-font-family-alternatives (delq e face-font-family-alternatives)))
-  (setq drgnx-look-fonts--alternatives nil)
-  (dolist (role '(code ui))
-    (let* ((family (plist-get (drgnx-look-fonts-resolve role) :family))
-           (value (drgnx-look-fonts--value role))
-           (fallback (or (and (consp value) (plist-get value :fallback))
-                         (plist-get (cdr (assq role drgnx-type-defaults)) :fallback))))
-      (when (and (stringp family) fallback)
-        (let ((e (cons family fallback)))
-          (push e drgnx-look-fonts--alternatives)
-          (push e face-font-family-alternatives))))))
+  (let (entries)
+    (dolist (role '(code ui))
+      (let* ((family (plist-get (drgnx-look-fonts-resolve role) :family))
+             (value (drgnx-look-fonts--value role))
+             (fallback (or (and (consp value) (plist-get value :fallback))
+                           (plist-get (cdr (assq role drgnx-type-defaults)) :fallback))))
+        (when (and (stringp family) fallback)
+          (push (cons family fallback) entries))))
+    (drgnx-look-fonts--set-alternatives (nreverse entries))))
 
 (defun drgnx-look-fonts--themed-p (face)
   "Non-nil when an enabled theme (not Customize's own) has a spec for FACE: Emacs then skips FACE's defface spec."
@@ -652,11 +662,16 @@ Checked per display, with a graphical frame: `find-font' in a daemon with no suc
       (nreverse out))))
 
 (defun drgnx-look-fonts--check-frame ()
-  "`server-after-make-frame-hook': check the new frame's display."
+  "`server-after-make-frame-hook': check the new frame's display, and write what the checks found to fonts-report.eld
+in the state dir for `drgnx doctor' (a batch Emacs with no frame of its own to check).  Never signals."
   (let ((frame (selected-frame)))
     (when (display-graphic-p frame)
       (setf (alist-get (terminal-name frame) drgnx-look-fonts--fallback-report nil nil #'equal)
-            (list (drgnx-look-fonts-fallbacks frame))))))
+            (list (drgnx-look-fonts-fallbacks frame)))
+      (condition-case err
+          (drgnx-file-write (expand-file-name "fonts-report.eld" (drgnx-state-dir)) (drgnx-look-fonts-fallback-report)
+                            :fsync nil)
+        (error (message "drgnx: cannot write the font report: %s" (error-message-string err)))))))
 
 (defun drgnx-look-fonts--distro ()
   "`fedora', `arch', `ubuntu' (or Debian-like), `homebrew' on a Mac, else nil; and whether Fedora is image-based."
@@ -758,10 +773,8 @@ Your Lisp's attributes and Customize entries stay."
   (dolist (o (copy-sequence drgnx-look-fonts--orig))
     (face-spec-set (car o) (cadr o) 'face-defface-spec))
   (setq drgnx-look-fonts--orig nil)
-  (dolist (e drgnx-look-fonts--alternatives)
-    (setq face-font-family-alternatives (delq e face-font-family-alternatives)))
-  (setq drgnx-look-fonts--alternatives nil)
-  (when drgnx-look-fonts--absolute          ; the faces are relative again: the scaled buffers' remaps without them
+  (drgnx-look-fonts--set-alternatives nil)
+  (when drgnx-look-fonts--absolute         ; the faces are relative again: the scaled buffers' remaps without them
     (setq drgnx-look-fonts--absolute nil drgnx-look-fonts--absolute-code nil)
     (drgnx-look-fonts--rescale-buffers)))
 

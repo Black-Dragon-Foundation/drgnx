@@ -191,8 +191,13 @@ The rules are global (they are Emacs's composition table), and turning the modul
 
 ### Missing fonts
 
+A role whose family is not installed uses the next family of its `:fallback` list that is (the code role's default:
+JetBrains Mono, then Adwaita Mono, then the system's `monospace`), never whatever font the system picks: the lists are
+handed to Emacs's font matching (`face-font-family-alternatives`, set through `internal-set-alternative-font-family-alist`
+so that the C side sees them).
 [`drgnx doctor`](install.md#fonts) names each role whose family is not installed, the family it fell back to and the
-package to install.
+package to install. drgnx checks each new window's display and writes what it found to `fonts-report.eld` in the
+state directory; the `drgnx doctor` command, which runs without a window, reads it there.
 
 The role faces are `drgnx-ui-text`, `drgnx-ui-heading`, `drgnx-ui-caption`, `drgnx-ui-title`, `drgnx-code-small`,
 `drgnx-agent-prose` and `drgnx-terminal`; the code role is the `default` and `fixed-pitch` faces and the UI role also

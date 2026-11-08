@@ -180,6 +180,22 @@ desktop's font once the code role follows it."
       (drgnx-look-fonts-apply)
       (should (equal "JetBrains Mono" (face-attribute 'default :family))))))
 
+(ert-deftest drgnx-look-fonts/a-missing-family-falls-back-down-its-list ()
+  "Pattern D: the font lookup reads the alternatives Emacs was given through `internal-set-alternative-font-family-alist'
+\(what `face-font-family-alternatives's setter calls), never the variable itself.  Only pushed onto the variable, a code
+family that is not installed fell to fontconfig's any font (a serif) instead of the role's fallback."
+  (let ((given 'none))
+    (cl-flet ((spy (alist) (setq given alist)))
+      (advice-add 'internal-set-alternative-font-family-alist :before #'spy)
+      (unwind-protect
+          (drgnx-look-fonts-test--clean
+            (drgnx-look-fonts-on)
+            (should (member '("JetBrains Mono" "Adwaita Mono" "monospace") given))
+            (should (member '("Adwaita Sans" "Inter" "sans-serif") given))
+            (drgnx-look-fonts-off)
+            (should-not (assoc "JetBrains Mono" given)))
+        (advice-remove 'internal-set-alternative-font-family-alist #'spy)))))
+
 (ert-deftest drgnx-look-fonts/your-lisp-default-font-stays ()
   "Pattern D: a `set-face-attribute' on `default' in config.el (after the module's setup noted `default', before
 init ended) is your Lisp: it stays with no theme and under drgnx's own, and the resolution says so."

@@ -491,7 +491,8 @@ that is not a checkout); (:error MESSAGE) when git cannot say."
            :package-modes-off (drgnx-doctor--package-modes-off)
            :sqlite (and (fboundp 'sqlite-available-p) (sqlite-available-p))
            :svg (image-type-available-p 'svg)
-           :font-fallbacks (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
+           :font-fallbacks (or (and (fboundp 'drgnx-look-fonts-fallback-report) (drgnx-look-fonts-fallback-report))
+                               (drgnx-doctor--state-file "fonts-report.eld"))   ; the CLI: the session's last check
            :agent-colours (and (fboundp 'drgnx-agent-identity-colour-count) (drgnx-agent-identity-colour-count))
            :work-plans (drgnx-doctor--work-plans)
            :ai-up (drgnx-doctor--ai-up)

@@ -110,5 +110,26 @@ install; it is ok when nothing is missing and absent before a graphical display 
   (should (eq 'ok (car (drgnx-doctor-check 'fonts '(:font-fallbacks (:fallbacks nil))))))
   (should-not (drgnx-doctor-check 'fonts '(:font-fallbacks nil))))
 
+(ert-deftest drgnx-look-fonts/the-cli-doctor-reads-the-session-font-check ()
+  "`drgnx doctor' runs in a batch Emacs with no graphical frame: the session's check of each new frame is written to
+fonts-report.eld in the state dir, and the doctor reads it there when it has no frame of its own to check."
+  (require 'drgnx-doctor)
+  (let* ((state (make-temp-file "drgnx-fonts-state" t))
+         (drgnx-look-fonts--fallback-report nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-state-dir) (lambda () state))
+                  ((symbol-function 'display-graphic-p) (lambda (&optional _) t))
+                  ((symbol-function 'terminal-name) (lambda (&optional _) "wayland-0"))
+                  ((symbol-function 'drgnx-look-fonts-fallbacks)
+                   (lambda (_) '((code "JetBrains Mono" "Adwaita Mono")))))
+          (drgnx-look-fonts--check-frame)
+          (should (file-exists-p (expand-file-name "fonts-report.eld" state)))
+          ;; the CLI doctor: no frame of its own, nothing checked in this Emacs
+          (let ((drgnx-look-fonts--fallback-report nil))
+            (let ((r (drgnx-doctor-check 'fonts (drgnx-doctor-facts))))
+              (should (eq 'warn (car r)))
+              (should (string-match-p "code: JetBrains Mono is not installed, using Adwaita Mono" (cadr r))))))
+      (delete-directory state t))))
+
 (provide 'look-fonts-mode-test)
 ;;; look-fonts-mode-test.el ends here
