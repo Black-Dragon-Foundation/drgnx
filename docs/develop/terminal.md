@@ -57,6 +57,12 @@ The hub starts it; it runs PROGRAM on a new PTY (a new session whose controlling
 with the worker's own environment, and serves the hub on PATH. Without the `ghostty` feature the binary refuses to start
 (exit 78) and the library builds only the parts that need no engine.
 
+**The grid keeps the window's width.** The workbench owns pane sizes, so the worker refuses DECCOLM, as xterm does by
+default and the other modern terminals do: mode 40 (allow 80 ⇄ 132 columns) stays off, and with it off the engine
+ignores mode 3 (DECCOLM) and neither resizes nor clears. The C API cannot lock a mode, and a program sets one with
+`CSI ? … h`, where `CSI ? 40 ; 3 h` sets 40 before 3 in the same sequence; so `Engine::write` holds each `CSI ? … h`
+until it ends (it may span writes) and writes it without 40. A request for 40 alone writes nothing.
+
 **The wire** (`src/proto.rs`) is one JSON object per line, tagged by `t`. The hub sends `attach {view, class, hub,
 env_epoch}`, `env`, `key {key, mods, text, unshifted}`, `text`, `paste`, `focus {in}`, `mouse {kind, button, col, row,
 mods}`, `resize {cols, rows, cell_px}`, `ack {version}`, `resync`, `config {config: [[name, value]…]}` and `close
@@ -156,7 +162,7 @@ worker, never in the golden.
 |---|---|---|
 | `double-width` | the double-width and double-height lines (DECDWL, DECDHL) drawn twice as wide | the rows carry no line size: they are drawn at normal width |
 | `vt52-exit` | VT52 mode (`CSI ? 2 l`): the rectangle of `*` and `!`, then the identify reply `ESC / Z` | libghostty-vt has no VT52 mode: the VT52 sequences print as text, and the identify request gets the ANSI reply (`CSI ? 62 ; 22 c`) |
-| 132-column screens (menus 1, 2 and 4) | DECCOLM switches to 132 columns when the terminal allows it | the grid becomes 132 columns wide while the PTY and the window stay at 80 (xterm refuses DECCOLM by default) |
+| 132-column screens (menus 1, 2 and 4) | DECCOLM switches to 132 columns when the terminal allows it | DECCOLM is refused, as in xterm's default: the grid stays at the window's 80 columns and vttest's 132-column lines wrap |
 | `vt52-exit` | the cursor report after leaving VT52 mode read as `CSI 1 ; 1 R` | vttest reads that reply and the identify reply up to a Return, so the script's Return shows as `<13>` in them and vttest calls the cursor report unknown |
 
 ## The hub's methods
@@ -255,13 +261,21 @@ program runs).
   a font change never re-pairs the buffer, and no `view/env` is sent). A reset that came before the answer found no
   buffer, so the answer sends `view/resync` when nothing was applied yet. With no subscription the buffer waits and
   `drgnx-hub-connect` runs; the subscription opens it.
+- **What an open reuses** (memos, `core/drgnx-memo.el`, activated by the module's setup): the environment (`term-env`,
+  one per session, built again when `process-environment` is set or bound to another list, a terminal setting it is
+  made of changes, the terminfo entry appears or goes, or the server starts or stops; the epoch `term-env-set` watches
+  `process-environment`, since `setenv` edits it in place), the `colours` of the config (`term-colours`, per frame
+  and weak on it, read again after a theme change: the epoch `term-theme`) and the word syntax table (`term-word-syntax`,
+  one for every terminal buffer, per value of `drgnx-term-selection-word-chars`). Together they were ~38 kB of an
+  open's ~78 kB of allocation.
 - **The view type `drgnx-term-view`:** `:delay 0` (no throttle; the 4 ms slices stay), `:ack t`, `:epoch-reset nil`,
   `:follow-tail t`. Its PATCHED puts the inserter's overlays back, then point and the cursor on the cursor's row and
   column (`cursor-type` from the shape: block `box`, hollow `hollow`, bar `(bar . 2)`, underline `(hbar . 2)`; not
   visible: nil). A cursor past the row's last character (trailing blanks are not sent) is drawn by an overlay's
   `after-string` of blanks whose last carries `cursor`.
-- **Theme:** a theme enabled or disabled repaints every terminal from the faces (`drgnx-view-patch-repaint`): rows
-  keep their keys, nothing goes to the hub.
+- **Theme:** a theme enabled or disabled bumps `term-theme` and repaints every terminal from the faces
+  (`drgnx-view-patch-repaint`): rows keep their keys; the workers get the new `colours` in a `term/config`. A face
+  changed without a theme (`set-face-attribute`) reaches a new terminal's worker only after the next theme change.
 - **Scrollback:** `drgnx-term-scrollback-lines`'s `:apply` sends `term/config` `scrollback-lines` to every worker,
   which removes the oldest rows or backfills; window-start reaching the buffer's top sends `term/fetch` with the first
   row's key (one at a time; not again for the same top row once the worker said nothing is missing).

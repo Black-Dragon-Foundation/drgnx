@@ -77,6 +77,8 @@ pub struct Engine {
     cols: u16,
     rows_n: u16,
     cell: (u32, u32),
+    /// The start of a `CSI ?` sequence not written yet: it may set mode 40 (see `write`).
+    held: Vec<u8>,
 }
 
 fn ok(rc: GhosttyResult, what: &str) -> Result<(), String> {
@@ -215,6 +217,47 @@ unsafe extern "C" fn on_prompt(
     }
 }
 
+/// The longest `CSI ?` sequence held (24 parameters of 5 digits, the engine's limit): a longer one, only possible with
+/// leading zeros, is written as it comes.
+const HELD_MAX: usize = 160;
+
+/// Where in BYTES the first `ESC [ ?` starts, or a prefix of it at the end; else BYTES' length.
+fn private_csi(bytes: &[u8]) -> usize {
+    let mut from = 0;
+    while let Some(i) = bytes[from..].iter().position(|&b| b == 0x1b) {
+        let at = from + i;
+        let next = &bytes[at + 1..];
+        if b"[?".starts_with(&next[..next.len().min(2)]) {
+            return at;
+        }
+        from = at + 1;
+    }
+    bytes.len()
+}
+
+/// `CSI ? … h` SEQ without mode 40 (empty when it set only 40), or None when it does not set 40.  Parameters are
+/// split at `;` and `:` and read with saturation, as the engine reads them.
+fn without_40(seq: &[u8]) -> Option<Vec<u8>> {
+    let params = &seq[3..seq.len() - 1];
+    let is_40 = |p: &&[u8]| {
+        p.iter().fold(0u16, |a, &d| {
+            a.saturating_mul(10).saturating_add(u16::from(d - b'0'))
+        }) == 40
+    };
+    let parts = params.split(|&b| b == b';' || b == b':');
+    if !parts.clone().any(|p| is_40(&p)) {
+        return None;
+    }
+    let kept: Vec<&[u8]> = parts.filter(|p| !is_40(p)).collect();
+    if kept.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = b"\x1b[?".to_vec();
+    out.extend_from_slice(&kept.join(&b';'));
+    out.push(b'h');
+    Some(out)
+}
+
 impl Engine {
     /// A terminal of COLS × ROWS cells of CELL px, keeping at most SCROLLBACK lines and SCROLLBACK_BYTES of them.
     pub fn new(
@@ -238,6 +281,7 @@ impl Engine {
             cols,
             rows_n: rows,
             cell,
+            held: Vec::with_capacity(HELD_MAX),
         };
         // SAFETY: each constructor writes a fresh handle into its out pointer; Drop frees what was made.
         unsafe {
@@ -335,10 +379,58 @@ impl Engine {
         &mut self.sink
     }
 
-    /// The program's output.
-    pub fn write(&mut self, bytes: &[u8]) {
-        // SAFETY: a live terminal and a valid slice.
-        unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
+    /// The program's output.  DECCOLM is refused, as in xterm's default: mode 40 (allow 80 ⇄ 132 columns) stays off,
+    /// so mode 3 does nothing and the grid keeps the window's width (the workbench owns pane sizes).  A program can set
+    /// 40 only with `CSI ? … h`: such a sequence is held until it ends (it may span writes) and written without 40.
+    pub fn write(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            if self.held.is_empty() {
+                let at = private_csi(bytes);
+                self.vt(&bytes[..at]);
+                bytes = &bytes[at..];
+            }
+            bytes = self.hold(bytes);
+        }
+    }
+
+    /// Hold the bytes of a `CSI ?` sequence from BYTES, until it ends or is not one: what is left of BYTES.
+    fn hold<'a>(&mut self, bytes: &'a [u8]) -> &'a [u8] {
+        for (i, &b) in bytes.iter().enumerate() {
+            let n = self.held.len();
+            let more = match n {
+                0 => b == 0x1b,
+                1 => b == b'[',
+                2 => b == b'?',
+                _ => b.is_ascii_digit() || b == b';' || b == b':',
+            };
+            if more && n < HELD_MAX {
+                self.held.push(b);
+                continue;
+            }
+            let mut held = std::mem::take(&mut self.held);
+            let rest = if b == b'h' && n >= 3 {
+                held.push(b);
+                match without_40(&held) {
+                    Some(seq) => self.vt(&seq),
+                    None => self.vt(&held),
+                }
+                &bytes[i + 1..]
+            } else {
+                self.vt(&held);
+                &bytes[i..]
+            };
+            held.clear();
+            self.held = held;
+            return rest;
+        }
+        &[]
+    }
+
+    fn vt(&mut self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            // SAFETY: a live terminal and a valid slice.
+            unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
+        }
     }
 
     /// Keep at most LINES lines of scrollback, and at most BYTES of it (the engine's default is one page, about
