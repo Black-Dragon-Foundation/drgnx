@@ -129,7 +129,10 @@ with the accent), never underlined links; on a graphical frame the keys are keyc
     (with-current-buffer "*drgnx start*"
       (let ((faces nil) (b (next-button (point-min))))
         (while b (push (button-get b 'face) faces) (setq b (next-button (button-end b))))
-        (should (equal '(drgnx-control-primary drgnx-control drgnx-control) (nreverse faces))))
+        (should (equal '(drgnx-ui-button-primary drgnx-ui-button drgnx-ui-button) (nreverse faces)))
+        ;; in the UI font, not the buffer's code font (the start page scene, s4e)
+        (dolist (f '(drgnx-ui-button-primary drgnx-ui-button))
+          (should (memq 'drgnx-ui-text (ensure-list (face-attribute f :inherit nil nil))))))
       (goto-char (point-min))
       (search-forward "Ctrl")
       (should (eq 'drgnx-keycap (get-text-property (1- (point)) 'face))))))
