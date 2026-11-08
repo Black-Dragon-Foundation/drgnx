@@ -798,6 +798,16 @@ keys); every binding is undone after."
     (dolist (key '("s-h" "s-m" "s-`" "s-SPC" "s-<tab>"))
       (should (equal (list key nil) (list key (drgnx-keys-test--on r key)))))))
 
+(ert-deftest drgnx-keys/vscode-undo-is-c-z ()
+  ;; Undo had no key in the VS Code profile: C-z was Emacs' `suspend-frame' (on Wayland it minimises the window) and
+  ;; C-/ is Toggle Comment.  VS Code's undo is C-z (Cmd+Z on a Mac); C-y stays Emacs' yank (the profile keeps it).
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)))))
+    (should (member "C-z" (drgnx-keys-test--keys r 'edit-undo)))
+    (should (member "C-S-z" (drgnx-keys-test--keys r 'edit-redo)))
+    (should-not (drgnx-keys-test--on r "C-y")))
+  (let ((r (drgnx-keys-test--resolve '((vscode app editing window)) :platform 'macos)))
+    (should (member "s-z" (drgnx-keys-test--keys r 'edit-undo)))))
+
 (ert-deftest drgnx-keys/cmd-shift-letters-are-what-ns-sends ()
   ;; GNU Emacs on macOS sends Cmd+Shift+P as s-P, never S-s-p (which no key press would reach: s-P unbound
   ;; is read as s-p, Quick Open).  Shift stays on named keys.
@@ -835,7 +845,7 @@ keys); every binding is undone after."
     (should (string-search "kill-current-buffer (s-k)" (seq-find (lambda (l) (string-prefix-p "s-k " l))
                                                                  (drgnx-keys-conflict-lines))))
     ;; The ns-win keys VS Code takes over, on purpose (Cmd+Shift+letter included: s-S Save As, s-H Replace
-    ;; in Project, …) and s-v, Paste (M12b: it replaces the selection); the others stay Emacs' (s-z …).  s-c and
+    ;; in Project, …), s-v, Paste (M12b: it replaces the selection), and s-z, Undo; the others stay Emacs'.  s-c and
     ;; s-x are bound only while text is selected (the region map), so Emacs' own stay without a selection.
     (should (equal (sort (seq-filter (lambda (key) (seq-find (lambda (b) (and (null (plist-get b :map))
                                                                               (equal (plist-get b :key) key)))
@@ -843,8 +853,8 @@ keys); every binding is undone after."
                                      (mapcar #'car drgnx-keys-test--ns-defaults))
                          #'string<)
                    (sort (list "<end>" "<home>" "s-'" "s-+" "s-," "s--" "s-0" "s-<left>" "s-<right>" "s-=" "s-a"
-                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-S" "s-H" "s-M" "s-F"
-                               "s-E")
+                               "s-f" "s-l" "s-n" "s-o" "s-p" "s-q" "s-s" "s-t" "s-v" "s-w" "s-z" "s-S" "s-H" "s-M"
+                               "s-F" "s-E")
                          #'string<)))
     ;; and s-L, Select All Occurrences — the extra/mc module's command, not in this registry
     (let ((vscode (alist-get 'vscode drgnx-keys-test--profiles)))
@@ -978,6 +988,7 @@ The commands of modules that need no installed package are in it, the later stag
                               quick-help quick-help-close             ; M12f's quick help
                               close-pane                              ; M12f's Esc and q in a pane
                               settings-lisp-files-open           ; settings Task 28: RET on the Lisp files page
+                              edit-undo                          ; Undo on C-z
                               settings-lisp-files-toggle settings-add-lisp-file   ; settings Task 29: t and a there
                               ;; settings Task 26: the Settings page took C-, from Modules, and its own keys
                               preferences-settings settings-page-tab settings-page-group settings-page-search

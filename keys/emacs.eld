@@ -249,6 +249,7 @@
         (edit-select-line :none "in the palette")
         (edit-next-occurrence :none "in the palette")
         (edit-all-occurrences :none "in the palette")
+        (edit-undo :none "C-/ (stock)")
         (edit-redo :none "C-? (stock)")
         (edit-comment :none "C-x C-; (stock)")
         (edit-delete-line :none "C-S-<backspace> (stock)")

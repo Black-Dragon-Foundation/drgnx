@@ -295,6 +295,7 @@ kill ring, so a hung owner or a terminal that refuses the read costs its timeout
                                         (go-line "Go to Line…" goto-line "Go to a line number")
                                         (edit-select-all "Select All" mark-whole-buffer "Select the whole buffer")
                                         (edit-select-line "Select Line" drgnx-editing-select-line "Select the line; again for the next")
+                                        (edit-undo "Undo" undo "Undo the last change (in the selection, with one)")
                                         (edit-redo "Redo" undo-redo "Redo the last undone change")
                                         (edit-comment "Toggle Comment" comment-line "Comment or uncomment the line or the selection")
                                         (edit-delete-line "Delete Line" kill-whole-line "Delete the whole line")

@@ -263,6 +263,7 @@
         (edit-select-line :none "V (Vim)")
         (edit-next-occurrence :none "in the palette")
         (edit-all-occurrences :none "in the palette")
+        (edit-undo :none "u (Vim)")
         (edit-redo :none "C-r (Vim)")
         (edit-comment "SPC c c")
         (edit-delete-line :none "dd (Vim)")

@@ -249,6 +249,7 @@
         (edit-select-line "C-l")
         (edit-next-occurrence "C-d")
         (edit-all-occurrences "C-S-l")
+        (edit-undo "C-z")
         (edit-redo "C-S-z")
         (edit-comment "C-/")
         (edit-delete-line "C-S-k")

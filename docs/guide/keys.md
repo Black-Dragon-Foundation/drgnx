@@ -311,11 +311,13 @@ drgnx (a graphical window, a capable terminal, a legacy one with Alt+Shift and F
 | Command | VS Code | Emacs | Vim |
 |---|---|---|---|
 | Copy / Cut / Paste (in a file) | `C-c` / `C-x` / `C-v` | `M-w` / `C-w` / `C-y` | `y` / `d` in visual state, `p` |
+| Undo / Redo | `C-z` / `C-S-z` | `C-/` / `C-?` | `u` / `C-r` |
 
 In the VS Code profile `C-c` and `C-x` copy and cut **only while text is selected** (as Emacs's CUA mode does); with
 no selection they are Emacs's prefixes, so `C-x C-s`, `C-c C-c` in a mode and the rest work as always. A selection
 the mark leaves empty (`C-SPC` and no move) counts as none. `C-v` always pastes, replacing the selection if there is
-one, in one undo step; it no longer scrolls (PageDown does). In a read-only buffer Cut copies, and Paste says the
+one, in one undo step; it no longer scrolls (PageDown does). `C-z` undoes (Emacs' own `C-z`, which minimises the window, is not on it), and `C-y` stays
+Emacs' paste of the last cut (yank), as in every profile; Redo is `C-S-z`. In a read-only buffer Cut copies, and Paste says the
 buffer is read-only. The Explorer keeps its own `C-c` / `C-x` / `C-v` for files (see [workbench.md](workbench.md)):
 they are in its own keymap, which beats the global `C-v`, and the Explorer never selects text, so the selection-only
 `C-c` / `C-x` stay out of its way. On a Mac they are `s-c`, `s-x` and `s-v`.
