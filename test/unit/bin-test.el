@@ -1118,6 +1118,19 @@ macOS (no /proc there)."
                                                           "test" "--container" "--perf" "--compositor" "kwin"))))))
       (delete-directory dir t))))
 
+(ert-deftest drgnx-bin/container-perf-takes-the-hook-audit ()
+  ;; --audit (what each hook function costs) goes with --perf inside the container too: the run's command carries it;
+  ;; it is refused on any other tier and beside an A/B.
+  (let ((dir (make-temp-file "drgnx-bin-tmp" t)))
+    (unwind-protect
+        (let* ((args (drgnx-bin-test--container-argv dir '("DRGNX_TEST_GUI_IMAGE=gui-image") "--perf" "--audit"))
+               (tail (member "gui-image" args)))
+          (should tail)
+          (should (equal (cdr tail) '("bin/drgnx" "test" "--perf" "--audit")))
+          (should (drgnx-bin-test--container-refused-p dir nil "--ui" "--audit"))
+          (should (drgnx-bin-test--container-refused-p dir nil "--perf" "--audit" "--ab-env" "A=1,2")))
+      (delete-directory dir t))))
+
 (ert-deftest drgnx-bin/container-passes-the-run-control-variables-and-turns-the-lease-off ()
   ;; The run-control variables go in with their values when set (and not when unset); the host's lease never applies
   ;; inside; the perf results file goes through a writable /out mount, since the checkout is read-only.

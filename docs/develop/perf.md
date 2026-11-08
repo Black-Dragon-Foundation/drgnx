@@ -7,6 +7,7 @@ drgnx is measured, not guessed at: every interaction it cares about is timed in 
 drgnx test --perf           every workload; fails when a gated budget (allocation, CPU, rows) breaks; wall clock is reported;
                             what got worse than the local history is printed
 drgnx test --perf --audit   the workloads with every hook function timed: judged on the hook budget only
+                            (also `drgnx test --container --perf --audit`, on the lab image)
 drgnx test --soak [MIN]     the input workloads in a loop for MIN minutes (30); fails when memory grows
 drgnx test --day [MIN]      the synthetic day (below): a pinned session of files, Org, eglot, vc-git and transcript replays
 DRGNX_STARTUP_TRACE=FILE    emacs --init-directory …/init: where startup time goes, written to FILE
