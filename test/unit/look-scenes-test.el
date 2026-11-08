@@ -22,7 +22,7 @@
 
 (ert-deftest drgnx-look-scenes/the-project-is-the-mockups ()
   "The mockups' project: drgnx-gateway.el and gateway-test.el modified, jobs-test.el untracked, the lock file
-ignored, on main; drgnx-gateway.el's line 216 is the mockup's, and the shell script has its heredoc."
+ignored, on main two commits ahead of its remote; drgnx-gateway.el's line 216 is the mockup's, and the shell script has its heredoc."
   (let ((dir (make-temp-file "look-scenes" t)))
     (unwind-protect
         (let* ((proj (drgnx-look-scene-project (expand-file-name "drgnx" dir)))
@@ -40,8 +40,8 @@ ignored, on main; drgnx-gateway.el's line 216 is the mockup's, and the shell scr
             (forward-line -15)
             (should (equal (buffer-substring (point) (line-end-position)) ";;;; Replies")))
           (should (string-match-p "<<PY" (with-temp-buffer (insert-file-contents "docs/p2-verify.sh") (buffer-string))))
-          (should (equal "main" (string-trim (with-temp-buffer (call-process "git" nil t nil "branch" "--show-current")
-                                                               (buffer-string))))))
+          (should (string-match-p "\\`## main\\.\\.\\.origin/main \\[ahead 2\\]"
+                                  (with-temp-buffer (call-process "git" nil t nil "status" "-sb") (buffer-string)))))
       (delete-directory dir t))))
 
 (ert-deftest drgnx-look-scenes/a-limit-is-named-not-hidden ()

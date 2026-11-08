@@ -80,7 +80,12 @@ A tint is composited over the variant's `editor'."
          (drgnx-status-info :foreground ,(c 'info))
          (drgnx-agent-1 :foreground ,(c 'a1)) (drgnx-agent-2 :foreground ,(c 'a2)) (drgnx-agent-3 :foreground ,(c 'a3))
          (drgnx-agent-4 :foreground ,(c 'a4)) (drgnx-agent-5 :foreground ,(c 'a5)) (drgnx-agent-6 :foreground ,(c 'a6))
-         (drgnx-control-hidden :foreground ,(c 'panel)))
+         (drgnx-control-hidden :foreground ,(c 'panel))
+         ;; chips on their tints; high contrast has no tints, so a ring in the chip's own colour (a box with no colour)
+         (drgnx-chip-quiet :foreground ,(c 'muted) :background ,(c 'sel-quiet) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
+                               ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1))))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))
@@ -136,7 +141,8 @@ A tint is composited over the variant's `editor'."
          (mode-line-buffer-id :foreground ,(c 'fg))
          (header-line :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'editor))   ; part of its card
          (header-line-highlight :background ,(c 'hover))
-         (tab-bar :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))
+         (tab-bar :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'gap))   ; the title row (§4)
+         (drgnx-topline-strong :inherit drgnx-ui-heading :foreground ,(c 'fg) :background ,(c 'gap))
          (tab-bar-tab :inherit drgnx-ui-text :foreground ,(c 'fg) :background ,(c 'editor))
          (tab-bar-tab-inactive :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))
          (tab-line :inherit drgnx-ui-text :foreground ,(c 'muted) :background ,(c 'panel))

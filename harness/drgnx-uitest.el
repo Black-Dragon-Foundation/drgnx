@@ -12,6 +12,8 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'drgnx-jank-guard)
+(declare-function dbus-call-method "dbus")
+(declare-function dbus-list-names "dbus")
 
 (defvar drgnx-uitest-record--last-change)
 (defvar drgnx-uitest-record--t0)
@@ -707,6 +709,78 @@ with redisplay between them, while the test waits.  The plist has :settled."
         (let ((drgnx-jank-guard--timer-fn nil) (drgnx-guard--timer-fn nil)) (recursive-edit))
       (cancel-timer watch))
     (append (list :settled (if drgnx-uitest--run-settled t :false)) (drgnx-uitest-measure-end))))
+
+;;;; A real pointer: mutter's virtual one
+
+;; Synthetic events (`drgnx-uitest-click-events') skip the shell: they never reach what only the toolkit's own input
+;; does, such as the tab bar's prefix.  Mutter's RemoteDesktop session gives the session a virtual pointer whose
+;; motion and buttons go through the compositor and the shell like a mouse's.  It has relative motion only (absolute
+;; needs a screen cast), so a move goes to the screen's corner, then by the distance, and is corrected by where Emacs
+;; saw the pointer arrive.
+
+(defvar drgnx-uitest--pointer-session nil "The RemoteDesktop session path this Emacs started, or nil.")
+(defvar drgnx-uitest-pointer-keys nil "The last `drgnx-uitest-pointer-click''s key sequences and their commands, for a failure's message.")
+
+(defconst drgnx-uitest--rd "org.gnome.Mutter.RemoteDesktop" "Mutter's RemoteDesktop service and interface.")
+
+(defun drgnx-uitest-pointer-available-p ()
+  "Non-nil when this session's bus has mutter's RemoteDesktop service (a session under headless mutter)."
+  (and (require 'dbus nil t) (getenv "DBUS_SESSION_BUS_ADDRESS")
+       (ignore-errors (member drgnx-uitest--rd (dbus-list-names :session)))))
+
+(defun drgnx-uitest--pointer-call (method &rest args)
+  "Call METHOD with ARGS on this Emacs's RemoteDesktop session, started the first time."
+  (unless drgnx-uitest--pointer-session
+    (let ((path (dbus-call-method :session drgnx-uitest--rd "/org/gnome/Mutter/RemoteDesktop" drgnx-uitest--rd
+                                  "CreateSession")))
+      (dbus-call-method :session drgnx-uitest--rd path (concat drgnx-uitest--rd ".Session") "Start")
+      (setq drgnx-uitest--pointer-session path)))
+  (apply #'dbus-call-method :session drgnx-uitest--rd drgnx-uitest--pointer-session
+         (concat drgnx-uitest--rd ".Session") method args))
+
+(defun drgnx-uitest--pointer-by (dx dy)
+  "Move the virtual pointer by DX, DY logical pixels."
+  (drgnx-uitest--pointer-call "NotifyPointerMotionRelative" :double (float dx) :double (float dy)))
+
+(defun drgnx-uitest--pointer-seen (frame)
+  "Where FRAME saw the pointer last, (X . Y) in its pixels, after the motion events in flight were read; or nil."
+  (sit-for 0.15)
+  (let ((pos (mouse-pixel-position)))
+    (and (eq (car pos) frame) (cadr pos) (cons (cadr pos) (cddr pos)))))
+
+(defun drgnx-uitest-pointer-move (x y &optional frame)
+  "Move the real pointer to pixel X, Y of FRAME (default the selected one), within one pixel; return where it is.
+Signals when FRAME never sees it."
+  (let* ((frame (or frame (selected-frame)))
+         (scale (/ (frame-scale-factor frame) (drgnx-uitest-device-scale frame)))   ; frame pixels per logical one
+         (seen nil))
+    (drgnx-uitest--pointer-by -100000 -100000)
+    (drgnx-uitest--pointer-by (/ x scale) (/ y scale))
+    (dotimes (_ 4)
+      (setq seen (drgnx-uitest--pointer-seen frame))
+      (when (and seen (or (> (abs (- (car seen) x)) 1) (> (abs (- (cdr seen) y)) 1)))
+        (drgnx-uitest--pointer-by (/ (- x (car seen)) scale) (/ (- y (cdr seen)) scale))))
+    (or (drgnx-uitest--pointer-seen frame) (error "drgnx-uitest: the frame never saw the pointer"))))
+
+(defun drgnx-uitest-pointer-click (x y &optional until timeout)
+  "Click the real pointer's first button at pixel X, Y of the selected frame, then read the key sequences it makes and
+run their commands, as the command loop would (Emacs hit-tests the events and looks the keys up), until UNTIL (a
+function of no arguments) is non-nil or TIMEOUT seconds (default 5) pass.  Return UNTIL's last value.
+A nested command loop (`recursive-edit', as `drgnx-uitest-run') reads none of a real pointer's events while a test
+runs from the session's server, so the keys are read here."
+  (drgnx-uitest-pointer-move x y)
+  (while (read-event nil nil 0.2))                          ; the motion's own events
+  (drgnx-uitest--pointer-call "NotifyPointerButton" :int32 272 t)     ; BTN_LEFT
+  (drgnx-uitest--pointer-call "NotifyPointerButton" :int32 272 nil)
+  (let ((deadline (+ (float-time) (or timeout 5))) (result nil))
+    (setq drgnx-uitest-pointer-keys nil)
+    (while (and (not (setq result (and until (funcall until)))) (< (float-time) deadline))
+      (let ((keys (with-timeout ((max 0.05 (- deadline (float-time))) nil) (read-key-sequence-vector nil))))
+        (when keys (push (list keys (key-binding keys t)) drgnx-uitest-pointer-keys))
+        (when-let* ((cmd (and keys (key-binding keys t))) ((commandp cmd)))
+          (setq this-command cmd)
+          (call-interactively cmd nil keys))))
+    result))
 
 (defun drgnx-uitest--run-watch ()
   "Leave `drgnx-uitest-run''s nested command loop once settled or past the deadline."

@@ -117,6 +117,18 @@ defface's `:inherit')."
     (drgnx-themes-test--with theme
       (should (equal (drgnx-look-token 'editor variant) (drgnx-face-color 'header-line :background 'gui))))))
 
+(ert-deftest drgnx-themes/title-row-and-chips ()
+  "Design §4 \"The window frame\": the title row (the tab bar) is on the gap; the chips are on their tints, and in
+high contrast, where tints are black, they are ringed in their own colour."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'gap variant) (drgnx-face-color 'tab-bar :background 'gui)))
+      (pcase-dolist (`(,face ,fg ,bg) '((drgnx-chip-quiet muted sel-quiet) (drgnx-chip-attention attention attention-tint)
+                                        (drgnx-chip-accent accent accent-tint)))
+        (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
+                       (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
+        (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
+
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme (should (eq variant (drgnx-look-variant)))))

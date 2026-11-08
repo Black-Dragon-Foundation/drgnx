@@ -106,8 +106,9 @@
       (error "git %S failed in %s" args dir))))
 
 (defun drgnx-look-scene-project (dir)
-  "Make the mockups' project in DIR (a directory named drgnx) and return it: on branch main, core/drgnx-gateway.el
-and test/unit/gateway-test.el modified, test/unit/jobs-test.el untracked, drgnx.lock.eld ignored."
+  "Make the mockups' project in DIR (a directory named drgnx) and return it: on branch main two commits ahead of its
+remote (DIR/../drgnx-origin.git), core/drgnx-gateway.el and test/unit/gateway-test.el modified, test/unit/jobs-test.el
+untracked, drgnx.lock.eld ignored."
   (let ((proj (file-name-as-directory (expand-file-name dir))))
     (make-directory proj t)
     (cl-flet ((put (file text) (let ((f (expand-file-name file proj)))
@@ -118,6 +119,14 @@ and test/unit/gateway-test.el modified, test/unit/jobs-test.el untracked, drgnx.
       (drgnx-look-scene--git proj "init" "-q" "-b" "main")
       (drgnx-look-scene--git proj "add" "-A")
       (drgnx-look-scene--git proj "commit" "-q" "-m" "init")
+      ;; main ↑2: pushed to a remote beside the project, then two commits more
+      (let ((origin (expand-file-name "../drgnx-origin.git" proj)))
+        (drgnx-look-scene--git proj "init" "-q" "--bare" origin)
+        (drgnx-look-scene--git proj "remote" "add" "origin" origin)
+        (drgnx-look-scene--git proj "push" "-q" "-u" "origin" "main"))
+      (dolist (file '("README.md" "docs/index.md"))
+        (put file (concat (cdr (assoc file drgnx-look-scene--files)) "\n"))
+        (drgnx-look-scene--git proj "commit" "-q" "-am" (format "docs: %s" file)))
       (put "core/drgnx-gateway.el" (drgnx-look-scene--gateway nil))
       (put "test/unit/gateway-test.el"
            (concat (cdr (assoc "test/unit/gateway-test.el" drgnx-look-scene--files))
@@ -132,6 +141,7 @@ and test/unit/gateway-test.el modified, test/unit/jobs-test.el untracked, drgnx.
 
 (defvar drgnx-look-scene-limits
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
+                 "no `1 needs you' or `2 agents' chips: the mock agent's turn does not run yet (look step 8)"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
                  "drgnx-job.el is not a preview (italic) tab: only transient buffers preview")
     (agent-panel "the mockup is the Work space (mission strip, Board, Timeline: G9, other plans); compare its right-hand panel"
@@ -204,6 +214,11 @@ changed to hide a gap: the gap is named here instead.")
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
 gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgnx-gateway.el at 216:34, from 201."
   (drgnx-look-scene--packages elpa)
+  ;; the title row as on GNOME, the mockups' desktop, where `auto' is `drgnx': the container's headless mutter names
+  ;; no desktop, so the frame is told it is GNOME's (the facts' :wm says so)
+  (drgnx-look-scene--try "title"
+    (set-frame-parameter nil 'drgnx-platform-wm 'gnome)
+    (customize-set-variable 'drgnx-face-title-bar 'drgnx))
   (drgnx-look-scene--try "project"
     (setq drgnx-look-scene--project (drgnx-look-scene-project (expand-file-name "~/code/drgnx"))))
   (drgnx-look-scene--try "trust" (drgnx-trust-folder drgnx-look-scene--project))
@@ -312,7 +327,9 @@ chrome faces, frame metrics, windows, modules."
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
                   :frame (list :px (list (frame-pixel-width f) (frame-pixel-height f)) :scale (frame-scale-factor f)
-                               :line-px (frame-char-height f) :tab-bar-lines (frame-parameter f 'tab-bar-lines))
+                               :line-px (frame-char-height f) :tab-bar-lines (frame-parameter f 'tab-bar-lines)
+                               :tab-bar-px (tab-bar-height f t) :wm (frame-parameter f 'drgnx-platform-wm)
+                               :drawn-title (and (fboundp 'drgnx-face-drawn-title-p) (drgnx-face-drawn-title-p f)))
                   :windows (mapcar (lambda (w) (list (buffer-name (window-buffer w)) :x (window-pixel-left w)
                                                      :y (window-pixel-top w) :w (window-pixel-width w)
                                                      :h (window-pixel-height w)

@@ -58,8 +58,9 @@ sized to SIZE and its stroke to `drgnx-icons-stroke' logical pixels."
         (setq text (replace-regexp-in-string "stroke-width=\"2\""
                                              (format "stroke-width=\"%.3f\"" (/ (* drgnx-icons-stroke 24.0) size))
                                              text t t))
-        ;; the scale is in the spec so that Emacs's own image cache draws it again when the scale changes
-        (create-image text 'svg t :ascent 'center :drgnx-scale scale)))))
+        ;; the frame's scale, in the spec (Emacs's image cache draws it again when the scale changes); without
+        ;; it Emacs takes `image-scaling-factor', a guess from the font (1.6 at scale 2)
+        (create-image text 'svg t :ascent 'center :scale scale)))))
 
 (defun drgnx-icons--image (name size)
   "The cached image of NAME at SIZE on the selected frame's scale, or nil."

@@ -144,6 +144,67 @@ the attention chip (\"1 needs you\"), the agents chip, then the window controls 
         (should-not (memq 'drgnx-topline-agents keys))
         (should-not (memq 'drgnx-topline-close keys))))))
 
+(defun drgnx-look-bars-test--faces (string)
+  "Every face named in STRING's `face' properties."
+  (let ((faces nil))
+    (dotimes (i (length string))
+      (dolist (f (ensure-list (get-text-property i 'face string)))
+        (when (symbolp f) (cl-pushnew f faces))))
+    faces))
+
+(defun drgnx-look-bars-test--heights (string)
+  "The `:height' of every `space' display spec in STRING."
+  (let ((heights nil))
+    (dotimes (i (length string))
+      (let ((d (get-text-property i 'display string)))
+        (when (eq (car-safe d) 'space) (when-let* ((h (plist-get (cdr d) :height))) (cl-pushnew h heights :test #'equal)))))
+    heights))
+
+(ert-deftest drgnx-look-bars/title-row-is-the-designs ()
+  "Design §4 \"The window frame\" (window-dark.png): on a graphical frame the row is the `title-row' density's height
+\(38 px), the branch a quiet chip with the commits ahead (`main ↑2'), the search box its placeholder with the palette's
+key as one keycap (it opens the palette), and the attention and agents chips pills on their tints."
+  (drgnx-topline-test--with 'vscode
+    (cl-letf (((symbol-function 'drgnx-pixels-font-extent) (lambda (&rest _) '(13 . 4)))
+              ((symbol-function 'drgnx-topline--git-root) (lambda (_) "/x/proj/"))
+              ((symbol-function 'drgnx-git-branch) (lambda (_) '(:head "main" :ahead 2 :behind 0))))
+      (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
+             (drgnx-notice--needs-you 1) (drgnx-topline-agents-function (lambda () 2))
+             (items (drgnx-topline--build (current-buffer) 160 t 1440))
+             (item (lambda (k) (nth 2 (assq k items))))
+             (text (lambda (k) (substring-no-properties (funcall item k)))))
+        (should (member '(38) (drgnx-look-bars-test--heights (funcall item 'drgnx-topline-mark))))
+        (should (string-match-p "proj" (funcall text 'drgnx-topline-mark)))
+        (should (string-match-p "main ↑2" (funcall text 'drgnx-topline-branch)))
+        (should (memq 'drgnx-chip-quiet (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-branch))))
+        (should (string-match-p "Search files, commands, symbols" (funcall text 'drgnx-topline-search)))
+        (should (string-match-p "Ctrl Shift P" (funcall text 'drgnx-topline-search)))
+        (should (eq 'drgnx-topline-test-palette (nth 3 (assq 'drgnx-topline-search items))))
+        (should (string-match-p "1 needs you" (funcall text 'drgnx-topline-attention)))
+        (should (memq 'drgnx-chip-attention (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-attention))))
+        (should (string-match-p "2 agents" (funcall text 'drgnx-topline-agents)))
+        (should (memq 'drgnx-chip-accent (drgnx-look-bars-test--faces (funcall item 'drgnx-topline-agents))))
+        ;; the hint of the terminal line is gone from a graphical one
+        (should-not (assq 'drgnx-topline-go-quick-open items))))))
+
+(ert-deftest drgnx-look-bars/title-row-search-is-centred ()
+  "Design §4 (`.search { margin: 0 auto }'): the search box sits in the middle of the room between the left items
+and the right ones, in pixels."
+  (drgnx-topline-test--with 'vscode
+    (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
+           (drgnx-notice--needs-you 3)
+           (items (drgnx-topline--build (current-buffer) 160 t 1440))
+           (width (lambda (i) (or (plist-get (nthcdr 4 i) :drgnx-px) (drgnx-look-bars-test--ten (nth 2 i)))))
+           (keys (mapcar #'car items))
+           (left (seq-take items (cl-position 'drgnx-topline-gap-1 keys)))
+           (right (nthcdr (1+ (cl-position 'drgnx-topline-gap-2 keys)) items))
+           (left-px (apply #'+ (mapcar width left))) (right-px (apply #'+ (mapcar width right)))
+           (box (funcall width (assq 'drgnx-topline-search items)))
+           (gap-1 (funcall width (assq 'drgnx-topline-gap-1 items))))
+      (should (> right-px 0))
+      (should (<= (abs (- (+ left-px gap-1 (/ box 2)) (+ left-px (/ (- 1440 left-px right-px) 2)))) 1))
+      (should (= 1440 (apply #'+ (mapcar width items)))))))
+
 (ert-deftest drgnx-look-bars/double-click-maximises ()
   "Pattern D: a double click on the title row's empty space is bound to the command Maximize or Restore Window
 \(`title-row-maximize' in the registry), which toggles the frame's maximised state."

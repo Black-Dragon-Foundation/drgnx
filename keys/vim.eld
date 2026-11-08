@@ -383,6 +383,8 @@
         (focus-panel :none "in the palette")
         (switch-tab :none "in the palette")
         (title-row-maximize :none "a double click on the title row; in the palette")
+        (title-row-minimize :none "the title row's – button; in the palette")
+        (title-row-close :none "the title row's × button; in the palette")
         (toggle-right-dock "SPC R")
         (focus-editor :none "C-w moves between windows")
         (dock-back "<escape>" :map drgnx-wb-dock-map)

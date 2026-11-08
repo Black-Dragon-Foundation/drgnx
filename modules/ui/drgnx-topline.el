@@ -35,6 +35,12 @@
 (require 'drgnx-timer)
 (require 'drgnx-state)
 (require 'drgnx-memo)
+(require 'drgnx-pixels)
+(require 'drgnx-faces)                  ; the chip faces, `drgnx-face-color'
+(require 'drgnx-type-faces)
+(require 'drgnx-icons)
+(declare-function drgnx-palette-keycap-names "drgnx-palette")
+(declare-function glitnir-active-p "glitnir")
 (declare-function drgnx-face-glyph "drgnx-face")
 (declare-function drgnx-face-drawn-title-p "drgnx-face")
 (declare-function drgnx-surfaces-key-label "drgnx-surfaces")
@@ -60,12 +66,13 @@
   "The top line: project and branch, the keys that open everything, window controls."
   :group 'drgnx-face :prefix "drgnx-topline-")
 
-(defface drgnx-topline '((t :inherit (shadow tab-line) :height 1.0 :box nil))
-  "The top line's quiet text (labels, separators, the empty area), on the tab line's background like every row of chrome."
+(defface drgnx-topline '((t :inherit (shadow tab-bar) :height 1.0 :box nil))
+  "The title row's quiet text (labels, separators, the empty area), on the tab bar's background: the gap (§4)."
   :group 'drgnx-topline)
 
-(defface drgnx-topline-strong '((t :inherit (bold tab-line) :height 1.0 :box nil))
-  "The project and the keys on the top line: the text colour of the theme (not the tab bar's dim one)."
+(defface drgnx-topline-strong '((t :inherit (bold tab-bar) :height 1.0 :box nil))
+  "The project and the keys on the title row: the text colour of the theme (not the tab bar's dim one); drgnx's
+themes give it the heading role."
   :group 'drgnx-topline)
 
 (defvar drgnx-topline--active nil
@@ -207,6 +214,32 @@ count is positive."
                                   (and (fboundp 'drgnx-agent-panel-list-show) 'drgnx-agent-panel-list-show)
                                   "Agents at work"))))))
 
+(defun drgnx-topline--event-item (event)
+  "The title row's item under mouse EVENT, found by its x in the row's own layout (the widths it was made with).
+The native Wayland shell's clicks on the tab bar carry no item (it never asks the tab bar which one was hit), so the
+row finds it itself, on every platform alike."
+  (when-let* ((x (car-safe (posn-x-y (event-start event)))))
+    (let ((measure (and (display-graphic-p) (drgnx-statusbar--measure-fn nil 'tab-bar))) (left 0))
+      (catch 'found
+        (dolist (item (drgnx-topline--line))
+          (let ((w (drgnx-topline--width (list item) measure)))
+            (when (< x (+ left w)) (throw 'found item))
+            (setq left (+ left w))))
+        nil))))
+
+(defun drgnx-topline-mouse-down (event)
+  "A press on the title row (EVENT): on its empty part it drags the window; on an item the release decides."
+  (interactive "e")
+  (when (eq (nth 3 (drgnx-topline--event-item event)) 'mouse-drag-frame-move)
+    (mouse-drag-frame-move event)))
+
+(defun drgnx-topline-mouse-up (event)
+  "A release on the title row (EVENT): run the command of the item under it, as a button does."
+  (interactive "e")
+  (let ((cmd (nth 3 (drgnx-topline--event-item event))))
+    (unless (memq cmd '(nil ignore mouse-drag-frame-move))
+      (call-interactively cmd))))
+
 (defun drgnx-topline-toggle-maximized ()
   "Maximise the selected frame, or restore it (a double click on the title row's empty space)."
   (interactive)
@@ -251,7 +284,11 @@ left out), each one running its command.  nil when none has a key."
 (defun drgnx-topline--width (items &optional measure)
   "The columns the tab-bar ITEMS take (their strings); with MEASURE, a function of a string, the units it gives."
   (let ((n 0))
-    (dolist (i items) (setq n (+ n (if measure (funcall measure (nth 2 i)) (string-width (nth 2 i))))))
+    (dolist (i items)
+      (setq n (+ n (cond ((and measure (plist-get (nthcdr 4 i) :drgnx-px)))   ; a gap knows its width
+                         ((and measure (drgnx-topline--known-px (nth 2 i))))   ; so do images
+                         (measure (funcall measure (nth 2 i)))
+                         (t (string-width (nth 2 i)))))))
     n))
 
 (defun drgnx-topline--pixel-gap (key pixels drag)
@@ -262,27 +299,255 @@ are not `equal', and `equal' ignores the text properties the width is in."
                                (and drag "Drag to move the window"))
           (list :drgnx-px (max 0 pixels))))
 
+;;;; The title row of a graphical frame (design §4, "The window frame"; mockup window-dark.png)
+;; 38 px on the gap: the project's mark and name, the branch chip, the search box in the middle (it opens the palette;
+;; its key as a keycap), the attention and agents chips, the window controls.  Sizes are logical pixels times the
+;; frame's scale.  The mark and the search box are SVG images made from the theme's faces (a gradient, and a field
+;; with a hairline and a keycap inside, which text runs cannot draw); without SVG they are text.
+
+(defconst drgnx-topline--search-size '(440 . 26) "The search box's width and height, logical pixels.")
+(defconst drgnx-topline--search-text "Search files, commands, symbols" "The search box's placeholder.")
+
+(defun drgnx-topline--px (n)
+  "N logical pixels on the selected frame, in its pixels."
+  (round (* n (drgnx-pixels-scale))))
+
+(defun drgnx-topline--space (n &optional face)
+  "A space N logical pixels wide, in FACE."
+  (let ((px (drgnx-topline--px n)))
+    (propertize " " 'face (or face 'drgnx-topline) 'display `(space :width (,px)) 'drgnx-topline-px px)))
+
+(defun drgnx-topline--svg-p ()
+  "Non-nil when the selected frame shows SVG images."
+  (and (display-graphic-p) (image-type-available-p 'svg)))
+
+(defun drgnx-topline--color (face attr)
+  "FACE's ATTR (`:foreground' or `:background') on the selected frame, or the SVG keyword \"currentColor\"."
+  (or (drgnx-face-color face attr (selected-frame)) "currentColor"))
+
+(defun drgnx-topline--image (svg text)
+  "TEXT shown as the SVG image SVG (a string, logical pixels) on a frame that can, else as itself.  The image's width
+in the frame's pixels is on it (`drgnx-topline-px'), for `drgnx-topline--known-px'."
+  (if (drgnx-topline--svg-p)
+      ;; :scale, else Emacs takes `image-scaling-factor' (a guess from the font: 1.6 at scale 2)
+      (propertize text 'display (create-image svg 'svg t :ascent 'center :scale (drgnx-pixels-scale))
+                  'drgnx-topline-px (and (string-match "width=\"\\([0-9]+\\)\"" svg)
+                                         (drgnx-topline--px (string-to-number (match-string 1 svg)))))
+    text))
+
+(defun drgnx-topline--known-px (string)
+  "STRING's width in pixels when every part of it is an image or a space of known width (`drgnx-topline-px'), else nil.
+A measure of an image is off by the text's slack; these widths are exact."
+  (let ((pos 0) (n 0) (len (length string)))
+    (while (and n (< pos len))
+      (let ((px (get-text-property pos 'drgnx-topline-px string))
+            (next (next-single-property-change pos 'drgnx-topline-px string len)))
+        (setq n (and px (+ n px)) pos next)))
+    n))
+
+(defun drgnx-topline--mark-svg ()
+  "The project mark: an 18 px square, radius 5, its colour running from the accent to the fifth agent colour."
+  (format (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"18\" height=\"18\" viewBox=\"0 0 18 18\">"
+                  "<defs><linearGradient id=\"m\" x1=\"0\" y1=\"0\" x2=\"1\" y2=\"1\">"
+                  "<stop offset=\"0\" stop-color=\"%s\"/><stop offset=\"1\" stop-color=\"%s\"/></linearGradient></defs>"
+                  "<rect width=\"18\" height=\"18\" rx=\"5\" fill=\"url(#m)\"/></svg>")
+          (drgnx-topline--color 'drgnx-accent :foreground) (drgnx-topline--color 'drgnx-agent-5 :foreground)))
+
+(defun drgnx-topline--keycap (id)
+  "The key of registry command ID as one keycap's text (\"Ctrl Shift P\"), or nil."
+  (when-let* ((key (drgnx-surfaces-key-label id :short t)))
+    (if (fboundp 'drgnx-palette-keycap-names) (string-join (drgnx-palette-keycap-names key) " ") key)))
+
+(defun drgnx-topline--xml (s) (replace-regexp-in-string "[&<>\"]" (lambda (c) (format "&#%d;" (aref c 0))) s t t))
+
+(defun drgnx-topline--search-svg (key)
+  "The search box as SVG: the field (panel, a hairline, radius 6), the search icon, the placeholder and KEY (or nil)
+as a keycap at the right (a hairline in the strong border, two pixels at the bottom, radius 4)."
+  (let* ((w (car drgnx-topline--search-size)) (h (cdr drgnx-topline--search-size))
+         (text (drgnx-topline--color 'drgnx-text-subtle :foreground))
+         (family (let ((f (face-attribute 'drgnx-ui-text :family nil t))) (if (stringp f) f "sans-serif")))
+         (cap-w (and key (+ 10 (ceiling (* (/ 11.0 12) (/ (drgnx-look-pixel-width key 'drgnx-ui-caption)
+                                                          (drgnx-pixels-scale)))))))
+         (cap-x (and key (- w 10 cap-w))))
+    (concat
+     (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">" w h w h)
+     (format "<rect x=\"0.5\" y=\"0.5\" width=\"%d\" height=\"%d\" rx=\"6\" fill=\"%s\" stroke=\"%s\"/>" (1- w) (1- h)
+             (drgnx-topline--color 'drgnx-surface-panel :background) (drgnx-topline--color 'drgnx-border :foreground))
+     (drgnx-topline--icon-svg 'search 10 5 16 text)
+     (format "<text x=\"34\" y=\"17.5\" font-family=\"%s\" font-size=\"13\" fill=\"%s\">%s</text>"
+             (drgnx-topline--xml family) text (drgnx-topline--xml drgnx-topline--search-text))
+     (when key
+       (let ((edge (drgnx-topline--color 'drgnx-border-strong :foreground)))
+         (concat
+          (format "<rect x=\"%.1f\" y=\"4.5\" width=\"%d\" height=\"16\" rx=\"4\" fill=\"none\" stroke=\"%s\"/>"
+                  (+ cap-x 0.5) (1- cap-w) edge)
+          (format "<path d=\"M%.1f 21h%d\" stroke=\"%s\"/>" (+ cap-x 3.5) (- cap-w 7) edge)
+          (format "<text x=\"%d\" y=\"16\" font-family=\"%s\" font-size=\"11\" fill=\"%s\">%s</text>"
+                  (+ cap-x 5) (drgnx-topline--xml family) text (drgnx-topline--xml key)))))
+     "</svg>")))
+
+(defun drgnx-topline--search-box ()
+  "The search box's item: it opens the palette; nil without a palette command."
+  (when-let* ((cmd (drgnx-commands-get 'palette)))
+    (let* ((key (drgnx-topline--keycap 'palette))
+           (text (concat "  " drgnx-topline--search-text "  " (or key "") "  ")))
+      (drgnx-topline--item 'drgnx-topline-search
+                           (drgnx-topline--image (drgnx-topline--search-svg key)
+                                                 ;; the image's corners show the face's background: the row's
+                                                 (propertize text 'face 'drgnx-topline))
+                           (drgnx-cmd-command cmd)
+                           (if key (format "Search: the command palette (%s)" key) "Search: the command palette")))))
+
+(defun drgnx-topline--icon-svg (name x y size color)
+  "Icon NAME (etc/icons) as an SVG element at X, Y, SIZE logical pixels, stroked in COLOR; \"\" without the file."
+  (let ((file (expand-file-name (format "%s.svg" name) drgnx-icons-dir)))
+    (if (not (file-readable-p file))
+        ""
+      (let ((text (with-temp-buffer (insert-file-contents file) (buffer-string))))
+        (setq text (replace-regexp-in-string "<!--.*?-->\n?" "" text t t))
+        (setq text (replace-regexp-in-string "width=\"24\" height=\"24\""
+                                             (format "x=\"%s\" y=\"%s\" width=\"%d\" height=\"%d\"" x y size size)
+                                             text t t))
+        (setq text (replace-regexp-in-string "stroke-width=\"2\""
+                                             (format "stroke-width=\"%.3f\"" (/ (* drgnx-icons-stroke 24.0) size))
+                                             text t t))
+        (replace-regexp-in-string "currentColor" color text t t)))))
+
+(defun drgnx-topline--text-px (text face)
+  "TEXT's width in FACE, logical pixels."
+  (/ (drgnx-look-pixel-width text face) (drgnx-pixels-scale)))
+
+(defun drgnx-topline--chip (parts face height radius &optional icon)
+  "A chip: PARTS (a string, or a list of strings and (STRING . FACE) pairs, a face for a dimmer part) after ICON (an
+icon name) in FACE's colours, HEIGHT logical pixels high, 7 either side, 5 after the icon, its corners RADIUS; in the
+caption role.  A face with a box (high contrast's ring) is ringed in its foreground.  SVG where the frame shows it,
+because text in a row taller than itself is painted the row's full height; else the text."
+  (let* ((parts (if (stringp parts) (list parts) parts))
+         (plain (mapconcat (lambda (p) (if (consp p) (car p) p)) parts "")))
+    (if (not (drgnx-topline--svg-p))
+        (propertize (concat " " plain " ") 'face face)
+      (let* ((fg (drgnx-topline--color face :foreground)) (bg (drgnx-topline--color face :background))
+             (flat (memq (face-attribute face :box nil t) '(nil unspecified)))   ; no ring
+             (family (let ((f (face-attribute 'drgnx-ui-caption :family nil t))) (if (stringp f) f "sans-serif")))
+             (x (+ 7 (if icon 19 0)))
+             (spans (mapconcat (lambda (p)
+                                 (let ((str (if (consp p) (car p) p))
+                                       (col (if (consp p) (drgnx-topline--color (cdr p) :foreground) fg)))
+                                   (format "<tspan fill=\"%s\">%s</tspan>" col (drgnx-topline--xml str))))
+                               parts ""))
+             (w (ceiling (+ x (drgnx-topline--text-px plain 'drgnx-ui-caption) 7))))
+        (drgnx-topline--image
+         (concat (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\">"
+                         w height w height)
+                 (format "<rect x=\"0.5\" y=\"0.5\" width=\"%d\" height=\"%d\" rx=\"%d\" fill=\"%s\"%s/>"
+                         (1- w) (1- height) radius bg (if flat "" (format " stroke=\"%s\"" fg)))
+                 (if icon (drgnx-topline--icon-svg icon 7 (/ (- height 14) 2.0) 14 fg) "")
+                 (format "<text x=\"%d\" y=\"%.1f\" font-family=\"%s\" font-size=\"12\" xml:space=\"preserve\">%s</text>"
+                         x (+ (/ height 2.0) 4) (drgnx-topline--xml family) spans)
+                 "</svg>")
+         plain)))))
+
+(defun drgnx-topline--edge-px (n)
+  "N logical pixels from the window's side, in the frame's pixels, less the frame's edge the tab bar sits inside (the
+cards' gap, `internal-border-width')."
+  (max 0 (- (drgnx-topline--px n) (frame-internal-border-width))))
+
+(defun drgnx-topline--edge-space (n)
+  "A space that puts what follows N logical pixels from the window's left side (`drgnx-topline--edge-px')."
+  (let ((px (drgnx-topline--edge-px n)))
+    (propertize " " 'face 'drgnx-topline 'display `(space :width (,px)) 'drgnx-topline-px px)))
+
+(defun drgnx-topline--mark-pixels (buffer)
+  "The mark item of a graphical row: the row's height (`title-row'), 14 px, the mark, 8 px, the project."
+  (let* ((height (drgnx-topline--px (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'title-row) 38)))
+         (extent (drgnx-pixels-font-extent 'drgnx-topline-strong))
+         (descent (if extent (+ (cdr extent) (/ (- height (car extent) (cdr extent)) 2)) 0)))
+    (drgnx-topline--item
+     'drgnx-topline-mark
+     (concat (or (drgnx-pixels-spacer 'drgnx-topline height descent) "")
+             (drgnx-topline--edge-space 14)
+             (drgnx-topline--image (drgnx-topline--mark-svg) (drgnx-topline--text (drgnx-topline--glyph 'diamond "<>")
+                                                                                  'drgnx-topline))
+             (drgnx-topline--space 8)
+             (drgnx-topline--text (or (drgnx-topline--project buffer) "drgnx") 'drgnx-topline-strong))
+     nil "The project")))
+
+(defun drgnx-topline--branch-chip (buffer)
+  "The branch chip of a graphical row, `main ↑2' (the commits ahead dimmer), after 10 px; nil without a branch."
+  (when-let* ((branch (drgnx-topline--branch buffer)))
+    (let* ((root (drgnx-topline--git-root buffer))
+           (ahead (and root (plist-get (drgnx-git-branch root) :ahead)))
+           (parts (cons branch (and ahead (> ahead 0) (list (cons (format " ↑%d" ahead) 'drgnx-text-subtle))))))
+      (drgnx-topline--item 'drgnx-topline-branch
+                           (concat (drgnx-topline--space 10) (drgnx-topline--chip parts 'drgnx-chip-quiet 20 4 'git-branch))
+                           nil "The branch"))))
+
+(defun drgnx-topline--pills ()
+  "The attention and agents chips of a graphical row (pills on their tints), each after 10 px, each only while its
+count is positive."
+  (let ((need (drgnx-topline--attention-count)) (agents (drgnx-topline--agents-count)))
+    (append
+     (when (> need 0)
+       (list (drgnx-topline--item 'drgnx-topline-attention
+                                  (concat (drgnx-topline--space 10)
+                                          (drgnx-topline--chip (format "● %d needs you" need) 'drgnx-chip-attention 20 10))
+                                  (and (fboundp 'drgnx-notice-needs-you-click) 'drgnx-notice-needs-you-click)
+                                  "Waiting on you: click for the newest, or the Notices list")))
+     (when (> agents 0)
+       (list (drgnx-topline--item 'drgnx-topline-agents
+                                  (concat (drgnx-topline--space 10)
+                                          (drgnx-topline--chip (format "%d %s" agents (if (= agents 1) "agent" "agents"))
+                                                               'drgnx-chip-accent 20 10 'bot))
+                                  (and (fboundp 'drgnx-agent-panel-list-show) 'drgnx-agent-panel-list-show)
+                                  "Agents at work"))))))
+
+(defconst drgnx-topline--control-commands
+  '((drgnx-topline-minimize title-row-minimize minus minimize "Minimise")
+    (drgnx-topline-maximize title-row-maximize square maximize "Maximise or restore")
+    (drgnx-topline-close title-row-close x close "Close the window"))
+  "The window controls: (ITEM REGISTRY-ID ICON GLYPH HELP); GLYPH where there is no SVG.")
+
+(defun drgnx-topline--control-svg (icon)
+  "A window control's SVG: ICON, 16 px in the muted colour, centred in 26 px; the square 12 px (the design's maximise
+is a 14-unit square, Lucide's an 18-unit one)."
+  (let* ((size (if (eq icon 'square) 12 16)) (at (/ (- 26 size) 2)))
+    (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"26\" viewBox=\"0 0 26 26\">"
+            (drgnx-topline--icon-svg icon at at size (drgnx-topline--color 'drgnx-topline :foreground)) "</svg>")))
+
+(defun drgnx-topline--control-buttons ()
+  "The window controls of a graphical row: each a 26 px button, 4 px apart, running its registry command (the hover
+colour under the pointer where the row draws a `mouse-face')."
+  (mapcar (pcase-lambda (`(,item ,id ,icon ,glyph ,help))
+            (drgnx-topline--item
+             item
+             (concat (drgnx-topline--space 4)
+                     (propertize (drgnx-topline--image (drgnx-topline--control-svg icon)
+                                                       (concat " " (drgnx-topline--glyph glyph "x") " "))
+                                 'mouse-face 'drgnx-hover))
+             (when-let* ((cmd (drgnx-commands-get id))) (drgnx-cmd-command cmd))
+             help))
+          drgnx-topline--control-commands))
+
 (defun drgnx-topline--build-pixels (buffer pixels drawn)
-  "The items for BUFFER on a frame PIXELS wide: the same line as `drgnx-topline--build', laid out in pixels.
-The hint is centred on the frame, the controls sit at the right edge."
+  "The items for BUFFER on a graphical frame PIXELS wide: the design's title row (see above).  The search box is
+centred on the frame and left out when it would touch the sides; the controls sit 8 px from the right edge."
   (let* ((measure (drgnx-statusbar--measure-fn nil 'tab-bar))
-         (space (max 1 (funcall measure " ")))
-         (controls (append (drgnx-topline--chips) (and drawn (drgnx-topline--controls))))   ; the right end
-         (controls-px (drgnx-topline--width controls measure))
-         (cols (/ (- pixels controls-px) space))                ; never under the controls
-         (mark (drgnx-topline--mark buffer cols))
-         (branch (drgnx-topline--branch-item buffer (- (drgnx-topline--limit cols) (string-width (nth 2 mark))) t))
-         (mark-px (+ (funcall measure (nth 2 mark)) (if branch (funcall measure (nth 2 branch)) 0)))
-         (hint (with-current-buffer buffer (drgnx-topline--hint)))
-         (hint-px (drgnx-topline--width hint measure))
-         (hint (and hint (<= (+ mark-px hint-px controls-px (* 4 space)) pixels) hint))
-         (items (if branch (list mark branch) (list mark))) (column mark-px))
-    (when hint                                           ; centred
-      (let ((gap (max (* 2 space) (- (/ (- pixels hint-px) 2) column))))
-        (setq items (append items (cons (drgnx-topline--pixel-gap 'drgnx-topline-gap-1 gap drawn) hint))
-              column (+ column gap hint-px))))
-    (append items
-            (cons (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (- pixels controls-px column) drawn) controls))))
+         (left (delq nil (list (drgnx-topline--mark-pixels buffer) (drgnx-topline--branch-chip buffer))))
+         (right (append (drgnx-topline--pills) (and drawn (drgnx-topline--control-buttons))
+                        (list (drgnx-topline--pixel-gap 'drgnx-topline-end (drgnx-topline--edge-px 8) nil))))
+         (left-px (drgnx-topline--width left measure))
+         (right-px (drgnx-topline--width right measure))
+         (search (drgnx-topline--search-box))
+         (search-px (if search (funcall measure (nth 2 search)) 0))
+         (start (+ left-px (/ (- pixels left-px right-px search-px) 2)))   ; `margin: auto' between the sides
+         (search (and search (>= start (+ left-px (drgnx-topline--px 10)))
+                      (<= (+ start search-px (drgnx-topline--px 10) right-px) pixels)
+                      search)))
+    (if search
+        (append left (list (drgnx-topline--pixel-gap 'drgnx-topline-gap-1 (- start left-px) drawn) search
+                           (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (- pixels start search-px right-px) drawn))
+                right)
+      (append left (list (drgnx-topline--pixel-gap 'drgnx-topline-gap-2 (- pixels left-px right-px) drawn)) right))))
 
 (defun drgnx-topline--build (buffer width drawn &optional pixels)
   "The items for BUFFER on a frame WIDTH columns wide; DRAWN: drgnx draws the title, so the controls show.
@@ -342,6 +607,7 @@ this file alone.")
                           (and (boundp 'drgnx-chrome--root) (buffer-local-value 'drgnx-chrome--root buffer))
                           (buffer-local-value 'buffer-file-name buffer)
                           width drawn pixels drgnx-face-glyphs
+                          custom-enabled-themes drgnx-pixels-generation   ; the images' colours, the fonts measured
                           (drgnx-topline--attention-count) (drgnx-topline--agents-count)
                           (and (framep object) (drgnx-statusbar--layout-key (frame-selected-window object)))
                           (drgnx-epoch drgnx-topline--git-epoch)
@@ -510,7 +776,8 @@ text frame, whose size and parameters (the top line's among them) the window's f
     (setq-default tab-bar-auto-width nil))
   (setq-default tab-bar-format drgnx-topline--format
                 tab-bar-show t)                          ; 1 would hide the bar: it has one tab
-  (face-spec-set 'tab-bar '((t :inherit tab-line :height 1.0 :box nil)) 'face-defface-spec)   ; the quiet line, in the theme's chrome
+  (face-spec-set 'tab-bar '((t :inherit (drgnx-ui-text drgnx-text-muted drgnx-surface-gap) :box nil))
+                 'face-defface-spec)                     ; the title row on the gap (§4), for a theme that sets none
   (drgnx-state-subscribe 'frame-resized #'drgnx-topline--resized :lane 'now)
   (drgnx-state-subscribe 'frame-added #'drgnx-topline--fit :lane 'idle)
   (drgnx-state-subscribe 'frame-resized #'drgnx-topline--fit :lane 'idle)
@@ -522,12 +789,20 @@ text frame, whose size and parameters (the top line's among them) the window's f
     (drgnx-timer-start 'topline-first-note 0.5 #'drgnx-topline--first-note :idle t :owner 'ui/face))
   (tab-bar-mode 1)
   (drgnx-module-define-key 'tab-bar-map [double-mouse-1] #'drgnx-topline-toggle-maximized)
+  (unless (plist-member drgnx-topline--saved :clicks)   ; the tab bar's own, put back when the row goes
+    (setq drgnx-topline--saved (plist-put drgnx-topline--saved :clicks
+                                          (list (lookup-key tab-bar-map [down-mouse-1]) (lookup-key tab-bar-map [mouse-1])))))
+  (drgnx-module-define-key 'tab-bar-map [down-mouse-1] #'drgnx-topline-mouse-down)
+  (drgnx-module-define-key 'tab-bar-map [mouse-1] #'drgnx-topline-mouse-up)
   (drgnx-topline--fit-all))
 
 (defun drgnx-topline--off ()
   "Turn the line off (idempotent), putting back what it changed."
   (when (eq (lookup-key tab-bar-map [double-mouse-1]) #'drgnx-topline-toggle-maximized)
     (define-key tab-bar-map [double-mouse-1] nil))
+  (pcase-let ((`(,down ,up) (plist-get drgnx-topline--saved :clicks)))
+    (when (eq (lookup-key tab-bar-map [down-mouse-1]) #'drgnx-topline-mouse-down) (define-key tab-bar-map [down-mouse-1] down))
+    (when (eq (lookup-key tab-bar-map [mouse-1]) #'drgnx-topline-mouse-up) (define-key tab-bar-map [mouse-1] up)))
   (drgnx-state-unsubscribe 'frame-resized #'drgnx-topline--resized)
   (drgnx-state-unsubscribe 'frame-added #'drgnx-topline--fit)
   (drgnx-state-unsubscribe 'frame-resized #'drgnx-topline--fit)
@@ -568,9 +843,13 @@ tab bar was already on before this module (then it is theirs)."
   "Turn the top line on (called by the module ui/face), with its epochs and memo active (`drgnx-topline--declared':
 their watchers go, and the memo empties, when `ui/face' is turned off)."
   (apply #'drgnx-memo-activate drgnx-topline--declared)
+  (drgnx-command-define 'title-row-minimize :category "Window" :title "Minimize Window" :command #'iconify-frame
+                        :doc "Minimise the window (the title row's first window control)")
   (drgnx-command-define 'title-row-maximize :category "Window" :title "Maximize or Restore Window"
                         :command #'drgnx-topline-toggle-maximized
                         :doc "Maximise the window, or restore it (also a double click on the empty part of the title row)")
+  (drgnx-command-define 'title-row-close :category "Window" :title "Close Window" :command #'delete-frame
+                        :doc "Close the window (the title row's last window control)")
   (setq drgnx-topline--active t)
   (drgnx-topline--apply))
 

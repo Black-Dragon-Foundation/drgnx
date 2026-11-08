@@ -513,6 +513,9 @@ sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-
 | `(drgnx-uitest-darker-p A B X Y)` | A's pixel has the lower luma (0.2126 R + 0.7152 G + 0.0722 B) |
 | `(drgnx-uitest-bare-frame)` | scroll bars, tool bar, menu bar and `blink-cursor-mode` off, so a snapshot and an export can be equal |
 | `(drgnx-uitest-pointer-set X Y)` | moves the compositor's pointer to the layout position X, Y (logical pixels): `t` when it moved, `failed` when sway refused, `unsupported` anywhere but sway (`swaymsg "seat - cursor set X Y"`), so a row that needs a real pointer (hover) skips there; a hover row runs in the `--compositor sway` pass. Headless sway has no input devices, so its seat has no pointer and `cursor set` reaches no client: the first call makes a virtual pointer (`zwlr_virtual_pointer_manager_v1`, the Wayland wire protocol spoken from Lisp over the session's socket, kept open for the session), which gives the seat a pointer; `failed` when the compositor offers none |
+| `(drgnx-uitest-pointer-available-p)` | non-nil when the session's compositor is mutter with its RemoteDesktop service on the session bus, so a real pointer can be driven |
+| `(drgnx-uitest-pointer-move X Y)` | moves mutter's virtual pointer to the frame position X, Y: to the top-left corner, then relative motion, corrected up to four times from `mouse-pixel-position` |
+| `(drgnx-uitest-pointer-click X Y &optional UNTIL TIMEOUT)` | a real press and release of the left button at X, Y through mutter's RemoteDesktop (`NotifyPointerButton` 272), then reads the key sequences the clicks make and runs their commands, as the command loop would (a nested `recursive-edit` reads no real events in a test run from the server); the keys are kept in `drgnx-uitest-pointer-keys`; it stops when UNTIL returns non-nil or after TIMEOUT seconds |
 
 The export is decoded in Lisp (zlib and a PNG unfilter), so it needs an Emacs with zlib.
 

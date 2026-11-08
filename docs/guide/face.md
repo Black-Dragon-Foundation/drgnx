@@ -349,10 +349,20 @@ too narrow for the hint, the hint goes first and the place is cut with an ellips
 
 When drgnx draws the window's title itself (`drgnx-face-title-bar` set to `drgnx`: [the title bar](#the-title-bar))
 the right end has `– ▢ ×` (minimise, maximise, close) and the empty part of the line moves the window when you drag
-it. With the system's own title bar (the default) those buttons would be a second set, so they are not there.
+it. With the system's own title bar (the default) those buttons would be a second set, so they are not there. The
+buttons are commands like any other, in the palette too: **Minimize Window** (`title-row-minimize`), **Maximize or
+Restore Window** (`title-row-maximize`) and **Close Window** (`title-row-close`); each one lights up under the mouse.
 
-On a graphical frame the line is laid out in pixels too: the hint is centred on the frame to the pixel, and the window
-controls sit at the right edge, whatever the font and the zoom. A new width, a zoom or a font change lays it out again.
+On a graphical frame the line is the window's title row, 38 pixels tall at the normal density (34 compact, 42
+comfortable), on the gap colour behind the cards: the drgnx mark and the project, the branch as a quiet chip (`main
+↑2` when two commits wait to be pushed), a search box in the middle (`Search files, commands, symbols…` with the
+palette's key as a keycap; a click opens the palette), the two chips, and the window controls. The search box is
+centred between the left and right parts and leaves when the window is too narrow for it. Chips, the search box,
+the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row
+height), so they follow every theme, and High Contrast gives the chips an outline instead of a tint. A new width, a
+zoom, a font or a theme change lays the row out again. A click on the row is matched to its item by its position, so
+the buttons work on every build of Emacs, including those whose tab bar reports no item for a click. A terminal keeps
+the text line above: the hint and glyph buttons.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the
 branch from drgnx's git cache, as the status bar reads it (until the cache has read the repository, the file's
@@ -374,9 +384,9 @@ and face). A terminal with fewer than 20 lines shows no line at all (it needs th
 | `drgnx-topline` | `t` | Show the top line. Set it to `nil` in `config.el` (or Customize) to take it away. |
 | `drgnx-topline-min-lines` | `20` | A terminal frame with fewer lines than this shows none; windows always show it. |
 
-Its faces are `drgnx-topline` (the quiet text, inherits `shadow` over `header-line`) and `drgnx-topline-strong`
-(the project and the keys, inherits `bold` over `header-line`); the line itself takes the theme's `header-line`
-look. The glyphs `diamond`, `search`, `minimize` and `maximize` are in the table above.
+Its faces are `drgnx-topline` (the quiet text) and `drgnx-topline-strong` (the project and the keys), both over
+`tab-bar`, which the theme paints in the UI font on the gap colour; the chips use `drgnx-chip-quiet`,
+`drgnx-chip-attention` and `drgnx-chip-accent`. The glyphs `diamond`, `search`, `minimize` and `maximize` are in the table above.
 
 ## Quick help
 

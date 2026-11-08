@@ -172,23 +172,89 @@ clicked)."
       (kill-buffer buf))))
 
 (ert-deftest drgnx-ui-look-bars/hint-centred ()
-  "Pattern D: the top line's hint (a block on the `region' face, as wide as a hint) is centred on the frame within
-1 device pixel."
+  "Pattern D: the title row's search box (a block on the `region' face, as wide as the box) is centred between the
+row's sides within 1 device pixel; with nothing on the right but the end's 8 px, that is the frame's middle less
+half the project mark."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*look-bars-top*")))
     (switch-to-buffer buf)
     (unwind-protect
-        (cl-letf (((symbol-function 'drgnx-topline--hint)
+        (cl-letf (((symbol-function 'drgnx-topline--search-box)
                    (lambda ()
-                     (list (drgnx-topline--item 'drgnx-topline-search (propertize "                  " 'face 'region))))))
+                     (drgnx-topline--item 'drgnx-topline-search (propertize "                  " 'face 'region)))))
           (drgnx-topline-setup)
           (drgnx-test-wait-presented)
-          (let* ((snap (drgnx-uitest-snapshot))
-                 (y (/ (round (* (drgnx-ui-look-bars--scale) (tab-bar-height nil t))) 2))
-                 (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region))))
+          (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-ui-look-bars--scale))
+                 (y (/ (round (* s (tab-bar-height nil t))) 2))
+                 (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region)))
+                 (items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (left (round (* s (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-gap-1 keys)) measure))))
+                 (right (round (* s (drgnx-topline--width (nthcdr (1+ (cl-position 'drgnx-topline-gap-2 keys)) items) measure)))))
             (should span)
-            (should (<= (abs (- (nth 0 snap) (+ (car span) (cdr span) 1))) 2))))
+            (should (<= (abs (- (+ left (nth 0 snap) (- right)) (+ (car span) (cdr span) 1))) 2))))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-is-38-px-on-the-gap ()
+  "Design §4: the title row is the `title-row' density's height (38 px at the default) and, where nothing is drawn,
+the `gap' token's colour."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-title*")))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (should (= (drgnx-ui-look-bars--logical 'title-row) (tab-bar-height nil t)))
+          (let* ((s (drgnx-ui-look-bars--scale)) (snap (drgnx-uitest-snapshot))
+                 (px (cdr (drgnx-uitest-pixel snap (round (* s 300)) (round (* s 3))))))
+            (should (cl-every (lambda (a b) (<= (abs (- a b)) 2)) px (drgnx-ui-look-bars--token-rgb 'gap 'dark)))))
+      (drgnx-topline--off)
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-controls-take-a-real-click ()
+  "Design §4: the title row's window controls are buttons.  A real pointer (mutter's virtual one, through the
+compositor and the shell as a mouse's motion and buttons go; `drgnx-uitest-pointer-click') on Minimise runs its
+registry command, Minimize Window.
+Skipped, saying why, on Nidhogg's native Wayland shell until its tab bar takes real presses (DEFERRED
+NH-TITLE-CLICK-1): there they reach Emacs without the tab bar's item, with no area, or not at all, while motion and
+text-area clicks arrive."
+  (skip-unless (display-graphic-p))
+  (when (featurep 'nidhogg-wayland)
+    (ert-skip "NH-TITLE-CLICK-1: the native shell's tab bar does not take a real press (no item, no area, or no event)"))
+  (skip-unless (drgnx-uitest-pointer-available-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-controls*")) (frame (selected-frame)) (ran nil)
+        (was drgnx-face-title-bar))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'iconify-frame) (lambda (&optional _f) (interactive) (setq ran t)))
+                  ;; as on GNOME (the session's mutter names no desktop)
+                  ((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          ;; drgnx draws the title: the frame is undecorated, so no system title bar takes the press
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (should (drgnx-face-drawn-title-p frame))
+          (drgnx-topline-setup)
+          (should (eq 'iconify-frame (drgnx-cmd-command (drgnx-commands-get 'title-row-minimize))))
+          (drgnx-test-wait-presented)
+          (let* ((items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-minimize keys)) measure))
+                 (x (+ before (round (* (drgnx-pixels-scale frame) (+ 4 13)))))   ; the 4 px gap, then the middle
+                 (y (/ (tab-bar-height frame t) 2)))
+            (should (equal (list :ran t) (list :ran (drgnx-uitest-pointer-click x y (lambda () ran))
+                                               :keys drgnx-uitest-pointer-keys
+                                               :item (car (drgnx-topline--event-item
+                                                           (list 'mouse-1 (list frame 'tab-bar (cons x y) 0)))))))))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
       (drgnx-topline--off)
       (kill-buffer buf))))
 
