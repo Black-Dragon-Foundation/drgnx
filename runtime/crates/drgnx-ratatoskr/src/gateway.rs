@@ -320,12 +320,16 @@ impl Gate {
     /// The embedders of the providers of kind `tei` and `ollama` that can embed (by id), through this gateway's
     /// loopback listener with an editor token of its own (kept in memory only, never in `runtime.db`).  An Ollama
     /// provider embeds with the model the embed role's CHAIN names for it, and is left out when the chain names none.
+    /// None while replaying a recording: a replayed provider is the replayer, which has no vectors recorded.
     /// Err: the gateway is not listening.
     pub fn embedders(
         &self,
         chain: &[crate::settings::ChainStep],
     ) -> Result<Vec<crate::embed::ProviderEmbedder>, Error> {
         let (_, port) = self.engine()?;
+        if crate::recording::replaying() {
+            return Ok(Vec::new());
+        }
         let found: Vec<(String, Kind, String)> = read(&self.providers)
             .values()
             .filter(|p| matches!(p.kind, Kind::Tei | Kind::Ollama) && p.caps.embed)
