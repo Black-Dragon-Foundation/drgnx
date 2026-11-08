@@ -88,7 +88,7 @@ The process is waited for before the temp directories go."
          (process-environment
           (append (list (concat "HOME=" home) (concat "ZDOTDIR=" home) (concat "XDG_CONFIG_HOME=" home "/.config")
                         "HISTFILE=/dev/null" "TERM=dumb")
-                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|HISTFILE\\|TERM\\|INSIDE_EMACS\\|EAT_SHELL_INTEGRATION_DIR\\)=" e))
+                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|HISTFILE\\|TERM\\|INSIDE_EMACS\\)=" e))
                               process-environment))))
     (unwind-protect
         (with-temp-buffer

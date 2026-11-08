@@ -1498,9 +1498,9 @@ open_here() { # [--wait] [-t | --gui] [--] [PATH…] — in drgnx's own terminal
 }
 
 cmd_open() { # [--check] [--wait] [-t | --gui] [PATH…] — open PATHs (none: the windows as you left them) in drgnx, like code .
-  # In drgnx's terminal (DRGNX_TERMINAL, or eat; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new
+  # In drgnx's terminal (DRGNX_TERMINAL; DRGNX_SERVER_NAME is its Emacs's socket): that drgnx, never a new
   # window or frame
-  if [[ ( -n "${DRGNX_TERMINAL:-}" || "${INSIDE_EMACS:-}" == *eat* ) && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then
+  if [[ -n "${DRGNX_TERMINAL:-}" && -n "${DRGNX_SERVER_NAME:-}" && "${1:-}" != --check ]]; then
     open_here "$@"; return
   fi
   if [[ "${1:-}" == --check ]]; then open_check; return; fi

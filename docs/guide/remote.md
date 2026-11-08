@@ -109,7 +109,7 @@ file of a container that runs as root), from a visit, a daemon or a sentinel ali
 - The private auto-save folder helps only while drgnx's state directory is outside the temp directory
   (`temporary-file-directory`), as it is by default. With `XDG_STATE_HOME` inside `$TMPDIR`, TRAMP asks again on the
   first visit of a root-owned file; set `tramp-auto-save-directory` to a folder outside the temp directory.
-- Shell integration in a remote terminal (eat or zsh integration over TRAMP) is not built.
+- Shell integration in a remote terminal (zsh integration over TRAMP) is not built.
 - Remote folders are not restored at the next start (see the Explorer's rules in [workbench.md](workbench.md)); open
   them again with Open Remote….
 - Language servers are found on the host's `PATH` (what TRAMP sees, see `tramp-remote-path`); a server installed

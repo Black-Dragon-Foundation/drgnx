@@ -40,7 +40,7 @@ OUTPUT being stdout and stderr together and HOME-STATE-FILE the text of the ssh 
                         (concat "XDG_STATE_HOME=" home "/state") (concat "XDG_DATA_HOME=" home "/data")
                         (concat "PATH=" (if path (concat path ":") "") "/usr/bin:/bin")
                         "HISTFILE" "PROMPT_COMMAND" "PS1=$ ")
-                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_[A-Z_]*\\|TERM\\|INSIDE_EMACS\\|PATH\\|EAT_[A-Z_]*\\|GHOSTTY_[A-Z_]*\\|DRGNX_[A-Z_]*\\|TERMINFO\\|TERM_PROGRAM\\)=" e))
+                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_[A-Z_]*\\|TERM\\|INSIDE_EMACS\\|PATH\\|GHOSTTY_[A-Z_]*\\|DRGNX_[A-Z_]*\\|TERMINFO\\|TERM_PROGRAM\\)=" e))
                               process-environment))))
     (unwind-protect
         (progn

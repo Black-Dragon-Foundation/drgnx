@@ -64,13 +64,6 @@
 		    "Highlight uncommitted changes using VC" :commit
 		    "5e467e66847069d29922efb1a91a25a78dbad3d5" :url
 		    "https://github.com/dgutov/diff-hl")
-	   (eat :version "0.9.4" :archive "nongnu" :kind tar :file
-		"eat-0.9.4.tar" :sha256
-		"14971fc562f0820794eb6af78beebc7dc3ba898221e785c2d272a9f0fccfc54a"
-		:size 778240 :requires ((compat "29.1")) :summary
-		"Emulate A Terminal, in a region, in a buffer and in Eshell"
-		:commit "c91451f2d17453c19d3fa76faa4945cbe54e14ce"
-		:url "https://codeberg.org/akib/emacs-eat")
 	   (eglot-booster :kind git :url
 			  "https://github.com/jdtsmith/eglot-booster"
 			  :rev "main" :commit

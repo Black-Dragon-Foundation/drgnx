@@ -41,7 +41,7 @@ ARGS replace the shell's usual arguments before the script."
           (append env (list (concat "HOME=" home) (concat "ZDOTDIR=" home) (concat "XDG_CONFIG_HOME=" home "/.config")
                             "TERM=dumb")
                   (when path (list (concat "PATH=" path)))
-                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|TERM\\|INSIDE_EMACS\\|EAT_SHELL_INTEGRATION_DIR\\|PATH\\)=" e))
+                  (seq-remove (lambda (e) (string-match-p "\\`\\(HOME\\|ZDOTDIR\\|XDG_CONFIG_HOME\\|TERM\\|INSIDE_EMACS\\|PATH\\)=" e))
                               process-environment)
                   (unless path (list (concat "PATH=" (getenv "PATH")))))))
     (unwind-protect
@@ -60,7 +60,7 @@ ARGS replace the shell's usual arguments before the script."
   "The script that sources SHELL's file TIMES times (default 1)."
   (string-join (make-list (or times 1) (format "source '%s'" (drgnx-shell-files-test--file shell))) "; "))
 
-(ert-deftest drgnx-shell-files/silent-outside-eat ()
+(ert-deftest drgnx-shell-files/silent-outside-the-terminal ()
   (dolist (shell (drgnx-shell-files-test--available))
     (let ((r (drgnx-shell-files-test--run shell (format "%s; %s" (drgnx-shell-files-test--source shell)
                                                         (nth 3 (assq shell drgnx-shell-files-test--shells))))))
@@ -80,14 +80,10 @@ ARGS replace the shell's usual arguments before the script."
         ('zsh (should (string-search (concat "fpath1=" (directory-file-name drgnx-shell-files-test--dir)) (nth 1 r))))
         ('bash (should (string-search "_drgnx" (nth 1 r))))
         ('fish (should (string-search "drgnx" (nth 1 r))))))
-    ;; and the text: no command substitution (in fish, no unquoted parentheses before the eat-only functions)
+    ;; and the text: no command substitution
     (let ((text (with-temp-buffer (insert-file-contents (drgnx-shell-files-test--file shell)) (buffer-string))))
       (should-not (string-search "$(" text))
-      (should-not (string-search "`" text))
-      (when (eq shell 'fish)
-        (let ((before (car (split-string text "^function __drgnx_eat" t))))
-          (dolist (line (split-string before "\n"))
-            (should-not (string-match-p "\\`[^#']*(" line))))))))
+      (should-not (string-search "`" text)))))
 
 (ert-deftest drgnx-shell-files/sourcing-twice-is-harmless ()
   (dolist (shell (drgnx-shell-files-test--available))
@@ -126,85 +122,10 @@ ARGS replace the shell's usual arguments before the script."
       (let ((r (drgnx-shell-files-test--run 'fish (format "%s; complete -c drgnx" (drgnx-shell-files-test--source 'fish)))))
         (should (string-match-p "^complete drgnx" (nth 1 r)))))))   ; fish lists the newest registration first
 
-(ert-deftest drgnx-shell-files/eat-integration-only-inside-eat ()
-  (let ((integ (make-temp-file "drgnx-eat" t)))
-    (unwind-protect
-        (progn
-          (with-temp-file (expand-file-name "zsh" integ) (insert "__drgnx_marker=hit\n"))
-          (with-temp-file (expand-file-name "bash" integ) (insert "__drgnx_marker=hit\n"))
-          (dolist (shell '(zsh bash))
-            (let ((show (format "%s; print -r -- \"marker=${__drgnx_marker-unset}\"" (drgnx-shell-files-test--source shell)))
-                  (dir (concat "EAT_SHELL_INTEGRATION_DIR=" integ)))
-              (when (eq shell 'bash) (setq show (format "%s; echo \"marker=${__drgnx_marker-unset}\"" (drgnx-shell-files-test--source shell))))
-              (dolist (case `(("31.1,eat" ,dir "hit")
-                              ("31.1,eat" nil "unset")             ; eat's dir missing
-                              (nil ,dir "unset")                   ; not in Emacs
-                              ("31.1,comint" ,dir "unset")         ; in Emacs, not eat
-                              ("31.1,vterm" ,dir "unset")))
-                (let ((r (drgnx-shell-files-test--run shell show (delq nil (list (and (car case) (concat "INSIDE_EMACS=" (car case))) (cadr case))))))
-                  (should (equal (list shell case (nth 0 r) (nth 1 r) (nth 2 r))
-                                 (list shell case 0 (format "marker=%s\n" (nth 2 case)) "")))))))
-          (when (drgnx-shell-files-test--exe 'fish)
-            (dolist (case `(("31.1,eat" t) (nil nil) ("31.1,comint" nil)))
-              (let ((r (drgnx-shell-files-test--run
-                        'fish (format "%s; functions -q __drgnx_eat_prompt; and echo defined; or echo none" (drgnx-shell-files-test--source 'fish))
-                        (delq nil (list (and (car case) (concat "INSIDE_EMACS=" (car case)))
-                                        (concat "EAT_SHELL_INTEGRATION_DIR=" integ))))))
-                (should (equal (nth 1 r) (if (cadr case) "defined\n" "none\n")))))))
-      (delete-directory integ t))))
-
-(ert-deftest drgnx-shell-files/eat-integration-without-a-history-file-is-silent ()
-  ;; eat's integration hands its history to Emacs with `tail -n N "$HISTFILE"': an unset HISTFILE (zsh's default) or
-  ;; one not written yet printed "tail: cannot open …" at every start of drgnx's terminal (test/live/drgnx-terminal-test.el).  The shell's
-  ;; own HISTFILE is left as it was.
-  (let ((integ (make-temp-file "drgnx-eat" t)))
-    (unwind-protect
-        (progn
-          (dolist (shell '(zsh bash))
-            (with-temp-file (expand-file-name (symbol-name shell) integ)
-              (insert "__eat_enable_integration () { __drgnx_marker=hit; tail -n 5 \"$HISTFILE\" > /dev/null; }\n"
-                      "__eat_enable_integration\n")))
-          (dolist (shell '(zsh bash))
-            (dolist (case '(("unset HISTFILE" "unset") ("HISTFILE=$HOME/never-written" "/never-written")))
-              (let ((r (drgnx-shell-files-test--run
-                        shell (format "%s; %s; echo \"marker=${__drgnx_marker-unset} hist=${HISTFILE-unset}\""
-                                      (car case) (drgnx-shell-files-test--source shell))
-                        (list "INSIDE_EMACS=31.1,eat" (concat "EAT_SHELL_INTEGRATION_DIR=" integ)))))
-                (should (equal (list shell case (nth 0 r) (nth 2 r)) (list shell case 0 "")))
-                (should (string-prefix-p "marker=hit hist=" (nth 1 r)))
-                (should (string-suffix-p (concat (cadr case) "\n") (nth 1 r)))))))
-      (delete-directory integ t))))
-
-(ert-deftest drgnx-shell-files/fish-emits-eats-sequences ()
-  (unless (drgnx-shell-files-test--exe 'fish) (ert-skip "fish is not installed here (the container tier runs this)"))
-  (let* ((env '("INSIDE_EMACS=31.1,eat" "EAT_SHELL_INTEGRATION_DIR=/nonexistent"))
-         (r (drgnx-shell-files-test--run
-             'fish (format "%s; cd /tmp; emit fish_preexec 'echo hi'; emit fish_prompt" (drgnx-shell-files-test--source 'fish))
-             env nil '("-N" "-i" "-c")))
-         (host (base64-encode-string (encode-coding-string (system-name) 'utf-8) t))
-         (pwd (base64-encode-string "/tmp" t)))
-    (should (equal (nth 2 r) ""))
-    (should (string-search (format "\e]51;e;A;%s;%s\e\\" host pwd) (nth 1 r)))
-    (should (string-search "\e]51;e;B\e\\" (nth 1 r)))
-    (should (string-search (format "\e]51;e;F;%s\e\\" (base64-encode-string "echo hi" t)) (nth 1 r)))
-    (should (string-search "\e]51;e;G\e\\" (nth 1 r)))
-    (should (string-search "\e]51;e;H;0\e\\\e]51;e;J\e\\\e]51;e;A;" (nth 1 r)))))
-
-(defun drgnx-shell-files-test--run-in-mode (shell pre args dir &optional post)
-  "Run SHELL with PRE before sourcing its file from DIR, outside eat and inside it; POST runs last.
-Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stands for eat's integration."
-  (let ((integ (make-temp-file "drgnx-eat" t))
-        (file (expand-file-name (nth 1 (assq shell drgnx-shell-files-test--shells)) dir)))
-    (unwind-protect
-        (progn
-          (with-temp-file (expand-file-name (symbol-name shell) integ) (insert "__drgnx_marker=hit\n"))
-          (let* ((show (if (eq shell 'zsh) "print -r --" "echo"))
-                 (script (format "%s; source '%s'; %s \"marker=${__drgnx_marker-unset}\"%s" pre file show
-                                 (if post (concat "; " post) ""))))
-            (list (drgnx-shell-files-test--run shell script nil nil args)
-                  (drgnx-shell-files-test--run shell script (list "INSIDE_EMACS=31.1,eat" (concat "EAT_SHELL_INTEGRATION_DIR=" integ))
-                                               nil args))))
-      (delete-directory integ t))))
+(defun drgnx-shell-files-test--run-strict (shell pre args dir &optional post)
+  "Run SHELL with PRE before sourcing its file from DIR; POST runs last.  Returns (EXIT OUT STDERR)."
+  (let ((file (expand-file-name (nth 1 (assq shell drgnx-shell-files-test--shells)) dir)))
+    (drgnx-shell-files-test--run shell (format "%s; source '%s'%s" pre file (if post (concat "; " post) "")) nil nil args)))
 
 (ert-deftest drgnx-shell-files/strict-modes-stay-silent-and-correct ()
   ;; unset variables are errors (nounset), POSIX and sh emulation, and a path with a space in it
@@ -226,9 +147,8 @@ Returns ((OUT-EXIT OUT STDERR) (IN-EXIT IN STDERR)); inside, a marker file stand
                        (bash "true" ("--norc" "--noprofile" "--posix" "-i" "-c")
                              "COMP_WORDS=(drgnx o); COMP_CWORD=1; _drgnx; echo \"reply=${COMPREPLY[*]}\"" "reply=open onboard\n")))
             (pcase-let* ((`(,shell ,pre ,args ,post ,more) c)
-                         (`(,out ,in) (drgnx-shell-files-test--run-in-mode shell pre args dir post)))
-              (should (equal (list c (nth 0 out) (nth 1 out) (nth 2 out)) (list c 0 (concat "marker=unset\n" more) "")))
-              (should (equal (list c (nth 0 in) (nth 1 in) (nth 2 in)) (list c 0 (concat "marker=hit\n" more) "")))))
+                         (out (drgnx-shell-files-test--run-strict shell pre args dir post)))
+              (should (equal (list c (nth 0 out) (nth 1 out) (nth 2 out)) (list c 0 (or more "") "")))))
           ;; zsh under emulate sh: the whole sourcing happens in sh emulation
           (let* ((file (expand-file-name "drgnx.zsh" dir))
                  (r (drgnx-shell-files-test--run 'zsh (format "emulate sh -c \"source '%s'\"; print -r -- \"first=$fpath[1]\"" file))))
