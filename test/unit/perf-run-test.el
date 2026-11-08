@@ -65,6 +65,7 @@ after another (the last repeats).  Binds `history' (the history file) and `start
           (loads ,loads) (started 0))
      (unwind-protect
          (cl-letf (((symbol-function 'drgnx-perf-load) (lambda () (if (cdr loads) (pop loads) (car loads))))
+                   ((symbol-function 'drgnx-perf-run--compiled) #'ignore)   ; no tree to build: the session is fake
                    ((symbol-function 'drgnx-ui-state-root) (lambda () dir))
                    ((symbol-function 'drgnx-ui-start) (lambda (&rest _) (setq started (1+ started)) '(:name "fake")))
                    ((symbol-function 'drgnx-ui-own-session) (lambda (_) 'sess))
@@ -327,5 +328,25 @@ file; without it the measure is as written."
         (let ((drgnx-perf-run--profile (drgnx-perf-run--profile-file "panel-replay")))
           (drgnx-perf-run-workload 'sess '(:measure "(m)" :repeat 1))))
       (should (member "(m)" forms)))))
+
+(ert-deftest drgnx-perf-run/a-tree-of-sources-is-built-before-the-run ()
+  "Pattern D: a tree with a Lisp file whose .elc is missing or older than it is built before the sessions start (a
+run of sources measures the interpreter); a compiled tree is not."
+  (let* ((root (make-temp-file "perf-tree" t)) (el (expand-file-name "core/a.el" root)) built)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-perf-ab--build) (lambda (tree) (push tree built))))
+          (make-directory (file-name-directory el))
+          (write-region "" nil el nil 'silent)
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root)))
+          (write-region "" nil (concat el "c") nil 'silent)
+          (set-file-times el (time-subtract nil 60))       ; backdated: file times sit on coarse ticks
+          (setq built nil)
+          (drgnx-perf-run--compiled root)
+          (should-not built)
+          (set-file-times (concat el "c") (time-subtract nil 120))
+          (drgnx-perf-run--compiled root)
+          (should (equal built (list root))))
+      (delete-directory root t))))
 
 ;;; perf-run-test.el ends here

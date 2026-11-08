@@ -13,6 +13,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'seq)
+(require 'drgnx-build)
 (require 'drgnx-ui)
 (require 'drgnx-perf)
 (require 'drgnx-perf-settings)
@@ -1405,8 +1406,19 @@ its own cost to the other numbers)."
   "Wait until the session's background native compilation has drained (PERF-ELN-1: a fresh tree compiles its files
 to the eln cache while it runs, and the wall clock pays for it).  A plain run waits too, before its first workload.")
 
+(defun drgnx-perf-run--compiled (root)
+  "ROOT built (`drgnx-perf-ab--build') when one of the files `drgnx build' compiles has no .elc as new as it: a
+session would load it as source, and a run of sources measures the interpreter (a replay fell behind its own stream
+and a draw made twice the objects; a fresh clone and a synced copy have no .elc)."
+  (when-let* ((el (seq-find (lambda (el) (let ((elc (concat el "c")))
+                                           (or (not (file-exists-p elc)) (file-newer-than-file-p el elc))))
+                            (drgnx-build-files root))))
+    (princ (format "perf: %s is not compiled: building the tree first\n" (file-relative-name el root)))
+    (drgnx-perf-ab--build root)))
+
 (defun drgnx-perf-run--judged (audit)
   "The run of `drgnx-perf-run'."
+  (drgnx-perf-run--compiled drgnx-ui-repo-dir)
   (let* ((loads (list (drgnx-perf-load)))
          (drgnx-perf-run--fixture (drgnx-perf-run--make-fixture))
          (all (drgnx-perf-run--workloads)) (selected (drgnx-perf-run--select all))

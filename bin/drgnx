@@ -536,9 +536,9 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
       *) echo "drgnx: DRGNX_PERF_CPUS must be 2 or 4, not ${DRGNX_PERF_CPUS}" >&2; return 2 ;;
     esac
     mount="$here:/src:ro"
-    # an A/B compiles the tree (`bin/drgnx build`) before its sessions start: under podman the checkout is an overlay,
-    # so the .elc files go to a layer the run throws away and the checkout stays as it was
-    if [ -n "$abenv" ] && [ "$rt" = podman ]; then mount="$here:/src:O"; fi
+    # a perf run compiles the tree (`bin/drgnx build`) before its sessions start, unless it is compiled: under podman
+    # the checkout is an overlay, so the .elc files go to a layer the run throws away and the checkout stays as it was
+    if { [ "$tier" = perf ] || [ -n "$abenv" ]; } && [ "$rt" = podman ]; then mount="$here:/src:O"; fi
     if [ -n "${DRGNX_UI_COMPOSITOR:-}" ]; then args+=(-e "DRGNX_UI_COMPOSITOR=$DRGNX_UI_COMPOSITOR"); fi
   elif [ "$tier" = tty ]; then
     fedora="${fedora:-45}"

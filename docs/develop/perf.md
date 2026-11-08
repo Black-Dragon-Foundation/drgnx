@@ -390,9 +390,11 @@ DRGNX_CONTAINER_NIDHOGG=/path/to/unpacked/nidhogg bin/drgnx test --container --s
 
 The container runs the Nidhogg at `DRGNX_CONTAINER_NIDHOGG` (an unpacked build; see [harness.md](harness.md)) instead of
 the image's, so a build under test is measured without touching the host. `--soak [MIN]` is the soak of the section above in
-the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section (it compiles the
-tree first, so under podman the checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run
-throws away; other runtimes keep it read-only, where the A/B's build fails). Its two sessions run side by side, so
+the GUI image, memory-capped like `--ui`; `--ab-env` is the interleaved A/B of the Glitnir section. Both compile the
+tree first (a plain `--perf` run only when a file has no `.elc` as new as it: a fresh clone, a synced copy; a run of
+sources measures the interpreter, and `panel-replay`'s mirror fell behind its own stream), so under podman the
+checkout is mounted as an overlay, `/src:O`: the `.elc` files go to a layer the run throws away; other runtimes keep
+it read-only, where that build fails. The A/B's two sessions run side by side, so
 `--ab-env` gets two sessions' memory, `--memory 6g` (a plain `--perf` run 3g; `DRGNX_TEST_GUI_MEMORY` overrides both):
 at 3g the OOM killer took one session in every `compile-flood` A/B (each peaks near 1.8 GB), and the run failed with
 "Connection refused" or "End of file during parsing". Name the workloads
