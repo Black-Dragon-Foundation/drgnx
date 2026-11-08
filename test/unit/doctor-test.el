@@ -1135,6 +1135,17 @@ what `ratatoskr doctor --json' said)."
       (should (eq (car r) 'warn))
       (should (string-search "wt-big" (nth 1 r))))))
 
+(ert-deftest drgnx-doctor/history-row-reads-a-project-with-no-pins ()
+  ;; a project nothing pins comes as `:pins []' (found on an install: "Args out of range: [], 0")
+  (let* ((fact (plist-get (drgnx-doctor-test--rtsk) :ratatoskr))
+         (store '(:schema 7 :history (:copies 1 :newest_age_s 100)
+                          :history_size [(:project "p1" :size 5242880 :cap 2147483648 :pins [])]))
+         (fact (plist-put fact :report (plist-put (plist-get fact :report) :store store)))
+         (r (drgnx-doctor-check 'history (list :ratatoskr fact))))
+    (should (eq (car r) 'ok))
+    (should (string-search "p1 5 MiB of 2048 MiB" (nth 1 r)))
+    (should-not (string-search "pinned" (nth 1 r)))))
+
 (ert-deftest drgnx-doctor/ratatoskr-report-is-read-from-the-binary ()
   ;; the report is exactly the binary's output: no "Process finished" line from a default sentinel (found by the e2e run)
   (let* ((dir (make-temp-file "drgnx-rtsk" t)) (bin (expand-file-name "ratatoskr" dir)))
