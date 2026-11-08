@@ -23,6 +23,7 @@
 (declare-function drgnx-look-token "drgnx-theme-gen")
 (declare-function drgnx-decor-chip "drgnx-decor")
 (declare-function glitnir-active-p "glitnir")
+(declare-function drgnx-start--key-column "drgnx-start")
 
 (defun drgnx-look-components-ui-test--rgb (hex)
   "HEX as the (A R G B) a snapshot gives."
@@ -103,6 +104,32 @@ and a button in the UI text role's; under Glitnir a button's corner is rounded (
               (pcase-dolist (`(,corner ,x) `((left ,(round (* s (+ (car edges) (car start)))))
                                              (right ,(1- (round (* s (+ (car edges) (car end))))))))
                 (should-not (equal (list corner fill) (list corner (drgnx-uitest-pixel snap x y))))))))
+      (mapc #'disable-theme custom-enabled-themes)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-components/the-start-page-keys-clear-their-column ()
+  "The start page's key table: in a buffer in the code font (the page's), the description after the widest keys
+(`C-k C-r', four caps) starts at least 16 logical pixels after the last cap's ring, where the page's column puts it."
+  (skip-unless (display-graphic-p))
+  (drgnx-uitest-bare-frame)
+  (load (expand-file-name "modules/ui/drgnx-start" drgnx-look-components-ui-test--repo) nil t)
+  (let ((buf (get-buffer-create "*look-components-keys*")))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme 'drgnx-dark t)
+          (switch-to-buffer buf)
+          (erase-buffer)
+          (let* ((wide (drgnx-palette-keycaps "C-k C-r"))
+                 (column (drgnx-start--key-column (list (drgnx-palette-keycaps "C-p") wide))))
+            (insert "\n" wide)
+            (let ((end (point)))
+              (insert (propertize " " 'display `(space :align-to (,column))) "See every key\n")
+              (goto-char (point-min))
+              (drgnx-test-wait-presented)
+              (let ((keys-end (car (posn-x-y (posn-at-point end))))
+                    (text (car (posn-x-y (posn-at-point (1+ end))))))
+                (should (>= (- text keys-end) (1- (drgnx-px 16))))))))
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 

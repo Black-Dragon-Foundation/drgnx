@@ -170,6 +170,11 @@ LOGO non-nil: the logo above the name takes `drgnx-start--logo-lines' and a blan
     (insert-text-button (concat pad label pad) :type 'drgnx-start-button 'face face 'mouse-face 'highlight
                         'drgnx-start-id id 'help-echo help)))
 
+(defun drgnx-start--key-column (keycaps)
+  "Where the descriptions start, in pixels from the keys' left edge: 16 px past the widest of KEYCAPS (strings of
+keycaps, `drgnx-palette-keycaps'), measured in their own faces (the spaces between the caps are in the page's font)."
+  (+ (apply #'max (mapcar #'drgnx-look-pixel-width keycaps)) (drgnx-px 16)))
+
 (defun drgnx-start--render ()
   "Fill the current buffer: the name, two lines on what drgnx is, the three keys, the buttons.
 The keys are read from the registry now, so a changed profile shows when the page shows again.  On a graphical frame
@@ -183,9 +188,7 @@ and the buttons one row, 8 px apart; a terminal has a bullet per key and a butto
                                    (when-let* ((key (drgnx-surfaces-key-label id :any t :short t)))
                                      (cons (if graphic (drgnx-palette-keycaps key) key) what)))
                                  drgnx-surfaces-starter-commands)))
-         (column (and graphic keys
-                      (+ (apply #'max (mapcar (lambda (k) (drgnx-look-pixel-width (car k) 'drgnx-keycap)) keys))
-                         (drgnx-px 16))))
+         (column (and graphic keys (drgnx-start--key-column (mapcar #'car keys))))
          (to (and column `(space :align-to (+ (- (0.5 . text) ,(/ drgnx-start--width 2.0)) (,column))))))
     (erase-buffer)
     (setq-local cursor-type (not graphic))  ; a graphical page shows where TAB is with a ring (`drgnx-start--focus')
