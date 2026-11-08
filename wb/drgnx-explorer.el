@@ -26,6 +26,8 @@
 (require 'drgnx-memo)
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-view-nav)               ; the keys on the rows path
+(declare-function drgnx-chrome-tab-p "drgnx-chrome")
+(declare-function drgnx-chrome-note-preview "drgnx-chrome")
 (require 'drgnx-git)
 (require 'drgnx-timer)
 (require 'drgnx-file-stream)
@@ -912,8 +914,14 @@ local folders only: a remote root is left out."
       (when-let* ((id (drgnx-explorer-node-at pos)))
         (if (drgnx-explorer-dir-at pos)
             (drgnx-explorer--rows-toggle id)
-          (drgnx-wb-show-in-editor (find-file-noselect id) (not keep-focus))))
+          (drgnx-explorer--show id keep-focus)))
     (drgnx-explorer--activate-old pos keep-focus)))
+
+(defun drgnx-explorer--show (file keep-focus)
+  "Show FILE in the editor: with KEEP-FOCUS as a preview tab (unless it is a tab already), else to work in."
+  (let* ((b (find-file-noselect file)) (new (not (and (fboundp 'drgnx-chrome-tab-p) (drgnx-chrome-tab-p b)))))
+    (drgnx-wb-show-in-editor b (not keep-focus))
+    (when (fboundp 'drgnx-chrome-note-preview) (drgnx-chrome-note-preview b (and keep-focus new)))))
 
 (defun drgnx-explorer--activate-old (pos keep-focus)
   "`drgnx-explorer-activate' off the rows path."
@@ -923,7 +931,7 @@ local folders only: a remote root is left out."
      ((drgnx-explorer-dir-at pos)
       (let ((drgnx-explorer--remote-reads t)) (drgnx-explorer-toggle-at pos)))   ; a click or Open: the user's command
      (t
-      (drgnx-wb-show-in-editor (find-file-noselect (drgnx-explorer--path v)) (not keep-focus))))))
+      (drgnx-explorer--show (drgnx-explorer--path v) keep-focus)))))
 
 (defun drgnx-explorer-next () "Next row (ends a multi-select)."
        (interactive) (drgnx-explorer--clear-selection)
@@ -1591,6 +1599,8 @@ is read.  File events and timers read none."
   (setq drgnx-explorer--pressed nil)
   (let ((pos (posn-point (event-end event))))
     (when (and (integer-or-marker-p pos) (not (drgnx-explorer-dir-at pos)) (drgnx-explorer-node-at pos))
+      (let ((b (get-file-buffer (drgnx-explorer-node-at pos))))     ; opened to work in: no longer a preview
+        (when (and b (fboundp 'drgnx-chrome-note-preview)) (drgnx-chrome-note-preview b nil)))
       (drgnx-wb-focus-editor))))
 
 (defun drgnx-explorer-mouse-ignore (_event)

@@ -25,7 +25,9 @@ setup.
 - **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
   `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
   border, radius 4). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
-  inside it). See [face.md](face.md#faces).
+  inside it), except in high contrast, which has no tints: there a chip is ringed in its own text colour, with the
+  same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
+  dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
 
 ### The three variants

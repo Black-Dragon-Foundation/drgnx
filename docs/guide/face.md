@@ -500,7 +500,8 @@ the border colour and, where the compositor rounds boxes (Glitnir), a 6 px radiu
 `drgnx-control-primary`, filled with the accent. The UI kit's buttons (`drgnx-ui-button`, `drgnx-ui-button-primary`)
 and ui/look's (`drgnx-button`, with `drgnx-button-hover` and `drgnx-button-pressed` changing only the fill) inherit
 them in the UI text role, with 12 px of room at either end and 26 px tall on a graphical frame. A chip (`drgnx-chip`,
-`drgnx-badge`) is a tint with room inside it and no ring, in the caption role, radius 4. A keycap (`drgnx-keycap`) is
+`drgnx-badge`) is a tint with room inside it (7 px either side) and no ring, in the caption role, radius 4; high
+contrast rings it in its text colour, with the same room. A keycap (`drgnx-keycap`) is
 subtle caption text in a 1 px ring of the strong border, radius 4: the palette, the title row's search box and the
 start page show keys this way. The rings' colours come from the theme (a box's colour cannot be inherited), so a
 theme that is not drgnx's draws them in the text colour.
@@ -516,6 +517,7 @@ look it describes.
 | `drgnx-surface-gap`, `-panel`, `-raised`, `-overlay` | `default` | the gap and bars, side panels, raised things (chips, the current tab), popups |
 | `drgnx-text-muted`, `-subtle`, `-disabled` | `shadow` | secondary, tertiary and unavailable text |
 | `drgnx-border`, `drgnx-border-strong` | `window-divider`, `vertical-border` | a card's hairline, an input's or popup's ring |
+| `drgnx-border-subtle` | `drgnx-border` | the fainter hairline under a tab row |
 | `drgnx-accent` | `link` (no underline) | the focus and the current thing |
 | `drgnx-hover` | `highlight` | a hovered row; its box has the widths of the focus ring |
 | `drgnx-selected`, `drgnx-selected-quiet` | `region`, `drgnx-surface-raised` | the selection, and the selection without the focus |

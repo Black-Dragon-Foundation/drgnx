@@ -250,22 +250,29 @@ line, on the editor's colour, so the shown tab, the breadcrumb and the code are 
 Customize `drgnx-chrome-tab*`, `header-line` and `drgnx-wb-bar` to change them.
 
 **On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
-surface; each tab is four pixels shorter than the row and two pixels from the next (a terminal separates them with a
-space). The shown tab is on the `editor` colour, so it joins the text below, and has its file's icon before the name.
-A tab that is not shown has no close mark you can see until the pointer is on the tab: the × is drawn in the row's own
-colour and the tab's hover colour brings it out (no Lisp runs while the pointer moves). The × of the shown tab is
-always there, and so is every × on a terminal. A modified file has a dimmed dot after its name, and a tab that is only
-there while it is shown (the scratch buffer, the start page) is in italics. At the right end of the row, an overflow
-button (**Go to Tab…**, in the palette: choose one of the group's tabs by name) and a split button (**Split Editor
-Right**). Under Glitnir the tabs' top corners are rounded (7 pixels).
+surface, six pixels in from the card's edge, with a hairline (the `drgnx-border-subtle` face) along its bottom; tabs
+are two pixels apart (a terminal separates them with a space). The shown tab is lifted four pixels off the row's top
+and is on the `editor` colour with no hairline under it, so it joins the text below; it has its file's icon before
+the name. A tab that is not shown has no close mark you can see until the pointer is on the tab: the × (a 14-pixel
+icon in an 18-pixel slot) is drawn in the row's own colour and the tab's hover colour brings it out (no Lisp runs
+while the pointer moves). The × of the shown tab is always there, and so is every × on a terminal. A modified file
+shows a dimmed dot in the ×'s place (after its name on a terminal). A tab that is only there while it is shown is in
+italics: the scratch buffer, the start page, and a **preview**, as in VS Code: a file the Explorer opened with one
+click is a preview until you edit it or open it to work in (a double click, Open), and the next preview takes its
+place. At the right end of the row, a split button (**Split Editor Right**) and an overflow button (**Go to Tab…**, in
+the palette: choose one of the group's tabs by name). Under Glitnir the shown tab's top corners are rounded (7
+pixels). With two editor groups or more, the selected group's card is ringed in the accent; with one, no card is.
 
 - **Tabs**: the buffers an editor window has shown, in the order they were opened; switching never reorders them.
   Click a tab to show it, `×` or middle-click closes it (the buffer stays open — close it in the Buffers panel).
   Close Tab `C-<f4>` · palette · `SPC b d`; Next / Previous Tab `C-<next>` / `C-<prior>` · Emacs' `C-x <right>` /
   `C-x <left>` · `SPC b n` / `SPC b p`. `*scratch*` is a tab only while it is shown. Killing a buffer takes its tab
   out of every window at once; closing the shown tab (or killing its buffer) shows the tab you used before it, as in VS Code; with no such tab, the one to its right, else its left. Each window keeps its own history.
-- **Breadcrumb**: the folders from the project's root › file (the project is named by the Explorer and the title row), `●` while unsaved, in the caption type face: a row 26 logical pixels
-  high on a graphical frame, the folders subtle and the file's name muted. A buffer with a header line of its own (the
+- **Breadcrumb**: the folders from the project's root › file › the definition the cursor is in (a function, a heading,
+  a class: what `add-log-current-defun` names), `●` while unsaved, in the caption type face (the project is named by
+  the Explorer and the title row): a row 26 logical pixels high on a graphical frame, the folders subtle and the last
+  part muted. The definition is looked up once Emacs has been idle for `drgnx-chrome-symbol-delay` (0.3 s), never while
+  the screen is drawn. A buffer with a header line of its own (the
   column headings of a list, clicked to sort) keeps it.
 - **At once**: chrome follows the workbench state store, so it is in place before a frame is drawn. A window made by
   anything — a split, a popup, a timer — has its tab line and header at the first redraw; `C-x o` between two windows
@@ -470,8 +477,9 @@ moment later, after a restored workbench was laid out in it, and lose the differ
 gives the windows made after it the new edge too. (On a display scaled above 1 the edge is set again in device
 pixels, so the window grows there once, as the windows shown at a density change do.)
 The gap and the frame's edge are painted in the gap colour (`drgnx-surface-gap`) on the frame, whatever the theme
-says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected window, has
-its ring in the accent colour, solid; it moves with the selection. Turning the module off takes the cards away and
+says: a theme with a grey divider (modus's) does not stripe the gap. The **focused tile**, the selected editor group
+when the frame has two or more, has its ring in the accent colour, solid; it moves with the selection (one editor
+group and the docked panes show no focus ring: their rows tell where you are). Turning the module off takes the cards away and
 gives the frame its divider widths and the theme's divider faces back. An editor card keeps its corners while it
 scrolls. Without Glitnir nothing changes.
 

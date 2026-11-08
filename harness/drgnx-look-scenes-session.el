@@ -26,6 +26,8 @@
 (defvar package-directory-list)
 (defvar magit-save-repository-buffers)
 (declare-function drgnx-chrome--note "drgnx-chrome")
+(declare-function drgnx-chrome-note-preview "drgnx-chrome")
+(declare-function drgnx-start-show "drgnx-start")
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
@@ -144,7 +146,6 @@ untracked, drgnx.lock.eld ignored."
   '((window-dark "the agent panel opens as a tab of the editor group, not the right island (look step 8)"
                  "no `1 needs you' or `2 agents' chips: the mock agent's turn does not run yet (look step 8)"
                  "no agent badges (C, R) in the Explorer: agent system part 3 (G9)"
-                 "drgnx-job.el is not a preview (italic) tab: only transient buffers preview"
                  "the status bar has no `1 job', `● Claude editing' or `● 1 needs you': no job or agent turn runs yet (look step 8)"
                  "the status bar's problems are Flymake's real ones for the file (the mockup's `✕ 1' is made up), and
 no `● eglot': the session runs no language server")
@@ -217,7 +218,8 @@ window starting at line START."
 
 (defun drgnx-look-scene-setup (elpa)
   "The mockups' state: the project at ~/code/drgnx, trusted; ELPA's packages active; tabs drgnx-gateway.el,
-gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgnx-gateway.el at 216:34, from 201."
+gateway-test.el (changed, not saved), drgnx-job.el (a preview) and Magit; the Explorer; drgnx-gateway.el at 216:34,
+from 201."
   (drgnx-look-scene--packages elpa)
   ;; the title row as on GNOME, the mockups' desktop, where `auto' is `drgnx': the container's headless mutter names
   ;; no desktop, so the frame is told it is GNOME's (the facts' :wm says so)
@@ -232,7 +234,8 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
     (drgnx-look-scene--goto "core/drgnx-gateway.el" 216 33 201)
     (drgnx-look-scene--open "test/unit/gateway-test.el")
     (goto-char (point-max)) (insert ";; next\n")                  ; changed, not saved: the tab's dot
-    (drgnx-look-scene--open "core/drgnx-job.el"))
+    (drgnx-look-scene--open "core/drgnx-job.el")
+    (drgnx-chrome-note-preview (current-buffer) t))               ; opened by a single click: the italic preview
   (drgnx-look-scene--try "magit"
     (require 'magit)
     (let ((magit-save-repository-buffers nil))                    ; gateway-test.el stays unsaved
@@ -320,6 +323,14 @@ gateway-test.el (changed, not saved), drgnx-job.el and Magit; the Explorer; drgn
 (defun drgnx-look-scene-work-space-dark ()
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--try "work space" (drgnx-work-space-open))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-start-page ()
+  "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
+  (drgnx-look-scene--theme 'drgnx-dark)
+  (drgnx-look-scene--try "start page"
+    (drgnx-wb-focus-editor)
+    (drgnx-start-show))
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-facts (file &optional scene)

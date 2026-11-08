@@ -68,6 +68,7 @@ A tint is composited over the variant's `editor'."
          (drgnx-text-disabled :foreground ,(c 'disabled))
          (drgnx-border :foreground ,(c 'border) :background ,(c 'border))
          (drgnx-border-strong :foreground ,(c 'border-strong) :background ,(c 'border-strong))
+         (drgnx-border-subtle :foreground ,(c 'border-subtle) :background ,(c 'border-subtle))
          (drgnx-accent :foreground ,(c 'accent) :underline nil)
          (drgnx-hover :background ,(c 'hover) :box (:line-width (-2 . -2) :style flat-button))
          (drgnx-selected :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))))
@@ -86,6 +87,10 @@ A tint is composited over the variant's `editor'."
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         ;; the in-text chips (modules/ui/drgnx-decor.el) carry their own box, the room inside them: high contrast
+         ;; makes it the 1 px ring instead (look.css `.t-hc .chip'; the room is the chip's stretches)
+         ,@(and hc `((drgnx-chip :box (:line-width (1 . 1) ,@(and (featurep 'glitnir) '(:corner-radius 4))))
+                     (drgnx-badge :box (:line-width (1 . 1) ,@(and (featurep 'glitnir) '(:corner-radius 99))))))
          ;; controls (design §3.5 `.btn', `.btn.pri', `kbd'): a 1 px ring in a colour, so the theme gives it; rounded
          ;; where the compositor rounds a box (Glitnir)
          (drgnx-control :foreground ,(c 'fg) :background ,(c 'sel-quiet)

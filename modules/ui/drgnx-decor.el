@@ -21,10 +21,10 @@
 
 ;;;; Faces
 
-(defface drgnx-chip '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :box (:line-width (7 . 2) :style flat-button)))
+(defface drgnx-chip '((t :inherit (drgnx-ui-caption drgnx-chip-quiet) :box (:line-width (1 . 2) :style flat-button)))
   "A small rounded label inside text (design §3.5 `.chip'): the quiet chip's tint, room inside it (a flat box in its
 own background, never a ring in the text colour), radius 4 where the compositor rounds." :group 'drgnx-decor)
-(defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :box (:line-width (7 . 2) :style flat-button)))
+(defface drgnx-badge '((t :inherit (drgnx-ui-caption drgnx-chip-accent) :box (:line-width (1 . 2) :style flat-button)))
   "A pill: an accent chip with the largest radius." :group 'drgnx-decor)
 (defface drgnx-button '((t :inherit (drgnx-ui-text drgnx-control)))
   "A clickable text button: the look's control (`drgnx-control', its fill and hairline)." :group 'drgnx-decor)
@@ -45,8 +45,8 @@ own background, never a ring in the text colour), radius 4 where the compositor 
   "A card of one row." :group 'drgnx-decor)
 
 (defconst drgnx-decor--boxes
-  '((drgnx-chip :line-width (7 . 2) :style flat-button :corner-radius 4)
-    (drgnx-badge :line-width (7 . 2) :style flat-button :corner-radius 99)
+  '((drgnx-chip :line-width (1 . 2) :style flat-button :corner-radius 4)
+    (drgnx-badge :line-width (1 . 2) :style flat-button :corner-radius 99)
     (drgnx-focus-ring :line-width 2 :corner-radius 6)
     (drgnx-card-top :line-width 1 :corner-radius 8 :open (bottom))
     (drgnx-card-mid :line-width 1 :corner-radius 8 :open (top bottom))
@@ -77,15 +77,17 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
 ;;;; Chips, buttons, card rows
 
 (defun drgnx-decor-chip (text &optional face icon)
-  "A chip: an unboxed gap, then TEXT boxed with FACE (default `drgnx-chip').
-ICON, an image spec, comes first inside the box, after a boxed `(space :width 2)' so that the image is not
-the run's edge."
-  (let ((face (or face 'drgnx-chip)))
+  "A chip: an unboxed gap, then TEXT boxed with FACE (default `drgnx-chip') with room either side (`.chip' padding
+0 7px: 6 px stretches and the box's 1 on a graphical frame, a space on a terminal), so that high contrast's ring
+\(the theme's box) keeps the same room.  ICON, an image spec, comes first inside the room, 5 px before TEXT."
+  (let* ((face (or face 'drgnx-chip)) (graphic (display-graphic-p))
+         (pad (lambda (n) (if graphic (propertize " " 'display `(space :width (,n)) 'face face) (propertize " " 'face face)))))
     (concat " "
+            (funcall pad 6)
             (when icon
-              (concat (propertize " " 'display '(space :width 2) 'face face)
-                      (propertize " " 'display icon 'face face)))
-            (propertize text 'face face))))
+              (concat (propertize " " 'display icon 'face face) (funcall pad 5)))
+            (propertize text 'face face)
+            (funcall pad 6))))
 
 (defun drgnx-decor--button-extent (pos)
   "The (BEG . END) of the button text around POS."

@@ -34,7 +34,7 @@
     (lightbulb "◌" . "i") (pencil "✎" . "e") (clock "◷" . "t") (bot "◈" . "b") (pin "⌖" . "p")
     (circle-dot "◉" . "o") (play "▶" . ">") (pause "⏸" . "||") (square "■" . "#") (refresh-cw "↻" . "r")
     (trash-2 "⌫" . "d") (copy "⎘" . "c") (settings "⚙" . "*") (terminal "›_" . ">_") (bell "◔" . "!")
-    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!")
+    (eye "◉" . "o") (lock "▮" . "#") (tag "⌗" . "#") (shield "⛨" . "!") (panel-right "◫" . "|")
     (triangle "▲" . "^") (hexagon "⬢" . "H") (star "★" . "*"))
   "The glyphs of the icons (NAME → (UNICODE . ASCII)), named after the icon files.  Several look alike on a terminal
 that is not UTF-8: an icon's glyph says less than its picture.  The icon names that exist as glyphs already

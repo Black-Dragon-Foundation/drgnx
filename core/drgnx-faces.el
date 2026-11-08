@@ -33,6 +33,8 @@
 
 (defface drgnx-border '((t :inherit window-divider)) "A hairline: a card's edge, a divider." :group 'drgnx-look)
 (defface drgnx-border-strong '((t :inherit vertical-border)) "A stronger line: an input's edge, a popup ring." :group 'drgnx-look)
+(defface drgnx-border-subtle '((t :inherit drgnx-border))
+  "A fainter hairline: under a tab row, under a pane's header." :group 'drgnx-look)
 
 ;;;; Interaction
 
