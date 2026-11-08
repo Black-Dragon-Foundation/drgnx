@@ -126,6 +126,39 @@ typed**, only counts; a malformed message from the hub is logged by its position
 clock (frames, flood and backfill, the in-flight patch, mode 2026, row keys through scrolls, resizes and eviction, the
 kitty, DECCKM, paste and mouse encodings, styles and wide cells); `tests/logging.rs` checks the log.
 
+### vttest
+
+`tests/vttest.rs` runs vttest (Thomas Dickey's VT100/VT220 test program) on a real PTY of 80 × 24 under the worker's
+run loop, walks its menus with a key script and compares eight screens with their goldens in
+`test/conformance/vttest/`. Each golden holds the screen's 24 rows as the editor gets them, then each row's style runs
+with the style spelled out. A step types its keys and waits for text that only the next screen shows, plus one of
+vttest's prompts, and then until the worker is quiet: an echoed digit or a half-drawn screen is never taken. A wait that
+runs out prints the screen it saw.
+
+| Golden | vttest | What it holds |
+|---|---|---|
+| `cursor-movement` | 1, first screen | the border of `*` and `+` and the frame of `E` around the text |
+| `scroll-regions` | 2, up to the first scroll test | rows 12–13 as a region scrolled down |
+| `character-sets` | 3 → 8 | US ASCII, British and DEC line drawing in G0 and G1 |
+| `reports` | 6 → 3 | DSR 5 (`CSI 0 n`, "terminal OK") and DSR 6 (the cursor's position) |
+| `insert-delete` | 8, up to the staggered column | insert and delete line, insert mode, delete character |
+| `double-width` | 4, first screen | the double-width and double-height lines in 80 columns |
+| `colours` | 11 → 6 → 2 | the 8 × 8 foreground/background matrix, bright off and on |
+| `vt52-exit` | 7, to the screen after VT52 mode is left | the identify reply and the cursor report in ANSI mode |
+
+vttest must be installed: the test images carry it (`test/container/base/Containerfile`, `test/container/rust-packages.sh`),
+and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
+They were recorded from the worker and checked by eye against what vttest says each screen should show. Where they
+differ, the golden keeps what the worker does and the row below records the difference: it is fixed in the engine or the
+worker, never in the golden.
+
+| Screen | vttest expects | The worker |
+|---|---|---|
+| `double-width` | the double-width and double-height lines (DECDWL, DECDHL) drawn twice as wide | the rows carry no line size: they are drawn at normal width |
+| `vt52-exit` | VT52 mode (`CSI ? 2 l`): the rectangle of `*` and `!`, then the identify reply `ESC / Z` | libghostty-vt has no VT52 mode: the VT52 sequences print as text, and the identify request gets the ANSI reply (`CSI ? 62 ; 22 c`) |
+| 132-column screens (menus 1, 2 and 4) | DECCOLM switches to 132 columns when the terminal allows it | the grid becomes 132 columns wide while the PTY and the window stay at 80 (xterm refuses DECCOLM by default) |
+| `vt52-exit` | the cursor report after leaving VT52 mode read as `CSI 1 ; 1 R` | vttest reads that reply and the identify reply up to a Return, so the script's Return shows as `<13>` in them and vttest calls the cursor report unknown |
+
 ## The hub's methods
 
 The editor talks to its terminals through the hub (`runstav/src/methods/term.rs`, routed by
