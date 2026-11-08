@@ -247,7 +247,14 @@ item under the release by its x and runs its command; a press runs nothing but a
       (drgnx-topline-mouse-up (funcall at 'mouse-1 (1+ before)))
       (should (equal drgnx-topline-test--ran '(palette)))
       (drgnx-topline-mouse-up (funcall at 'mouse-1 100000))         ; past the row: nothing
-      (should (equal drgnx-topline-test--ran '(palette))))
+      (should (equal drgnx-topline-test--ran '(palette)))
+      ;; an Emacs that attaches the item (the caption's `menu-item') is believed, not the x: one item, one command
+      (let* ((keys (drgnx-topline-test--item 'drgnx-topline-keys-sheet))
+             (caption (propertize "x" 'menu-item (list 'drgnx-topline-keys-sheet (nth 3 keys) nil)))
+             (ev (list 'mouse-1 (list (selected-window) 'tab-bar (cons (1+ before) 0) 0 (cons caption 0)))))
+        (should (eq (car (drgnx-topline--event-item ev)) 'drgnx-topline-keys-sheet))
+        (drgnx-topline-mouse-up ev)
+        (should (equal drgnx-topline-test--ran '(keys palette)))))
     (drgnx-topline--off)
     (should-not (eq 'drgnx-topline-mouse-up (lookup-key tab-bar-map [mouse-1])))))
 
@@ -280,6 +287,24 @@ the space before its dimmer part (SVG drops a leading space unless told to keep 
   ;; the maximise square is the design's size, smaller than the minus and the cross
   (should (string-match-p "width=\"12\" height=\"12\"" (drgnx-topline--control-svg 'square)))
   (should (string-match-p "width=\"16\" height=\"16\"" (drgnx-topline--control-svg 'x))))
+
+(ert-deftest drgnx-topline/a-control-s-hover-is-a-circle ()
+  "The design's hover on – □ × is a 26 px circle.  A `mouse-face' paints a glyph's whole box, the row's full height, so
+the control's image is the row's height in the gap colour with a round hole of radius 13: only the hole shows the
+hover colour.  The hover face has no box (a box would ring the square)."
+  (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _) 1.0)))
+    (let ((svg (drgnx-topline--control-svg 'x)))
+      (should (string-match-p "height=\"38\"" svg))
+      (should (string-match-p "fill-rule=\"evenodd\"" svg))
+      (should (string-match-p "a13 13 " svg))))
+  (should (memq (face-attribute 'drgnx-topline-hover :box nil t) '(nil unspecified)))
+  (cl-letf (((symbol-function 'drgnx-topline--svg-p) (lambda () t)))
+    (dolist (item (drgnx-topline--control-buttons))
+      (let ((s (nth 2 item)))
+        (should (eq 'drgnx-topline-hover (get-text-property (1- (length s)) 'mouse-face s)))
+        ;; the tab bar counts the hover's extent in characters but the row in glyphs: an image over three characters
+        ;; is one glyph, and the hover would run two glyphs past it (onto the row's end)
+        (should (= 2 (length s)))))))
 
 (ert-deftest drgnx-topline/the-hint-runs-the-command ()
   (drgnx-topline-test--with 'vscode

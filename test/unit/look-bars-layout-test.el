@@ -188,8 +188,8 @@ key as one keycap (it opens the palette), and the attention and agents chips pil
         (should-not (assq 'drgnx-topline-go-quick-open items))))))
 
 (ert-deftest drgnx-look-bars/title-row-search-is-centred ()
-  "Design §4 (`.search { margin: 0 auto }'): the search box sits in the middle of the room between the left items
-and the right ones, in pixels."
+  "The search box sits in the middle of the window, in pixels, whatever the sides hold: a chip that comes or goes
+never moves it."
   (drgnx-topline-test--with 'vscode
     (let* ((drgnx-look-bars-measure-function #'drgnx-look-bars-test--ten)
            (drgnx-notice--needs-you 3)
@@ -202,8 +202,11 @@ and the right ones, in pixels."
            (box (funcall width (assq 'drgnx-topline-search items)))
            (gap-1 (funcall width (assq 'drgnx-topline-gap-1 items))))
       (should (> right-px 0))
-      (should (<= (abs (- (+ left-px gap-1 (/ box 2)) (+ left-px (/ (- 1440 left-px right-px) 2)))) 1))
-      (should (= 1440 (apply #'+ (mapcar width items)))))))
+      (should (<= (abs (- (+ left-px gap-1 (/ box 2)) 720)) 1))
+      (should (= 1440 (apply #'+ (mapcar width items))))
+      (let* ((drgnx-notice--needs-you 0)
+             (fewer (drgnx-topline--build (current-buffer) 160 t 1440)))
+        (should (equal (funcall width (assq 'drgnx-topline-gap-1 fewer)) gap-1))))))
 
 (ert-deftest drgnx-look-bars/double-click-maximises ()
   "Pattern D: a double click on the title row's empty space is bound to the command Maximize or Restore Window

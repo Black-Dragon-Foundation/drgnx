@@ -172,9 +172,8 @@ clicked)."
       (kill-buffer buf))))
 
 (ert-deftest drgnx-ui-look-bars/hint-centred ()
-  "Pattern D: the title row's search box (a block on the `region' face, as wide as the box) is centred between the
-row's sides within 1 device pixel; with nothing on the right but the end's 8 px, that is the frame's middle less
-half the project mark."
+  "Pattern D: the title row's search box (a block on the `region' face, as wide as the box) is centred on the window
+within 1 device pixel, whatever the sides hold, so it never moves when a chip comes or goes."
   (skip-unless (display-graphic-p))
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create "*look-bars-top*")))
@@ -187,13 +186,9 @@ half the project mark."
           (drgnx-test-wait-presented)
           (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-ui-look-bars--scale))
                  (y (/ (round (* s (tab-bar-height nil t))) 2))
-                 (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region)))
-                 (items (drgnx-topline--line)) (keys (mapcar #'car items))
-                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
-                 (left (round (* s (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-gap-1 keys)) measure))))
-                 (right (round (* s (drgnx-topline--width (nthcdr (1+ (cl-position 'drgnx-topline-gap-2 keys)) items) measure)))))
+                 (span (drgnx-ui-look-bars--span snap y (drgnx-ui-look-bars--rgb 'region))))
             (should span)
-            (should (<= (abs (- (+ left (nth 0 snap) (- right)) (+ (car span) (cdr span) 1))) 2))))
+            (should (<= (abs (- (nth 0 snap) (+ (car span) (cdr span) 1))) 2))))
       (drgnx-topline--off)
       (kill-buffer buf))))
 
@@ -253,6 +248,42 @@ text-area clicks arrive."
                                                :keys drgnx-uitest-pointer-keys
                                                :item (car (drgnx-topline--event-item
                                                            (list 'mouse-1 (list frame 'tab-bar (cons x y) 0)))))))))
+      (setq drgnx-face-title-bar was)
+      (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
+      (drgnx-topline--off)
+      (kill-buffer buf))))
+
+(ert-deftest drgnx-ui-look-bars/title-row-control-hover-is-a-circle ()
+  "Design §4 (`.wctl span:hover'): a real pointer (mutter's virtual one) resting on Close lights a 26 px circle in the
+hover colour: about 26 px across through its middle, and a chord of about 14 px 11 px above it (a square would be 26)."
+  (skip-unless (display-graphic-p))
+  (skip-unless (drgnx-uitest-pointer-available-p))
+  (drgnx-uitest-bare-frame)
+  (let ((buf (get-buffer-create "*look-bars-hover*")) (frame (selected-frame)) (was drgnx-face-title-bar))
+    (switch-to-buffer buf)
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) (lambda (_f) (eq drgnx-face-title-bar 'drgnx))))
+          (setq drgnx-face-title-bar 'drgnx)
+          (drgnx-face--apply-title frame)
+          (drgnx-topline-setup)
+          (drgnx-test-wait-presented)
+          (let* ((items (drgnx-topline--line)) (keys (mapcar #'car items))
+                 (measure (drgnx-statusbar--measure-fn nil 'tab-bar))
+                 (sc (drgnx-pixels-scale frame))
+                 (before (drgnx-topline--width (seq-take items (cl-position 'drgnx-topline-close keys)) measure))
+                 (x (+ before (round (* sc (+ 4 13)))))
+                 (y (/ (tab-bar-height frame t) 2))
+                 (hover (drgnx-ui-look-bars--rgb 'drgnx-topline-hover)))
+            (should-not (equal hover (drgnx-ui-look-bars--rgb 'drgnx-topline)))
+            (drgnx-uitest-pointer-move x y)
+            (drgnx-test-wait-presented)
+            (let* ((snap (drgnx-uitest-snapshot)) (s (drgnx-ui-look-bars--scale))
+                   (mid (drgnx-ui-look-bars--span snap (round (* s y)) hover))
+                   (chord (drgnx-ui-look-bars--span snap (round (* s (- y (* 11 sc)))) hover))
+                   (px (lambda (span) (and span (- (cdr span) (car span) -1)))))
+              (ert-info ((format "spans: middle %S, chord %S" mid chord))
+                (should (and mid (<= (* 22 sc s) (funcall px mid) (* 27 sc s))))
+                (should (and chord (< (funcall px chord) (* 18 sc s))))))))
       (setq drgnx-face-title-bar was)
       (cl-letf (((symbol-function 'drgnx-face--drawn-wanted-p) #'ignore)) (drgnx-face--apply-title frame))
       (drgnx-topline--off)

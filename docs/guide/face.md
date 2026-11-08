@@ -357,11 +357,12 @@ On a graphical frame the line is the window's title row, 38 pixels tall at the n
 comfortable), on the gap colour behind the cards: the drgnx mark and the project, the branch as a quiet chip (`main
 ↑2` when two commits wait to be pushed), a search box in the middle (`Search files, commands, symbols…` with the
 palette's key as a keycap; a click opens the palette), the two chips, and the window controls. The search box is
-centred between the left and right parts and leaves when the window is too narrow for it. Chips, the search box,
+centred on the window, so it stays put when a chip comes or goes, and leaves when the window is too narrow for it.
+Under the mouse a window control gets a round hover, 26 pixels across. Chips, the search box,
 the mark and the buttons are small images drawn from the theme's faces (a text background would fill the whole row
 height), so they follow every theme, and High Contrast gives the chips an outline instead of a tint. A new width, a
-zoom, a font or a theme change lays the row out again. A click on the row is matched to its item by its position, so
-the buttons work on every build of Emacs, including those whose tab bar reports no item for a click. A terminal keeps
+zoom, a font or a theme change lays the row out again. A click runs the item it reports; a click that reports none
+(some builds' tab bars) is matched to its item by its position, so the buttons work on every build of Emacs. A terminal keeps
 the text line above: the hint and glyph buttons.
 
 The line is Emacs's tab bar with no tabs, since drgnx has no workspaces. It only reads what is already known: the

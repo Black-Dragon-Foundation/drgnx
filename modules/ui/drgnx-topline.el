@@ -70,6 +70,10 @@
   "The title row's quiet text (labels, separators, the empty area), on the tab bar's background: the gap (§4)."
   :group 'drgnx-topline)
 
+(defface drgnx-topline-hover '((t :inherit drgnx-hover :box nil))
+  "A window control under the mouse: the hover colour, seen only through the control's round hole (no box)."
+  :group 'drgnx-topline)
+
 (defface drgnx-topline-strong '((t :inherit (bold tab-bar) :height 1.0 :box nil))
   "The project and the keys on the title row: the text colour of the theme (not the tab bar's dim one); drgnx's
 themes give it the heading role."
@@ -217,15 +221,25 @@ count is positive."
 (defun drgnx-topline--event-item (event)
   "The title row's item under mouse EVENT, found by its x in the row's own layout (the widths it was made with).
 The native Wayland shell's clicks on the tab bar carry no item (it never asks the tab bar which one was hit), so the
-row finds it itself, on every platform alike."
-  (when-let* ((x (car-safe (posn-x-y (event-start event)))))
-    (let ((measure (and (display-graphic-p) (drgnx-statusbar--measure-fn nil 'tab-bar))) (left 0))
-      (catch 'found
-        (dolist (item (drgnx-topline--line))
-          (let ((w (drgnx-topline--width (list item) measure)))
-            (when (< x (+ left w)) (throw 'found item))
-            (setq left (+ left w))))
-        nil))))
+row finds it itself.  An event that carries its item (the caption's `menu-item', as Emacs's own tab bar attaches it)
+is believed instead: the x is only the fallback, so a click never finds two items."
+  (let* ((posn (event-start event))
+         (key (car-safe (and (car-safe (posn-string posn))
+                             (get-text-property (or (cdr (posn-string posn)) 0) 'menu-item (car (posn-string posn))))))
+         (x (car-safe (posn-x-y posn))))
+    (if key
+        (assq key (drgnx-topline--line))
+      (when x (drgnx-topline--item-at x)))))
+
+(defun drgnx-topline--item-at (x)
+  "The title row's item at X, in the row's own layout (the widths it was made with)."
+  (let ((measure (and (display-graphic-p) (drgnx-statusbar--measure-fn nil 'tab-bar))) (left 0))
+    (catch 'found
+      (dolist (item (drgnx-topline--line))
+        (let ((w (drgnx-topline--width (list item) measure)))
+          (when (< x (+ left w)) (throw 'found item))
+          (setq left (+ left w))))
+      nil)))
 
 (defun drgnx-topline-mouse-down (event)
   "A press on the title row (EVENT): on its empty part it drags the window; on an item the release decides."
@@ -510,9 +524,16 @@ count is positive."
 (defun drgnx-topline--control-svg (icon)
   "A window control's SVG: ICON, 16 px in the muted colour, centred in 26 px; the square 12 px (the design's maximise
 is a 14-unit square, Lucide's an 18-unit one)."
-  (let* ((size (if (eq icon 'square) 12 16)) (at (/ (- 26 size) 2)))
-    (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"26\" viewBox=\"0 0 26 26\">"
-            (drgnx-topline--icon-svg icon at at size (drgnx-topline--color 'drgnx-topline :foreground)) "</svg>")))
+  (let* ((size (if (eq icon 'square) 12 16)) (at (/ (- 26 size) 2))
+         ;; the row's height in the gap colour with a round hole: a `mouse-face' paints the glyph's whole box, the
+         ;; row's height, and only the hole shows it, so the hover is the design's 26 px circle
+         (h (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'title-row) 38))
+         (top (/ (- h 26) 2)))
+    (concat (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"%d\" viewBox=\"0 0 26 %d\">" h h)
+            (format "<path fill-rule=\"evenodd\" fill=\"%s\" d=\"M0 0h26v%dH0z M0 %da13 13 0 1 0 26 0a13 13 0 1 0 -26 0z\"/>"
+                    (drgnx-topline--color 'drgnx-topline :background) h (+ top 13))
+            (drgnx-topline--icon-svg icon at (+ top at) size (drgnx-topline--color 'drgnx-topline :foreground))
+            "</svg>")))
 
 (defun drgnx-topline--control-buttons ()
   "The window controls of a graphical row: each a 26 px button, 4 px apart, running its registry command (the hover
@@ -521,9 +542,14 @@ colour under the pointer where the row draws a `mouse-face')."
             (drgnx-topline--item
              item
              (concat (drgnx-topline--space 4)
-                     (propertize (drgnx-topline--image (drgnx-topline--control-svg icon)
-                                                       (concat " " (drgnx-topline--glyph glyph "x") " "))
-                                 'mouse-face 'drgnx-hover))
+                     ;; one character under the image: the tab bar finds a hover's extent in characters, the
+                     ;; row's in glyphs, so an image over three would light two glyphs past it
+                     (propertize (if (drgnx-topline--svg-p)
+                                     (drgnx-topline--image (drgnx-topline--control-svg icon)
+                                                           (let ((g (drgnx-topline--glyph glyph "x")))
+                                                             (if (> (length g) 0) (substring g 0 1) "x")))
+                                   (concat " " (drgnx-topline--glyph glyph "x") " "))
+                                 'mouse-face 'drgnx-topline-hover))
              (when-let* ((cmd (drgnx-commands-get id))) (drgnx-cmd-command cmd))
              help))
           drgnx-topline--control-commands))
@@ -539,7 +565,7 @@ centred on the frame and left out when it would touch the sides; the controls si
          (right-px (drgnx-topline--width right measure))
          (search (drgnx-topline--search-box))
          (search-px (if search (funcall measure (nth 2 search)) 0))
-         (start (+ left-px (/ (- pixels left-px right-px search-px) 2)))   ; `margin: auto' between the sides
+         (start (/ (- pixels search-px) 2))   ; the window's middle: a chip that comes or goes never moves it
          (search (and search (>= start (+ left-px (drgnx-topline--px 10)))
                       (<= (+ start search-px (drgnx-topline--px 10) right-px) pixels)
                       search)))

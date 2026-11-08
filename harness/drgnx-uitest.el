@@ -753,9 +753,19 @@ with redisplay between them, while the test waits.  The plist has :settled."
 Signals when FRAME never sees it."
   (let* ((frame (or frame (selected-frame)))
          (scale (/ (frame-scale-factor frame) (drgnx-uitest-device-scale frame)))   ; frame pixels per logical one
+         ;; where the window may sit on the screen, logical pixels: Wayland never says, so the corner (a maximised
+         ;; window), then the middle (mutter centres a window it places), then a sweep
+         (sw (display-pixel-width)) (sh (display-pixel-height))
+         (fw (/ (frame-pixel-width frame) scale)) (fh (/ (frame-pixel-height frame) scale))
+         (guesses (append (list '(0 . 0) (cons (max 0 (/ (- sw fw) 2)) (max 0 (/ (- sh fh) 2))))
+                          (cl-loop for gy from 0 below sh by 150
+                                   nconc (cl-loop for gx from 0 below sw by 150 collect (cons gx gy)))))
          (seen nil))
-    (drgnx-uitest--pointer-by -100000 -100000)
-    (drgnx-uitest--pointer-by (/ x scale) (/ y scale))
+    (while (and guesses (not seen))
+      (let ((g (pop guesses)))
+        (drgnx-uitest--pointer-by -100000 -100000)
+        (drgnx-uitest--pointer-by (+ (car g) (/ x scale)) (+ (cdr g) (/ y scale)))
+        (setq seen (drgnx-uitest--pointer-seen frame))))
     (dotimes (_ 4)
       (setq seen (drgnx-uitest--pointer-seen frame))
       (when (and seen (or (> (abs (- (car seen) x)) 1) (> (abs (- (cdr seen) y)) 1)))
