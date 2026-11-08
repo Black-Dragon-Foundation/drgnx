@@ -448,15 +448,16 @@ fn replace_previews_the_window_only() {
     assert!(n > 0 && n <= WINDOW, "{n}");
 }
 
-/// Each model send carries the whole list of ids, so once the rows' window is full the model is sent when the search
-/// has doubled it, not after every file (100 files send a few models, not 100).
+/// Once the rows' window is full the model is sent when the search has doubled it (each send is a delta, but each send
+/// costs the editor a redisplay and a queue entry: 101 sends cost five times the CPU of 9), and what is sent in all is
+/// about one whole model, since a list that grew by appending goes as a splice at its end.
 #[test]
-fn the_model_grows_by_doubling_once_the_window_is_full() {
+fn the_model_grows_by_doubling_and_costs_about_one_whole_model() {
     let mut s = store();
     let greps = Greps::default();
     let id = run_of(&greps, "");
     start_patches(&mut s, CONN, "s");
-    let mut sent = 0;
+    let (mut sends, mut bytes) = (0, 0);
     for f in 0..100 {
         let file = format!("/r/f{f:03}.txt");
         let ms = (1..=100)
@@ -467,8 +468,82 @@ fn the_model_grows_by_doubling_once_the_window_is_full() {
                 batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
             })
             .unwrap();
-        sent += usize::from(model.is_some());
+        if let Some(model) = model {
+            sends += 1;
+            bytes += json!(model)["model"].as_str().unwrap().len();
+        }
     }
-    assert!(sent <= 20, "{sent} models for 100 files");
-    assert!(sent >= 3, "{sent}");
+    assert!((3..=20).contains(&sends), "{sends} models for 100 files");
+    let whole = greps
+        .current(CONN, "s", |run| {
+            grep_doc(&run.files).reset().to_string().len()
+        })
+        .unwrap();
+    assert!(
+        bytes * 10 <= whole * 12,
+        "{bytes} bytes sent, the whole model is {whole}"
+    );
+}
+
+/// The model stream of a grow-by-appending search, as the hub writes it, is what Nidhogg's Sjá loads: the same JSON
+/// file sits in Nidhogg's test tree (`sja/tests/fixtures/grep-append.json`), where a test applies it. `UPDATE_SJA_FIXTURES=1` rewrites it here;
+/// copy it to Nidhogg's tree.
+#[test]
+fn the_model_stream_is_the_fixture_sja_loads() {
+    let mut sent = super::super::model::Sent::default();
+    let files = [
+        (
+            "/r/a.txt",
+            vec![
+                m("/r/a.txt", 1, "x ", "needle", " y"),
+                m("/r/a.txt", 5, "", "needle", ""),
+            ],
+        ),
+        ("/r/b.txt", vec![m("/r/b.txt", 2, "", "needle", " z")]),
+        (
+            "/r/c.txt",
+            vec![
+                m("/r/c.txt", 9, "p ", "needle", ""),
+                m("/r/c.txt", 10, "", "needle", "q"),
+            ],
+        ),
+    ];
+    let mut held: Vec<(String, Vec<Match>)> = Vec::new();
+    let mut steps = Vec::new();
+    for (file, ms) in files {
+        held.push((file.to_owned(), ms));
+        let out = sent.publish(grep_doc(&held)).expect("a model per batch");
+        steps.push(json!({"base": out.base, "version": out.version, "reset": out.reset, "model": out.model}));
+    }
+    let ids = grep_doc(&held).lists["order"].clone();
+    let now = json!({"list": "order", "ids": ids, "steps": steps});
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/grep-append.json"
+    );
+    if std::env::var_os("UPDATE_SJA_FIXTURES").is_some() {
+        std::fs::write(
+            path,
+            format!("{}\n", serde_json::to_string_pretty(&now).unwrap()),
+        )
+        .unwrap();
+    }
+    let have: Value =
+        serde_json::from_str(include_str!("../../../tests/fixtures/grep-append.json")).unwrap();
+    assert_eq!(
+        have, now,
+        "the fixture is stale: UPDATE_SJA_FIXTURES=1 rewrites it"
+    );
+    // the second and third sends carry the appended ids as a splice at the end of the list, not the list
+    for step in &steps[1..] {
+        let ops: Value = serde_json::from_str(step["model"].as_str().unwrap()).unwrap();
+        let list_ops: Vec<&Value> = ops["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|o| o.get("list").is_some() || o.get("splice").is_some())
+            .collect();
+        assert_eq!(list_ops.len(), 1);
+        assert!(list_ops[0].get("splice").is_some(), "{list_ops:?}");
+    }
 }

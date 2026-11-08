@@ -610,6 +610,24 @@ mark on screen: (:wall_ms MS) and the terminal draws' rows (`drgnx-perf--term-me
                   (drgnx-perf--term-measure :wall_ms (round (* 1000 (- (float-time) t0))))))
             (when (buffer-live-p b) (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
             (delete-file file))))
+      (defvar drgnx-perf--watch-pauses nil "Ms of each collection since the watch began, newest first.")
+      (defvar drgnx-perf--watch-gc-total 0.0 "`gc-elapsed' at the last collection of the watch.")
+      (defun drgnx-perf--watch-gc ()
+        (push (* 1000 (- gc-elapsed drgnx-perf--watch-gc-total)) drgnx-perf--watch-pauses)
+        (setq drgnx-perf--watch-gc-total gc-elapsed))
+      (defun drgnx-perf--term-watch (secs)
+        "SECS of the typed terminal streaming output with no key typed: the one waiting here is the profiler's whole
+subject, so the stream's filter, its decode and its draws are what a profile of the measure shows.  The terminal's
+draws and allocation (`drgnx-perf--term-measure'), and the collections: (:gc_count N :gc_pause STATS)."
+        (let ((deadline (+ (float-time) secs)))
+          (setq drgnx-perf--watch-pauses nil drgnx-perf--watch-gc-total gc-elapsed)
+          (drgnx-perf--term-arm)
+          (add-hook 'post-gc-hook #'drgnx-perf--watch-gc)
+          (unwind-protect
+              (while (< (float-time) deadline) (accept-process-output nil (max 0.001 (- deadline (float-time)))))
+            (remove-hook 'post-gc-hook #'drgnx-perf--watch-gc))
+          (drgnx-perf--term-measure :gc_count (length drgnx-perf--watch-pauses)
+                                    :gc_pause (mapcar #'drgnx-perf--round (drgnx-perf-stats drgnx-perf--watch-pauses)))))
       (defun drgnx-perf--term-backfill ()
         "`seq 1 10000' in a new terminal shown in the panel, timed until its buffer holds the 10k lines (the backfill
 after the flood): the draws' rows, and the heap the full terminal adds (:heap_kb: the live Lisp objects after a
@@ -927,6 +945,14 @@ error if it does not hold).  With :actions, :measure runs after the input and it
        :each "(progn (pop-to-buffer drgnx-perf--term) (select-window (get-buffer-window drgnx-perf--term)) (drgnx-perf--term-arm) t)"
        :actions ,(make-list 6 (funcall type "echo hello world 123"))
        :measure "(drgnx-perf--term-measure)"
+       :check "(drgnx-perf--term-live-p)"
+       :teardown "(drgnx-perf--term-teardown)")
+      ;; the terminal streaming (`seq 1 2000' in a loop) for 10 s with no key typed: the measure is only the wait, so a
+      ;; profile of it (DRGNX_PERF_PROFILE) shows the stream's decode and draws, which a typed-key run buries
+      (terminal-flood
+       :setup ,(drgnx-perf-run--terminal-setup-form "sh" "-c" "while :; do seq 1 2000; done")
+       :each "(progn (drgnx-perf--term-show) t)"
+       :measure "(drgnx-perf--term-watch 10)"
        :check "(drgnx-perf--term-live-p)"
        :teardown "(drgnx-perf--term-teardown)")
       ;; `seq 1 10000' then the backfill of the rows that scrolled past: the draws' slices while it fills, and the heap
@@ -1260,8 +1286,11 @@ RESULTS-NAME.profile.txt (else in the temp directory); nil without it."
 (defun drgnx-perf-run-workload (sess spec &optional audit)
   "Run workload SPEC in SESS: its setup, then :repeat (3) runs, the medians of their numbers.  AUDIT:
 the hook audit on (its rows under :audit).  The probes, the audit and the teardown are undone even
-when a step fails.  With `drgnx-perf-run--profile', its measure runs under the profilers."
-  (let ((actions (plist-get spec :actions)) (measure (drgnx-perf-run--profiled (plist-get spec :measure))))
+when a step fails.  With `drgnx-perf-run--profile', its measure runs under the profilers, and a workload with typed
+actions is profiled from its first key to the end of the completion wait instead."
+  (let* ((actions (plist-get spec :actions))
+         (keys-profile (and actions drgnx-perf-run--profile))   ; typed keys: profiled from the first key to the end of the wait
+         (measure (if keys-profile (plist-get spec :measure) (drgnx-perf-run--profiled (plist-get spec :measure)))))
     (if (plist-get spec :daemon) (drgnx-perf-run-daemon-startup)
       (unwind-protect
           (progn
@@ -1271,10 +1300,13 @@ when a step fails.  With `drgnx-perf-run--profile', its measure runs under the p
                 (when (plist-get spec :each) (drgnx-perf-run--call sess (plist-get spec :each) 120) (drgnx-ui-measure sess nil))
                 (if (not actions)
                     (push (drgnx-perf-run--call sess measure 120) runs)
+                  (when keys-profile (drgnx-perf-run--call sess "(drgnx-perf-profile-begin)"))
                   (drgnx-perf-run--call sess (drgnx-perf-run--begin-form spec audit))
                   (drgnx-ui-measure sess actions)
                   (push (append (drgnx-perf-run--call sess "(drgnx-perf-end)")
-                                (drgnx-perf-run--extras sess spec)
+                                (prog1 (drgnx-perf-run--extras sess spec)
+                                  (when keys-profile
+                                    (drgnx-perf-run--call sess (format "(drgnx-perf-profile-end %S)" drgnx-perf-run--profile))))
                                 (and measure (drgnx-perf-run--call sess measure 120)))   ; what input cannot show
                         runs)
                   (when audit
@@ -1359,7 +1391,7 @@ version and the commit, as JSON in FILE."
     (typing-with-index . "the container's /src is not a git project; the workload indexes the repo")
     ,@(mapcar (lambda (w) (cons w "drgnx's terminal: its time rows are judged and its allocation rows set at the combined gate pass, on the desktop island"))
               '(terminal-typing terminal-output terminal-output-10mb terminal-output-100mb terminal-echo terminal-echo-idle
-                                terminal-backfill))
+                                terminal-backfill terminal-flood))
     (memory . "its one key only opens the pause RSS is read after; RSS is its budget")
     ,@(mapcar (lambda (w) (cons w "report-only until its step lands (§17.6); no allocation, CPU or rows budget: they follow the worker's design, not today's code"))
               (seq-difference drgnx-perf-workers-names drgnx-perf-run-workers-seeded))

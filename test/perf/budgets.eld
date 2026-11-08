@@ -116,8 +116,11 @@
  ;; Measured once each, old path and hub path in one session (2026-11-08, Nidhogg's line image, 4 CPUs), x 1.25.
  ;; replace-typing (old path) 76189 kB, 391 ms.  replace-typing-rows: 200012 kB, 2887 ms before the hub sent a window of
  ;; the rows (`search/grep-look`) and the model as it doubles; 17771 kB, 353 ms after.
+ ;; Model lists as splices and the line height once per pass (2026-11-08, pinned, +nidhogg-workers-framing, three runs): 15249-15410 kB,
+ ;; 330-337 ms; the budgets sit at 16800 kB (10 % over, so a return to 17771 fails) and 400 ms.  Without framing (the default until
+ ;; gate 26) the same run is 26910 kB, 448 ms, so these rows stay report-only until the combined pass decides the path.
  (replace-typing (:complete-kb) 95300 :report-only rro-scan) (replace-typing (:complete-cpu_ms) 500 :report-only rro-scan)
- (replace-typing-rows (:complete-kb) 22300 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 442 :report-only rro-scan)
+ (replace-typing-rows (:complete-kb) 16800 :report-only rro-scan) (replace-typing-rows (:complete-cpu_ms) 400 :report-only rro-scan)
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)

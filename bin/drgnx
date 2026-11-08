@@ -469,10 +469,10 @@ env_eval() { # FORM — evaluate with harness/drgnx-env.el loaded, print the res
   "$(emacs_bin || echo false)" --batch -Q --eval '(setq load-prefer-newer t)' -L "$here/harness" -l drgnx-env --eval "(princ (or $1 \"\"))"
 }
 
-test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
+test_container() { # [--ui [--compositor C] | --scenario | --perf [--audit | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] — the batch (GUI, scenario, perf, terminal) tier inside a fedora:45 / Nidhogg 31.1 container
   # DRGNX_TEST_IMAGE / DRGNX_TEST_GUI_IMAGE / DRGNX_TEST_TTY_IMAGE: use that image (CI pulls a prebuilt one) instead of building it
   # --tty --fedora 45 (the default and the only release drgnx supports)
-  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" noaa="" soakmin=""
+  local rt mount image file elpa prebuilt="${DRGNX_TEST_IMAGE:-}" args=() cmd=(bin/drgnx test) build=() tier="" fedora="" compositor="" abenv="" abn="" noaa="" audit="" soakmin=""
   while (($#)); do
     case "$1" in
       --ui|--tty|--scenario|--perf|--soak|--day)
@@ -483,6 +483,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
                 abenv="$2"; shift ;;
       --n) [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: drgnx test --container --perf --ab-env VAR=JUDGED,REF [--n N]" >&2; return 2; }
            abn="$2"; shift ;;
+      --audit) audit=1 ;;   # what each hook function costs (not judged), with --perf
       --aa) ;;   # the default with --ab-env: every workload runs against itself first
       --no-aa) noaa=1 ;;
       --fedora) fedora="${2:-?}"; if (($# > 1)); then shift; fi ;;
@@ -493,6 +494,9 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
   done
   if { [ -n "$abenv" ] || [ -n "$abn" ] || [ -n "$noaa" ]; } && { [ "$tier" != perf ] || [ -z "$abenv" ]; }; then
     echo "drgnx: --ab-env VAR=JUDGED,REF [--n N] [--no-aa] goes with --perf" >&2; return 2
+  fi
+  if [ -n "$audit" ] && { [ "$tier" != perf ] || [ -n "$abenv" ]; }; then
+    echo "drgnx: --audit goes with --perf alone (not --ab-env)" >&2; return 2
   fi
   if [ -n "$fedora" ] && { [ "$tier" != tty ] || [[ ! "$fedora" =~ ^45$ ]]; }; then
     echo "drgnx: --fedora 45 goes with --tty (the terminal tier's image); got: $fedora" >&2; return 2
@@ -508,6 +512,7 @@ test_container() { # [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=
     image=drgnx-test-gui; file=Containerfile.gui; cmd=(bin/drgnx test --ui); prebuilt="${DRGNX_TEST_GUI_IMAGE:-}"
     [ "$tier" = scenario ] && cmd=(bin/drgnx test --scenario --config drgnx)
     [ "$tier" = perf ] && cmd=(bin/drgnx test --perf)
+    [ -z "$audit" ] || cmd+=(--audit)
     if [ -n "$abenv" ]; then cmd+=(--ab-env "$abenv"); [ -z "$abn" ] || cmd+=(--n "$abn"); [ -z "$noaa" ] || cmd+=(--no-aa); fi
     if [ "$tier" = soak ]; then cmd=(bin/drgnx test --soak); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
     if [ "$tier" = day ]; then cmd=(bin/drgnx test --day); [ -z "$soakmin" ] || cmd+=("$soakmin"); fi
@@ -1021,7 +1026,7 @@ cmd_test() {
     --day) shift; run_in_tmp ui_exec test-day "${1:-30}" ;;
     --container) shift; test_container "$@" ;;
     --podman) shift; DRGNX_CONTAINER=podman test_container "$@" ;;
-    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test --affected A..B [--run [--no-cache]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
+    *) echo "usage: drgnx test [--one-process] [--leaks] [--shuffle[=SEED]] | drgnx test --affected A..B [--run [--no-cache]] | drgnx test [--shuffle=SEED] --find-polluter TEST [FILE…] | drgnx test --stress N [--load K] [--ui|--tty|--scenario] | drgnx test [--ui [--compositor C] | --tty | --scenario [--config C] | --bench | --perf [--audit | --ab REF [--n N] | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --container [--ui [--compositor C] | --scenario | --perf [--audit | --ab-env VAR=JUDGED,REF [--n N]] | --soak [MIN] | --day [MIN] | --tty [--fedora 45]] | --install [NAME…] | --bootstrap [--fedora 44|45]]" >&2; exit 2 ;;
   esac
 }
 

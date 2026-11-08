@@ -687,26 +687,34 @@ themselves, each with its callers (`drgnx-perf-profile-caller-depth' deep)."
         (walk tree 0)))
     (nreverse lines)))
 
-(defun drgnx-perf-profiled (file thunk)
-  "THUNK's value, run under the CPU and the memory profiler.  FILE gets the report even when THUNK signals: for
-memory (bytes sampled) and CPU (1 ms samples), the call paths callers above callees, then the functions sampled
-most with their callers (`drgnx-perf--profile-lines')."
+(defun drgnx-perf-profile-begin ()
+  "Start the CPU (1 ms samples) and the memory profiler; `drgnx-perf-profile-end' writes the report."
   (require 'profiler)
   (profiler-memory-start)
-  (when (fboundp 'profiler-cpu-start) (profiler-cpu-start 1000000))   ; 1 ms
-  (unwind-protect (funcall thunk)
-    (let ((cpu (and (fboundp 'profiler-cpu-running-p) (profiler-cpu-running-p) (profiler-cpu-log)))
-          (mem (profiler-memory-log)))
-      (when (fboundp 'profiler-cpu-stop) (profiler-cpu-stop))
-      (profiler-memory-stop)
-      (with-temp-file file
-        (pcase-dolist (`(,title . ,log) (list (cons "Memory" mem) (cons "CPU" cpu)))
-          (when (hash-table-p log)
-            (insert "== " title ": call paths\n")
-            (dolist (l (drgnx-perf--profile-lines log nil)) (insert l "\n"))
-            (insert "\n== " title ": most sampled, with their callers\n")
-            (dolist (l (drgnx-perf--profile-lines log t)) (insert l "\n"))
-            (insert "\n")))))))
+  (when (fboundp 'profiler-cpu-start) (profiler-cpu-start 1000000)))
+
+(defun drgnx-perf-profile-end (file)
+  "Stop the profilers `drgnx-perf-profile-begin' started and write their report to FILE: for memory (bytes sampled) and
+CPU, the call paths callers above callees, then the functions sampled most with their callers
+\(`drgnx-perf--profile-lines')."
+  (let ((cpu (and (fboundp 'profiler-cpu-running-p) (profiler-cpu-running-p) (profiler-cpu-log)))
+        (mem (profiler-memory-log)))
+    (when (fboundp 'profiler-cpu-stop) (profiler-cpu-stop))
+    (profiler-memory-stop)
+    (with-temp-file file
+      (pcase-dolist (`(,title . ,log) (list (cons "Memory" mem) (cons "CPU" cpu)))
+        (when (hash-table-p log)
+          (insert "== " title ": call paths\n")
+          (dolist (l (drgnx-perf--profile-lines log nil)) (insert l "\n"))
+          (insert "\n== " title ": most sampled, with their callers\n")
+          (dolist (l (drgnx-perf--profile-lines log t)) (insert l "\n"))
+          (insert "\n"))))))
+
+(defun drgnx-perf-profiled (file thunk)
+  "THUNK's value, run under the CPU and the memory profiler.  FILE gets the report even when THUNK signals
+\(`drgnx-perf-profile-end')."
+  (drgnx-perf-profile-begin)
+  (unwind-protect (funcall thunk) (drgnx-perf-profile-end file)))
 
 ;;;; Hook audit
 

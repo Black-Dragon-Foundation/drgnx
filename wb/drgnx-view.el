@@ -64,6 +64,8 @@ right after it would inherit `read-only' and is refused (see `drgnx-view--protec
 (defvar drgnx-view--deadline nil
   "When the slice now running ends (`drgnx-timer-now' time).  A view whose draw starts before it shares it.")
 
+(defvar drgnx-view--line-height nil
+  "While a draw pass runs: the default line height, read at the first row that needs it (it cannot change inside one pass).")
 (defvar drgnx-view--slicing nil "Non-nil while a sliced draw runs: `drgnx-view--go-p' checks the deadline.")
 (defvar drgnx-view--rows 0 "Rows the draw now running has drawn, grown or removed.")
 (defvar drgnx-view--stopped nil "Non-nil once the draw now running stopped at its deadline or on input.")
@@ -876,7 +878,7 @@ the view's `cut' says whether work is left."
       (let ((inhibit-read-only t) (inhibit-interaction t)
             (t0 (float-time))   ; the :draw-ms stat's own clock: the slice's deadline is the only reader of `drgnx-timer-now'
             (drgnx-view--slicing (and slice t)) (drgnx-view--rows 0) (drgnx-view--stopped nil)
-            (drgnx-view--changed nil) (type (drgnx-view--type view)))
+            (drgnx-view--changed nil) (drgnx-view--line-height nil) (type (drgnx-view--type view)))
         (when slice
           (let ((now (drgnx-timer-now)))   ; this pass's deadline while unspent, or spent by a view before this one
             (unless (and drgnx-view--deadline
@@ -1962,7 +1964,10 @@ place, and the measure reported (`view/measured').  Returns the new text, or nil
         (put-text-property (nth 0 im) (1+ (nth 0 im)) 'display (if (or (null spec) (eq spec :alt)) (nth 2 im) spec)
                            text)))
     (let ((h (plist-get row :height)) (nl (copy-sequence "\n")))
-      (when h (put-text-property 0 1 'line-height (* (plist-get h :lines) (default-line-height)) nl))
+      (when h
+        (put-text-property 0 1 'line-height
+                           (* (plist-get h :lines) (or drgnx-view--line-height (setq drgnx-view--line-height (default-line-height))))
+                           nl))
       (concat text nl))))
 
 ;;;; Classes and the stale shade: the last step
