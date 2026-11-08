@@ -95,7 +95,16 @@ and its attach starts with a reset. The hub going away never ends the program.
 were not sent yet (a reset: all, the table starting again). The 16 palette colours go as `{ansi: N}`, the rest of the
 256-colour palette and direct colours as `{rgb}` (program data). A row has one character per cell, trailing default
 blanks dropped; a wide character's second cell is a stop at the next column's pixel, so columns keep their place
-whatever width the editor's font gives the character. The cursor's column in `term` is an index into the row's text.
+whatever width the editor's font gives the character. A glyph wider than its two cells would still push its row right
+up to the next stop, so the terminal's buffer replaces the hub-fed rows' fit guard (an ellipsis before the first stop,
+for labels) with its own (`drgnx-view-patch-guard-function` = `drgnx-term--cell-guard`): the wide cluster before each
+stop is measured once per cell width (`drgnx-term--cell-scales`, 4,096 entries) and, when wider than two cells, drawn
+smaller by a `(height F)` display over all its characters (so a joined emoji stays one glyph). A guard per stop with
+a scale was chosen over rescaling the emoji font (`face-font-rescale-alist`): that is global, names a font, and would
+shrink emoji in every buffer; the scale here is measured from the glyph actually drawn, in this buffer only. Grapheme
+clusters are one width as Unicode gives it by default (`drgnx-term-grapheme-width-method` "unicode": mode 2027 on, as
+Ghostty does), so 👩‍💻 is two cells; a shell whose line editor counts code points (wcwidth) can misplace its cursor on
+such a line, which "legacy" avoids. The cursor's column in `term` is an index into the row's text.
 
 **Input:** a key name maps to libghostty's key (letters, digits and US-layout symbols by character, named keys, else
 unidentified with its text; `src/keys.rs`) and is encoded from the terminal's modes (kitty keyboard flags,
@@ -116,6 +125,39 @@ typed**, only counts; a malformed message from the hub is logged by its position
 `cargo test -p drgnx-term` (through the cargo wrapper, in a container): `tests/worker.rs` drives the worker with a fake
 clock (frames, flood and backfill, the in-flight patch, mode 2026, row keys through scrolls, resizes and eviction, the
 kitty, DECCKM, paste and mouse encodings, styles and wide cells); `tests/logging.rs` checks the log.
+
+### vttest
+
+`tests/vttest.rs` runs vttest (Thomas Dickey's VT100/VT220 test program) on a real PTY of 80 × 24 under the worker's
+run loop, walks its menus with a key script and compares eight screens with their goldens in
+`test/conformance/vttest/`. Each golden holds the screen's 24 rows as the editor gets them, then each row's style runs
+with the style spelled out. A step types its keys and waits for text that only the next screen shows, plus one of
+vttest's prompts, and then until the worker is quiet: an echoed digit or a half-drawn screen is never taken. A wait that
+runs out prints the screen it saw.
+
+| Golden | vttest | What it holds |
+|---|---|---|
+| `cursor-movement` | 1, first screen | the border of `*` and `+` and the frame of `E` around the text |
+| `scroll-regions` | 2, up to the first scroll test | rows 12–13 as a region scrolled down |
+| `character-sets` | 3 → 8 | US ASCII, British and DEC line drawing in G0 and G1 |
+| `reports` | 6 → 3 | DSR 5 (`CSI 0 n`, "terminal OK") and DSR 6 (the cursor's position) |
+| `insert-delete` | 8, up to the staggered column | insert and delete line, insert mode, delete character |
+| `double-width` | 4, first screen | the double-width and double-height lines in 80 columns |
+| `colours` | 11 → 6 → 2 | the 8 × 8 foreground/background matrix, bright off and on |
+| `vt52-exit` | 7, to the screen after VT52 mode is left | the identify reply and the cursor report in ANSI mode |
+
+vttest must be installed: the test images carry it (`test/container/base/Containerfile`, `test/container/rust-packages.sh`),
+and without it the test fails, it never skips. `UPDATE_VTTEST_GOLDENS=1` writes the goldens instead of comparing.
+They were recorded from the worker and checked by eye against what vttest says each screen should show. Where they
+differ, the golden keeps what the worker does and the row below records the difference: it is fixed in the engine or the
+worker, never in the golden.
+
+| Screen | vttest expects | The worker |
+|---|---|---|
+| `double-width` | the double-width and double-height lines (DECDWL, DECDHL) drawn twice as wide | the rows carry no line size: they are drawn at normal width |
+| `vt52-exit` | VT52 mode (`CSI ? 2 l`): the rectangle of `*` and `!`, then the identify reply `ESC / Z` | libghostty-vt has no VT52 mode: the VT52 sequences print as text, and the identify request gets the ANSI reply (`CSI ? 62 ; 22 c`) |
+| 132-column screens (menus 1, 2 and 4) | DECCOLM switches to 132 columns when the terminal allows it | the grid becomes 132 columns wide while the PTY and the window stay at 80 (xterm refuses DECCOLM by default) |
+| `vt52-exit` | the cursor report after leaving VT52 mode read as `CSI 1 ; 1 R` | vttest reads that reply and the identify reply up to a Return, so the script's Return shows as `<13>` in them and vttest calls the cursor report unknown |
 
 ## The hub's methods
 
@@ -234,8 +276,9 @@ program runs).
 - **Copy mode** (`drgnx-term-copy-mode`) pauses the view (`drgnx-view-patch-pause`) and swaps in a map with only
   `C-g`; leaving draws the kept patches. `drgnx-term-find` sends `term/search` up from the cursor and enters copy mode
   at the first match, marked by the face `drgnx-term-search-selected`.
-- **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link` (screen rows only: backfilled rows carry
-  none); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
+- **Links:** the worker sends an OSC 8 run as the row prop `drgnx-term-link`, on every row it sends: a screen cell's
+  link is read through a viewport point, a row above the screen (scrolled off, a backfill, `term/fetch`) through a
+  history point (row `scrollback rows - N` for viewport row `-N`: the engine's viewport never scrolls); PATCHED gives such runs `mouse-face` and a keymap, and `drgnx-term-open-link` opens a local `file://` URI with
   `find-file-other-window`, anything else with `browse-url`.
 - **Resize:** a window change (`drgnx-state` `windows-changed`) debounces 50 ms per buffer
   (`drgnx-timer-debounce`), then sends `term/resize` with the selected window's size.
@@ -258,8 +301,9 @@ program runs).
 
 **Tests:** `test/unit/term-test.el` (`drgnx-term/`, a gated hub with the real worker: the shell in a worker, echo,
 a flood backfilled, the scrollback setting both ways, undo off, input queued while the hub is away, a theme change
-without a reset, a tty frame) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align,
-cursor shapes).
+without a reset, a tty frame), `test/unit/term-cells-test.el` (`drgnx-term-cells/`: the cell guard with a fixed
+measure) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align, CJK, emoji and a joined
+emoji among them, cursor shapes).
 
 ## Settings
 
