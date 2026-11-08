@@ -21,6 +21,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-surfaces)
 (require 'drgnx-icons)
+(require 'drgnx-pixels)
 (require 'drgnx-ui-kit)
 
 (declare-function glitnir-active-p "glitnir")
@@ -123,8 +124,8 @@ thing waiting on you)."
 ;;;; Drawing
 
 (defun drgnx-notice-toast--px (parent logical)
-  "LOGICAL pixels in PARENT's own pixels (a frame of Nidhogg's Wayland shell counts device pixels)."
-  (if (featurep 'nidhogg-wayland) (round (* logical (frame-scale-factor parent))) logical))
+  "LOGICAL pixels in PARENT's own pixels (`drgnx-px': device pixels on Nidhogg's native shells, rounded half up)."
+  (drgnx-px logical parent))
 
 (defun drgnx-notice-toast--parent ()
   "The graphical root frame the toasts float over, or nil."

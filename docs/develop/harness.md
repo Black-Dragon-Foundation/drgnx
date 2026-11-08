@@ -501,8 +501,9 @@ shell (the shell applies the alpha itself); under GTK, Glitnir draws such a chil
 For tests that compare pixels. A snapshot is `(W H BYTES)`: `BYTES` holds W×H ARGB32 pixels, rows tightly packed,
 each a 32-bit word in the machine's byte order (little-endian: B G R A). Rectangles are `(L T R B)` in device pixels
 (`frame-edges` × `(drgnx-uitest-device-scale FRAME)`), right and bottom exclusive. That function is `frame-scale-factor`
-under GTK, which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale;
-sizes in logical pixels, such as a margin or a radius, still go by `frame-scale-factor`.
+under GTK, which works in logical pixels, and 1 on Nidhogg's native shells (Wayland and Naglfar,
+`drgnx-pixels-device-p`), whose frames are in device pixels at any scale; sizes in logical pixels, such as a margin or
+a radius, go through `drgnx-px` ([core.md](core.md#logical-and-device-pixels-drgnx-pixelsel)).
 
 | Function | Returns |
 |---|---|

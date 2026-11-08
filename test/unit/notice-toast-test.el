@@ -73,5 +73,14 @@ with the float route on, the notice is taken and the echo queue stays empty."
           (should (equal taken '(2)))
           (should (equal drgnx-notice--echo-pending '((line . "a startup line")))))))))
 
+(ert-deftest drgnx-notice-toast/px-goes-through-the-pixel-rule ()
+  "The toast's sizes round half up at 1.25 (10 → 13, not `round''s 12), and a frame that counts logical pixels (no
+native shell: the seam `drgnx-pixels-device-p') takes them unscaled."
+  (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.25)))
+    (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () t)))
+      (should (= (drgnx-notice-toast--px (selected-frame) 10) 13)))
+    (cl-letf (((symbol-function 'drgnx-pixels-device-p) (lambda () nil)))
+      (should (= (drgnx-notice-toast--px (selected-frame) 10) 10)))))
+
 (provide 'notice-toast-test)
 ;;; notice-toast-test.el ends here

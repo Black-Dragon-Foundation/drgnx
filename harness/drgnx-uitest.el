@@ -19,6 +19,7 @@
 (declare-function ert-fail "ert" (data))
 (declare-function x-export-frames "xfns.c" (&optional frames type))
 (declare-function glitnir-snapshot "glitnir")
+(declare-function drgnx-pixels-device-p "drgnx-pixels" ())
 
 (defvar drgnx-uitest-session-id nil
   "This session's id (DRGNX_UI_NAME, set by harness/init/prelude.el): `drgnx-uitest-api-as' runs only for it.")
@@ -755,7 +756,7 @@ Never signals."
 (defun drgnx-uitest-device-scale (frame)
   "Device pixels per unit of FRAME's Lisp coordinates, as a snapshot counts them: `frame-scale-factor' under GTK,
 which works in logical pixels, and 1 on the native shell, whose frames are in device pixels at any scale."
-  (if (featurep 'nidhogg-wayland) 1 (frame-scale-factor frame)))
+  (if (drgnx-pixels-device-p) 1 (frame-scale-factor frame)))
 
 (defun drgnx-uitest--png-raw (png)
   "Decode PNG (a unibyte string: 8-bit RGB or RGBA, not interlaced, as cairo writes) into a snapshot."

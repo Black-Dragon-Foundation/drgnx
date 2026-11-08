@@ -230,9 +230,8 @@ window's ring is the accent."
     (dolist (p (cons 'drgnx-look-card drgnx-look--card-parameters)) (set-window-parameter window p nil))))
 
 (defun drgnx-look--card-gap-px (frame)
-  "The gap in FRAME's own pixels: the density's `gap' logical pixels times the frame's scale (a frame pixel is a
-device pixel on the native shell)."
-  (round (* (drgnx-look-density-value 'gap) (frame-scale-factor frame))))
+  "The gap in FRAME's own pixels: the density's `gap' logical pixels (`drgnx-px')."
+  (drgnx-px (drgnx-look-density-value 'gap) frame))
 
 (defun drgnx-look--card-follow-scale (frame)
   "Give FRAME's dividers the gap again when its scale changed under it (a frame that is a card frame only)."

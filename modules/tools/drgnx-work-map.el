@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'drgnx-view)
 (require 'drgnx-view-nav)
+(require 'drgnx-pixels)
 (require 'drgnx-work-client)
 (unless (featurep 'drgnx-decor)
   (load (expand-file-name "../ui/drgnx-decor" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -132,7 +133,7 @@ key profiles bind them (`drgnx-command-define' with this map); each view's own k
 ;;;; Geometry
 
 (defun drgnx-work-map--scale ()
-  (or drgnx-work-map-scale (and (fboundp 'frame-scale-factor) (ignore-errors (frame-scale-factor))) 1))
+  (or drgnx-work-map-scale (drgnx-pixels-scale)))
 
 (defun drgnx-work-map--px (units)
   "UNITS (4 logical pixels each) in device pixels."

@@ -26,6 +26,7 @@
 (require 'cl-lib)
 (require 'drgnx-timer)
 (require 'drgnx-color)
+(require 'drgnx-pixels)
 
 (defvar drgnx-hub--events)
 (defvar drgnx-look-motion)
@@ -99,7 +100,7 @@ of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
   (let* ((frame (window-frame window)) (buffer (window-buffer window))
          (gui (display-graphic-p frame)) (factor (drgnx-view-env--scale-factor buffer)))
     (list :display (if gui "gui" "tty")
-          :scale (if gui (float (or (ignore-errors (frame-scale-factor frame)) 1)) 1.0)
+          :scale (if gui (drgnx-pixels-scale frame) 1.0)
           :fonts (and gui (delq nil (mapcar (lambda (r)
                                               (when-let* ((f (drgnx-view-env--font (cdr r) frame factor)))
                                                 (cons (symbol-name (car r)) f)))

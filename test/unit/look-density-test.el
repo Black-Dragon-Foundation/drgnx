@@ -46,10 +46,10 @@ gets the target less the frame's own line height."
         (should (= 19 (drgnx-look-density-code-line))))
       ;; the frame gets the target less its own line height (a terminal frame has no such parameter: the GUI row
       ;; measures the lines)
-      (should (= (max 0 (- (round (* 21 (drgnx-look-density--scale (selected-frame)))) h))
+      (should (= (max 0 (- (drgnx-px 21 (selected-frame)) h))
                  (drgnx-look-density--extra (selected-frame))))
       (let ((drgnx-look-density 'roomy))
-        (should (= (max 0 (- (round (* 23 (drgnx-look-density--scale (selected-frame)))) h))
+        (should (= (max 0 (- (drgnx-px 23 (selected-frame)) h))
                    (drgnx-look-density--extra (selected-frame))))))))
 
 (ert-deftest drgnx-look-density/user-line-spacing-stays ()
@@ -67,8 +67,8 @@ gets the target less the frame's own line height."
 (ert-deftest drgnx-look-density/ui-cons-centres ()
   "Pattern D: the cons brings a UI row to the tree row's height and puts the extra pixels half above, half below
 \(the odd one below); a row already tall enough gets none."
-  (let ((s (drgnx-look-density--scale nil)))
-    (should (equal (cons (/ (- (round (* 26 s)) 18) 2) (- (- (round (* 26 s)) 18) (/ (- (round (* 26 s)) 18) 2)))
+  (let ((row (drgnx-px 26)))
+    (should (equal (cons (/ (- row 18) 2) (- (- row 18) (/ (- row 18) 2)))
                    (drgnx-look-ui-line-spacing 18)))
     (should (equal '(4 . 4) (drgnx-look-ui-line-spacing 18 'comfortable 1.0)))
     (should (equal '(4 . 5) (drgnx-look-ui-line-spacing 17 'comfortable 1.0)))
@@ -76,6 +76,29 @@ gets the target less the frame's own line height."
     (should (equal '(6 . 6) (drgnx-look-ui-line-spacing 18 'roomy 1.0)))
     (should (equal '(0 . 0) (drgnx-look-ui-line-spacing 40 'comfortable 1.0)))
     (should (equal '(11 . 11) (drgnx-look-ui-line-spacing 30 'comfortable 2.0)))))
+
+(ert-deftest drgnx-look-density/ui-line-spacing-rounds-half-up ()
+  "The tree row at 1.25 is 33 device pixels (26 × 1.25 = 32.5, half up): 7 more than a 26 px line, 3 above and 4
+below; at 4/3 it is 35, at 2 it is 52."
+  (should (equal (drgnx-look-ui-line-spacing 26 'comfortable 1.25) '(3 . 4)))
+  (should (equal (drgnx-look-ui-line-spacing 26 'comfortable (/ 160 120.0)) '(4 . 5)))
+  (should (equal (drgnx-look-ui-line-spacing 26 'comfortable 2.0) '(13 . 13))))
+
+(ert-deftest drgnx-look-density/code-line-goes-through-the-pixel-rule ()
+  "The code line's extra spacing is the line in frame pixels less the character height: 21 at 1.25 is 26 (half up),
+so the extra is 26 less the frame's line height."
+  (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.25))
+            ((symbol-function 'drgnx-pixels-device-p) (lambda () t)))
+    (let ((drgnx-look-density 'comfortable) (line-spacing nil))
+      (should (= (drgnx-look-density--extra (selected-frame)) (max 0 (- 26 (frame-char-height))))))
+    (let ((drgnx-look-density 'compact) (line-spacing nil))
+      ;; 19 × 1.25 = 23.75 → 24
+      (should (= (drgnx-look-density--extra (selected-frame)) (max 0 (- 24 (frame-char-height)))))))
+  ;; a frame that counts logical pixels takes the line unscaled
+  (cl-letf (((symbol-function 'frame-scale-factor) (lambda (&optional _f) 1.25))
+            ((symbol-function 'drgnx-pixels-device-p) (lambda () nil)))
+    (let ((drgnx-look-density 'comfortable) (line-spacing nil))
+      (should (= (drgnx-look-density--extra (selected-frame)) (max 0 (- 21 (frame-char-height))))))))
 
 (provide 'look-density-test)
 ;;; look-density-test.el ends here
