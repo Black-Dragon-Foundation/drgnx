@@ -28,6 +28,7 @@
 (declare-function drgnx-notify "drgnx-notice" (source severity text &rest args))
 (declare-function drgnx-explorer-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
+(declare-function drgnx-explorer-open-root "drgnx-explorer")
 (declare-function drgnx-explorer-focus "drgnx-explorer")
 (defvar drgnx-explorer-buffer-name)
 
@@ -94,7 +95,9 @@ this to decide whether `drgnx PATH' needs a new window."
 (defun drgnx-session-open-folder (dir)
   "Show DIR in front as the Explorer's first folder (`drgnx DIR'), the Explorer selected — as VS Code after
 `code DIR' — with DIR as its `default-directory', so quick open and project search work in DIR's project.
-The Explorer's other folders stay.  Without the workbench (drgnx safe), DIR opens in dired.
+DIR replaces the folder the Explorer took by itself at the start (the editor's folder): the folders you opened stay,
+and every window showing the Explorer shows DIR's row at its top.
+Without the workbench (drgnx safe), DIR opens in dired.
 In a terminal frame (`drgnx -t DIR', or the command typed there) DIR opens in that frame: the graphical window
 is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call never asks."
   (interactive (list (read-directory-name "Open folder: " nil nil t)))
@@ -103,7 +106,7 @@ is not raised.  As File → Open Folder… it asks for DIR; bin/drgnx's call nev
       (drgnx-session-raise))
     (if (not (fboundp 'drgnx-explorer-set-roots))
         (dired dir)
-      (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-roots))))
+      (drgnx-explorer-open-root dir)
       (drgnx-explorer-focus)
       (with-current-buffer drgnx-explorer-buffer-name (setq default-directory dir)))
     t))

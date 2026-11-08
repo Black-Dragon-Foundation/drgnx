@@ -52,6 +52,9 @@ Only chains in listings already read are joined: a closed folder is never read f
 (defconst drgnx-explorer-buffer-name " *drgnx explorer*" "Internal (a leading space): not in C-x b or ibuffer.")
 
 (defvar drgnx-explorer--roots nil "The Explorer's root directories (never changed by the follower).")
+(defvar drgnx-explorer--default-roots nil
+  "The roots the Explorer took by itself (the editor's folder when it was first shown), not the user: Open Folder
+replaces them, the layout file never keeps them.")
 (defvar drgnx-explorer--expanded (make-hash-table :test #'equal) "Expanded folders (paths without trailing /).")
 ;; Folder → (MTIME . CHILDREN), at most 64 folders (PERF-L L1).  An expanded folder is got on every render, so the shown
 ;; ones stay recent and the least recently shown goes first.  `drgnx-core/workbench' activates it.
@@ -421,7 +424,9 @@ faces come later, from jit-lock, for the rows on screen."
   (or (get-buffer drgnx-explorer-buffer-name)
       (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
         (drgnx-explorer-mode)
-        (unless drgnx-explorer--roots (setq drgnx-explorer--roots (list (drgnx-explorer--default-root))))
+        (unless drgnx-explorer--roots
+          (setq drgnx-explorer--roots (list (drgnx-explorer--default-root))
+                drgnx-explorer--default-roots drgnx-explorer--roots))
         (drgnx-explorer--render)
         (current-buffer))))
 
@@ -772,13 +777,42 @@ A remote file is never revealed: this runs from the change bus, where remote I/O
 (defun drgnx-explorer-set-roots (roots)
   "Show ROOTS (directories) in the Explorer (this ends Find)."
   (when drgnx-explorer--find (drgnx-explorer--find-stop) (setq drgnx-explorer--find nil) (drgnx-explorer--plain-title))
-  (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots))
+  (setq drgnx-explorer--roots (mapcar (lambda (r) (file-name-as-directory (expand-file-name r))) roots)
+        drgnx-explorer--default-roots (seq-filter (lambda (r) (member r drgnx-explorer--roots)) drgnx-explorer--default-roots))
   ;; a command of the user lists a remote root now; `drgnx open' (emacsclient -e, in the server's process filter) and
   ;; other automatic callers do not
   (let ((drgnx-explorer--remote-reads (or drgnx-explorer--remote-reads (not inhibit-quit))))
     (if (get-buffer drgnx-explorer-buffer-name) (drgnx-explorer--render) (drgnx-explorer--buffer))))   ; a new one renders itself
 
 (defun drgnx-explorer-roots () drgnx-explorer--roots)
+
+(defun drgnx-explorer-chosen-roots ()
+  "The roots the user opened: `drgnx-explorer-roots' without the one the Explorer took by itself at the start."
+  (seq-remove (lambda (r) (member r drgnx-explorer--default-roots)) drgnx-explorer--roots))
+
+(defun drgnx-explorer-open-root (dir)
+  "Make DIR the Explorer's first folder, as `code DIR': the folder it took by itself goes, the ones the user opened
+stay.  Every window showing the Explorer then shows DIR's row at its top."
+  (let ((dir (file-name-as-directory (expand-file-name dir))))
+    (drgnx-explorer-set-roots (cons dir (remove dir (drgnx-explorer-chosen-roots))))
+    (with-current-buffer (drgnx-explorer--buffer)
+      (goto-char (point-min))
+      (dolist (w (get-buffer-window-list (current-buffer) nil t))
+        (set-window-start w (point-min))
+        (set-window-point w (point-min))))))
+
+(defun drgnx-explorer-remove-folder ()
+  "Remove the folder of the root row here from the Explorer (Remove Folder from Workspace): nothing on disk changes."
+  (interactive)
+  (let* ((here (drgnx-explorer--node))
+         (root (and here (car (member (file-name-as-directory here) drgnx-explorer--roots)))))
+    (unless root (user-error "Not a folder of the workspace: right-click its top row"))
+    (drgnx-explorer-set-roots (remove root drgnx-explorer--roots))))
+
+(defun drgnx-explorer--root-row-p (_click)
+  "Non-nil on a root row of the Explorer (the right-click menu's `explorer-root' context)."
+  (and (derived-mode-p 'drgnx-explorer-mode)
+       (when-let* ((here (drgnx-explorer--node))) (member (file-name-as-directory here) drgnx-explorer--roots))))
 
 (defun drgnx-explorer-refresh ()
   "Re-read changed folders and render again, keeping expansion and the selected row (during Find: filter again)."

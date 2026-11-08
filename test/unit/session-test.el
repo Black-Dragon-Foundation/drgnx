@@ -8,6 +8,7 @@
 (require 'drgnx)
 (require 'drgnx-session)
 (require 'drgnx-explorer)
+(require 'drgnx-persist)
 (require 'project)
 (defvar server-client-instructions)
 
@@ -296,6 +297,62 @@ of `save-some-buffers'), ASKED (confirmations) and EVENTS (newest first: `save',
         (drgnx-explorer-set-roots nil)
         (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
         (delete-directory root t)))))
+
+(ert-deftest drgnx-session/an-opened-folder-replaces-the-folder-drgnx-chose ()
+  :tags '(:cond)
+  ;; `drgnx DIR' as `code DIR': the folder the Explorer took by itself at the start (the editor's folder, here the
+  ;; home-like H) goes, and the restart does not bring it back; folders the user opened stay; Remove Folder from
+  ;; Workspace takes one out.  Every window showing the Explorer then shows DIR's root row at its top.
+  (drgnx-test-with-state
+    (let* ((root (file-name-as-directory (make-temp-file "drgnx-session-only" t)))
+           (home (file-name-as-directory (expand-file-name "home" root)))
+           (a (drgnx-session-test--repo root "projA" "a.py"))
+           (b (drgnx-session-test--repo root "projB" "b.py"))
+           (project-list-file (expand-file-name "projects" root))
+           (drgnx-wb--sections nil) (drgnx-explorer--roots nil) (drgnx-explorer--default-roots nil)
+           buf)
+      (unwind-protect
+          (cl-letf (((symbol-function 'drgnx-session-raise) #'ignore))
+            (dotimes (i 300) (make-directory (expand-file-name (format "d%03d" i) home) t))
+            (delete-other-windows)
+            (drgnx-explorer-setup)
+            (setq buf (find-file-noselect (expand-file-name "notes.txt" home)))
+            (switch-to-buffer buf)
+            (drgnx-wb-show-sidebar)
+            (should (equal (drgnx-explorer-roots) (list home)))           ; the start: the editor's folder
+            (let ((w (drgnx-wb-section-window 'explorer)))
+              (should w)
+              ;; the user scrolled far down home's rows
+              (with-current-buffer drgnx-explorer-buffer-name
+                (let ((deep (save-excursion (goto-char (point-min)) (forward-line 250) (point))))
+                  (set-window-start w deep) (set-window-point w deep)))
+              (drgnx-session-open-folder (directory-file-name b))
+              (should (equal (drgnx-explorer-roots) (list b)))            ; DIR is the only folder: home went
+              (should (= (window-start w) (with-current-buffer drgnx-explorer-buffer-name (point-min))))
+              (should (equal (with-current-buffer drgnx-explorer-buffer-name (drgnx-explorer-node-at (window-point w)))
+                             (directory-file-name b))))
+            (drgnx-session-open-folder a)                                 ; a folder the user opened stays
+            (should (equal (drgnx-explorer-roots) (list a b)))
+            (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) (list a b)))
+            ;; Remove Folder from Workspace on b's root row
+            (with-current-buffer drgnx-explorer-buffer-name
+              (goto-char (point-min))
+              (while (not (equal (drgnx-explorer-node-at (point)) (directory-file-name b))) (forward-line 1))
+              (drgnx-explorer-remove-folder))
+            (should (equal (drgnx-explorer-roots) (list a))))
+        (when (buffer-live-p buf) (kill-buffer buf))
+        (drgnx-wb-hide-sidebar)
+        (delete-other-windows)
+        (drgnx-explorer-set-roots nil)
+        (when (get-buffer drgnx-explorer-buffer-name) (kill-buffer drgnx-explorer-buffer-name))
+        (delete-directory root t)))))
+
+(ert-deftest drgnx-session/the-folder-drgnx-chose-is-not-saved ()
+  ;; The layout file keeps only the folders the user opened: the one the Explorer took at the start is worked out
+  ;; again at the next start.
+  (let ((drgnx-explorer--roots '("/w/a/" "/start/")) (drgnx-explorer--default-roots '("/start/")))
+    (should (equal (drgnx-explorer-chosen-roots) '("/w/a/")))
+    (should (equal (plist-get (drgnx-persist--workbench-state nil) :roots) '("/w/a/")))))
 
 (ert-deftest drgnx-session/an-unsaved-untitled-buffer-is-offered-and-never-lost ()
   ;; Nothing of drgnx-session stubbed: the real `save-some-buffers' offers New Untitled's buffer (its question,

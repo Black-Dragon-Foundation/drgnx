@@ -164,6 +164,8 @@ hides —, a live name filter (`C-M-f` · `/` · `/`), middle-click closes a
 row, and "save all · close saved" buttons in the title. Git letters show after the names. The right-click menu has
 Open, Close, Close Others, Save All, and for the row's buffer Save, Copy Path, Diff with File and Reveal in Explorer.
 The Explorer's right-click menu also has Reveal in Buffers, Open Folder in Dired and Open in Other Window.
+On a folder's top row it has **Remove Folder from Workspace** (also in the palette): the folder leaves the Explorer,
+nothing on disk changes.
 
 Next Panel Tab (``M-` `` · palette) cycles the panel's tabs; Mode Menu (`C-'` · palette) opens the current major
 mode's menu at the cursor, the menu-bar entry without the menu bar.

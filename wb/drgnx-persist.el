@@ -51,7 +51,7 @@ After the restore the keys are in the frame parameter `drgnx-persist-extra', rea
 (define-error 'drgnx-persist-newer "workbench.eld was written by a newer drgnx" 'file-error)
 (declare-function drgnx-frame-role "drgnx-frames")
 (defvar drgnx-persist--pending)
-(defvar drgnx-explorer--roots)
+(declare-function drgnx-explorer-chosen-roots "drgnx-explorer")
 (declare-function drgnx-explorer-set-roots "drgnx-explorer")
 
 (defun drgnx-persist--file ()
@@ -133,7 +133,7 @@ window manager places the window then); the size is cut to the work area, from t
             :left (list :shown (and dock t) :view (drgnx-wb-sidebar-view) :px (drgnx-persist--size 'left dock))
             :panel (drgnx-persist--area 'panel)
             :right (drgnx-persist--area 'right)
-            :roots (and (boundp 'drgnx-explorer--roots) drgnx-explorer--roots)
+            :roots (and (fboundp 'drgnx-explorer-chosen-roots) (drgnx-explorer-chosen-roots))
             :main (window-state-get (window-main-window) t)
             :groups (mapcar (lambda (g) (list :tabs (or (nth 2 (assq g drgnx-persist--pending))   ; still loading
                                                         (delq nil (mapcar #'buffer-file-name (drgnx-chrome-tabs g))))

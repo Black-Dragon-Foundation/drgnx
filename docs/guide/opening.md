@@ -38,8 +38,10 @@ What happens:
   ([workbench.md](workbench.md#the-layout-survives-a-restart)) — and the paths in front of it.
 - **A window is open:** the paths open there and the window comes to the front.
 
-A **folder** becomes the Explorer's first folder (the others stay) and the Explorer is selected, as in VS Code after
-`code .`, so quick open and the Search view (`C-p`, `C-S-f`; ⌘P, ⌘⇧F on a Mac) work in that folder's project right away; it does not
+A **folder** becomes the Explorer's first folder and the Explorer is selected, as in VS Code after `code .`: the
+folder the Explorer showed by itself at the start (the folder of the first file in front, often your home) goes, folders you
+opened stay (Remove Folder from Workspace, on a folder's top row, takes one out), the layout file keeps only the folders
+you opened, and every window showing the Explorer shows the new folder at its top, so quick open and the Search view (`C-p`, `C-S-f`; ⌘P, ⌘⇧F on a Mac) work in that folder's project right away; it does not
 open as a directory listing. A **file** opens in the editor. drgnx started by hand as a normal Emacs (not a daemon) answers
 `drgnx PATH` too, as long as no other drgnx does.
 

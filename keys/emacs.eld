@@ -284,6 +284,7 @@
         (explorer-reveal-in-buffers :none "the Explorer's right-click menu")
         (explorer-open-in-dired :none "the Explorer's right-click menu")
         (explorer-other-window :none "the Explorer's right-click menu")
+        (explorer-remove-folder :none "a folder's top row in the Explorer: the right-click menu")
         (view-panel-next :none "in the palette")
         (help-mode-menu :none "C-mouse-3 (stock)")
         (go-window-pick :none "C-x o (stock)")

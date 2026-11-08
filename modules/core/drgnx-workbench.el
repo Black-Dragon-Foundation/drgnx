@@ -17,6 +17,8 @@
 (declare-function drgnx-wb-view-search "drgnx-wb")
 (declare-function drgnx-wb-focus-editor "drgnx-wb")
 (declare-function drgnx-explorer-setup "drgnx-explorer")
+(declare-function drgnx-explorer-remove-folder "drgnx-explorer")
+(declare-function drgnx-explorer--root-row-p "drgnx-explorer")
 (declare-function drgnx-rules-mode "drgnx-rules")
 (declare-function drgnx-chrome-mode "drgnx-chrome")
 (declare-function drgnx-chrome-switch-tab "drgnx-chrome")
@@ -220,7 +222,13 @@
                                           (explorer-copy-relative-path "Copy Relative Path" drgnx-explorer-copy-relative-path "The path from the root, to the clipboard")
                                           (explorer-reveal-externally "Reveal in File Manager" drgnx-explorer-reveal-externally "Open the folder in the system's file manager")))
                            (drgnx-command-define id :category "Explorer" :title title :command fn :doc doc
-                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer)))
+                                                 :map 'drgnx-explorer-mode-map :when in-explorer :context 'explorer))
+                         ;; A folder of the workspace: its top row's right-click menu.
+                         (drgnx-surfaces-define-context 'explorer-root #'drgnx-explorer--root-row-p)
+                         (drgnx-command-define 'explorer-remove-folder :category "Explorer" :title "Remove Folder from Workspace"
+                                               :command #'drgnx-explorer-remove-folder :map 'drgnx-explorer-mode-map
+                                               :when in-explorer :context 'explorer-root
+                                               :doc "Take this folder out of the Explorer (nothing on disk changes)"))
                        ;; The Outline, below the Explorer.
                        (require 'drgnx-outline)
                        (drgnx-outline-setup)

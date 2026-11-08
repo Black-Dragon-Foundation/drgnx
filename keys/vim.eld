@@ -298,6 +298,7 @@
         (explorer-reveal-in-buffers :none "the Explorer's right-click menu")
         (explorer-open-in-dired :none "the Explorer's right-click menu")
         (explorer-other-window :none "the Explorer's right-click menu")
+        (explorer-remove-folder :none "a folder's top row in the Explorer: the right-click menu")
         (view-panel-next "SPC u p")
         (help-mode-menu "SPC m")
         (go-window-pick "SPC w w")
