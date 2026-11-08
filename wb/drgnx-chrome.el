@@ -168,9 +168,9 @@ middle of the tab, which is at the bottom of the row)."
              (tab (- row (drgnx-px drgnx-chrome--tab-lift frame))))
         (list row (drgnx-pixels-box-height 'drgnx-chrome-tab tab frame) frame)))))
 
-(defun drgnx-chrome--tab-paint (rows descent)
-  "The anonymous faces of a graphical tab row (ROWS: `drgnx-chrome--tab-rows'; DESCENT: the row's pixels below the
-baseline), read from the theme when the line is made: (LIFT . RULE).  LIFT is the shown tab's box:
+(defun drgnx-chrome--tab-paint (rows)
+  "The anonymous faces of a graphical tab row (ROWS: `drgnx-chrome--tab-rows'), read from the theme when the line is
+made: (LIFT . RULE).  LIFT is the shown tab's box:
 `drgnx-chrome--tab-lift' pixels of the row's colour above it (a box spans its row), none at its sides, its bottom open
 and its top corners rounded where the compositor rounds boxes.  RULE is the hairline under the rest of the row: an
 underline in `drgnx-border-subtle' on the row's last pixels, or nil when the theme gives that face no colour."
@@ -181,7 +181,8 @@ underline in `drgnx-border-subtle' on the row's last pixels, or nil when the the
                                    ,@(if (stringp row-bg) (list :color row-bg) '(:style flat-button))
                                    ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
                                        `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom)))))
-          (and (stringp rule) (list :underline `(:color ,rule :position ,(max 0 (- descent (drgnx-px-line 1 frame)))))))))
+          ;; `:position' 0: on the row's last pixels (a number is pixels above the descent line), the font's thickness
+          (and (stringp rule) (list :underline `(:color ,rule :position 0))))))
 
 (defun drgnx-chrome--tab (w b shown active rows &optional paint)
   "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;
@@ -331,7 +332,7 @@ and the hairline under all but the shown tab (`drgnx-chrome--tab-paint')."
          (frame (nth 2 rows))
          (extent (and rows (drgnx-pixels-font-extent 'drgnx-chrome-tab frame)))
          (descent (and extent (+ (cdr extent) (nth 1 rows))))
-         (paint (and extent (drgnx-chrome--tab-paint rows descent)))
+         (paint (and extent (drgnx-chrome--tab-paint rows)))
          (stretch (lambda (n) (let ((s (propertize " " 'face 'drgnx-chrome-tab 'display (drgnx-chrome--px n frame))))
                                 (when (cdr paint) (add-face-text-property 0 1 (cdr paint) nil s))
                                 s))))

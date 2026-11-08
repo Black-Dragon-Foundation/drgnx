@@ -78,12 +78,40 @@ text area just below the tab line are both the `editor' token, and the tab line'
     (let* ((w (selected-window)) (s (drgnx-uitest-device-scale (selected-frame))) (edges (window-pixel-edges w))
            (top (round (* s (nth 1 edges)))) (h (window-tab-line-height w))
            (snap (drgnx-uitest-snapshot))
-           (x (round (* s (+ (nth 0 edges) 4)))))
+           (x (+ (round (* s (nth 0 edges))) (drgnx-px 12))))   ; inside the tab, past the row's 6 px
       (should (> h 0))
       (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap x (+ top h -2)) (drgnx-ui-look-tabs--rgb 'editor)))
       (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap x (+ top h 2)) (drgnx-ui-look-tabs--rgb 'editor)))
       (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap (- (round (* s (nth 2 edges))) 40) (+ top 2))
                                         (drgnx-ui-look-tabs--rgb 'panel))))))
+
+(ert-deftest drgnx-ui-look-tabs/the-row-has-its-hairline-and-the-shown-tab-is-lifted ()
+  "Pattern D: window-dark.html `.tabs': the row's last pixel row is the subtle border, except under the shown tab,
+which is the `editor' colour down to the text and starts 4 logical pixels below the row's top (the row's `panel'
+above it).  Writes the tab row to the session's evidence folder when there is one."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-tabs--with
+    (let* ((w (selected-window)) (s (drgnx-uitest-device-scale (selected-frame))) (edges (window-pixel-edges w))
+           (b (window-buffer w)) (h (window-tab-line-height w)) (top (round (* s (nth 1 edges))))
+           (bx (seq-find (lambda (x) (let* ((p (posn-at-x-y x (/ h 2) w t)) (str (and p (posn-string p))))
+                                       (and str (stringp (car str))
+                                            (eq b (get-text-property (cdr str) 'drgnx-buffer (car str))))))
+                         (number-sequence 0 (window-pixel-width w))))
+           (snap (drgnx-uitest-snapshot))
+           (last (+ top (round (* s h)) -1))
+           (shown-x (+ (round (* s (+ (nth 0 edges) bx))) (drgnx-px 12)))
+           (empty-x (round (* s (+ (nth 0 edges) (* 0.6 (window-pixel-width w)))))))
+      (when-let* ((dir (getenv "DRGNX_UI_EVIDENCE")) ((file-directory-p dir)))
+        (copy-file (plist-get (drgnx-uitest-capture (make-temp-file "tabs" t)) :root)
+                   (expand-file-name (format "tab-row-s%s.png" (drgnx-pixels-scale)) dir) t))
+      (should bx)
+      (should (equal (list 'hairline (drgnx-ui-look-tabs--rgb 'border-subtle))
+                     (list 'hairline (cdr (drgnx-uitest-pixel snap empty-x last)))))
+      (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap shown-x last) (drgnx-ui-look-tabs--rgb 'editor)))
+      (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap shown-x (+ top (drgnx-px 2)))
+                                        (drgnx-ui-look-tabs--rgb 'panel)))
+      (should (drgnx-ui-look-tabs--near (drgnx-uitest-pixel snap shown-x (+ top (drgnx-px 6)))
+                                        (drgnx-ui-look-tabs--rgb 'editor))))))
 
 (ert-deftest drgnx-ui-look-tabs/hover-reveals-the-close ()
   "Pattern D (sway): the close mark of a tab that is not shown is drawn in the tab's own background until the pointer
