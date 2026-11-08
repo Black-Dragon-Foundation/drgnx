@@ -1973,15 +1973,18 @@ and badges build on it). This is its contract.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
-- **Who is here as rows** (`work::presence::here`): `agents/presence/subscribe {workspace, view}` (the editor sent
-  `view/env` for VIEW first; drgnx's is `agents-here` in a data class `data`, its rows reading none of the env) also
-  makes VIEW's classes get rows: one per agent present in the user's tree (`a:SESSION`, in ordinal order, its newest
-  entry: properties `drgnx-presence-session`, `-ordinal`, `-mode`, `-file`, `-line`, `drgnx-work-id`) and one per shown
-  path (`p:PATH`, a file an agent is about to change or has changed (`pending`, `write`, `edit`) and each folder above
-  it up to its root: `drgnx-presence-ordinals`, `drgnx-presence-dir`). A file outside the roots is shown where it lands
+- **Who is here as a view model** (`work::presence::here`): `agents/presence/subscribe {workspace, view}` (the editor
+  sent `view/env` for VIEW first; drgnx's is `agents-here` in a data class `data`, its rows reading none of the env)
+  also makes VIEW get a model (`here::doc`, published before the rows, which name its version) and rows: a node and a
+  row per agent present in the user's tree (`a:SESSION`, in ordinal order, its newest entry: kind `agent`, fields
+  `label` (its handle), `session`, `ordinal`, `mode`, `file`, `line`) and per shown path (`p:PATH`, a file an agent is
+  about to change or has changed (`pending`, `write`, `edit`) and each folder above it up to its root: kind `file` or
+  `folder`, fields `path` and `ordinals`, space-separated); the lists `agents` and `paths`. A row holds only its text
+  and `drgnx-work-id`; a path's text carries its ordinals, so every change of a node changes its row. A file outside the roots is shown where it lands
   in the user's tree (a linked worktree's file at its place in the main checkout, from `rel` and the main checkout);
   one landing nowhere, and an agent the hub has not named yet, are not shown. The subscription starts with a reset;
-  each flush publishes the rows again and only what changed goes out. Marks and colours are the editor's, by ordinal.
+  each flush publishes the model and the rows again and only what changed goes out. Marks and colours are the
+  editor's, by ordinal.
   Tests: `work/presence/here/tests.rs`, scenario `work/presence-rows`.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.

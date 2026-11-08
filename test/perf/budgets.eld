@@ -161,8 +161,9 @@
  (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
  ;; presence-burst, 2026-11-08, pinned to 4 CPUs, 30 agents over 90 files, one change per key.  Before (-old: every
  ;; `agent-presence' event rebuilds the badges, who is here and the status from the cached presence): alloc p50 160832
- ;; objects per key, cpu p90 3.61.  After (the hub's rows, applied path by path): alloc p50 10747, cpu p90 1.11; both
- ;; 30 agents and 98 badges.  The alloc budget is a tenth of before; cpu measured x 1.25.
+ ;; objects per key, cpu p90 3.61.  After (the hub's view model, read node by node as the rows name them): alloc p50
+ ;; 11832, cpu p90 1.31 (the rows alone, before the model: 10747, 1.11); both 30 agents and 98 badges.  The alloc
+ ;; budget is a tenth of before; cpu the rows' 1.11 x 1.25.
  (presence-burst (:alloc :p50) 16084 :report-only ot5) (presence-burst (:cpu_ms :p90) 1.4 :report-only ot5)
  (presence-burst (:rows) 0 :report-only ot5)
  (presence-burst-old (:alloc :p50) 201040 :report-only ot5)

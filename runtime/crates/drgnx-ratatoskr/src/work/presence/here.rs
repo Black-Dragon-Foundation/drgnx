@@ -3,10 +3,12 @@
 //! its newest entry) and one per shown path (`p:PATH`: a file an agent is about to change or has changed, and each
 //! folder above it up to its root, with the ordinals of those agents). A file outside the roots is shown where it lands
 //! in the user's tree (a linked worktree's file at its place in the main checkout); one that lands nowhere is not shown.
-//! The rows say what they show as properties; the marks and colours of an ordinal are the editor's. Pure: the files,
+//! What the rows show is the view's model ([`doc`]: a node per row, its data as fields, the lists `agents` and
+//! `paths`); a row holds only its key and text. The marks and colours of an ordinal are the editor's. Pure: the files,
 //! the landing and the identities come in as arguments.
 
 use super::{Entry, RepoPath, under};
+use crate::view::model::Doc;
 use drgnx_rows::{Row, RowBuilder};
 use runstav::methods::work::PresenceMode as Mode;
 use serde_json::{Value, json};
@@ -105,6 +107,14 @@ pub fn here(
     Here { agents, paths }
 }
 
+/// ORDS space-separated, in order.
+fn ordinals(ords: &BTreeSet<u32>) -> String {
+    ords.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn mode_name(m: Mode) -> Value {
     serde_json::to_value(m).unwrap_or(Value::Null)
 }
@@ -130,29 +140,70 @@ pub fn rows(h: &Here) -> Vec<Row> {
             None,
         );
         let end = b.pos();
-        b.prop(0, end, "drgnx-presence-session", json!(a.session))
-            .prop(0, end, "drgnx-presence-ordinal", json!(a.ordinal))
-            .prop(0, end, "drgnx-presence-mode", mode)
-            .prop(0, end, "drgnx-presence-file", json!(a.path))
-            .prop(0, end, "drgnx-work-id", json!(key));
-        if let Some(l) = a.line {
-            b.prop(0, end, "drgnx-presence-line", json!(l));
-        }
+        b.prop(0, end, "drgnx-work-id", json!(key));
         out.push(b.finish());
     }
-    for (path, (ords, dir)) in &h.paths {
-        let mut b = RowBuilder::new(format!("p:{path}"));
-        b.push(path, None);
+    // a path's row says its ordinals too: a change of who edits it is a change of its row, which names the model's
+    for (path, (ords, _)) in &h.paths {
+        let key = format!("p:{path}");
+        let mut b = RowBuilder::new(key.clone());
+        b.push(&format!("{path} · {}", ordinals(ords)), None);
         let end = b.pos();
-        b.prop(0, end, "drgnx-presence-ordinals", json!(ords)).prop(
-            0,
-            end,
-            "drgnx-presence-dir",
-            json!(dir),
-        );
+        b.prop(0, end, "drgnx-work-id", json!(key));
         out.push(b.finish());
     }
     out
+}
+
+/// The view's model: a node per row with what it shows as fields (an agent: `label` its handle, `session`, `ordinal`,
+/// `mode`, `file`, `line`; a path, of kind `file` or `folder`: `path` and `ordinals`, the agents' ordinals in order,
+/// space-separated), and the lists `agents` (in ordinal order) and `paths`.
+pub fn doc(h: &Here) -> Doc {
+    let mut d = Doc {
+        descriptor: json!({
+            "scheme": "tree",
+            "chain_kinds": [],
+            "match_fields": ["label"],
+            "lists": ["agents", "paths"],
+            "classes": ["selected"],
+            "flags": [],
+            "forms": [],
+            "start": "agents",
+        }),
+        ..Doc::default()
+    };
+    let mut agents = Vec::with_capacity(h.agents.len());
+    for a in &h.agents {
+        let id = format!("a:{}", a.session);
+        let mut fields = vec![
+            json!(["label", a.handle]),
+            json!(["session", a.session]),
+            json!(["ordinal", a.ordinal]),
+            json!(["mode", mode_name(a.mode)]),
+            json!(["file", a.path]),
+        ];
+        if let Some(l) = a.line {
+            fields.push(json!(["line", l]));
+        }
+        d.nodes.insert(
+            id.clone(),
+            json!({"id": id, "kind": "agent", "flags": 0, "fields": fields}),
+        );
+        agents.push(id);
+    }
+    let mut paths = Vec::with_capacity(h.paths.len());
+    for (path, (ords, dir)) in &h.paths {
+        let id = format!("p:{path}");
+        d.nodes.insert(
+            id.clone(),
+            json!({"id": id, "kind": if *dir { "folder" } else { "file" }, "flags": 0,
+                   "fields": [["label", path], ["path", path], ["ordinals", ordinals(ords)]]}),
+        );
+        paths.push(id);
+    }
+    d.lists.insert("agents".into(), agents);
+    d.lists.insert("paths".into(), paths);
+    d
 }
 
 #[cfg(test)]

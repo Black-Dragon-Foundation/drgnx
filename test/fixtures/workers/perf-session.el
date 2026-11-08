@@ -796,12 +796,15 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
 
 (defvar drgnx-perf-w--pb-n 0 "The presence changes applied since the run began.")
 (defvar drgnx-perf-w--pb-version 0 "The version of the last rows patch applied.")
+(defvar drgnx-perf-w--pb-models nil "Change N → the hub's model string for it (made in `each': the hub's work).")
 (defvar drgnx-agents-editor-here--badges)
 (defvar drgnx-agents-editor-here--rows)
 (defvar drgnx-agents-editor-here-ordinal-function)
 (declare-function drgnx-agents-editor-here--event "drgnx-agents-editor-here")
 (declare-function drgnx-agents-editor-here--rows-buffer "drgnx-agents-editor-here")
+(declare-function drgnx-agents-editor-here--take "drgnx-agents-editor-here")
 (declare-function drgnx-view-apply-patch "drgnx-view")
+(declare-function drgnx-view-model-event "drgnx-view")
 
 (defun drgnx-perf-w--pb-roots () (list (file-name-as-directory (drgnx-perf-w--tmpdir))))
 
@@ -809,35 +812,50 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
   "File I of the 90, six folders of fifteen."
   (expand-file-name (format "src/d%d/f%d.el" (% i 6) i) (drgnx-perf-w--tmpdir)))
 
-(defun drgnx-perf-w--pb-props (text &rest kvs)
-  (cl-loop for (k v) on kvs by #'cddr collect (list 0 (length text) k v)))
+(defun drgnx-perf-w--pb-ords (ords) (mapconcat #'number-to-string ords " "))
+
+(defun drgnx-perf-w--pb-row (key text)
+  (list :key key :text text :props (list (list 0 (length text) "drgnx-work-id" key))))
 
 (defun drgnx-perf-w--pb-agent (sid file line)
-  "Agent SID's row, as the hub sends it: editing FILE at LINE."
-  (let ((text (format "%s · edit · %s:%d" sid (file-name-nondirectory file) line)))
-    (list :key (concat "a:" sid) :text text
-          :props (drgnx-perf-w--pb-props text "drgnx-presence-session" sid
-                                         "drgnx-presence-ordinal" (string-to-number (substring sid 1))
-                                         "drgnx-presence-mode" "edit" "drgnx-presence-file" file "drgnx-presence-line" line))))
+  "Agent SID's row, as the hub sends it: editing FILE at LINE (what it says is the model's)."
+  (drgnx-perf-w--pb-row (concat "a:" sid) (format "%s · edit · %s:%d" sid (file-name-nondirectory file) line)))
 
-(defun drgnx-perf-w--pb-path (path ords dir)
-  (list :key (concat "p:" path) :text path
-        :props (drgnx-perf-w--pb-props path "drgnx-presence-ordinals" ords
-                                       "drgnx-presence-dir" (and dir t))))
+(defun drgnx-perf-w--pb-path (path ords _dir)
+  (drgnx-perf-w--pb-row (concat "p:" path) (concat path " · " (drgnx-perf-w--pb-ords ords))))
 
-(defun drgnx-perf-w--pb-patch (ops)
-  (list :view "agents-here" :class "data" :hub 1 :base drgnx-perf-w--pb-version
-        :version (cl-incf drgnx-perf-w--pb-version) :env_epoch 1 :ops ops))
+(defun drgnx-perf-w--pb-agent-node (sid file line)
+  (list :id (concat "a:" sid) :kind "agent" :flags 0
+        :fields (vector (vector "label" sid) (vector "session" sid) (vector "ordinal" (string-to-number (substring sid 1)))
+                        (vector "mode" "edit") (vector "file" file) (vector "line" line))))
+
+(defun drgnx-perf-w--pb-path-node (path ords dir)
+  (list :id (concat "p:" path) :kind (if dir "folder" "file") :flags 0
+        :fields (vector (vector "label" path) (vector "path" path) (vector "ordinals" (drgnx-perf-w--pb-ords ords)))))
+
+(defun drgnx-perf-w--pb-send (model ops)
+  "The hub's MODEL (a string) and the rows OPS naming it, then the module's step after the draw."
+  (let ((base drgnx-perf-w--pb-version) (v (cl-incf drgnx-perf-w--pb-version)))
+    (drgnx-view-model-event (list :view "agents-here" :hub 1 :base base :version v :reset (and (= base 0) t) :model model))
+    (drgnx-view-apply-patch (list :view "agents-here" :class "data" :hub 1 :base base :version v :env_epoch 1 :model v
+                                  :ops ops))
+    (drgnx-agents-editor-here--take)))
+
+(defun drgnx-perf-w--pb-change-model (n)
+  "The hub's model diff for change N: agent N mod 30's node and file N mod 90's."
+  (let ((sid (format "s%d" (1+ (% n 30)))) (file (drgnx-perf-w--pb-file (% n 90))))
+    (json-serialize (list :ops (vector (list :nodes (vector (drgnx-perf-w--pb-agent-node sid file n)
+                                                            (drgnx-perf-w--pb-path-node file (list (1+ (% n 30))) nil))))))))
 
 (defun drgnx-perf-w--pb-apply (n)
-  "Presence change N: agent N mod 30 edits file N mod 90, as the old event or as the hub's rows patch."
+  "Presence change N: agent N mod 30 edits file N mod 90, as the old event or as the hub's model and rows patch."
   (let ((sid (format "s%d" (1+ (% n 30)))) (file (drgnx-perf-w--pb-file (% n 90))))
     (if drgnx-view-old-path
         (drgnx-agents-editor-here--event
          "agent-presence" (list :file file :entries (list (list :session sid :mode "edit" :line n :at (float n)))))
-      (drgnx-view-apply-patch
-       (drgnx-perf-w--pb-patch (list (list :replace (list (drgnx-perf-w--pb-agent sid file n)
-                                                          (drgnx-perf-w--pb-path file (list (1+ (% n 30))) nil)))))))))
+      (drgnx-perf-w--pb-send (or (gethash n drgnx-perf-w--pb-models) (drgnx-perf-w--pb-change-model n))
+                             (list (list :replace (list (drgnx-perf-w--pb-agent sid file n)
+                                                        (drgnx-perf-w--pb-path file (list (1+ (% n 30))) nil))))))))
 
 (defun drgnx-perf-w--pb-change ()
   "Post-command: the next presence change."
@@ -858,15 +876,27 @@ streams %S, hub %S, C-p %S, saw %S, messages %S"
       (dotimes (i 90) (drgnx-perf-w--pb-apply i))
     (when-let* ((b (get-buffer " *drgnx agents here rows*"))) (kill-buffer b))
     (drgnx-agents-editor-here--rows-buffer)
-    (let (rows)
-      (dotimes (i 30) (push (drgnx-perf-w--pb-agent (format "s%d" (1+ i)) (drgnx-perf-w--pb-file i) i) rows))
-      (dotimes (i 90) (push (drgnx-perf-w--pb-path (drgnx-perf-w--pb-file i) (list (1+ (% i 30))) nil) rows))
-      (dotimes (d 6) (push (drgnx-perf-w--pb-path (expand-file-name (format "src/d%d" d) (drgnx-perf-w--tmpdir))
-                                                  (number-sequence 1 30) t)
-                           rows))
+    (setq drgnx-perf-w--pb-models (make-hash-table))
+    (dotimes (n 40) (puthash (1+ n) (drgnx-perf-w--pb-change-model (1+ n)) drgnx-perf-w--pb-models))
+    (let (agents paths)
+      (dotimes (i 30) (push (list (format "s%d" (1+ i)) (drgnx-perf-w--pb-file i) i) agents))
+      (dotimes (i 90) (push (list (drgnx-perf-w--pb-file i) (list (1+ (% i 30))) nil) paths))
+      (dotimes (d 6) (push (list (expand-file-name (format "src/d%d" d) (drgnx-perf-w--tmpdir)) (number-sequence 1 30) t) paths))
       (dolist (dir (list (expand-file-name "src" (drgnx-perf-w--tmpdir)) (directory-file-name (drgnx-perf-w--tmpdir))))
-        (push (drgnx-perf-w--pb-path dir (number-sequence 1 30) t) rows))   ; the folders above, up to the root
-      (drgnx-view-apply-patch (drgnx-perf-w--pb-patch (list (list :reset (nreverse rows)))))))
+        (push (list dir (number-sequence 1 30) t) paths))   ; the folders above, up to the root
+      (setq agents (nreverse agents) paths (nreverse paths))
+      (drgnx-perf-w--pb-send
+       (json-serialize
+        (list :ops (vector (list :reset (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                :lists ["agents" "paths"] :classes ["selected"] :flags []
+                                                                :forms [] :start "agents")
+                                              :nodes (vconcat (mapcar (lambda (a) (apply #'drgnx-perf-w--pb-agent-node a)) agents)
+                                                              (mapcar (lambda (p) (apply #'drgnx-perf-w--pb-path-node p)) paths))
+                                              :edges []
+                                              :lists (vector (list :name "agents" :ids (vconcat (mapcar (lambda (a) (concat "a:" (car a))) agents)))
+                                                             (list :name "paths" :ids (vconcat (mapcar (lambda (p) (concat "p:" (car p))) paths)))))))))
+       (list (list :reset (append (mapcar (lambda (a) (apply #'drgnx-perf-w--pb-agent a)) agents)
+                                  (mapcar (lambda (p) (apply #'drgnx-perf-w--pb-path p)) paths)))))))
   (add-hook 'post-command-hook #'drgnx-perf-w--pb-change)
   t)
 

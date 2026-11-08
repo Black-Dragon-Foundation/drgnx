@@ -803,7 +803,10 @@ impl Live {
                 |s| ids.get(s).map(|i| (i.ordinal, i.handle)),
             );
             let rows = here::rows(&h);
+            let doc = here::doc(&h);
             for view in views {
+                // the model first: the rows' patch names its version
+                f.core.views.publish_model(f, c, &view, doc.clone());
                 f.core.views.publish_rows(f, c, &view, rows.clone());
             }
         }

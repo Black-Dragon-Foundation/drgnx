@@ -135,14 +135,15 @@ fn every_order_presence_converges() {
         for i in &order {
             p.apply(events[*i].clone());
         }
-        let got = serde_json::to_value(rows(&here_of(&p))).expect("rows serialise");
+        let h = here_of(&p);
+        let got = json!({"rows": rows(&h), "model": doc(&h).reset()});
         match &seen {
             None => seen = Some(got),
             Some(first) => assert_eq!(&got, first, "order {order:?}"),
         }
     }
     let first = seen.expect("an order ran");
-    let keys: Vec<&str> = first
+    let keys: Vec<&str> = first["rows"]
         .as_array()
         .expect("rows")
         .iter()
@@ -161,4 +162,53 @@ fn every_order_presence_converges() {
             "p:/w/src/a.rs"
         ]
     );
+}
+
+#[test]
+fn who_is_here_model_carries_what_the_rows_show() {
+    let mut p = Presence::new();
+    p.apply(step("s1", 1, 100.0, "/w/src/a.rs", Mode::Edit));
+    p.apply(step("s2", 2, 101.0, "/w/src/a.rs", Mode::Pending));
+    let h = here_of(&p);
+    let d = doc(&h);
+    assert_eq!(d.lists["agents"], vec!["a:s1", "a:s2"]);
+    assert_eq!(d.lists["paths"], vec!["p:/w", "p:/w/src", "p:/w/src/a.rs"]);
+    let fields = |id: &str| d.nodes[id]["fields"].clone();
+    assert_eq!(d.nodes["a:s1"]["kind"], "agent");
+    assert!(
+        fields("a:s1")
+            .as_array()
+            .expect("fields")
+            .contains(&json!(["ordinal", 1]))
+    );
+    assert!(
+        fields("a:s1")
+            .as_array()
+            .expect("fields")
+            .contains(&json!(["file", "/w/src/a.rs"]))
+    );
+    assert_eq!(d.nodes["p:/w/src"]["kind"], "folder");
+    assert_eq!(d.nodes["p:/w/src/a.rs"]["kind"], "file");
+    assert!(
+        fields("p:/w/src/a.rs")
+            .as_array()
+            .expect("fields")
+            .contains(&json!(["ordinals", "1 2"]))
+    );
+    // the rows hold no data of their own, and a path's text changes with its agents
+    let rs = rows(&h);
+    let file_row = rs
+        .iter()
+        .find(|r| r.key == "p:/w/src/a.rs")
+        .expect("the file's row");
+    assert_eq!(file_row.text, "/w/src/a.rs · 1 2");
+    let names: Vec<String> = serde_json::to_value(&rs)
+        .expect("rows serialise")
+        .as_array()
+        .expect("rows")
+        .iter()
+        .flat_map(|r| r["props"].as_array().cloned().unwrap_or_default())
+        .filter_map(|p| p[2].as_str().map(str::to_owned))
+        .collect();
+    assert!(names.iter().all(|n| n == "drgnx-work-id"), "{names:?}");
 }
