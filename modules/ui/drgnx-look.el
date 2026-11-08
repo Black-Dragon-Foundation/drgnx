@@ -23,6 +23,8 @@
   (load (expand-file-name "drgnx-look-fonts" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 (unless (featurep 'drgnx-look-density)
   (load (expand-file-name "drgnx-look-density" (file-name-directory (or load-file-name buffer-file-name))) nil t))
+(unless (featurep 'drgnx-look-scale)
+  (load (expand-file-name "drgnx-look-scale" (file-name-directory (or load-file-name buffer-file-name))) nil t))
 ;; and the colours it derives from other themes
 (unless (featurep 'drgnx-look-derive)
   (load (expand-file-name "drgnx-look-derive" (file-name-directory (or load-file-name buffer-file-name))) nil t))
@@ -38,6 +40,9 @@
 (declare-function drgnx-look-derive-on "drgnx-look-derive" ())
 (declare-function drgnx-look-derive-off "drgnx-look-derive" ())
 (declare-function drgnx-look-density-on "drgnx-look-density" ())
+(declare-function drgnx-look-scale-on "drgnx-look-scale" ())
+(declare-function drgnx-look-scale-off "drgnx-look-scale" ())
+(declare-function drgnx-look-scale-choose "drgnx-look-scale" (percent))
 (declare-function drgnx-look-density-off "drgnx-look-density" ())
 (declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
 (declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
@@ -462,6 +467,7 @@ else enabled since stays)."
   (when (frame-parameter nil 'drgnx-look-zen) (drgnx-look-zen))
   (drgnx-look-follow-off)
   (drgnx-look-echo-area-off)
+  (drgnx-look-scale-off)
   (drgnx-look-density-off)
   (drgnx-look-fonts-off)
   (drgnx-look-derive-off)
@@ -549,16 +555,6 @@ only the one remap is reapplied."
   (dolist (b (buffer-list))
     (when (buffer-local-value 'drgnx-look--gap-cookie b) (with-current-buffer b (drgnx-look--gap-off)))))
 
-;;;; Zoom
-
-(defun drgnx-look--zoom (key)
-  "Zoom every frame's text as the key KEY (+, - or 0) of global-text-scale-adjust; then +, - or 0 repeat."
-  (let ((last-command-event key)) (global-text-scale-adjust 1)))
-
-(defun drgnx-look-zoom-in () "Bigger text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?=))
-(defun drgnx-look-zoom-out () "Smaller text everywhere; then +, - or 0." (interactive) (drgnx-look--zoom ?-))
-(defun drgnx-look-zoom-reset () "The text size back to normal." (interactive) (drgnx-look--zoom ?0))
-
 ;;;; Zen
 
 (defvar drgnx-look-zen-width 100 "Text width in zen mode, in columns.")
@@ -616,14 +612,19 @@ only the one remap is reapplied."
                        (drgnx-look-derive-on)
                        (drgnx-look-fonts-on)
                        (drgnx-look-density-on)
+                       (drgnx-look-scale-on)
                        (drgnx-look-echo-area-on)
                        (drgnx-command-define 'preferences-theme :category "Preferences" :title "Color Theme"
                                              :command #'drgnx-look-choose-theme :menu '("Options") :doc "Pick the colour theme (remembered)")
                        (drgnx-command-define 'view-zen :category "View" :title "Zen Mode" :scope 'window
                                              :command #'drgnx-look-zen :doc "Only the text; again to give the sidebar and panel back")
-                       (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-zoom-in) (view-zoom-out "Zoom Out" drgnx-look-zoom-out)
-                                                          (view-zoom-reset "Reset Zoom" drgnx-look-zoom-reset)))
-                         (drgnx-command-define id :category "View" :title title :command fn :doc "The text size in every window; then +, - or 0"))
+                       (pcase-dolist (`(,id ,title ,fn) '((view-zoom-in "Zoom In" drgnx-look-scale-zoom-in)
+                                                          (view-zoom-out "Zoom Out" drgnx-look-scale-zoom-out)
+                                                          (view-zoom-reset "Reset Zoom" drgnx-look-scale-zoom-reset)))
+                         (drgnx-command-define id :category "View" :title title :command fn
+                                               :doc "The UI scale, 10 % a step (every size and font); then +, - or 0"))
+                       (drgnx-command-define 'view-ui-scale :category "View" :title "UI Scale…" :command #'drgnx-look-scale-choose
+                                             :doc "Set the UI scale, 100 to 200 % (every size and font, at once)")
                        (drgnx-command-define 'decor-activate :category "View" :title "Activate Button" :command #'drgnx-decor-activate
                                              :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
                                              :doc "Run the decoration button at point")

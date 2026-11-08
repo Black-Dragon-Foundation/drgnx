@@ -1155,6 +1155,24 @@ A change applies at once.
 | `:agents` | `never` |
 | `:schema` | `(enum auto full reduced)` |
 
+## drgnx-look-scale
+
+The UI scale in percent: every size of the look and every font, on top of the display's own scale.  100 to 200 in
+steps of 5; Zoom In and Zoom Out step 10.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `100` |
+| Type | `integer` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-scale--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(pred drgnx-look-scale-percent-p "a percent from 100 to 200 in steps of 5")` |
+
 ## drgnx-look-theme
 
 The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as

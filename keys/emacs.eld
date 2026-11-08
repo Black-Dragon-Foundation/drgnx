@@ -276,6 +276,7 @@
         (view-zoom-in :none "C-x C-+ (stock)")
         (view-zoom-out :none "C-x C-- (stock)")
         (view-zoom-reset :none "C-x C-0 (stock)")
+        (view-ui-scale :none "in the palette")
         (view-escape :none "C-g, ESC ESC ESC (stock)")
         (buffers-save :none "the Buffers right-click menu")
         (buffers-copy-path :none "the Buffers right-click menu")

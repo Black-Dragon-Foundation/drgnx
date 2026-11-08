@@ -241,6 +241,21 @@ rows take the new tree row, every editor's tab row the new tab row and every sta
 in the pixels of the frame that shows them, again when its scale changes (a frame moved to a ×2 monitor), and a
 sidebar made before any graphical frame (a daemon's) gets its rows when a graphical frame first shows it.
 
+## UI scale
+
+`drgnx-look-scale` makes everything bigger on top of the display's own scale: every size above and every font, from
+100 % (the default) to 200 % in steps of 5. It applies at once to every frame, frames made later included, with no
+restart. At 110 % on a 125 % display a 26 px row is 36 device pixels (26 × 1.25 × 1.1, rounded half up) and a 16 px
+icon 22, and the fonts are opened at 96 dpi × 1.25 × 1.1, so each is the size a fresh start at that scale gives.
+
+- **Zoom In** and **Zoom Out** (`C-=` and `C--` in the VS Code profile) add or take 10 %; **Reset Zoom** (`C-0`)
+  gives 100 %. After one, `+`, `-` or `0` repeat it. Each step is saved in your settings.el.
+- **UI Scale…** (the palette) asks for a percent.
+- The Emacs profile leaves `C-x C-+` and the rest to stock `text-scale`, which sizes one buffer's text; the UI scale is
+  in the palette there.
+
+Turning the look off gives every frame its own sizes back; the setting stays for the next time.
+
 ## Popups and the palette
 
 Under Glitnir (the compositor; not in a terminal, and not where it is off) popups and the floating command palette are

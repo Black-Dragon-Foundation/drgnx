@@ -222,6 +222,10 @@ forgotten."
   "A theme was enabled or disabled: one env per (view, class) whose look changed."
   (drgnx-view-env--update-all))
 
+(defun drgnx-view-env-look-changed ()
+  "The fonts or the scale changed outside a theme (the UI scale): one env per (view, class) whose look changed."
+  (drgnx-view-env--update-all))
+
 (defun drgnx-view-env--size-changed (&optional _frame)
   "A window's size or a frame's windows changed: the width, once Emacs is idle (never inside a follow)."
   (drgnx-timer-debounce 'drgnx-view-env drgnx-view-env-delay #'drgnx-view-env--update-all :idle t :owner :core))
