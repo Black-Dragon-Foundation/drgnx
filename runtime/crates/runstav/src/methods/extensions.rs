@@ -268,6 +268,64 @@ pub struct ModulesParams {
     pub modules: Vec<ModuleEntry>,
 }
 
+/// The most rows one section of `extensions/list` holds (the list's pages, all loaded).
+pub const LIST_LIMIT_MAX: u32 = 20_000;
+/// The most sections one `extensions/list` names.
+pub const SECTIONS_MAX: usize = 8;
+
+/// One section of the list: a search, its header's title.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ListSection {
+    /// The section's name (`installed`, `updates`, `search`, …): its header row is `section:NAME`.
+    pub name: String,
+    pub title: String,
+    /// Its search; `limit` may be up to 20000 here (every page the list loaded).
+    pub search: SearchParams,
+    /// Leave out the rows whose state is `update` (Installed: they wait in Updates).
+    #[serde(default)]
+    pub minus_updates: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ListParams {
+    pub view: String,
+    /// In order; a row an earlier section holds is not shown again, and a section left with none has no header.
+    pub sections: Vec<ListSection>,
+    /// One line per row (no summary line).
+    #[serde(default)]
+    pub dense: bool,
+    /// Each kind's glyph (`package`, `plugin`, `module`).
+    #[serde(default)]
+    pub glyphs: Vec<Glyph>,
+    /// The ids that wait for a restart (the editor knows them).
+    #[serde(default)]
+    pub restart: Vec<String>,
+}
+
+/// A kind's glyph in a graphical and in a terminal class.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct Glyph {
+    /// `package`, `plugin` or `module`.
+    pub kind: String,
+    pub gui: String,
+    pub tty: String,
+}
+
+/// What one section matched and how many of its rows the list holds.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListTotal {
+    pub name: String,
+    pub total: u32,
+    pub loaded: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListResult {
+    pub sections: Vec<ListTotal>,
+}
+
 pub(crate) fn methods() -> Vec<Method> {
     vec![
         method!(
@@ -293,6 +351,28 @@ pub(crate) fn methods() -> Vec<Method> {
             "extensions/rows", ExtensionsRows(RowsParams) -> RowsResult,
             classes: [User], writes: false,
             doc: "the rows of these ids, in their order; an unknown id is left out",
+        ),
+        method!(
+            "extensions/list", ExtensionsList(ListParams) -> ListResult,
+            classes: [User], writes: false,
+            doc: "the Extensions list as the view's rows: each section's search, in order, its header and rows built in the hub and sent as `view-patch` to every class of VIEW after its model; answers each section's total",
+            check: |p| {
+                if p.view.is_empty() || p.view.len() > super::view::VIEW_MAX {
+                    return Err(invalid("view", "a view id of 1 to 64 bytes"));
+                }
+                if p.sections.is_empty() || p.sections.len() > SECTIONS_MAX {
+                    return Err(invalid("sections", "1 to 8 sections"));
+                }
+                for (i, s) in p.sections.iter().enumerate() {
+                    if s.search.query.chars().count() > QUERY_MAX {
+                        return Err(invalid(&format!("sections/{i}/search/query"), "the query is too long"));
+                    }
+                    if s.search.limit.is_some_and(|l| l == 0 || l > LIST_LIMIT_MAX) {
+                        return Err(invalid(&format!("sections/{i}/search/limit"), "limit is 1 to 20000"));
+                    }
+                }
+                Ok(())
+            },
         ),
         method!(
             "extensions/modules", ExtensionsModules(ModulesParams) -> Empty,

@@ -76,6 +76,8 @@
 (declare-function drgnx-wb-place "drgnx-rules")
 (declare-function drgnx-work-map-buffers "drgnx-work-map")
 (declare-function drgnx-work-map-buffer "drgnx-work-map")
+(declare-function drgnx-work-map-rows-p "drgnx-work-map")
+(declare-function drgnx-work-map-rows-attach "drgnx-work-map")
 (declare-function drgnx-work-map-mode "drgnx-work-map")
 (declare-function drgnx-work-map-toggle-outline "drgnx-work-map")
 (declare-function drgnx-work-map-needs-you "drgnx-work-map")
@@ -232,11 +234,14 @@ labels' margin (84 px) and 12 px of padding, in logical pixels.  A terminal fram
           (setq default-directory (car (plist-get workspace :roots))
                 drgnx-work-space--view (plist-get workspace :id) drgnx-work-space--message nil)
           (add-hook 'kill-buffer-hook #'drgnx-work-space--killed nil t)
-          (drgnx-view-attach 'work-map)
-          (drgnx-view-touch drgnx-view)
-          (drgnx-work-client-open (plist-get workspace :id) workspace
-                                  :width (drgnx-work-space--width-units)
-                                  :density (symbol-name drgnx-work-space-density))))
+          (let ((rows (drgnx-work-map-rows-p)))
+            ;; on the hub's rows the hub lays the map out and draws it; else this Emacs draws the frames it gets
+            (if rows (drgnx-work-map-rows-attach (plist-get workspace :id))
+              (drgnx-view-attach 'work-map)
+              (drgnx-view-touch drgnx-view))
+            (drgnx-work-client-open (plist-get workspace :id) workspace
+                                    :width (drgnx-work-space--width-units)
+                                    :density (symbol-name drgnx-work-space-density) :rows rows))))
       buffer)))
 
 ;;;###autoload

@@ -18,6 +18,7 @@
 (require 'drgnx-registry)
 (require 'drgnx-timer)
 
+(declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-explain-note-always "drgnx-agent-panel-explain")
 (defvar drgnx-agent-panel--session)
 (defvar drgnx-agent-panel--snap)
@@ -363,7 +364,7 @@ that finished, the diffs are asked for again soon.  FROM-SLICE: they came from a
 (defun drgnx-agent-panel-pin ()
   "Pin the card or step at point under the chips; again to unpin it."
   (interactive)
-  (let* ((key (and (drgnx-view-p drgnx-view) (drgnx-view-key-at)))
+  (let* ((key (drgnx-agent-panel--key-at))
          (key (if (eq (car-safe key) :pin) (car (nth (cadr key) drgnx-agent-panel--pins)) key))
          (text (and key (drgnx-agent-panel--pin-text key))))
     (unless text (user-error "Point is not on something to pin"))

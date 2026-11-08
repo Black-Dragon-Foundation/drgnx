@@ -26,7 +26,7 @@
 (declare-function drgnx-extensions-list--normalize "drgnx-extensions-list")
 (declare-function drgnx-extensions-list--trust "drgnx-extensions-list")
 (declare-function drgnx-extensions-show-log "drgnx-extensions-list")
-(defvar drgnx-extensions-list--rows)
+(declare-function drgnx-extensions-list-row "drgnx-extensions-list" (id))
 (defvar drgnx-extensions-list--root)
 (defvar drgnx-extensions-project-global-text)
 (declare-function drgnx-extensions-list-note-root "drgnx-extensions-list")
@@ -302,7 +302,7 @@ trust card for a source that does not sign."
 
 (defun drgnx-extensions-details--row ()
   "The row the page shows: the list's, else what the hub answered."
-  (or (gethash drgnx-extensions-details--id drgnx-extensions-list--rows)
+  (or (drgnx-extensions-list-row drgnx-extensions-details--id)
       (when-let* ((r (plist-get drgnx-extensions-details--info :row))) (drgnx-extensions-list--normalize r))))
 
 (defun drgnx-extensions-details--button (label fn &optional help)
@@ -624,7 +624,7 @@ its log."
                                   nil t)))
     (pcase choice
       ("Install another version"
-       (let* ((row (gethash id drgnx-extensions-list--rows))
+       (let* ((row (drgnx-extensions-list-row id))
               (versions (drgnx-extensions-details-versions name (plist-get row :version))))
          (if versions
              (drgnx-extensions-details-install-version id (completing-read "Version: " versions nil t))

@@ -7,7 +7,10 @@
 (require 'drgnx-modules)
 (require 'drgnx-hub-client)
 (require 'drgnx-history)
-(load (expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
+;; the panel's revert and fork commands require this library when they run: loaded first, so a test's stub of its
+;; functions is not replaced by the library's own definitions mid-test (alone, the revert test waited on the hub)
+(require 'drgnx-history-revert)
+(load(expand-file-name "test/fixtures/modules-fixture" drgnx-dir) nil t)
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (defvar drgnx-agent-panel--stats-render)
@@ -24,7 +27,6 @@
 (declare-function drgnx-agent-panel-ledger "drgnx-agent-panel-cards")
 (declare-function drgnx-agent-panel-revert-here "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-fork-here "drgnx-agent-panel")
-(declare-function drgnx-history-revert-to-here "drgnx-history-revert")
 (declare-function drgnx-forecast-line "drgnx-forecast")
 
 (defvar drgnx-agent-panel-test--calls nil)

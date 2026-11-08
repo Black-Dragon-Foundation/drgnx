@@ -28,6 +28,7 @@
 (defvar drgnx-agents-editor-followed)
 (defvar drgnx-explorer-decorators)
 (defvar drgnx-statusbar-left)
+(defvar drgnx-view-old-path)
 
 (defvar drgnx-agents-editor-here-test--root nil)
 
@@ -41,7 +42,9 @@
              ;; the workspace: one root (the function is the work space module's, so it is stubbed inside)
              (cl-letf (((symbol-function 'drgnx-work-space-workspace)
                         (lambda (&rest _) (list :id "workspace:000000000000" :roots (list root)))))
-               ,@body)))
+               ;; these tests feed `agent-presence': the old path (the hub's rows: editor-here-rows-test.el)
+               (let ((drgnx-view-old-path t))
+                 ,@body))))
        (delete-directory root t))))
 
 (defun drgnx-agents-editor-here-test--presence (file &rest entries)

@@ -1,0 +1,16 @@
+{"scenario": "extensions/rows", "requires": ["v1"], "doc": "extensions/list answers each section's total and sends the list as the view's rows: the model first, then a reset with a header row per section and each row's line and summary line (the glyph, name, version and source in the text, its id on the span); a second list sends only what changed."}
+{"do": "root"}
+{"do": "write_file", "path": "$ROOT/cache/drgnx/extensions/catalog.json", "text": "{\"version\":1,\"packages\":[{\"name\":\"alpha\",\"summary\":\"A\"},{\"name\":\"beta\",\"summary\":\"B\"}],\"builtins\":[{\"name\":\"eglot\",\"version\":\"1.17\",\"summary\":\"LSP\"}]}"}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "c", "hub": "h"}
+{"do": "send", "conn": "c", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "c", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 2, "method": "view/env", "params": {"view": "extensions", "class": "g", "display": "gui", "scale": 1, "fonts": [], "cell": [8, 16], "width_px": 800, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "c", "json": {"id": 2, "result": true}}
+{"do": "send", "conn": "c", "json": {"id": 3, "method": "extensions/list", "params": {"view": "extensions", "glyphs": [{"kind": "package", "gui": "P", "tty": "p"}], "sections": [{"name": "builtin", "title": "Built-in", "search": {"filters": {"builtin": true}}}, {"name": "search", "title": "Search results", "search": {"query": "", "sort": "name"}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 3, "result": {"sections": [{"name": "builtin", "total": 1, "loaded": 1}, {"name": "search", "total": 3, "loaded": 3}]}}}
+{"do": "expect", "conn": "c", "json": {"event": "view-model", "data": {"view": "extensions", "hub": "$capture:hub", "base": 0, "version": 1}}, "within_ms": 10000}
+{"do": "expect", "conn": "c", "json": {"event": "view-patch", "data": {"view": "extensions", "class": "g", "hub": "$hub", "base": 0, "version": 1, "model": 1, "ops": [{"reset": [{"key": "section:builtin", "text": "Built-in (1)"}, {"key": "emacs:eglot", "text": "P eglot 1.17", "props": {"$contains": [[0, "$number", "drgnx-extensions-id", "emacs:eglot"]]}}, {"key": "emacs:eglot/2", "text": "    LSP · emacs"}, {"key": "section:search", "text": "Search results (3)"}, {"key": "pkg:alpha", "text": "P alpha"}, {"key": "pkg:alpha/2", "text": "$string"}, {"key": "pkg:beta", "text": "P beta"}, {"key": "pkg:beta/2", "text": "$string"}]}]}}, "within_ms": 10000}
+{"do": "send", "conn": "c", "json": {"id": 4, "method": "extensions/list", "params": {"view": "extensions", "dense": true, "glyphs": [{"kind": "package", "gui": "P", "tty": "p"}], "sections": [{"name": "builtin", "title": "Built-in", "search": {"filters": {"builtin": true}}}, {"name": "search", "title": "Search results", "search": {"query": "", "sort": "name"}}]}}}
+{"do": "expect", "conn": "c", "json": {"id": 4, "result": {"sections": "$any"}}}
+{"do": "expect", "conn": "c", "json": {"event": "view-patch", "data": {"view": "extensions", "class": "g", "hub": "$hub", "base": 1, "version": 2, "ops": [{"remove": {"$contains": ["emacs:eglot/2", "pkg:alpha/2", "pkg:beta/2"]}}]}}, "within_ms": 10000}

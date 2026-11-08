@@ -170,6 +170,24 @@
  (agents-line-motion (:rows) 0 :report-only ot5)
  (agents-line-motion-old (:alloc :p50) 7298 :report-only ot5)
  (agents-line-motion-old (:cpu_ms :p90) 5.2 :report-only ot5) (agents-line-motion-old (:rows) 0 :report-only ot5)
+ ;; presence-burst, 2026-11-08, pinned to 4 CPUs, 30 agents over 90 files, one change per key.  Before (-old: every
+ ;; `agent-presence' event rebuilds the badges, who is here and the status from the cached presence): alloc p50 160832
+ ;; objects per key, cpu p90 3.61.  After (the hub's view model, read node by node as the rows name them): alloc p50
+ ;; 11832, cpu p90 1.31 (the rows alone, before the model: 10747, 1.11); both 30 agents and 98 badges.  The alloc
+ ;; budget is a tenth of before; cpu the rows' 1.11 x 1.25.
+ (presence-burst (:alloc :p50) 16084 :report-only ot5) (presence-burst (:cpu_ms :p90) 1.4 :report-only ot5)
+ (presence-burst (:rows) 0 :report-only ot5)
+ (presence-burst-old (:alloc :p50) 201040 :report-only ot5)
+ (presence-burst-old (:cpu_ms :p90) 4.6 :report-only ot5) (presence-burst-old (:rows) 0 :report-only ot5)
+ ;; panel-replay, 2026-11-08, pinned to 4 CPUs.  Before (the panel drawing every row in Lisp, the mirror copying its
+ ;; transcript per update): alloc p50 20292 (p90 24118) per update, a draw 14.75 kB p50 (63.03 p90), 305 updates over
+ ;; 2024 entries, 2560 lines.  After (the hub's rows, the mirror patched in place): alloc p50 98 (p90 323) per update
+ ;; over 410 updates (272 of them row patches), 1956 entries, 1956 hub rows, 2152 lines.  The alloc budget is a tenth of
+ ;; before.  draw_kb stays at before's: after, the draws ran as 5 slice chains of about 76 kB (only a chain's first slice
+ ;; is counted), so it is read in the combined pass.  panel-replay-old (`drgnx-view-old-path`, the paired row): alloc p50
+ ;; 20293 (p90 24144), a draw 14.82 kB p50, 305 updates.
+ (panel-replay (:alloc :p50) 2030 :report-only ot5) (panel-replay (:draw_kb :p50) 18.5 :report-only ot5)
+ (panel-replay-old (:alloc :p50) 25367 :report-only ot5) (panel-replay-old (:draw_kb :p50) 18.5 :report-only ot5)
  (quick-open-large (:complete-ms) 100 :report-only ot5)        ; first candidates within 100 ms
  (quick-open-large (:stalls-ge16) 0 :report-only ot5)
  (autosave-typing (:input :max) 50 :report-only ot8) (autosave-typing (:complete-ms) 1000 :report-only ot8)
@@ -185,6 +203,10 @@
  (extensions-details (:open_ms) 50 :report-only ext-pass)
  (extensions-progress (:reads_too_close) 0 :report-only ext-pass) (extensions-progress (:last_unread) 0 :report-only ext-pass)
  (extensions-progress (:typing_delta_ms) 1 :report-only ext-pass)
+ ;; The list on the rows path (the hub's rows and model), 2026-11-08, pinned to 4 CPUs: a tenth of the old path's
+ ;; objects on open (167507 for 200 rows) and per job step (the file read's 2624; on the rows path the event's).
+ ;; Measured on the rows path: 119930 on open (404 lines: the rows and their summaries), 2073 per step.
+ (extensions-open (:alloc) 16751 :report-only ext-pass) (extensions-progress (:alloc_event_step) 262 :report-only ext-pass)
  (activate-live (:activate_ms) 20 :report-only ext-pass)   ; the plan step's repoint of 40 packages
  (activate-live-new (:activate_ms) 20 :report-only ext-pass)   ; a job's end that added a package: it is activated
  (install-overhead (:overhead_ms) 3000 :report-only ext-pass)
@@ -195,6 +217,17 @@
  (work-raster (:raster_ms :p95) 1.5) (work-raster (:chain_ms :max) 6)
  (work-relayout (:relayout :p95) 50) (work-relayout (:stalls) 0)
  (work-live (:draw_ms_s) 40) (work-live (:slice_ms :max) 4) (work-live (:stalls) 0)
+ ;; The map on the hub's rows (render offload; read in the combined pass).  work-live's draw is at most 40 kB p50 (it was
+ ;; 831 kB, Lisp drawing the frames); work-live-old (`drgnx-view-old-path`, the paired row) reports the same rows.  The
+ ;; work-nav and work-relayout allocations are a tenth of as2-fix's (2026-11-07, b1: work-nav p50 11191 objects per key,
+ ;; work-relayout p50 128420); their CPU (b1: p90 11.31 and 59.16 ms) and rows (0) are kept as measured.  Both
+ ;; workloads still drive the old path (Sjá's keys are `work-nav-rows').
+ (work-live (:draw_kb :p50) 40 :report-only ot5) (work-live-old (:draw_kb :p50) 40 :report-only ot5)
+ (work-live-old (:slice_ms :max) 4 :report-only ot5) (work-live-old (:draw_ms_s) 40 :report-only ot5)
+ (work-nav (:alloc :p50) 1119 :report-only ot5) (work-nav (:cpu_ms :p90) 11.31 :report-only ot5)
+ (work-nav (:rows) 0 :report-only ot5)
+ (work-relayout (:alloc :p50) 12842 :report-only ot5) (work-relayout (:cpu_ms :p90) 59.16 :report-only ot5)
+ (work-relayout (:rows) 0 :report-only ot5)
  (work-typing-shown (:input :p95) 16) (work-typing-shown (:stalls) 0)
  (work-typing-hidden (:input :p95) 16) (work-typing-hidden (:stalls) 0)
  (work-trail (:draw_ms) 100) (work-trail (:append_ms :max) 1)

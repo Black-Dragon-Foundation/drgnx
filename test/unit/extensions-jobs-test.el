@@ -6,6 +6,7 @@
 ;; file as `drgnx sync --pending --progress FILE' does, and its end is the hub's `exec-done' event.  The progress reads
 ;; run on the virtual clock (clock-fixture.el).  Every drgnx location is a temp directory.
 (require 'ert)
+(defvar drgnx-view-old-path)
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-paths)
@@ -46,7 +47,7 @@
   "BODY with ROOT a temp dir holding every drgnx location, the hub stubbed and the job layer set up (torn down after),
 on the virtual clock.  The hub's job list has not answered yet: `drgnx-extensions-jobs-test--listed' answers it."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "drgnx-ext-jobs" t)))
+  `(let* ((drgnx-view-old-path t) (,root (file-name-as-directory (make-temp-file "drgnx-ext-jobs" t)))
           (process-environment (append (list (concat "XDG_STATE_HOME=" ,root "state") (concat "DRGNX_DATA_DIR=" ,root "data")
                                              (concat "DRGNX_CONFIG_DIR=" ,root "config") (concat "XDG_CACHE_HOME=" ,root "cache"))
                                        process-environment))

@@ -8,6 +8,7 @@
 (require 'drgnx-perf-run)
 (require 'drgnx-paths)
 (load (expand-file-name "test/fixtures/agents-editor-five-fixture" drgnx-dir) nil t)
+(load (expand-file-name "test/fixtures/panel-replay-fixture" drgnx-dir) nil t)
 
 (defconst perf-agents-test--names '(agents-typing agents-typing-none agents-follow agent-panel-stream pair-typing))
 
@@ -64,6 +65,31 @@
                      (drgnx-perf-run--relative-fails (funcall res 6.0 4.5 0.9))))
     (should (cl-some (lambda (l) (string-search "pair-typing applied" l))
                      (drgnx-perf-run--relative-fails (funcall res 4.0 4.0 0.5))))))
+
+(ert-deftest drgnx-perf-agents/panel-replay-streams-the-recording-into-a-long-transcript ()
+  (let ((spec (cdr (assq 'panel-replay (drgnx-perf-run--workloads)))))
+    (should (string-search "drgnx-panel-replay-up" (plist-get spec :setup)))
+    (should (string-search "drgnx-panel-replay-measure" (plist-get spec :measure)))
+    (should (string-search "drgnx-panel-replay-down" (plist-get spec :teardown)))
+    (should-not (plist-get spec :actions))
+    (should (eql 1 (plist-get spec :repeat))))
+  ;; the paired row: the same stream on the old path
+  (let ((spec (cdr (assq 'panel-replay-old (drgnx-perf-run--workloads)))))
+    (should (string-search "(drgnx-panel-replay-up drgnx-perf--hub-bin t)" (plist-get spec :setup)))
+    (should (eql 1 (plist-get spec :repeat))))
+  (let* ((lines (split-string (drgnx-panel-replay-program) "\n"))
+         (words (mapcan (lambda (l) (split-string l "\\\\n" t)) lines))
+         (reads (seq-filter (lambda (w) (string-prefix-p "provider:read" w)) words))
+         (says (seq-filter (lambda (w) (string-prefix-p "say " w)) words)))
+    ;; about 2,000 entries: an answer and a read per prefix step, then a read every tenth chunk of the stream
+    (should (= (length says) (+ drgnx-panel-replay-prefix drgnx-panel-replay-updates)))
+    (should (= (length reads) (+ drgnx-panel-replay-prefix (/ drgnx-panel-replay-updates 10))))
+    (should (= (length reads) (length (delete-dups (copy-sequence reads)))))
+    ;; two turns: the prefix, then the stream at 20 updates a second; no line breaks inside a chunk (one line a turn)
+    (should (= 2 (length lines)))
+    (should-not (seq-some (lambda (w) (string-prefix-p "silent " w)) (split-string (car lines) "\\\\n" t)))
+    (should (= drgnx-panel-replay-updates (seq-count (lambda (w) (equal w "silent 0.05")) words)))
+    (should-not (seq-some (lambda (w) (string-search "\n" w)) says))))
 
 (provide 'perf-agents-test)
 ;;; perf-agents-test.el ends here

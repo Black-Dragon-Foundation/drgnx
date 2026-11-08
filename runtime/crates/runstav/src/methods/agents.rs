@@ -655,6 +655,24 @@ pub struct SessionRef {
     pub session: Id,
 }
 
+/// `agents/panel/look`: what the user chose for an agent panel (docs/develop/hub.md, "The agent panel's rows").  Each
+/// field given replaces the one before; none given builds the rows again.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PanelLook {
+    /// The panel's view, `agent-panel/SESSION`.
+    pub view: Bounded<String, 256>,
+    /// The step types whose detail is open (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<Vec<Bounded<String, 16>>>,
+    /// Rows opened or folded by hand: `[entry index, open]` each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<Vec<(u64, bool)>>,
+    /// The rows go back one window further (the editor scrolled to their top).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older: Option<bool>,
+}
+
 /// The change number a subscription to a session's entries continues from.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -828,6 +846,11 @@ pub(crate) fn methods() -> Vec<Method> {
             "agents/entries/unsubscribe", AgentsEntriesUnsubscribe(SessionRef) -> bool,
             classes: [User], writes: false,
             doc: "this connection no longer gets the session's `agent-entries` events",
+        ),
+        method!(
+            "agents/panel/look", AgentsPanelLook(PanelLook) -> bool,
+            classes: [User], writes: false,
+            doc: "what the user chose for an agent panel's rows (the step types open, rows opened or folded by hand, one window further back): its view-patch follows",
         ),
         method!(
             "agents/tool-input", AgentsToolInput(ToolInputParams) -> ToolInput,

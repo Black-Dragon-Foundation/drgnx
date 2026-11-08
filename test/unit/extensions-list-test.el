@@ -3,6 +3,7 @@
 ;; The hub's search and the job layer are stubbed (`cl-letf'), the clock is virtual: nothing here reaches a process, a
 ;; network or the user's packages.  See docs/guide/extensions.md.
 (require 'ert)
+(defvar drgnx-view-old-path)
 (require 'cl-lib)
 (require 'drgnx-paths)
 (require 'drgnx-timer)
@@ -22,7 +23,7 @@
   "BODY with a fresh list model and an empty job layer (its state table is fresh); the list buffer is killed after."
   (declare (indent 0) (debug t))
   `(unwind-protect
-       (let ((drgnx-extensions-jobs--state (make-hash-table)) (drgnx-extensions-live--restart nil))
+       (let ((drgnx-view-old-path t) (drgnx-extensions-jobs--state (make-hash-table)) (drgnx-extensions-live--restart nil))
          (drgnx-extensions-list--reset)
          (add-hook 'drgnx-extensions-jobs-changed-functions #'drgnx-extensions-list--jobs-changed)
          ,@body)

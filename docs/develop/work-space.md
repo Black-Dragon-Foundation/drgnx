@@ -595,6 +595,16 @@ chain, the edge selection, the item that finished) and the commands are in `drgn
   `O` sets the model's form, so up and down walk `outline`. Open reads the label once; a file opens at the team's
   agents on its chain. Motion capture's card rects (`drgnx-work-map--rect`) are the model's fields `x y w h`. The trailing notice is `work/map/set {view, selected}` (or `{view, clear}`). Tests:
   `test/unit/work-map-nav-test.el`.
+- **The switch.** A map opened when `drgnx-work-map-rows-p` holds (not `drgnx-view-old-path`, and this Emacs has
+  Sjá) goes on the hub's rows: `drgnx-work-map-rows-attach VIEW` makes the buffer the hub-fed view of the map view's id
+  (`drgnx-view-patch-attach`, its env registered while a window shows it), and `drgnx-work-client-open … :rows t`
+  subscribes with `rows: true`. The hub lays the map out, draws its rows (the strip the first) and sends its model; the
+  client keeps no frame for it (its answer is `{hub, version}`: the view is live), so the frame's functions, the edge
+  tiles and the header strip draw nothing. A hub restart: the patches dim the view, the client subscribes again on
+  the new connection (with `rows`), and the new hub's reset redraws it. Otherwise the map keeps its frames and draws
+  them, unchanged. Tests: `test/unit/work-map-rows-test.el`; the view rules on the 30-agent map and a trail (a new
+  class after `text-scale`, a second frame at twice the font, a theme change mid-stream, a face override) in
+  `test/ui/work-map-rows-gui-test.el`, and the map in a terminal class in `test/tty/work-map-test.el`.
 - **The side panel** is the buffer `*drgnx work detail: NAME*` in `drgnx-work-detail-mode`, a `drgnx-view` of type
   `work-detail` with one row per section (`:head :why :touches :conclusions :actions`); its text is
   `drgnx-work-detail-sections`. The pane kind `work-detail` (home right) shows it.
@@ -725,8 +735,10 @@ title, and `drgnx-work-trail-row-text` its row (the gap before the time is a `di
   `timeline/get {limit 200}` each, asked again 0.3 s after an `agent-step` of its session. `drgnx-work-timeline-spans`
   (pure) puts steps at their time on the lane's pixel width, at least 2 px; faces `drgnx-work-seg-*` use
   `:inverse-video` over the stock colour faces, so a segment's colour is the face's foreground.
-- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`; the buffers are attached to
-  `work/trail/subscribe` with the render offload's Lisp switch) the keys go through the replica
+- **On the rows path** (a hub-fed view with Sjá's model, `drgnx-work-trail--rows-p`) a trail or Timeline of a map on
+  the hub's rows is the hub-fed view `trail/SESSION` or `timeline/MAP-VIEW`, asked for with `work/trail/subscribe`
+  (`{view, session}`; `{view, lanes}`, the map model's agents of `team` with their `label`) again after a reconnect
+  (its env's RESUBSCRIBE), and ended with `work/trail/close` when its buffer goes. The keys go through the replica
   (`drgnx-work-trail--rows-nav`): a move follows the selection's link of that name (`next-agent`/`previous-agent` are
   `down`/`up`; the trail ignores them), open reads the selected node's fields once (`drgnx-work-trail--model-step`:
   a step as `drgnx-work-trail-open-step` takes it; a conclusion's `n`, `conclusion-kind` and `label`). A selected

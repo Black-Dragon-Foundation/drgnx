@@ -58,6 +58,17 @@ The Built-in section's module rows come from the editor: the module sends its ta
 are turned off or on (`drgnx-modules-after-teardown-functions`). Each entry is `(:name :doc :packages :flags :state)`,
 the state `on` (ran), `failed`, `needs-package` (waits for its packages) or `off`.
 
+## The list on the rows path
+
+With Sjá's view model (`nidhogg-view--call`) and `drgnx-view-old-path` nil, the list is the hub's rows
+(`drgnx-extensions-list-rows-p`): each fetch is one `extensions/list` call with the sections, their searches and
+limits, `dense`, the glyphs and the ids that need a restart; the hub publishes the rows and the model to the buffer's
+`extensions` view and answers each section's total and loaded count. The buffer keeps no row table and draws no row:
+`drgnx-extensions-list-row` reads a row's fields from the model, point's row is the model's selection, and "more"
+asks for a larger limit. What changes between answers without a new list — a job's state chip — is an overlay
+(`after-string`) on the row's line, redrawn on the jobs' changes and the elapsed-time tick; a change to the ids that
+need a restart asks again. On the old path the view builds its rows itself, as before.
+
 ## Jobs
 
 Every install, update, removal, rollback and refresh the view asks for is a hub job
@@ -81,7 +92,10 @@ module's setup calls `drgnx-extensions-jobs-setup` and its teardown `drgnx-exten
   `upgrade-all`, `rollback` N, `refresh`, `fetch-readme` ARCHIVE NAME, `plugin-install` PATH (`:replace`),
   `plugin-remove` NAME; FN gets the job's id.
 - **Progress.** Each job's progress file is `<state>/extensions/progress/TOKEN.json`, TOKEN made by the editor
-  before the job starts (so a job is followed before the hub names it); `TOKEN.json.plan.json` is its swap plan. One
+  before the job starts (so a job is followed before the hub names it); `TOKEN.json.plan.json` is its swap plan. On
+  the rows path the hub reads both while the job runs and sends `exec-progress` events (docs/develop/hub.md, Jobs,
+  "Progress"); the layer takes the plan and the step from the event and never opens the files (other sessions' jobs'
+  plans come the same way, and their `exec-done` is the plan gone). On the old path (`drgnx-view-old-path`) one
   file-notify watch on the directory while the module runs; reads are coalesced by `drgnx-timer-soon` (at most four a
   second, the last change always read) and parse only the files the change events named (an event that names none
   reads the whole directory), so files other sessions' jobs left cost nothing per read. Without a file-notify backend

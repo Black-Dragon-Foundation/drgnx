@@ -153,16 +153,94 @@ kept once made."
                       (cons (nreverse hits) total))
                     drgnx-perf-extensions--answers)))
 
+     (defun drgnx-perf-extensions--search (params)
+       "(ROWS . TOTAL) the stub answers a search with PARAMS."
+       (let* ((f (plist-get params :filters))
+              (section (cond ((plist-get f :installed) 'installed) ((plist-get f :updates) 'updates)
+                             ((plist-get f :plugins) 'plugins) ((plist-get f :builtin) 'builtin))))
+         (cond (section (let ((rows (cdr (assq section drgnx-perf-extensions--sections)))) (cons rows (length rows))))
+               ((plist-get f :ids) (cons nil 0))
+               (t (drgnx-perf-extensions--answer (downcase (or (plist-get params :query) "")))))))
+
+     ;; `extensions/list' on the rows path: the hub's work (its rows and model, in its shape) is done here, and what
+     ;; it allocates and takes is kept apart, so the measures are the editor's (the model's apply and the rows' insert)
+     (defvar drgnx-perf-extensions--hub-objects 0 "Objects the stub allocated building the hub's rows since the count's start.")
+     (defvar drgnx-perf-extensions--hub-ms 0 "Milliseconds the stub took building the hub's rows since the count's start.")
+     (defvar drgnx-perf-extensions--list-version 0 "The version of the stub's last rows patch.")
+
+     (defun drgnx-perf-extensions--hub-row (key text id &optional more)
+       (append (list :key key :text text
+                     :props (append (list (list 0 (length text) "drgnx-work-id" (or id key)))
+                                    (and id (list (list 0 (length text) "drgnx-extensions-id" id)))))
+               more))
+
+     (defun drgnx-perf-extensions--hub-list (params)
+       "The hub's answer to `extensions/list' PARAMS: (TOTALS ROWS MODEL), as the hub builds them."
+       (let ((seen (make-hash-table :test 'equal)) totals rows nodes order (dense (eq (plist-get params :dense) t)))
+         (seq-doseq (s (plist-get params :sections))
+           (let* ((search (plist-get s :search)) (answer (drgnx-perf-extensions--search search))
+                  (got (seq-take (nthcdr (or (plist-get search :offset) 0) (car answer)) (or (plist-get search :limit) 200)))
+                  (held (if (eq (plist-get s :minus_updates) t) (seq-remove (lambda (r) (equal (plist-get r :state) "update")) got) got))
+                  (shown (seq-remove (lambda (r) (prog1 (gethash (plist-get r :id) seen) (puthash (plist-get r :id) t seen))) held))
+                  (name (plist-get s :name)) (hid (concat "section:" name)))
+             (push (list :name name :total (cdr answer) :loaded (length got)) totals)
+             (when shown
+               (push (drgnx-perf-extensions--hub-row hid (format "%s (%d)" (plist-get s :title)
+                                                                 (if (equal name "search") (cdr answer) (length held)))
+                                                     nil (list :runs (list (list 0 1 "bold"))))
+                     rows)
+               (push (list :id hid :kind "section" :flags 1 :fields (vector (vector "label" (plist-get s :title)))) nodes)
+               (push hid order)
+               (dolist (r shown)
+                 (let* ((id (plist-get r :id))
+                        (line (concat "▣ " (plist-get r :name) " " (plist-get r :version)
+                                      (if (plist-get r :latest) (concat "  update to " (plist-get r :latest)) ""))))
+                   (push (drgnx-perf-extensions--hub-row id line id (list :runs (list (list 2 (+ 2 (length (plist-get r :name))) "bold"))))
+                         rows)
+                   (unless dense
+                     (push (drgnx-perf-extensions--hub-row (concat id "/2")
+                                                           (concat "    " (plist-get r :summary) " · " (plist-get r :source)
+                                                                   " · unsigned archive")
+                                                           id (list :runs (list (list 0 4 "shadow"))))
+                           rows))
+                   (push (list :id id :kind "package" :flags 0 :parent hid
+                               :fields (vector (vector "label" (plist-get r :name)) (vector "name" (plist-get r :name))
+                                               (vector "state" (plist-get r :state)) (vector "signed" (plist-get r :signed))
+                                               (vector "source" (plist-get r :source)) (vector "section" name)))
+                         nodes)
+                   (push id order))))))
+         (list (nreverse totals) (nreverse rows)
+               (json-serialize
+                (list :ops (vector (list :reset (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"]
+                                                                        :lists ["order"] :classes ["selected" "match" "dim"]
+                                                                        :flags ["expanded"] :forms [] :start "order")
+                                                      :nodes (vconcat (nreverse nodes)) :edges []
+                                                      :lists (vector (list :name "order" :ids (vconcat (nreverse order))))))))))))
+
+     (defun drgnx-perf-extensions--hub-answer-list (params callback)
+       "Answer `extensions/list' as the hub would: the model, then a rows reset to the list's class, then the totals."
+       (let* ((m0 (apply #'+ (memory-use-counts))) (t0 (float-time))
+              (built (drgnx-perf-extensions--hub-list params))
+              (buf (get-buffer "*Extensions*"))
+              (state (and buf (buffer-local-value 'drgnx-view-patch buf)))
+              (v (cl-incf drgnx-perf-extensions--list-version))
+              (patch (and state (list :view "extensions" :class (drgnx-view-patch-class state) :hub 1 :base (1- v) :version v
+                                      :env_epoch (drgnx-view-patch-epoch state) :model v
+                                      :ops (list (list :reset (nth 1 built))))))
+              (model (list :view "extensions" :hub 1 :base (1- v) :version v :reset t :model (nth 2 built))))
+         (setq drgnx-perf-extensions--hub-objects (+ drgnx-perf-extensions--hub-objects (- (apply #'+ (memory-use-counts)) m0))
+               drgnx-perf-extensions--hub-ms (+ drgnx-perf-extensions--hub-ms (* 1000 (- (float-time) t0))))
+         (when patch
+           (drgnx-view-model-event model)
+           (drgnx-view-apply-patch patch))
+         (funcall callback (list :sections (nth 0 built)) nil)))
+
      (defun drgnx-perf-extensions--hub (method params callback &rest _)
        "Stands for `drgnx-hub-call': answers from memory at once (the draw is what these rows time)."
        (pcase method
+         ("extensions/list" (drgnx-perf-extensions--hub-answer-list params callback))
          ("extensions/search"
-          (let* ((f (plist-get params :filters))
-                 (section (cond ((plist-get f :installed) 'installed) ((plist-get f :updates) 'updates)
-                                ((plist-get f :plugins) 'plugins) ((plist-get f :builtin) 'builtin)))
-                 (answer (cond (section (let ((rows (cdr (assq section drgnx-perf-extensions--sections)))) (cons rows (length rows))))
-                               ((plist-get f :ids) (cons nil 0))
-                               (t (drgnx-perf-extensions--answer (downcase (or (plist-get params :query) ""))))))
+          (let* ((answer (drgnx-perf-extensions--search params))
                  (off (or (plist-get params :offset) 0)))
             (funcall callback (list :rows (vconcat (seq-take (nthcdr off (car answer)) 200)) :total (cdr answer)) nil)))
          ("extensions/details"
@@ -205,6 +283,7 @@ kept once made."
 
      (defun drgnx-perf-extensions--common-each ()
        (drgnx-perf-extensions--kill-pages)
+       (setq drgnx-perf-extensions--list-version 0)
        (drgnx-extensions-list--reset)
        t)
 
@@ -239,12 +318,17 @@ A timed form that ends with this stops the clock on painted rows, not on armed t
 
      (defun drgnx-perf-extensions--list () (get-buffer drgnx-extensions-list-buffer-name))
 
+     (defvar drgnx-perf-extensions--open-alloc 0 "Objects the last open and paint allocated (`memory-use-counts').")
      (defun drgnx-perf-extensions--open-ms ()
-       "Open the list and paint it: (MS . PROCESSES)."
+       "Open the list and paint it: (MS . PROCESSES), without what the stub took building the hub's rows (the rows
+path).  Its allocation, the stub's left out too, goes to `drgnx-perf-extensions--open-alloc'."
        (drgnx-perf-extensions--count-start)
-       (let ((ms (drgnx-perf-extensions--ms
-                  (lambda () (drgnx-extensions-open) (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))))))
-         (cons ms drgnx-perf-extensions--procs)))
+       (setq drgnx-perf-extensions--hub-objects 0 drgnx-perf-extensions--hub-ms 0)
+       (let* ((m0 (apply #'+ (memory-use-counts)))
+              (ms (drgnx-perf-extensions--ms
+                   (lambda () (drgnx-extensions-open) (drgnx-perf-extensions--settle (drgnx-perf-extensions--list))))))
+         (setq drgnx-perf-extensions--open-alloc (- (apply #'+ (memory-use-counts)) m0 drgnx-perf-extensions--hub-objects))
+         (cons (- ms drgnx-perf-extensions--hub-ms) drgnx-perf-extensions--procs)))
 
      (defun drgnx-perf-extensions--type-ms (word)
        "The milliseconds of each key of WORD typed into the search, the result painted: a list."
@@ -292,9 +376,14 @@ and the redisplay; a next page it asks for is drawn after, in slices timed apart
      (defun drgnx-perf-extensions-open-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions-open-measure ()
        (let ((r (drgnx-perf-extensions--open-ms)))
-         (unless (> (hash-table-count drgnx-extensions-list--rows) 0) (error "the list opened with no rows"))
+         (unless (or (> (hash-table-count drgnx-extensions-list--rows) 0)
+                     (and (drgnx-extensions-list--hub-fed-p) (> (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)) 0)))
+           (error "the list opened with no rows"))
          (list :open_ms (drgnx-perf-extensions--r (car r)) :processes (cdr r)
-               :rows (hash-table-count drgnx-extensions-list--rows)
+               :alloc drgnx-perf-extensions--open-alloc :path (if (drgnx-extensions-list--hub-fed-p) "rows" "old")
+               :rows (if (drgnx-extensions-list--hub-fed-p)
+                         (with-current-buffer (drgnx-perf-extensions--list) (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))
+                       (hash-table-count drgnx-extensions-list--rows))
                :rows_drawn (drgnx-perf-extensions--drawn (drgnx-perf-extensions--list)))))
      (defun drgnx-perf-extensions-open-teardown () (drgnx-perf-extensions--common-teardown))
 
@@ -353,7 +442,11 @@ and the redisplay; a next page it asks for is drawn after, in slices timed apart
      ;; extensions-progress: a job writes steps, the layer reads them at most four times a second (no two reads closer
      ;; than the throttle's gap), the last write is always read, and typing goes on
      (defvar drgnx-perf-extensions--reads nil "When the progress directory was read, newest first.")
-     (defun drgnx-perf-extensions--count-read (&rest _) (push (float-time) drgnx-perf-extensions--reads))
+     (defvar drgnx-perf-extensions--step-allocs nil "Objects each step's read allocated, newest first.")
+     (defun drgnx-perf-extensions--count-read (fn &rest args)
+       (push (float-time) drgnx-perf-extensions--reads)
+       (let ((m0 (apply #'+ (memory-use-counts))))
+         (prog1 (apply fn args) (push (- (apply #'+ (memory-use-counts)) m0) drgnx-perf-extensions--step-allocs))))
      (defun drgnx-perf-extensions-progress-setup ()
        (drgnx-perf-extensions--common-setup "jobs")
        (make-directory (drgnx-extensions-jobs-dir) t)
@@ -361,14 +454,14 @@ and the redisplay; a next page it asks for is drawn after, in slices timed apart
        (puthash "perf-job" (list :token "perf-job" :kind 'upgrade :status 'running :since (float-time)
                                  :ids '(perf-installed-0 perf-installed-1 perf-installed-2) :id "perf-job")
                 drgnx-extensions-jobs--jobs)
-       (advice-add 'drgnx-extensions-jobs--read :before #'drgnx-perf-extensions--count-read)
+       (advice-add 'drgnx-extensions-jobs--read :around #'drgnx-perf-extensions--count-read)
        t)
      (defun drgnx-perf-extensions-progress-each () (drgnx-perf-extensions--common-each))
      (defun drgnx-perf-extensions--progress-run (storm)
        "A second or so of keys in a scratch buffer, each drawn; with STORM a progress file written and announced (the
 event names it) before each, then a wait for the read after the last write: (TIMES . LAST-I), LAST-I the last step
 written, or nil."
-       (setq drgnx-perf-extensions--reads nil)
+       (setq drgnx-perf-extensions--reads nil drgnx-perf-extensions--step-allocs nil)
        (let* ((seconds (drgnx-perf-extensions--size 'progress)) (file (drgnx-extensions-jobs--file "perf-job"))
               (t0 (float-time)) (i 0) times (buf (get-buffer-create " *perf progress*")))
          (with-current-buffer buf (erase-buffer))
@@ -390,14 +483,30 @@ written, or nil."
        (let ((ts drgnx-perf-extensions--reads) gaps)
          (while (cdr ts) (push (* 1000 (- (car ts) (cadr ts))) gaps) (setq ts (cdr ts)))
          gaps))
+     (defun drgnx-perf-extensions--event-steps (n)
+       "Objects each of N steps took as the hub sends them (`exec-progress'), newest first: the rows path's read."
+       (let ((file (drgnx-extensions-jobs--file "perf-job")) out)
+         (puthash "perf-job" "perf-job" drgnx-extensions-jobs--ids)
+         (dotimes (i n)
+           (let ((data (list :id "perf-job" :file file :step (list :step "native" :pkg "perf-installed-0" :i (1+ i) :n 400)))
+                 (m0 (apply #'+ (memory-use-counts))))
+             (drgnx-extensions-jobs--event "exec-progress" data)
+             (push (- (apply #'+ (memory-use-counts)) m0) out)))
+         (remhash "perf-job" drgnx-extensions-jobs--ids)
+         out))
      (defun drgnx-perf-extensions-progress-measure ()
        (drgnx-perf-extensions--open-ms)
-       (let* ((quiet (drgnx-perf-extensions--progress-run nil))
+       (let* ((events (and (not (drgnx-extensions-jobs--files-p)) (drgnx-perf-extensions--event-steps 20)))
+              (quiet (drgnx-perf-extensions--progress-run nil))
               (storm (drgnx-perf-extensions--progress-run t))
               (gaps (drgnx-perf-extensions--gaps))
               (seen (plist-get (gethash "perf-job" drgnx-extensions-jobs--jobs) :i))
               (p0 (drgnx-perf-extensions--pct (car quiet) 0.95)) (p1 (drgnx-perf-extensions--pct (car storm) 0.95)))
          (list :reads (length drgnx-perf-extensions--reads)
+               :alloc_event_step (if events (drgnx-perf-extensions--pct events 0.5) 0)
+               :alloc_step (if drgnx-perf-extensions--step-allocs
+                               (drgnx-perf-extensions--pct drgnx-perf-extensions--step-allocs 0.5)
+                             0)
                :read_gap_min_ms (drgnx-perf-extensions--r (if gaps (apply #'min gaps) 0))
                :reads_too_close (seq-count (lambda (g) (< g 240)) gaps)
                :last_unread (if (eql seen (cdr storm)) 0 1)
