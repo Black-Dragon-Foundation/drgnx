@@ -1173,6 +1173,25 @@ steps of 5; Zoom In and Zoom Out step 10.  A change applies at once.
 | `:agents` | `never` |
 | `:schema` | `(pred drgnx-look-scale-percent-p "a percent from 100 to 200 in steps of 5")` |
 
+## drgnx-look-scale-monitors
+
+The UI scale of particular monitors, in percent: an alist from a monitor's name (as `frame-monitor-attributes'
+gives it, "eDP-1") to a percent, 100 to 200 in steps of 5.  A frame on a monitor named here takes its percent
+instead of `drgnx-look-scale', and changes when it moves to another monitor.  A change applies at once.
+
+| Key | Value |
+| --- | --- |
+| Default | `nil` |
+| Type | `(alist :key-type string :value-type integer)` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-scale--settings-apply` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(alist string (pred drgnx-look-scale-percent-p "a percent from 100 to 200 in steps of 5"))` |
+
 ## drgnx-look-theme
 
 The colour theme ui/look loads at start (Color Theme picks it); `auto': drgnx Dark, Light or High Contrast as

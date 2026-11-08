@@ -277,6 +277,7 @@
         (view-zoom-out "C--")
         (view-zoom-reset "C-0")
         (view-ui-scale :none "in the palette")
+        (view-ui-scale-monitor :none "in the palette")
         (view-escape "<escape>")
         (buffers-save :none "the Buffers right-click menu")
         (buffers-copy-path :none "the Buffers right-click menu")

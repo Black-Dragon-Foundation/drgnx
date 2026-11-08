@@ -75,5 +75,29 @@
     (should (equal (car zooms) (cons (selected-frame) 1.0)))
     (should (= drgnx-look-scale 130))))   ; the setting stays: the next setup applies it again
 
+(ert-deftest drgnx-look-scale/monitor-override-wins ()
+  "Pattern D: a monitor's override is its UI scale; a monitor without one, or no monitor (a terminal), takes the
+global value.  The overrides' schema is the same percent."
+  (let ((drgnx-look-scale 120) (drgnx-look-scale-monitors '(("Meta-0" . 110) ("Meta-1" . 100))))
+    (should (= (drgnx-look-scale-for "Meta-0") 110))
+    (should (= (drgnx-look-scale-for "Meta-1") 100))
+    (should (= (drgnx-look-scale-for "eDP-1") 120))
+    (should (= (drgnx-look-scale-for nil) 120)))
+  (should-not (drgnx-setting-check 'drgnx-look-scale-monitors '(("eDP-1" . 125))))
+  (should (drgnx-setting-check 'drgnx-look-scale-monitors '(("eDP-1" . 123))))
+  (should (drgnx-setting-check 'drgnx-look-scale-monitors '((eDP-1 . 125)))))
+
+(ert-deftest drgnx-look-scale/monitor-command-sets-and-clears ()
+  "Pattern D: UI Scale for This Monitor sets the selected frame's monitor's override, and \"default\" clears it."
+  (drgnx-look-scale-test--isolated
+    (let ((drgnx-look-scale-monitors nil))
+      (cl-letf (((symbol-function 'frame-monitor-attributes) (lambda (&optional _) '((name . "Meta-0")))))
+        (drgnx-look-scale-monitor-set 150)
+        (should (equal drgnx-look-scale-monitors '(("Meta-0" . 150))))
+        (should (= (drgnx-pixels-ui-scale) 1.5))
+        (drgnx-look-scale-monitor-set nil)
+        (should (equal drgnx-look-scale-monitors nil))
+        (should (= (drgnx-pixels-ui-scale) 1.0))))))
+
 (provide 'look-scale-test)
 ;;; look-scale-test.el ends here

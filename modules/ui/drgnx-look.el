@@ -43,6 +43,7 @@
 (declare-function drgnx-look-scale-on "drgnx-look-scale" ())
 (declare-function drgnx-look-scale-off "drgnx-look-scale" ())
 (declare-function drgnx-look-scale-choose "drgnx-look-scale" (percent))
+(declare-function drgnx-look-scale-monitor-choose "drgnx-look-scale" (percent))
 (declare-function drgnx-look-density-off "drgnx-look-density" ())
 (declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
 (declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
@@ -625,6 +626,9 @@ only the one remap is reapplied."
                                                :doc "The UI scale, 10 % a step (every size and font); then +, - or 0"))
                        (drgnx-command-define 'view-ui-scale :category "View" :title "UI Scale…" :command #'drgnx-look-scale-choose
                                              :doc "Set the UI scale, 100 to 200 % (every size and font, at once)")
+                       (drgnx-command-define 'view-ui-scale-monitor :category "View" :title "UI Scale for This Monitor…"
+                                             :command #'drgnx-look-scale-monitor-choose
+                                             :doc "Set this monitor's own UI scale, or \"default\" to follow the global one")
                        (drgnx-command-define 'decor-activate :category "View" :title "Activate Button" :command #'drgnx-decor-activate
                                              :map 'drgnx-decor-button-map :when (lambda () (get-text-property (point) 'drgnx-decor-action))
                                              :doc "Run the decoration button at point")

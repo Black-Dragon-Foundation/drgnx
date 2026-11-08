@@ -251,6 +251,10 @@ icon 22, and the fonts are opened at 96 dpi × 1.25 × 1.1, so each is the size 
 - **Zoom In** and **Zoom Out** (`C-=` and `C--` in the VS Code profile) add or take 10 %; **Reset Zoom** (`C-0`)
   gives 100 %. After one, `+`, `-` or `0` repeat it. Each step is saved in your settings.el.
 - **UI Scale…** (the palette) asks for a percent.
+- **Per monitor:** `drgnx-look-scale-monitors` maps a monitor's name to its own percent, say
+  `(("eDP-1" . 125))` for the laptop panel; a frame there takes it instead of the global one, and changes when it moves
+  to another monitor or its monitor is unplugged. **UI Scale for This Monitor…** sets it for the selected frame's
+  monitor, or clears it when you answer `default`.
 - The Emacs profile leaves `C-x C-+` and the rest to stock `text-scale`, which sizes one buffer's text; the UI scale is
   in the palette there.
 
