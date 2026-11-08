@@ -1990,6 +1990,18 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
   lit, dim) come from the model, on each node's span ("Keys through the model" below).
 - `drgnx-view-old-path` (test-only) makes a view moved onto hub-built rows take its old Lisp path, for the combined
   pass that compares the two.
+- **A view of its own around the hub's rows** (the agent panel): `drgnx-view-patch-attach … :keep t` keeps the
+  buffer's view; its type renders a string key with `drgnx-view-patch-render` and its own keys itself, and the buffer
+  sets `drgnx-view-patch-apply-function` to place the rows. The panel's (`drgnx-agent-panel--apply-rows`) rewrites a
+  patch's ops before the stock apply: a reset removes the hub rows there were and inserts the new ones after the rows
+  above the transcript (header, chips, strip, pinned cards), an insert after no row goes there too, and the cards,
+  queue and composer stay below the anchor row `(:rows-end)`. The panel is hub-fed only while the subscribed
+  connection is up when it is made; it still keeps the entries (cards, pins, the step at point) and tells the hub
+  its look (`agents/panel/look`: the step types open, the rows opened or folded by hand, `older` for the window before;
+  `docs/develop/hub.md`). Navigation and fold state move to the native view model later.
+- **The agent mirror** (`core/drgnx-agents-mirror.el`) patches its transcript in place: an entry's cell takes the
+  patched entry (`--complete-blocks`), a new index extends the list; behind `drgnx-view-old-path` it copies the whole
+  transcript per event as before.
 - **One buffer, one fit:** a buffer shown in two classes (two frames) gets an env and a reset per class from the
   hub, but holds the rows of the class it is paired with; both frames show that fit.
 - **A class change** (`text-scale`, a font or a scale): `drgnx-view-env` re-pairs a buffer shown in one class with

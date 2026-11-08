@@ -30,6 +30,8 @@
 (declare-function drgnx-hub-call "drgnx-hub-client")
 (declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
 (declare-function nidhogg-view-set "nidhogg-views" (h what value))
+(declare-function drgnx-view-env-register "drgnx-view-env")
+(declare-function drgnx-work-map-rows-p "drgnx-work-map")
 (declare-function drgnx-work--open-agent "drgnx-work-map")
 (declare-function drgnx-work-map--card-face "drgnx-work-map")
 (declare-function drgnx-work-map--state "drgnx-work-map")
@@ -324,6 +326,38 @@ its way."
         (when (equal (buffer-local-value 'drgnx-work-trail--session b) sid) (drgnx-work-trail--catch-up b)))
       (drgnx-work-timeline--step-arrived sid))))
 
+;;;; On the hub's rows: the trail and the Timeline built in the hub (`work/trail/subscribe')
+
+(defvar-local drgnx-work-trail--hub-params nil
+  "On the rows path, what `work/trail/subscribe' takes besides the view: (:session SID) or (:lanes [...]).")
+
+(defun drgnx-work-trail--map-rows-p (map-buffer)
+  "Whether MAP-BUFFER's map is on the hub's rows (a trail or Timeline of it goes there too)."
+  (and (buffer-live-p map-buffer) (drgnx-work-map-rows-p) (buffer-local-value 'drgnx-view-patch map-buffer) t))
+
+(defun drgnx-work-trail--hub-subscribe ()
+  "Ask the hub for this buffer's trail or Timeline (again after a reconnect, as its env's RESUBSCRIBE)."
+  (when drgnx-view-patch
+    (drgnx-work-client--call "work/trail/subscribe"
+                             (append (list :view (drgnx-view-patch-view drgnx-view-patch)) drgnx-work-trail--hub-params)
+                             #'ignore)))
+
+(defun drgnx-work-trail--hub-close ()
+  "`kill-buffer-hook' of a trail or Timeline on the rows path: the hub ends its view."
+  (when drgnx-view-patch
+    (ignore-errors (drgnx-work-client--call "work/trail/close" (list :view (drgnx-view-patch-view drgnx-view-patch)) #'ignore))))
+
+(defun drgnx-work-trail--rows-attach (view params)
+  "Make the current buffer the hub-fed trail or Timeline VIEW and ask the hub for it with PARAMS."
+  (drgnx-view-patch-attach view "unshown")
+  (setq drgnx-work-trail--hub-params params)
+  (require 'drgnx-view-env)
+  (let ((buffer (current-buffer)))
+    (drgnx-view-env-register view buffer (lambda (_view) (when (buffer-live-p buffer)
+                                                           (with-current-buffer buffer (drgnx-work-trail--hub-subscribe))))))
+  (add-hook 'kill-buffer-hook #'drgnx-work-trail--hub-close nil t)
+  (drgnx-work-trail--hub-subscribe))
+
 ;;;; Opening a trail
 
 (defun drgnx-work-trail--sid (agent-id)
@@ -335,7 +369,14 @@ its way."
 MAP-BUFFER is the map the trail is a view of.  Returns the buffer; it does not show itself."
   (let ((buffer (get-buffer-create (format "*drgnx work trail: %s*" session))))
     (with-current-buffer buffer
-      (unless (and (derived-mode-p 'drgnx-work-trail-mode) (equal drgnx-work-trail--session session))
+      (cond
+       ((and (derived-mode-p 'drgnx-work-trail-mode) (equal drgnx-work-trail--session session)))
+       ;; the hub builds the trail: its steps, conclusions and model come as patches
+       ((drgnx-work-trail--map-rows-p map-buffer)
+        (drgnx-work-trail-mode)
+        (setq drgnx-work-trail--session session drgnx-work-lens-nav #'drgnx-work-trail--nav)
+        (drgnx-work-trail--rows-attach (format "trail/%s" session) (list :session session)))
+       (t
         (drgnx-work-trail-install buffer session nil nil)
         (setq drgnx-work-trail--loaded nil drgnx-work-trail--more t)
         (drgnx-work-trail--request
@@ -343,7 +384,7 @@ MAP-BUFFER is the map the trail is a view of.  Returns the buffer; it does not s
          (lambda (steps)
            (setq drgnx-work-trail--loaded t drgnx-work-trail--more (>= (length steps) drgnx-work-trail-first-page))
            (drgnx-work-trail--merge steps)))
-        (drgnx-work-trail--fetch-conclusions buffer))
+        (drgnx-work-trail--fetch-conclusions buffer)))
       (setq drgnx-work-lens--map map-buffer drgnx-work-map--lens (drgnx-work-lens-string 'timeline)))
     buffer))
 
@@ -754,20 +795,41 @@ list of (SEQ X W KIND), each at least 2 px wide.  A step that is still open runs
   "The Timeline of MAP-BUFFER, made when there is none: a lane for each agent, lit by the map's selection."
   (let ((buffer (get-buffer-create (format "*drgnx work timeline: %s*" (string-trim (buffer-name map-buffer) "\\*drgnx work: " "\\*")))))
     (with-current-buffer buffer
-      (unless (derived-mode-p 'drgnx-work-timeline-mode)
+      (cond
+       ((derived-mode-p 'drgnx-work-timeline-mode))
+       ;; the hub builds the Timeline: a lane per agent of the map's model, lit by the map's selection there
+       ((drgnx-work-trail--map-rows-p map-buffer)
+        (drgnx-work-timeline-mode)
+        (setq drgnx-work-lens-nav #'drgnx-work-timeline--nav)
+        (drgnx-work-trail--rows-attach (format "timeline/%s" (drgnx-view-patch-view (buffer-local-value 'drgnx-view-patch map-buffer)))
+                                       (list :lanes (vconcat (drgnx-work-timeline--model-lanes map-buffer))))
+        (drgnx-work-timeline-rows-attached))
+       (t
         (drgnx-work-timeline-mode)
         (setq drgnx-work-lens-nav #'drgnx-work-timeline--nav
               drgnx-work-timeline--steps (make-hash-table :test #'equal))
-        (drgnx-view-attach 'work-timeline))
+        (drgnx-view-attach 'work-timeline)))
       (setq drgnx-work-lens--map map-buffer drgnx-work-map--lens (drgnx-work-lens-string 'timeline))
-      (let* ((state (drgnx-work-map--state map-buffer)) (sel (buffer-local-value 'drgnx-work-map--selection map-buffer))
-             (lit (and state sel (drgnx-work-timeline--lit-for state sel))))
-        (setq drgnx-work-timeline--lanes (and state (drgnx-work-timeline--lane-ids state))
-              drgnx-work-timeline--lit (car lit) drgnx-work-timeline--lit-file (cadr lit)
-              drgnx-work-timeline--sel (cons (or (car (car lit)) (car drgnx-work-timeline--lanes)) nil)))
-      (drgnx-view-touch drgnx-view)
-      (dolist (lane drgnx-work-timeline--lanes) (drgnx-work-timeline--fetch buffer lane)))
+      (unless drgnx-view-patch               ; on the hub's rows the hub reads the lanes and lights them
+        (let* ((state (drgnx-work-map--state map-buffer)) (sel (buffer-local-value 'drgnx-work-map--selection map-buffer))
+               (lit (and state sel (drgnx-work-timeline--lit-for state sel))))
+          (setq drgnx-work-timeline--lanes (and state (drgnx-work-timeline--lane-ids state))
+                drgnx-work-timeline--lit (car lit) drgnx-work-timeline--lit-file (cadr lit)
+                drgnx-work-timeline--sel (cons (or (car (car lit)) (car drgnx-work-timeline--lanes)) nil)))
+        (drgnx-view-touch drgnx-view)
+        (dolist (lane drgnx-work-timeline--lanes) (drgnx-work-timeline--fetch buffer lane))))
     buffer))
+
+(defun drgnx-work-timeline--model-lanes (map-buffer)
+  "The lanes of a Timeline of MAP-BUFFER's map on the rows path: its model's agents (not their subagents), in team
+order, as `work/trail/subscribe' takes them ({session, label})."
+  (with-current-buffer map-buffer
+    (when-let* ((h (and drgnx-view-patch (drgnx-view-patch-handle drgnx-view-patch))))
+      (delq nil (mapcar (lambda (id)
+                          (when (and (equal (nidhogg-view-get h 'kind id) "agent") (not (string-search "/" id)))
+                            (list :session (drgnx-work-trail--sid id)
+                                  :label (or (drgnx-view-nav-field "label" id) (drgnx-work-trail--sid id)))))
+                        (append (nidhogg-view-get h 'list "team") nil))))))
 
 (defun drgnx-work-timeline--nav (dir)
   "A key of the lens in the Timeline: DIR moves to the earlier or later step of the lane (`left' `right'), the lane

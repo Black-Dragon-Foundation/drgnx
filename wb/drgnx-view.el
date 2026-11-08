@@ -1372,6 +1372,10 @@ least recently used quarter goes.")
 (defvar drgnx-view-patch-measure-function #'drgnx-view-text-width
   "Called with a string to measure it, in px, in the view's buffer (the fit guard); tests count it.")
 
+(defvar-local drgnx-view-patch-apply-function #'drgnx-view-patch--apply-ops
+  "Called with (STATE VIEW PATCH) to put an applied patch's rows in the buffer's view.  A buffer that keeps a view of
+its own (`drgnx-view-patch-attach' with KEEP) places the hub's rows among its own rows with a function of its own.")
+
 (defvar drgnx-view-patch--buffers (make-hash-table :test #'equal)
   "(VIEW . CLASS) → the buffer that shows that pair's rows.  Pruned with the buffer.")
 
@@ -1590,7 +1594,7 @@ Returns what was done: `drop', `hold', `resync', `apply', `paused' (kept until t
                                 :version (or (drgnx-view-patch-version state) 0)))))
               ('apply
                (when (drgnx-view-patch--reset-p patch) (drgnx-view-patch--stale state nil))
-               (drgnx-view-patch--apply-ops state drgnx-view patch)
+               (funcall drgnx-view-patch-apply-function state drgnx-view patch)
                (when-let* ((n (plist-get patch :model)))
                  (drgnx-view-model--named state n (drgnx-view-patch--reset-p patch))
                  (drgnx-view-touch drgnx-view))
@@ -2002,12 +2006,14 @@ by the view that owns the buffer.")
     (setq drgnx-view-patch nil))
   (drgnx-view-patch--hooks))
 
-(cl-defun drgnx-view-patch-attach (view class &key buffer start epoch type)
+(cl-defun drgnx-view-patch-attach (view class &key buffer start epoch type keep)
   "Make BUFFER (default: the current one) show the hub-built rows of (VIEW, CLASS), from START: a view of TYPE
 \(default `drgnx-view-rows'; another type renders with `drgnx-view-patch-render' too, and sets ACK and EPOCH-RESET,
-`drgnx-view-define').  EPOCH: the env epoch sent for the pair.  Returns the view."
+`drgnx-view-define').  EPOCH: the env epoch sent for the pair.  KEEP: the buffer keeps the view it has, whose type
+renders the hub's rows with `drgnx-view-patch-render' among its own and sets `drgnx-view-patch-apply-function'.
+Returns the view."
   (with-current-buffer (or buffer (current-buffer))
-    (let* ((v (drgnx-view-attach (or type 'drgnx-view-rows) :start start)) (ty (drgnx-view--type v)))
+    (let* ((v (if keep drgnx-view (drgnx-view-attach (or type 'drgnx-view-rows) :start start))) (ty (drgnx-view--type v)))
       (when drgnx-view-patch (drgnx-view-model--close drgnx-view-patch))   ; attached again: the old instance goes
       (setq-local drgnx-view-patch (drgnx-view-patch--make :view view :class class :epoch (or epoch 0)
                                                            :ack (drgnx-view-type-ack ty)

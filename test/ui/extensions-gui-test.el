@@ -6,6 +6,7 @@
 ;; PNGs; run once per display scale (DRGNX_UI_SCALE).  The terminal row draws the same list as a terminal that does not
 ;; write UTF-8 would see it: the ASCII forms of the kind marks and the busy dot.  No hub is started.
 (require 'ert)
+(defvar drgnx-view-old-path)
 (require 'cl-lib)
 (require 'drgnx-uitest)
 
@@ -37,7 +38,7 @@
   (drgnx-extensions-list--receive 'recommended (list (drgnx-ui-extensions--row "rust-mode" "package" "available")) 1 0))
 
 (defmacro drgnx-ui-extensions--with-jobs (&rest body)
-  `(let ((drgnx-extensions-jobs--state (make-hash-table)))
+  `(let ((drgnx-view-old-path t) (drgnx-extensions-jobs--state (make-hash-table)))
      (drgnx-extensions-jobs--put '(forge) (list :status 'busy :step 'native :i 14 :n 37 :since (- (float-time) 12)))
      (drgnx-extensions-jobs--put '(vterm) (list :status 'failed :error "download failed; nothing was changed"))
      (drgnx-extensions-jobs--put '(dash) (list :status 'done :warnings '("a.el" "b.el")))

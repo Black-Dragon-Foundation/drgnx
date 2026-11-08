@@ -126,6 +126,18 @@ or `q` there ended the followed agent's turn (the premise's timeline showed exac
 chat of `pair-typing` also writes the whole file from a read the hub never served every 5 s; the hub refuses it whole
 (the plan's U1), so it is no applied write.
 
+`panel-replay` (no keys; session side `test/fixtures/panel-replay-fixture.el`) measures what one update of an agent's
+transcript costs the editor while its panel is shown. A hub of the workload's own runs one mock agent whose first turn
+makes about 1,900 entries at once (an answer and a read, 950 times); its second, sent when the measure starts, streams the
+synthetic day's recording (`test/fixtures/day/transcript.eld`) at 20 updates a second, a read every tenth chunk, so the
+transcript ends near 2,000 entries. The panel shows the session and the mirror holds its transcript. Over 400 updates (at most 40 s) it reports
+`:alloc` (objects the update's event handlers made: the mirror's and the panel's), `:draw_kb` (kB each draw of the panel
+made), `:updates` (`:patches` of them the panel's row patches), `:entries`, `:rows` (the panel's lines) and
+`:hub_rows` (the hub's rows the panel holds). With the hub's rows an update is either the entries
+event (the mirror and the panel's own state) or the panel's `view-patch` (the rows inserted); `panel-replay-old` runs the
+same on `drgnx-view-old-path` (the panel draws every row, the mirror copies its transcript per update): the paired row.
+Report-only until the render offload's combined pass.
+
 The conformance rows `editor/cursor-latency` (the hub's virtual clock: a move reaches the watcher within 100 ms) and
 `pair/write-latency` (the clock never advanced: nothing in the write's path waits on a timer) hold the hub's side; the
 GUI scenes `agents-editor-gui/p3-drawn-frame` (agents in the editor) and `p3-agent-panel-scene` (the panel) draw each look
@@ -754,13 +766,13 @@ Tests: `test/unit/perf-workers-test.el`.
 
 ### The workers' workloads
 
-Sixteen workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
+Eighteen workloads (`harness/drgnx-perf-workloads.el`, the session side in `test/fixtures/workers/perf-session.el`) measure
 what the Nidhogg workers take off the main thread. Each types the same 6 commands into the editor while the work runs; the
 first key starts it (from a timer, as it starts for a user), so the keys and the work overlap. Each has `:complete-when`
 (`:complete-ms`, polled at idle) and `:digest` (equal on and off), and a budget row `(W PATH LIMIT :report-only STEP)` in
 `test/perf/budgets.eld`: the limit is the design's table (V2 §1 or drgnx's existing row), never a first run. A row fails
-only after `DRGNX_PERF_LANDED` names its step. Five of them (`drgnx-perf-run-workers-seeded`: `explorer-git` and the
-render offload's Quick Open and agent-line pairs) also have allocation, CPU and rows rows, a first run's numbers x 1.25;
+only after `DRGNX_PERF_LANDED` names its step. Seven of them (`drgnx-perf-run-workers-seeded`: `explorer-git` and the
+render offload's Quick Open, agent-line and who-is-here pairs) also have allocation, CPU and rows rows, a first run's numbers x 1.25;
 the others are on `drgnx-perf-run-unseeded`.
 
 | Workload | What it does | Budget rows (step) |
@@ -777,6 +789,7 @@ the others are on `drgnx-perf-run-unseeded`.
 | `quick-open-large` | `project-files` of a 200,000-file git repository (Quick Open's listing) | `:complete-ms` 100, no 16 ms stall (ot5) |
 | `quick-open-typing`, `quick-open-typing-old` | Quick Open (its key, C-p, queued as the user's command) in the 200,000-file repository, then `d012/f001.txt` typed a key at a time and `C-g`; the hub's ranked rows (the session starts a hub), or with `drgnx-view-old-path` the file stream and completion over every name. Done once every key reached the minibuffer on the workload's path and the first list came before the first key. The query has no space: a plain `completing-read` takes SPC as `minibuffer-complete-word` | `:alloc :p50` 4905 / 8003808, `:cpu_ms :p90` 1.4 / 273.3, `:rows` 0 (ot5; measured x 1.25) |
 | `agents-line-motion`, `agents-line-motion-old` | 20 `<down>` in a large Lisp file while three agents' frames arrive, one per command; the editor line's name from the outline, or with `drgnx-view-old-path` from `add-log-current-defun` per frame | `:alloc :p50` 6869 / 7298, `:cpu_ms :p90` 4.5 / 5.2, `:rows` 0 (ot5; measured x 1.25) |
+| `presence-burst`, `presence-burst-old` | who is here with 30 agents over 90 files (six folders), then 20 `<down>`, each followed by one agent's move to another file: the hub's `agents-here` model diff (an agent node and a file node) and the rows patch naming it, read node by node, or with `drgnx-view-old-path` the `agent-presence` event and a rebuild from the cached presence. No hub: the model and the patches are the hub's shape, the model strings made before the run. The digest (agents and badges held) is equal on both | `:alloc :p50` 16084 (a tenth of the old path's 160832) / 201040, `:cpu_ms :p90` 1.4 / 4.6, `:rows` 0 (ot5). Measured 2026-11-08, pinned: alloc p50 11832 / 160832, cpu p90 1.31 / 4.15 |
 | `autosave-typing` | a 50 MB buffer, the keyboard loop's auto-save at the first key (`nidhogg-workers--test-keyboard-auto-save`, `read_char`'s call: a `do-auto-save` from Lisp never leaves the main thread); the digest is the auto-save file's md5; each repeat kills the buffer the one before made (they once stayed, 100 MB that the `memory` row read) | input max 50, `:complete-ms` 1000 (ot8) |
 
 `terminal-output` and `live-view` keep their rows. Their output depends on the clock (a paced stream, an
@@ -814,10 +827,10 @@ get its situation fails instead of measuring something else. Mock agents only; n
 
 | Workload | What it does | Measured (budget row) |
 |---|---|---|
-| work-nav | 300 map keys (Tab, right, left, down and up, 60 each) with an agent selected | `:input :p95` 16 ms; `:frame_kb` 2048 (`memory-report-object-size` of the client's frame); `:stalls` 0 |
+| work-nav | 300 map keys (Tab, right, left, down and up, 60 each) with an agent selected | `:input :p95` 16 ms; `:frame_kb` 2048 (`memory-report-object-size` of the client's frame); `:stalls` 0; report-only until the render offload's combined pass: `:alloc :p50` 1119 objects per key (a tenth of 2026-11-07's 11191), `:cpu_ms :p90` 11.31 and `:rows` 0 as measured then; it still drives the old path |
 | work-raster | every band tile of the map's layout rasterised at scale 2 (`image-flush` and `image-size` of a fresh image), passes repeated to 100 tiles; then, for twelve agents, the tiles of the bands that carry that agent's chain, summed | `:raster_ms :p95` 1.5; `:chain_ms :max` 6 |
-| work-relayout | 320 layout commands (`f`, `o`, `1` to `6`, 40 times; only about one in six makes the hub send a frame with a layout, and the lab's p95 needs 100 samples; each command first waits up to a second for the layout before it, which is why the lab's own input p90 reads about 1 s) | `:relayout :p95` 50 ms, from the command to the frame it asked for drawn (the view has nothing pending); `:stalls` 0 |
-| work-live | 30 s with the map shown and the agents streaming (checked: the map got at least 30 deltas) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0 |
+| work-relayout | 320 layout commands (`f`, `o`, `1` to `6`, 40 times; only about one in six makes the hub send a frame with a layout, and the lab's p95 needs 100 samples; each command first waits up to a second for the layout before it, which is why the lab's own input p90 reads about 1 s) | `:relayout :p95` 50 ms, from the command to the frame it asked for drawn (the view has nothing pending); `:stalls` 0; report-only until the combined pass: `:alloc :p50` 12842 (a tenth of 2026-11-07's 128420), `:cpu_ms :p90` 59.16 and `:rows` 0 as measured then; it still drives the old path |
+| work-live | 30 s with the map shown and the agents streaming, on the hub's rows (checked: the map got at least 30 updates: its patches' versions; `work-live-old` keeps the map on `drgnx-view-old-path`, its frames' deltas, the paired row; the other Work workloads stay there too) | `:draw_ms_s` 40 (the view's `:draw-ms` per second); `:slice_ms :max` 4 (each draw of the map's view); `:stalls` 0; report-only until the combined pass: `:draw_kb :p50` 40 for both (the Lisp frames drew 831 kB). Run on a Nidhogg with Sjá: the workload fails when the map is not on the path it names. First run (2026-11-08, pinned, the line's GUI image): rows 38.9 kB p50, 1.26 draw ms/s, slices ≤ 0.43 ms; old 814.2 kB, 13.86 ms/s, ≤ 3.77 ms |
 | work-typing-shown, work-typing-hidden | the typing workload's six strings with the map shown in the editor's other window, and with it open but shown nowhere (the hub told: no deltas) | `:input :p95` 16 ms each, `:stalls` 0; the rule between them (shown at most 1 ms over hidden) is `drgnx-perf-run--relative-fails`, judged when both are in the run |
 | view-patch | no hub: a hub-fed view (`drgnx-view-patch-attach`) holding 30 agents' cards (150 rows, a run of faces, an item id, two stops and an image each), then 100 patches, each replacing one row of every agent (30 rows), parsed from JSON, applied and drawn | report-only until the render offload's combined pass: `:alloc` (objects for the parse, the apply and the draw), `:draw_kb` (kB the draw made), `:slices`, `:rows`. First smoke run (2026-11-07, GUI container): alloc p50 6052 objects, draw 6.7 kB |
 | work-nav-rows | no hub: a map-shaped hub-fed view (30 agents, each with an ask above and a file below: 90 rows, each holding its node's span) and its model in Sjá, agent 00 selected; then 100 keys held with no time between them (right and left, the team walk, up and down) through `drgnx-view-nav`; then Sjá's apply of a 30-agent reset on a fresh view (20 times) and of a one-node field patch (40 times). Needs a Nidhogg with Sjá | report-only until the combined pass: `:alloc` (objects per key), `:classed` (overlays the class step made and deleted per key), `:hub_calls` (after the selection settled: the one trailing notice), `:reset_us` and `:field_us` (the design's targets: a reset ≤ 2 ms, a field patch ≤ 100 µs). First run (2026-11-07, GUI container): alloc p50 688 objects per key, 12 overlays per key, 1 hub call, a reset p50 271 µs, a field patch p50 3 µs |
@@ -955,11 +968,11 @@ rows), written by `drgnx-perf-extensions-write-archives`; no network. To write t
 
 | Workload | What it measures | Budget (`:report-only ext-pass`) |
 |---|---|---|
-| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started | `:open_ms` 100, `:processes` 0 |
+| `extensions-open` | `Open Extensions` to the painted sections (`:rows_drawn`); `:processes` counts processes started; `:alloc` the objects the open and paint allocated, the stub hub's own left out, on the path `:path` names (`rows`: the hub's rows and model, `:rows` the patch's lines; `old`: `drgnx-view-old-path`) | `:open_ms` 100, `:processes` 0, `:alloc` 16751 (a tenth of the old path's 167507). Measured 2026-11-08, pinned: 119930 on the rows path |
 | `extensions-search` | each key of a search over 7,150 rows, to the painted results | `:key_p50_ms` 8, `:key_max_ms` 16 |
 | `extensions-scroll` | scrolling the whole catalog by name (`@sort:name`, pages of 200), per key: the command, the list's own `post-command-hook` and the redisplay; the slices that draw a next page are timed apart (`:slice_max_ms`) | `:key_max_ms` 16 |
 | `extensions-details` | opening a details page, to its painted rows | `:open_ms` 50 |
-| `extensions-progress` | a running job's progress-file reads while it writes a step every key (each event names the file): the smallest gap between two reads (`:read_gap_min_ms`, `:reads`), how many gaps fall under 240 ms, whether the last write was read; and typing's p95 against idle | `:reads_too_close` 0, `:last_unread` 0, `:typing_delta_ms` 1 |
+| `extensions-progress` | a running job's progress-file reads while it writes a step every key (each event names the file): the smallest gap between two reads (`:read_gap_min_ms`, `:reads`), how many gaps fall under 240 ms, whether the last write was read; and typing's p95 against idle; `:alloc_step` the objects of a file read, and on the rows path `:alloc_event_step` those of taking one `exec-progress` event (20 of them) | `:reads_too_close` 0, `:last_unread` 0, `:typing_delta_ms` 1, `:alloc_event_step` 262 (a tenth of the file read's 2624). Measured 2026-11-08, pinned: 2073 |
 | `activate-live` | a job's plan step: repointing the 40 package directories of a running session into the generation that holds the old copies (one walk of `load-path`) | `:activate_ms` 20 |
 | `activate-live-new` | a job's end that added a package, as the job layer passes it (`drgnx-extensions-live-after` of `(:status done)`): the new package activated from its own descriptor, the session holding 40 others | `:activate_ms` 20 |
 | `install-overhead` | an install's cost beyond the package manager's own, both children run | `:overhead_ms` 3000 (reported on ext4; macOS has APFS clones) |

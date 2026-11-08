@@ -46,6 +46,8 @@
 (defvar drgnx-work-trail-time-zone)
 (defvar drgnx-work-timeline--sel)
 
+(defvar drgnx-view-old-path)
+
 (defmacro drgnx-work-views-test--with (&rest body)
   "BODY with the module `tools/work-space' set up, a gated hub serving the test's dirs (profile \"mock\"), this Emacs
 connected to it, and `workspace' the workspace of the test's home folder."
@@ -58,7 +60,8 @@ connected to it, and `workspace' the workspace of the test's home folder."
          (add-hook 'drgnx-hub-disconnect-functions #'drgnx-work-client-disconnected)
          (drgnx-hub-connect)
          (drgnx-agents-mirror-test--settle (lambda () (process-live-p drgnx-hub--events)) "the subscribed connection")
-         (let ((workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
+         ;; these tests read the frames this Emacs draws: the old path (the hub's rows: work-map-rows-test.el)
+         (let ((drgnx-view-old-path t) (workspace (list :id "workspace:000000000001" :roots (list (getenv "HOME")))))
            ,@body)))))
 
 ;;;; Board

@@ -186,6 +186,36 @@ impl Hub {
         })
     }
 
+    /// Each section's search, as `extensions/list` asks it: (its total, its rows from its offset, up to its limit).
+    pub async fn sections(
+        &self,
+        sections: &[w::ListSection],
+        plugins: Vec<w::Row>,
+    ) -> Result<Vec<(u32, Vec<w::Row>)>, Error> {
+        let index = self.index_with(Some(plugins)).await?;
+        Ok(sections
+            .iter()
+            .map(|s| {
+                let p = &s.search;
+                let hits = rank::search(
+                    &index.entries,
+                    &p.query,
+                    &p.filters,
+                    p.sort.unwrap_or(w::Sort::Relevance),
+                );
+                let offset = p.offset.unwrap_or(0) as usize;
+                let limit = p.limit.unwrap_or(w::LIMIT_DEFAULT).min(w::LIST_LIMIT_MAX) as usize;
+                let rows = hits
+                    .iter()
+                    .skip(offset)
+                    .take(limit)
+                    .map(|&i| index.entries[i].row.clone())
+                    .collect();
+                (hits.len() as u32, rows)
+            })
+            .collect())
+    }
+
     async fn details(&self, id: &str, plugins: Vec<w::Row>) -> Result<w::DetailsResult, Error> {
         let index = self.index_with(Some(plugins)).await?;
         let files = self.files()?;
@@ -240,7 +270,7 @@ impl Hub {
 
 pub async fn serve(
     front: &Front,
-    _caller: &Caller,
+    caller: &Caller,
     p: Params,
 ) -> Result<Result<Value, Error>, Box<Params>> {
     let hub = &front.extensions;
@@ -251,6 +281,15 @@ pub async fn serve(
         Params::ExtensionsSearch(q) => hub.search(q, plugins).await.map(|r| json!(r)),
         Params::ExtensionsDetails(d) => hub.details(&d.id, plugins).await.map(|r| json!(r)),
         Params::ExtensionsRows(r) => hub.rows(&r.ids, plugins).await.map(|r| json!(r)),
+        Params::ExtensionsList(l) => match hub.sections(&l.sections, plugins).await {
+            Ok(found) => Ok(json!(crate::view::extensions::list(
+                front,
+                caller.conn_id,
+                l,
+                found
+            ))),
+            Err(e) => Err(e),
+        },
         Params::ExtensionsModules(m) => hub.set_modules(m.modules).await.map(|()| json!({})),
         other => return Err(Box::new(other)),
     })

@@ -1327,10 +1327,11 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `agents/list` | user, agent, service | `{}` | `{sessions?: [Snapshot]}` | no |
 | `agents/move` | user | `{id: Id, profile: string}` | `{id: string, name: string}` | yes |
 | `agents/pair` | user | `{id: Id, on: boolean}` | `boolean` | no |
+| `agents/panel/look` | user | `{older?: boolean, open?: [string], rows?: [[natnum, boolean]], view: string}` | `boolean` | no |
 | `agents/pause` | user | `{id: Id}` | `boolean` | yes |
 | `agents/permission` | user | `{id: Id, option?: string, request: RequestId}` | `boolean` | yes |
 | `agents/presence/get` | user | `{file: string}` | `{entries?: [PresenceEntry], file: string, rel?: string, repo?: string}` | no |
-| `agents/presence/subscribe` | user | `{file?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
+| `agents/presence/subscribe` | user | `{file?: string, view?: string, workspace?: {id: string, roots?: [string]}}` | `{files?: [FilePresence]}` | no |
 | `agents/probe` | user | `{profile: string, wait_s?: natnum}` | `{agent?: AgentInfo, ok: boolean, stderr_tail?: string, why?: string}` | no |
 | `agents/role` | user | `{id: Id, role: "manager" \| "worker" \| "chat"}` | `boolean` | yes |
 | `agents/send` | user | `{id: Id, if_free?: boolean, text: Prompt}` | `boolean` | yes |
@@ -1374,6 +1375,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `exec/stop` | user | `{id: Id}` | `ExecRow` | yes |
 | `explorer/subscribe` | user | `{compact?: boolean, expanded?: [AbsPath], roots: [AbsPath], view: string}` | `{listing: natnum}` | no |
 | `extensions/details` | user, agent | `{id: string}` | `DetailsResult` | no |
+| `extensions/list` | user | `{dense?: boolean, glyphs?: [{gui: string, kind: string, tty: string}], restart?: [string], sections: [{minus_updates?: boolean, name: string, search: {filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}, title: string}], view: string}` | `{sections: [ListTotal]}` | no |
 | `extensions/modules` | user | `{modules: [{doc?: string, flags?: [string], name: string, packages?: [string], state: "on" \| "off" \| "needs-package" \| "failed"}]}` | `{}` | no |
 | `extensions/rows` | user | `{ids: [string]}` | `{rows: [Row]}` | no |
 | `extensions/search` | user, agent | `{filters?: {archive?: string, builtin?: boolean, disabled?: boolean, enabled?: boolean, ids?: [string], installed?: boolean, keyword?: string, kind?: "package" \| "plugin" \| "module" \| "emacs", plugins?: boolean, unsigned?: boolean, updates?: boolean}, limit?: natnum, offset?: natnum, query?: string, sort?: "name" \| "downloads" \| "installed" \| "relevance" \| "updated"}` | `{rows: [Row], total: natnum}` | no |
@@ -1619,6 +1621,7 @@ result is (`event(NAME).check`):
 | `settings/explain` | the front (`settings_get`) | `{req, scope, names?, root?}`: the editor answers `settings/explained` with the same `req` |
 | `agent-step` | sessions (the front) | `{session, step: Step}`: a step opened or closed, with its class, the hub's stamps and its anchors |
 | `exec-done` | jobs (the front) | `{id, session?, status, exit?, summary: {exit?, failing, lines, log}}` |
+| `exec-progress` | jobs (the front) | `{id, file, plan}` or `{id, file, step}`: a `--progress` job's plan or step file changed ([Jobs](#jobs-exec), "Progress") |
 | `plugin` | plugins (the front) | `{name, state}`: a plugin's state changed (`unapproved`, `approved`, `changed`, `disabled`, `broken`, or `removed` when its folder is gone) |
 | `machines-changed` | machines (the front) | `{machines: [{machine, slots: [{id, holder?, kind}], local}]}`: the whole list, sent when a report, an expiry or the local slots changed it |
 | `agent-presence` | the presence model (to the connections that asked) | `{file, rel?, repo?, entries: [{session, file, mode, line?, line_end?, col?, source, step, at, live?, tool_call?}]}`: who is in the file now (running tool calls included), at most once per file per 100 ms ("The presence model") |
@@ -1970,6 +1973,19 @@ and badges build on it). This is its contract.
 - **The event** `agent-presence {file, entries}` goes only to the connections that asked (`Front::send_to`), at most
   once per file per 100 ms of the hub's clock: a change arms one flush 100 ms later (task `presence:flush`), and every
   file changed meanwhile goes out once, with its entries then.
+- **Who is here as a view model** (`work::presence::here`): `agents/presence/subscribe {workspace, view}` (the editor
+  sent `view/env` for VIEW first; drgnx's is `agents-here` in a data class `data`, its rows reading none of the env)
+  also makes VIEW get a model (`here::doc`, published before the rows, which name its version) and rows: a node and a
+  row per agent present in the user's tree (`a:SESSION`, in ordinal order, its newest entry: kind `agent`, fields
+  `label` (its handle), `session`, `ordinal`, `mode`, `file`, `line`) and per shown path (`p:PATH`, a file an agent is
+  about to change or has changed (`pending`, `write`, `edit`) and each folder above it up to its root: kind `file` or
+  `folder`, fields `path` and `ordinals`, space-separated); the lists `agents` and `paths`. A row holds only its text
+  and `drgnx-work-id`; a path's text carries its ordinals, so every change of a node changes its row. A file outside the roots is shown where it lands
+  in the user's tree (a linked worktree's file at its place in the main checkout, from `rel` and the main checkout);
+  one landing nowhere, and an agent the hub has not named yet, are not shown. The subscription starts with a reset;
+  each flush publishes the model and the rows again and only what changed goes out. Marks and colours are the
+  editor's, by ordinal.
+  Tests: `work/presence/here/tests.rs`, scenario `work/presence-rows`.
 - **Durability:** none of its own. At start, before the recorded sessions resume, it is rebuilt from their steps'
   details (reads, searches, edits); a shell step's command is not stored, so its files come back with its next step.
 - New sources (Gleipnir's opens, part 3's own refinements) add a `source` value without changing this contract.
@@ -2378,6 +2394,38 @@ The Explorer's folders, listed by the hub as a model and rows (`runtime/crates/d
   spaces for a file) in `drgnx-explorer-guide`, then the name in `drgnx-explorer-root`, `-directory` or `-file`, a
   control character as `^X`; the path is the `drgnx-work-id` over the whole row.
 - The hub does not watch the folders: the editor's own watches ask again when a shown folder changes.
+
+### The agent panel's rows
+
+The transcript of an agent session, as rows the panel only inserts (`runtime/crates/drgnx-ratatoskr/src/view/panel.rs`;
+the rows themselves are `agents/session/rows.rs`, pure).
+
+- **The view.** An editor that shows session SID's panel sends `view/env` for the view `agent-panel/SID`; the hub sends
+  every class of it the rows of the session's last 200 entries, a reset first, then each change of the transcript as
+  the patch of the rows it touched. `agent-entries` is unchanged: the mirror and the old panel still read it.
+- **Groups.** An entry is drawn in a group: a tool call with the thoughts right after it, or any other entry alone.
+  A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
+  hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
+  the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+  and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
+  step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
+  your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
+  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
+  are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
+- **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
+  `drgnx-agent-panel-checkpoint` (its step's seq); a hook line `drgnx-agent-panel-hook` (`[seq, row, record]`, for
+  the provenance); a hunk `drgnx-agent-panel-hunk` (`[path, hunk, part]`).
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
+  come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
+  every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
+- `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open
+  (`thinking`, `read`, `search`, `edit`, `execute`, `fetch`, `other`; a failed step is open anyway), the rows opened
+  or folded by hand (`[[entry, open], …]`), and `older` to show 200 entries more. It is per connection and view, and
+  is dropped when the view closes or the connection goes.
+- `huddle_rows` builds a huddle thread's rows (`h`, `r:N`, `o`) from its record; the thread still draws in Lisp.
 
 ### The symbol at a line (`search/symbol-at`)
 
@@ -2876,6 +2924,12 @@ optional; an older file with numbers reads as before), the `ExecRow` has no `tim
 (`Meta::time_left` is none), so only the process's end, `exec/stop` or the hub's stop ends the job. The graph row records
 a time box of 0. The editor side is `core/drgnx-exec.el` (a cache fed by `exec/list` and `exec-done`; see
 `docs/guide/jobs.md`, "The editor's jobs").
+
+**Progress** (`exec/progress.rs`): a job whose command line has `--progress FILE` (the Extensions view's jobs) is
+watched while it runs. Every 250 ms the hub reads `FILE.plan.json` and then `FILE` (each up to `MAX_BYTES`), and for
+each that changed since the last look and holds a JSON object it broadcasts `exec-progress {id, file, plan}` or
+`{id, file, step}`; one last look runs before `exec-done`, so the final step is never lost. The editor's jobs take
+these events instead of watching and reading the files themselves.
 
 ## Runners: the transport
 
@@ -3516,12 +3570,21 @@ and never reaches the network here: the refresh job (`drgnx extensions refresh`)
 - **Search:** words are lower-cased; a row matches when each word is a prefix of a word of its name or a substring of
   its name, keywords or summary. Rank: exact name, name prefix, name word prefix, inside the name, keyword, summary
   (the worst of the words), then installed first, then downloads, then name. `limit` is 1 to 500 (default 200).
-- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows` and
-  `extensions/modules` are the user's.
+- **The list as rows** (`extensions/list`, `view/extensions.rs`): the Extensions view sends its sections (name,
+  title, a search each, at most 8; `minus_updates` drops the rows the updates section shows), `dense`, its glyphs
+  (`{kind, gui, tty}` each) and the ids that need a restart. The hub runs the searches, builds the rows (a bold header
+  `Title (N)` per section, then a line per row with glyph, name, version, state chip and "restart to use", and unless
+  `dense` a shadowed `ID/2` line with summary, source and trust) and the model (a tree: section nodes with `label`,
+  `section`, `count`; row nodes with `label`, `name`, `state`, `signed`, `source`, `section`, `version`, `latest`),
+  publishes both to the `extensions` view of that connection, and answers each section's `{name, total, loaded}`. The
+  last list per connection is kept to rebuild on a resync, dropped when the connection goes.
+- **Classes:** `extensions/search` and `extensions/details` are open to agents; `extensions/rows`,
+  `extensions/list` and `extensions/modules` are the user's.
 
-Tests: `extensions::catalog::` [D, one every-order test A] and `extensions::rank::` [D]; conformance
-`extensions/search-ranks-the-fixture`, `details-of-an-installed-package`, `rows-keep-their-order`,
-`a-new-catalog-is-read-on-the-next-call` and `an-agent-may-search-but-not-send-modules` [B].
+Tests: `extensions::catalog::` [D, one every-order test A], `extensions::rank::` [D] and
+`view::extensions::` [D]; conformance `extensions/search-ranks-the-fixture`, `details-of-an-installed-package`,
+`rows-keep-their-order`, `a-new-catalog-is-read-on-the-next-call`, `an-agent-may-search-but-not-send-modules` and
+`extensions/rows` [B].
 
 ## Plugins
 

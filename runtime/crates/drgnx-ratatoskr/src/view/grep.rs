@@ -264,8 +264,8 @@ fn all_rows(run: &Run) -> Vec<Row> {
 }
 
 impl Store {
-    /// A new search: the rows are none and the next patch a reset.
-    fn restart(&mut self, key: &Key) {
+    /// A new search (or a new subscription of a view): the rows are none and the next patch a reset.
+    pub(super) fn restart(&mut self, key: &Key) {
         if let Some(p) = self.pairs.get_mut(key) {
             p.reset_due = true;
             p.rows.clear();

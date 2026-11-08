@@ -21,7 +21,7 @@
 (defconst drgnx-perf-workers-names
   '(lsp-burst lsp-typing ts-open ts-paste ts-typing ts-typing-unclosed compile-flood image-open
               explorer-expand explorer-git quick-open-large quick-open-typing quick-open-typing-old
-              agents-line-motion agents-line-motion-old autosave-typing)
+              agents-line-motion agents-line-motion-old presence-burst presence-burst-old autosave-typing)
   "The new workloads, in the order they run.")
 
 (defconst drgnx-perf-workers-lsp-sizes "500000,1000000,3000000"
@@ -205,6 +205,18 @@ whatever they found)."
                      :digest "(drgnx-perf-w-agents-line-digest)"
                      :check "(drgnx-perf-w-agents-line-done)"
                      :teardown "(drgnx-perf-w-agents-line-teardown)"))
+                 '(nil t))
+       ;; twenty presence changes, one per command, with 30 agents over 90 files held: what who is here costs per
+       ;; change, from the hub's rows (path by path) and on the old path (the cached presence rebuilt per event)
+       ,@(mapcar (lambda (old)
+                   `(,(if old 'presence-burst-old 'presence-burst)
+                     :setup ,(drgnx-perf-workers--form "(drgnx-perf-w-presence-burst-setup)")
+                     :each ,(if old "(drgnx-perf-w-presence-burst-old-each)" "(drgnx-perf-w-presence-burst-each)")
+                     :actions ,(make-list 20 (list :keys "<down>"))
+                     :complete-when "(drgnx-perf-w-presence-burst-done)"
+                     :digest "(drgnx-perf-w-presence-burst-digest)"
+                     :check "(drgnx-perf-w-presence-burst-done)"
+                     :teardown "(drgnx-perf-w-presence-burst-teardown)"))
                  '(nil t))
        ;; typing in a 50 MB buffer across an auto-save
        (autosave-typing

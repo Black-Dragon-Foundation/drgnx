@@ -488,11 +488,13 @@ pub const COALESCE: Duration = Duration::from_millis(100);
 /// The most globs a shell step's command expands, per step.
 const GLOB_CAP: usize = 200;
 
-/// What one connection asked for.
+/// What one connection asked for: the roots and files of its `agent-presence`, and the views that show who is here
+/// ([`here`]) as rows.
 #[derive(Debug, Default)]
 struct Sub {
     roots: Vec<String>,
     files: BTreeSet<RepoPath>,
+    views: BTreeSet<String>,
 }
 
 impl Sub {
@@ -528,6 +530,8 @@ pub struct Live {
     checkouts: Mutex<BTreeMap<PathBuf, Option<(PathBuf, String)>>>,
     /// Told the files each change touched, at once (the editors' buffer views, [`crate::editor`]).
     listener: OnceLock<Listener>,
+    /// The front, once a connection subscribed: a flush publishes who is here's rows through it.
+    front: OnceLock<std::sync::Weak<Front>>,
 }
 
 /// What [`Live::on_change`] calls with the files a change touched.
@@ -654,10 +658,14 @@ impl Live {
         }
     }
 
-    /// The waiting files' entries, each to the connections that asked for it.
+    /// The waiting files' entries, each to the connections that asked for it; then who is here's rows, to the views
+    /// that show them.
     fn flush(&self) {
         // a change from here on arms the next flush
         self.armed.store(false, Ordering::SeqCst);
+        if let Some(f) = self.front.get().and_then(std::sync::Weak::upgrade) {
+            self.here_publish(&f, None);
+        }
         let files = std::mem::take(&mut *lock(&self.pending));
         let Some(editors) = self.editors.get() else {
             return;
@@ -767,6 +775,54 @@ impl Live {
         })
     }
 
+    /// FILE (a true name) where it lands in the user's tree: its place in its repository's main checkout (a linked
+    /// worktree's file in the main one; a main checkout's file is itself); none outside git.
+    fn land(&self, file: &str) -> Option<String> {
+        let (rel, _) = self.rel_and_repo(file)?;
+        let main = main_checkout(Path::new(file))?;
+        Some(main.join(rel).to_string_lossy().into_owned())
+    }
+
+    /// Who is here's rows again for the views of CONN (none: of every connection that has one); what changed goes out.
+    pub fn here_publish(&self, f: &Front, conn: Option<u64>) {
+        let subs: Vec<(u64, Vec<String>, Vec<String>)> = lock(&self.subs)
+            .iter()
+            .filter(|(c, s)| !s.views.is_empty() && conn.is_none_or(|o| o == **c))
+            .map(|(c, s)| (*c, s.roots.clone(), s.views.iter().cloned().collect()))
+            .collect();
+        if subs.is_empty() {
+            return;
+        }
+        let files = self.all_now();
+        let ids = &f.core.agents.identities;
+        for (c, roots, views) in subs {
+            let h = here::here(
+                &files,
+                &roots,
+                |file| self.land(file),
+                |s| ids.get(s).map(|i| (i.ordinal, i.handle)),
+            );
+            let rows = here::rows(&h);
+            let doc = here::doc(&h);
+            for view in views {
+                // the model first: the rows' patch names its version
+                f.core.views.publish_model(f, c, &view, doc.clone());
+                f.core.views.publish_rows(f, c, &view, rows.clone());
+            }
+        }
+    }
+
+    /// A class of CONN's VIEW got its env: its rows, when VIEW shows who is here (false otherwise).
+    pub fn here_build(&self, f: &Front, conn: u64, view: &str) -> bool {
+        let shows = lock(&self.subs)
+            .get(&conn)
+            .is_some_and(|s| s.views.contains(view));
+        if shows {
+            self.here_publish(f, Some(conn));
+        }
+        shows
+    }
+
     /// Connection CONN is gone: its subscriptions with it.
     pub fn gone(&self, conn: u64) {
         lock(&self.subs).remove(&conn);
@@ -852,6 +908,9 @@ pub async fn subscribe(
 ) -> Result<PresenceFiles, runstav::wire::Error> {
     let live = &f.core.presence;
     let _ = live.editors.set(f.editors.clone());
+    if let Some(front) = f.core.views.front_weak() {
+        let _ = live.front.set(front);
+    }
     let at = crate::clock::wall_secs();
     // the names asked, by their true names (the model's keys): a root's files are named as the model has them, a
     // single file as it was asked
@@ -866,6 +925,9 @@ pub async fn subscribe(
                     .map(|r| true_name(&r.to_string_lossy()))
                     .collect();
                 s.roots.extend(roots.iter().cloned());
+                if let Some(v) = &p.view {
+                    s.views.insert(v.clone());
+                }
                 let mut all: BTreeSet<RepoPath> = BTreeSet::new();
                 {
                     let model = lock(&live.model);
@@ -882,6 +944,11 @@ pub async fn subscribe(
             (None, None) => Vec::new(),
         }
     };
+    if let Some(v) = &p.view {
+        // a new subscription starts the view afresh: a reset of who is here now
+        f.core.views.restart_rows(c.conn_id, v);
+        live.here_publish(f, Some(c.conn_id));
+    }
     Ok(PresenceFiles {
         files: files
             .into_iter()
@@ -900,6 +967,8 @@ pub async fn get(
         .presence
         .file_asked(&p.file, crate::clock::wall_secs()))
 }
+
+pub mod here;
 
 #[cfg(test)]
 mod tests;

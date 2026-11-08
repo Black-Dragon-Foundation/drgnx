@@ -146,6 +146,9 @@ Sets `drgnx-work-thirty--roots'."
 
 (defvar drgnx-hub-event-functions)
 (declare-function drgnx-hub-running-p "drgnx-hub-client")
+(declare-function drgnx-view-patch-handle "drgnx-view")
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+(defvar drgnx-view-patch)
 (declare-function drgnx-hub-connect "drgnx-hub-client")
 (declare-function drgnx-hub-ensure "drgnx-hub-client")
 (declare-function drgnx-hub-disconnect "drgnx-hub-client")
@@ -237,11 +240,16 @@ agent, start the 30 agents and send each its ask; wait until all 30 are busy.  R
 (defvar drgnx-view)
 
 (defun drgnx-work-thirty-agent-items (buffer)
-  "How many agent items the frame of BUFFER's map holds."
-  (let ((state (drgnx-work-client-view-state (buffer-local-value 'drgnx-work-space--view buffer))))
-    (if (and state (drgnx-work-client-live-p state))
-        (seq-count (lambda (id) (string-prefix-p "agent:" id)) (drgnx-work-client-ids state))
-      0)))
+  "How many agent items BUFFER's map holds: in its frame, or on the hub's rows in its model's team."
+  (let ((state (drgnx-work-client-view-state (buffer-local-value 'drgnx-work-space--view buffer)))
+        (patch (buffer-local-value 'drgnx-view-patch buffer)))
+    (cond
+     ((and patch (drgnx-view-patch-handle patch))
+      (seq-count (lambda (id) (string-prefix-p "agent:" id))
+                 (append (nidhogg-view-get (drgnx-view-patch-handle patch) 'list "team") nil)))
+     ((and state (drgnx-work-client-live-p state))
+      (seq-count (lambda (id) (string-prefix-p "agent:" id)) (drgnx-work-client-ids state)))
+     (t 0))))
 
 (defun drgnx-work-thirty-map (shown)
   "The map of the fixture's workspace: in a window beside the selected one when SHOWN, else open and shown nowhere

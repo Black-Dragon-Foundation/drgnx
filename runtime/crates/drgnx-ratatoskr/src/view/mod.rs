@@ -18,11 +18,13 @@
 //! [`Store`] is the pure core (no I/O, no clock), tested in every order of envs, rows, resyncs and restarts.
 
 pub mod explorer;
+pub mod extensions;
 pub mod files;
 pub mod fonts;
 pub mod git;
 pub mod grep;
 pub mod model;
+pub mod panel;
 #[cfg(test)]
 mod tests;
 
@@ -365,6 +367,10 @@ pub struct Views {
     files: files::Files,
     /// The Explorer's listings (`explorer/subscribe`).
     explorers: explorer::Explorers,
+    /// The Extensions lists (`extensions/list`).
+    lists: extensions::Lists,
+    /// The agent panels' rows (`agent-panel/SESSION`).
+    pub panels: Arc<panel::Panels>,
     /// The front, kept once at the hub's start: a search thread reaches the store and the connections through it.
     front: OnceLock<Weak<Front>>,
 }
@@ -379,6 +385,8 @@ impl Default for Views {
             letters: git::Letters::default(),
             files: files::Files::default(),
             explorers: explorer::Explorers::default(),
+            lists: extensions::Lists::default(),
+            panels: Arc::default(),
             front: OnceLock::new(),
         }
     }
@@ -396,7 +404,13 @@ impl Views {
             || self.git_build(f, key)
             || self.files_build(f, key)
             || self.explorer_build(f, key)
+            || self.extensions_build(f, key)
+            || f.core.presence.here_build(f, key.0, &key.1)
         {
+            return;
+        }
+        if let Some(sid) = panel::session_of(&key.1) {
+            self.panels.build_session(f, sid, Some(key.0));
             return;
         }
         let Some((mut rows, images, labels)) =
@@ -429,6 +443,26 @@ impl Views {
     /// The display classes CONN shows VIEW in.
     pub fn classes(&self, conn: u64, view: &str) -> Vec<String> {
         lock(&self.store).classes(conn, view)
+    }
+
+    /// Every (connection, view, class) that shows VIEW.
+    pub fn keys_of(&self, view: &str) -> Vec<Key> {
+        lock(&self.store)
+            .pairs
+            .keys()
+            .filter(|(_, v, _)| v == view)
+            .cloned()
+            .collect()
+    }
+
+    /// The sessions an agent panel shows: their steps' facts are kept.
+    fn prune_panels(&self) {
+        let shown = lock(&self.store)
+            .pairs
+            .keys()
+            .filter_map(|(_, v, _)| panel::session_of(v).map(str::to_owned))
+            .collect();
+        self.panels.prune(&shown);
     }
 
     /// The envs CONN sent for VIEW, one per class.
@@ -543,9 +577,40 @@ impl Views {
         lock(&self.store).hub()
     }
 
+    /// The front kept at the hub's start (none before it), for a model outside the views that publishes rows later.
+    pub fn front_weak(&self) -> Option<Weak<Front>> {
+        self.front.get().cloned()
+    }
+
+    /// ROWS, which read no env (a data view), for every class CONN shows VIEW in: what changed goes out.
+    pub fn publish_rows(&self, f: &Front, conn: u64, view: &str, rows: Vec<Row>) {
+        let patches: Vec<Patch> = {
+            let mut store = lock(&self.store);
+            store
+                .classes(conn, view)
+                .into_iter()
+                .filter_map(|class| {
+                    store.publish(&(conn, view.to_owned(), class), rows.clone(), &[])
+                })
+                .collect()
+        };
+        for p in patches {
+            f.send_to(conn, "view-patch", json!(p));
+        }
+    }
+
+    /// CONN's VIEW starts afresh: each class's next patch is a reset.
+    pub fn restart_rows(&self, conn: u64, view: &str) {
+        let mut store = lock(&self.store);
+        for class in store.classes(conn, view) {
+            store.restart(&(conn, view.to_owned(), class));
+        }
+    }
+
     /// Keep the front once; the searches' threads send through it.
     pub fn bind(&self, front: &Arc<Front>) {
         let _ = self.front.set(Arc::downgrade(front));
+        self.panels.bind(front);
     }
 
     pub fn gone(&self, conn: u64) {
@@ -553,9 +618,12 @@ impl Views {
         self.letters.gone(conn);
         self.files.gone(conn);
         self.explorers.gone(conn);
+        self.lists.gone(conn);
+        self.panels.gone(conn, None);
         lock(&self.store).gone(conn);
         lock(&self.fixtures).retain(|(c, _), _| *c != conn);
         self.prune_fonts();
+        self.prune_panels();
     }
 }
 
@@ -649,8 +717,11 @@ pub fn close(f: &Front, c: &Caller, p: ViewClose) -> Result<bool, Error> {
     views.letters.stop(c.conn_id, &p.view);
     views.files.stop(c.conn_id, &p.view);
     views.explorers.stop(c.conn_id, &p.view);
+    views.lists.stop(c.conn_id, &p.view);
+    views.panels.gone(c.conn_id, Some(&p.view));
     let closed = lock(&views.store).close(c.conn_id, &p.view);
     views.prune_fonts();
+    views.prune_panels();
     Ok(closed)
 }
 

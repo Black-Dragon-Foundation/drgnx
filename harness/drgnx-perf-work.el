@@ -28,10 +28,18 @@ agents with the map shown or hidden, say whether the premise holds and take it a
        (require 'memory-report)
        (defvar drgnx-perf--work-buf nil "The map's buffer.")
        (defvar drgnx-perf--work-shown nil "Whether the workload's map is shown.")
-       (defun drgnx-perf--work-up (shown)
-         "30 agents streaming and the map of their workspace, SHOWN or hidden; an error when that does not hold."
+       (defvar drgnx-view-old-path)
+       (defun drgnx-perf--work-up (shown &optional rows)
+         "30 agents streaming and the map of their workspace, SHOWN or hidden; an error when that does not hold.  ROWS:
+the map on the hub's rows (with Sjá); else on `drgnx-view-old-path', the frames this Emacs draws."
+         (require 'drgnx-view)
+         (setq drgnx-view-old-path (not rows))
          (drgnx-work-thirty-start drgnx-perf--hub-bin)
          (setq drgnx-perf--work-shown shown drgnx-perf--work-buf (drgnx-work-thirty-map shown))
+         ;; the lane says which path it ran: no silent fallback to this Emacs's frames
+         (unless (eq (and rows t) (and (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf) t))
+           (error "Premise: the map is %s the hub's rows (Sjá: %s)" (if rows "not on" "on")
+                  (if (fboundp 'nidhogg-view--call) "yes" "no")))
          (drgnx-work-thirty-premise drgnx-perf--work-buf shown))
        (defun drgnx-perf--work-premise ()
          (drgnx-work-thirty-premise drgnx-perf--work-buf drgnx-perf--work-shown))
@@ -40,7 +48,8 @@ agents with the map shown or hidden, say whether the premise holds and take it a
          (setq drgnx-perf--work-buf nil)
          (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
          (ignore-errors (delete-other-windows))
-         (drgnx-work-thirty-stop))
+         (drgnx-work-thirty-stop)
+         (setq drgnx-view-old-path nil))
        (defun drgnx-perf--work-select-map ()
          "The map's window selected, with an agent selected in it."
          (select-window (or (get-buffer-window drgnx-perf--work-buf) (error "The map is not shown")))
@@ -239,12 +248,16 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
                   (push (list (drgnx-perf--round ms) (and touched t) (- (plist-get (drgnx-view-stats v) :rows-drawn) rows)
                               (drgnx-perf--round (* 1000 (- gc-elapsed gc0))))
                         drgnx-perf--wl-long)))))))
+      (defun drgnx-perf--wl-updates ()
+        "The map's updates so far: on the hub's rows its patches' version, else the client's deltas."
+        (let ((patch (buffer-local-value 'drgnx-view-patch drgnx-perf--work-buf)))
+          (if patch (or (drgnx-view-patch-version patch) 0)
+            (drgnx-work-client-counter (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf) :deltas))))
       (defun drgnx-perf--wl-arm ()
         (setq drgnx-perf--wl-slices nil drgnx-perf--wl-long nil drgnx-perf--wl-consed nil drgnx-perf--wl-idle 0
               drgnx-perf--wl-gcs nil
               drgnx-perf--wl-start (list (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms)
-                                         (drgnx-work-client-counter (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf)
-                                                                    :deltas)))
+                                         (drgnx-perf--wl-updates)))
         (advice-add 'drgnx-view--draw-buffer :around #'drgnx-perf--wl-slice))
       (defun drgnx-perf--wl-wait (secs)
         "Let the session run for SECS: one wait to the deadline, waking only for process output."
@@ -252,14 +265,14 @@ agents in turn, the tiles of the bands that carry that agent's chain, summed."
           (while (< (float-time) deadline) (accept-process-output nil (- deadline (float-time))))))
       (defun drgnx-perf--wl-measure ()
         "30 s with the map shown and the agents streaming: the view's draw ms per second, each draw's ms and the stalls."
-        (let ((t0 (float-time)) (id (buffer-local-value 'drgnx-work-space--view drgnx-perf--work-buf)))
+        (let ((t0 (float-time)))
           (drgnx-perf-begin)
           (add-hook 'post-gc-hook #'drgnx-perf--wl-gc)
           (drgnx-perf--wl-wait 30)
           (remove-hook 'post-gc-hook #'drgnx-perf--wl-gc)
           (let* ((secs (- (float-time) t0)) (end (drgnx-perf-end))
                  (draw (- (plist-get (drgnx-view-stats (drgnx-perf--work-view)) :draw-ms) (car drgnx-perf--wl-start)))
-                 (deltas (- (drgnx-work-client-counter id :deltas) (cadr drgnx-perf--wl-start))))
+                 (deltas (- (drgnx-perf--wl-updates) (cadr drgnx-perf--wl-start))))
             (advice-remove 'drgnx-view--draw-buffer #'drgnx-perf--wl-slice)
             (when (< deltas 30) (error "Premise: the map got %d deltas in %.0f s" deltas secs))
             (append (list :draw_ms_s (drgnx-perf--round2 (/ draw secs)) :deltas deltas
@@ -565,12 +578,13 @@ field patch."
 (defun drgnx-perf-work-workloads (visit kill-fixture)
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
-`work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows' and `work-trail'."
+`work-live-old', `work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows' and `work-trail'.  `work-live'
+puts the map on the hub's rows; the others keep it on `drgnx-view-old-path'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
-         (up (lambda (shown extra)
-               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") ") " extra " t)")))
+         (up (lambda (shown extra &optional rows)
+               (concat "(progn " lib " (drgnx-perf--work-up " (if shown "t" "nil") (if rows " t" "") ") " extra " t)")))
          (down (concat "(progn (drgnx-perf--work-down) " kill-fixture " t)"))
          (typing-each (lambda (&optional extra)
                         (concat "(progn " visit " (drgnx-perf--work-premise) " extra " t)")))
@@ -591,11 +605,15 @@ fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster'
                      :measure "(drgnx-perf--rl-guard #'drgnx-perf--rl-measure)"
                      :check "(and (drgnx-work-thirty-premise) (or (>= (length drgnx-perf--rl-ms) 100) (error \"Premise: %d layouts drawn; %d lost; changes (t0 layout timer) %S; %S\" (length drgnx-perf--rl-ms) (apply #'+ (mapcar #'cdr drgnx-perf--rl-lost)) (let (r) (dolist (f drgnx-perf--rl-frames r) (let ((c (assoc f r))) (if c (cl-incf (cdr c)) (push (cons f 1) r))))) (drgnx-perf--rl-diag))))"
                      :teardown ,(concat "(progn (drgnx-perf--rl-teardown) " down ")"))
-      (work-live :setup ,(funcall up t drgnx-perf-work--live-form)
-                 :each "(progn (drgnx-perf--work-premise) (drgnx-perf--wl-arm) t)"
-                 :measure "(drgnx-perf--wl-measure)"
-                 :check ,typing-check
-                 :teardown ,down)
+      ;; the map on the hub's rows, and on the old path (`work-live-old': the frames this Emacs draws), the paired row
+      ,@(mapcar (lambda (old)
+                  `(,(if old 'work-live-old 'work-live)
+                    :setup ,(funcall up t drgnx-perf-work--live-form (not old))
+                    :each "(progn (drgnx-perf--work-premise) (drgnx-perf--wl-arm) t)"
+                    :measure "(drgnx-perf--wl-measure)"
+                    :check ,typing-check
+                    :teardown ,down))
+                '(nil t))
       (work-typing-shown :setup ,(funcall up t "")
                          :each ,(funcall typing-each)
                          :actions ,typing :check ,typing-check :teardown ,down)
