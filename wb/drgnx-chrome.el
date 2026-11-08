@@ -30,11 +30,11 @@
 ;; No `:height' in the tab faces: a relative 1.0 scales by one, and costs a font spec copy at every run of the tab line.
 (defface drgnx-chrome-tab '((t :inherit (shadow tab-line-tab-inactive) :box nil))
   "A tab in an editor's tab line: dimmed." :group 'drgnx)
-(defface drgnx-chrome-tab-current '((t :inherit tab-line-tab-current :box nil :weight bold))
-  "The shown tab of an editor group that is not the active one." :group 'drgnx)
-(defface drgnx-chrome-tab-active '((t :inherit (link tab-line-tab-current) :box nil :weight bold
-                                      :underline nil :overline t))
-  "The shown tab of the active editor group: the theme's link colour, overlined." :group 'drgnx)
+(defface drgnx-chrome-tab-current '((t :inherit (drgnx-text-muted tab-line-tab-current) :box nil))
+  "The shown tab of an editor group that is not the active one: on the editor's colour, muted." :group 'drgnx)
+(defface drgnx-chrome-tab-active '((t :inherit tab-line-tab-current :box nil))
+  "The shown tab of the active editor group: it joins the editor, in the body text's colour (the look, §3.8)."
+  :group 'drgnx)
 (defface drgnx-chrome-tab-hover '((t :inherit tab-line-highlight))
   "The tab (or its ×) under the pointer; only that one." :group 'drgnx)
 (defface drgnx-chrome-tab-preview '((t :slant italic))
@@ -462,10 +462,11 @@ it, so without this the next redisplay may keep the old line (the window's text 
                                 ((eq (frame-parameter (window-frame w) 'drgnx-chrome-breadcrumb) 'off) 'none)
                                 (t (let ((tail (buffer-local-value 'drgnx-chrome-header-tail (window-buffer w)))
                                          (providers (and drgnx-chrome-tail-providers drgnx-chrome--providers-tail)))
+                                     ;; on the header line's own face: the editor's colour, so the breadcrumb is
+                                     ;; part of the editor's surface under the shown tab (the look, §4)
                                      (if (or tail providers)
-                                         (delq nil (list (drgnx-wb-bar (drgnx-chrome-breadcrumb w) t) providers tail
-                                                         (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))
-                                       (drgnx-wb-bar (drgnx-chrome-breadcrumb w))))))))
+                                         (delq nil (list (drgnx-chrome-breadcrumb w) providers tail))
+                                       (drgnx-chrome-breadcrumb w)))))))
      (drgnx-chrome--set w 'mode-line-format drgnx-chrome-editor-mode-line))
     ((or 'dock 'area)
      (drgnx-chrome--set w 'tab-line-format 'none)

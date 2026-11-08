@@ -237,8 +237,24 @@
     ;; no height of their own: a relative 1.0 kept the tab line's height and cost a font spec copy per tab run
     (dolist (f '(drgnx-chrome-tab drgnx-chrome-tab-current drgnx-chrome-tab-active))
       (should (eq (face-attribute f :height nil nil) 'unspecified))))
-  (should (eq (face-attribute 'drgnx-chrome-tab-active :overline nil nil) t))
-  (should (memq (face-attribute 'drgnx-chrome-tab-current :overline nil nil) '(nil unspecified))))
+  ;; the look (design §4 tabs, §3.8 Current): the shown tab joins the editor in the body text's colour, no link colour,
+  ;; line or bold; the shown tab of another group is muted
+  (dolist (f '(drgnx-chrome-tab-active drgnx-chrome-tab-current))
+    (should (memq (face-attribute f :overline nil nil) '(nil unspecified)))
+    (should (memq (face-attribute f :weight nil nil) '(normal unspecified)))
+    (should-not (memq 'link (ensure-list (face-attribute f :inherit nil nil)))))
+  (should (memq 'drgnx-text-muted (ensure-list (face-attribute 'drgnx-chrome-tab-current :inherit nil nil)))))
+
+(ert-deftest drgnx-chrome/the-breadcrumb-sits-on-the-editor ()
+  "The look (design §4 editor): the breadcrumb row is part of the editor's surface, under the shown tab: the header is
+not painted with the tab row's band (`drgnx-wb-bar'); the theme's `header-line' gives the editor's colour."
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "src/a.el")
+    (drgnx-chrome-apply nil t)
+    (let ((h (window-parameter (selected-window) 'header-line-format)))
+      (should (stringp h))
+      (should-not (seq-some (lambda (i) (memq 'drgnx-wb-bar (ensure-list (get-text-property i 'face h))))
+                            (number-sequence 0 (1- (length h))))))))
 
 (ert-deftest drgnx-chrome/header-rows-are-one-band-to-the-edge ()
   (let ((s (drgnx-wb-bar "x")))

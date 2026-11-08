@@ -242,10 +242,11 @@ is not a frame line); with fewer, the frame parameter `drgnx-chrome-breadcrumb` 
 and the row is gone, sticky scroll's scopes with it. It comes back with room, and a buffer's own header line (column
 headings) stays.
 
-Hovering a file tab lights that one only, the whole tab. Tabs are dimmed, the shown tab of the active editor group is
-bold in the theme's link colour with an overline, and every row of chrome (tab line, breadcrumb, dock titles, panel
-tabs, the top line) is the theme's tab-line background; customize `drgnx-chrome-tab*` and `drgnx-wb-bar` to change
-them.
+Hovering a file tab lights that one only, the whole tab. Tabs are dimmed; the shown tab joins the editor (its colour,
+in the body text's colour in the active editor group and muted in another group). The breadcrumb row is the header
+line, on the editor's colour, so the shown tab, the breadcrumb and the code are one surface. The other rows of chrome
+(tab line, dock titles, panel tabs, the top line) are the theme's tab-line background. All of them are in the UI font.
+Customize `drgnx-chrome-tab*`, `header-line` and `drgnx-wb-bar` to change them.
 
 **On a graphical frame** the tab row is `tab-row` high (34 logical pixels at the comfortable density) on the `panel`
 surface; each tab is four pixels shorter than the row and two pixels from the next (a terminal separates them with a

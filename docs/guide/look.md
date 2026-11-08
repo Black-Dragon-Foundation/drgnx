@@ -122,6 +122,10 @@ Every piece of text has a **role**, and every role is one setting holding a plis
 | `drgnx-look-font-agent` | the agent panel's prose | the UI font |
 | `drgnx-look-font-terminal` | the terminal's text | the code font |
 
+drgnx's three themes give Emacs's own chrome faces these roles: `tab-bar`, `tab-line` (and their tab faces) and
+`header-line` take the UI font, and `mode-line` takes the caption. So a package's mode line, a Magit header or a tab
+from another package is in the UI font too. A theme from elsewhere keeps its own chrome fonts.
+
 A role's plist has these keys, and you give only the ones you want to change:
 
 - `:family` a family name, or `ui` / `code` for "the same as that role";

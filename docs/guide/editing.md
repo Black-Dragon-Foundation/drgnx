@@ -73,16 +73,16 @@ scroll by lines as always. **Toggle Smooth Scrolling**. Module `ui/smooth`.
 
 ## Sticky scroll
 
-When the start of the function, class or block you are in has scrolled off the top, its first line shows in the
-header, after the breadcrumb — up to three enclosing scopes, outermost first: `src › shape.py › class Shape: › def
-area(self):`. The header line is always there (the breadcrumb), so nothing moves as you scroll — except in a terminal window with
+When the start of the function, class or block you are in has scrolled off the top, its name shows in the header,
+after the breadcrumb and in the breadcrumb's type — up to three enclosing scopes, outermost first: `src › shape.py ›
+Shape › area`. A scope that names nothing (a `let` in Lisp, an `if` block) is left out. The header line is always there (the breadcrumb), so nothing moves as you scroll — except in a terminal window with
 fewer than 30 frame lines (31 terminal rows with the menu bar on), where the breadcrumb row is off and the scopes,
 which share its row, are hidden too. Scopes come from
 tree-sitter when the buffer has a parser (functions, methods, classes, structs, …), else from indentation (also while
 the tree is not ready — a large file's first parse still running on Nidhogg's parse worker: the header never waits for
 it and redraws once the tree is there); each
 position is worked out once, and again only when the text above the window's top changes. Scrolling inside the same
-scopes reuses their text (the scope lines are read and coloured once), and a comment block or a long string above the
+scopes reuses their names (the scope lines are read once), and a comment block or a long string above the
 top is passed in one step, however many lines it has. **Toggle Sticky Scroll** for this buffer. Module `editor/sticky` (drgnx's own). It is one of the header's tail providers: add your own with
 `drgnx-chrome-add-tail-provider` (a function of a window returning a string or nil, and a depth; lowest first).
 
@@ -156,7 +156,7 @@ Module `editor/clipboard`. Tests: `test/unit/mod-clipboard-test.el`.
 `test/unit/edit-clipboard-test.el` (the keys pressed through the command loop in each profile; the prefixes
 with and without a selection and the delay; the Explorer's own keys); `test/unit/mod-grammars-test.el` (the language of a buffer, the hint once and never a prompt, the install as a job
 and its command, buffers switching after it); `test/unit/mod-amenities-test.el` (the modules wait without their
-package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes, outermost first, at most three, one line, the
+package and run with it; the booster only with its program; a missing formatter still saves); `mod-sticky-test.el` (the scopes' names, outermost first, at most three, one line, the
 cost of a scroll step, never waiting for a parse that is not ready); `mod-markdown-test.el` (GFM for READMEs, the preview through pandoc or without a program,
 Mermaid as a job once, without mmdc nothing); `test/ui/code-editing-test.el` (on a graphical frame: the sticky
 scopes of a long function, indent guides, smooth scrolling, a screenshot); the perf workload `code-scrolling`

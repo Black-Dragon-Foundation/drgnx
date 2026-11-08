@@ -96,6 +96,27 @@
     (dotimes (i 8)
       (should (eql 1.0 (plist-get (drgnx-faces--clause-plist (intern (format "outline-%d" (1+ i))) 'gui) :height))))))
 
+(ert-deftest drgnx-themes/chrome-text-is-in-the-ui-font ()
+  "Design §3.1, 'Where the UI font goes': the tab bar, the tab lines, header lines and the status bar take the UI
+roles (the status bar the caption), in every theme, the tabs' own faces included (a theme spec replaces the
+defface's `:inherit')."
+  (pcase-dolist (`(,_ . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,role . ,faces)
+                     '((drgnx-ui-text tab-bar tab-bar-tab tab-bar-tab-inactive tab-line tab-line-tab
+                                      tab-line-tab-current tab-line-tab-inactive tab-line-tab-special header-line)
+                       (drgnx-ui-caption mode-line mode-line-active mode-line-inactive)))
+        (dolist (face faces)
+          (should (equal (list face role)
+                         (list face (let ((i (plist-get (drgnx-faces--clause-plist face 'gui) :inherit)))
+                                      (if (consp i) (car i) i))))))))))
+
+(ert-deftest drgnx-themes/header-lines-are-on-the-editor ()
+  "A header line belongs to its card (the breadcrumb under the tabs, a package's own header): the editor's colour."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'editor variant) (drgnx-face-color 'header-line :background 'gui))))))
+
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme (should (eq variant (drgnx-look-variant)))))

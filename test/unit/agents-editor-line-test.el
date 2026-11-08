@@ -109,7 +109,7 @@ scroll's providers registered beside it."
           (goto-char (point-min))
           (set-window-start (selected-window) (save-excursion (forward-line 19) (point)))
           (drgnx-chrome-add-tail-provider #'drgnx-sticky--tail 20)
-          (should (string-search "(defun drgnx-sticky-test-fn" (drgnx-chrome--tail-string (selected-window))))
+          (should (equal " › drgnx-sticky-test-fn" (substring-no-properties (drgnx-chrome--tail-string (selected-window)))))
           (drgnx-sticky-mode -1)
           (should (equal "" (drgnx-chrome--tail-string (selected-window)))))
       (drgnx-chrome-remove-tail-provider #'drgnx-sticky--tail)
