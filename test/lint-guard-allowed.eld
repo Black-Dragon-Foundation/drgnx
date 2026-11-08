@@ -16,6 +16,6 @@
  (:file "core/drgnx-platform.el" :form make-process :near "drgnx-platform-call" :why "a platform command (sweep Task 8)" :until "runner")
  (:file "core/drgnx-platform.el" :form set-process-sentinel :near "drgnx-platform-call" :why "a platform command's stderr end (sweep Task 8)" :until "runner")
  (:file "core/drgnx-shell-env.el" :form make-process :near "drgnx-shell-env-start" :why "the login shell's environment (sweep Task 8)" :until "runner")
- (:file "wb/drgnx-git.el" :form make-pipe-process :near "drgnx-git-refresh" :why "the Explorer's git status stderr (sweep Task 7)" :until "runner")
- (:file "wb/drgnx-git.el" :form make-process :near "drgnx-git-refresh" :why "the Explorer's git status (sweep Task 7)" :until "runner")
+ (:file "wb/drgnx-git.el" :form make-pipe-process :near "drgnx-git--refresh-local" :why "the Explorer's git status stderr (sweep Task 7)" :until "runner")
+ (:file "wb/drgnx-git.el" :form make-process :near "drgnx-git--refresh-local" :why "the Explorer's git status (sweep Task 7)" :until "runner")
 )

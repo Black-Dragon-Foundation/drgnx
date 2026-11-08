@@ -1602,6 +1602,11 @@ The workbench has two string caches, both activated by `core/workbench`: `git-st
 plist, 16 roots; `wb/drgnx-git.el`) and `explorer-listing` (folder → `(MTIME . CHILDREN)`, 64 folders;
 `wb/drgnx-explorer.el`). A root pushed out of `git-status` while its `git status` runs is not killed: the finished
 run puts the root back (`drgnx-git--done` sees no entry and no earlier read of that process).
+With the hub up the status is not read by that process: `drgnx-git-refresh` asks the hub (`git/letters`) and a repository's
+letters are the rows of a hub-fed view in a hidden buffer (`drgnx-git--letters`, at most `drgnx-git-roots-max`, the least
+recently refreshed dropped); `drgnx-git-status`, `drgnx-git-branch` and `drgnx-git-unread-p` read those rows and
+`drgnx-git-changed-functions` run after each patch.  The buffer has no window, so its env is the selected window's class
+(`drgnx-view-env-register` HEADLESS).  `drgnx-git-shown-functions` name the folders that get a mark row (the Explorer's).
 
 With Nidhogg's framing on (`nidhogg-workers-framing`), the status process is framed as `records` split at NUL
 (`drgnx-git--frame`) and its batches are read as they arrive (`drgnx-git--batch`) into an accumulator on the process

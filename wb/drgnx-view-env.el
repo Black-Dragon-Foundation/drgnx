@@ -63,6 +63,9 @@ asks again anyway).")
   "(VIEW . CLASS) → (EPOCH LOOK WIDTH): what was last sent for each (view, class), LOOK the facts the epoch counts.
 Pruned with its view.")
 
+(defvar drgnx-view-env--headless (make-hash-table :test #'equal)
+  "View id → t for the views that are in no window and still get the env of the selected window's class (git letters).")
+
 (defvar drgnx-view-env--glyphs (make-hash-table :test #'equal)
   "(FONT-NAME . CHAR) → its advance in px, as the editor measured it for a `view-glyphs' ask (bounded:
 `drgnx-view-env-glyph-cache-max').")
@@ -142,7 +145,8 @@ of (ROLE FILE INDEX PX ASCENT DESCENT AVG SPACE NAME)."
 the narrowest window of the class (Call 2: one buffer holds one fit)."
   (let ((buffer (car (gethash view drgnx-view-env--views))) (classes nil))
     (when (buffer-live-p buffer)
-      (dolist (w (drgnx-view-env--windows buffer))
+      (dolist (w (or (drgnx-view-env--windows buffer)
+                     (and (gethash view drgnx-view-env--headless) (list (selected-window)))))
         (let* ((facts (drgnx-view-env--window-facts w)) (class (drgnx-view-env--class facts))
                (width (window-body-width w t)) (have (assoc class classes)))
           (if have
@@ -271,10 +275,12 @@ cache, each (font, char) measured once."
 
 ;;;; Registering a view
 
-(defun drgnx-view-env-register (view buffer &optional resubscribe)
+(defun drgnx-view-env-register (view buffer &optional resubscribe headless)
   "VIEW (an id string) is hub-fed and drawn in BUFFER: send its env now and whenever it changes.  RESUBSCRIBE (VIEW)
-runs after the env is sent again on a reconnect.  The view is forgotten with its buffer."
+runs after the env is sent again on a reconnect.  HEADLESS: BUFFER is shown in no window, and the hub gets the env
+of the selected window's display class for it (rows that only Lisp reads).  The view is forgotten with its buffer."
   (puthash view (cons buffer resubscribe) drgnx-view-env--views)
+  (if headless (puthash view t drgnx-view-env--headless) (remhash view drgnx-view-env--headless))
   (with-current-buffer buffer
     (add-hook 'text-scale-mode-hook #'drgnx-view-env--text-scale nil t)
     (add-hook 'kill-buffer-hook #'drgnx-view-env--buffer-killed nil t))
@@ -289,6 +295,7 @@ runs after the env is sent again on a reconnect.  The view is forgotten with its
   "Forget VIEW: its envs, its buffer's hooks; the global hooks go with the last view."
   (let ((v (gethash view drgnx-view-env--views)))
     (remhash view drgnx-view-env--views)
+    (remhash view drgnx-view-env--headless)
     (when (and v (buffer-live-p (car v)))
       (with-current-buffer (car v)
         (remove-hook 'text-scale-mode-hook #'drgnx-view-env--text-scale t)

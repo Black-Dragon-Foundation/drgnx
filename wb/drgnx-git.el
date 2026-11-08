@@ -149,7 +149,9 @@ branch lines.  A detached HEAD is (:head nil :detached t); a branch with no upst
 (defun drgnx-git-branch (root)
   "The branch of the repository at ROOT as the last status run read it (see `drgnx-git-parse-branch'), or nil.
 A cache read: it runs no git."
-  (plist-get (drgnx-cache-get 'git-status root) :branch))
+  (if-let* ((buf (drgnx-git--letters-buffer root)))
+      (drgnx-git--letters-branch buf)
+    (plist-get (drgnx-cache-get 'git-status root) :branch)))
 
 (defun drgnx-git--rank (status) (nth 2 (alist-get status drgnx-git--looks)))
 
@@ -172,7 +174,14 @@ it, `added' for one holding untracked files (the folder itself is tracked: it sh
 
 (defun drgnx-git-status (path)
   "PATH's git status, or nil: its own entry, else (a folder) the strongest inside it, else an
-ignored or untracked folder around it."
+ignored or untracked folder around it.
+With the hub's letters (`drgnx-git-letters-active-p') the answers come from its rows."
+  (if-let* ((root (drgnx-git-root path)) (buf (drgnx-git--letters-buffer root)))
+      (drgnx-git--letters-status buf (string-remove-suffix "/" (file-relative-name (expand-file-name path) root)))
+    (drgnx-git--status-cache path)))
+
+(defun drgnx-git--status-cache (path)
+  "`drgnx-git-status' from the status the last local run read."
   (when-let* ((root (drgnx-git-root path)) (repo (drgnx-cache-get 'git-status root)) (files (plist-get repo :files)))
     (let ((rel (string-remove-suffix "/" (file-relative-name (expand-file-name path) root))))
       (or (gethash rel files)
@@ -187,7 +196,8 @@ ignored or untracked folder around it."
 (defun drgnx-git-unread-p (path)
   "Non-nil when PATH is in a repository whose status is not in the cache: never read, or pushed out.
 A peek: it keeps nothing from eviction."
-  (when-let* ((root (drgnx-git-root path))) (not (drgnx-cache-peek 'git-status root))))
+  (when-let* ((root (drgnx-git-root path)))
+    (and (not (drgnx-git--letters-buffer root)) (not (drgnx-cache-peek 'git-status root)))))
 
 (defun drgnx-git-look (status)
   "(LETTER FACE) for STATUS."
@@ -237,10 +247,19 @@ its run went on (the entry, and with it :proc, is gone)."
     found))
 
 (defun drgnx-git-refresh (path &optional wait)
-  "Read the status of PATH's repository in the background (WAIT: until done, for tests).
-A refresh asked for while one runs is done once afterwards, also when the cache pushed the repository out meanwhile."
+  "Read the status of PATH's repository in the background (WAIT: until done, for tests): the hub's letters when the hub
+is up (`git/letters', rows the editor reads), else a `git status' run of Emacs's own (`drgnx-git--refresh-local')."
   ;; Folders found outside any repository are looked at again: one may have been made since (git init).
   (maphash (lambda (dir root) (when (eq root 'none) (remhash dir drgnx-git--roots))) drgnx-git--roots)
+  (let ((root (and (drgnx-git--hub-ready-p) (drgnx-git-root path))))
+    (if root
+        (drgnx-git--letters-refresh root wait)
+      (when-let* ((r (drgnx-git-root path))) (drgnx-git--letters-drop r))
+      (drgnx-git--refresh-local path wait))))
+
+(defun drgnx-git--refresh-local (path &optional wait)
+  "Read the status of PATH's repository in the background with a process of Emacs's own (WAIT: until done, for tests).
+A refresh asked for while one runs is done once afterwards, also when the cache pushed the repository out meanwhile."
   (when-let* ((root (drgnx-git-root path)) ((executable-find "git")))
     (let* ((repo (drgnx-cache-get 'git-status root))
            (running (if repo (plist-get repo :proc) (drgnx-git--run-of root))))
@@ -307,6 +326,157 @@ The look is a peek: a late sentinel is no use of ROOT, and a stamp would evict a
                      (> (or (drgnx-git--index-entries root) 0) drgnx-git-speedup-entries))
             (drgnx-timer-soon (cons 'git-speedups root) 1 #'drgnx-git--offer :args (list root) :idle t :owner :core))
           (when again (drgnx-git-refresh root)))))))
+
+;;;; On the rows path: the hub's letters (Sjá)
+;; With the hub up (and `drgnx-view-old-path' off, and Sjá in this Emacs) a repository's status is read by the hub
+;; (`git/letters'), which sends a hub-fed view of its own per repository the rows `f:PATH' (a letter per changed
+;; path, ignored ones included), `d:FOLDER' (a mark per shown folder holding a change; only the folders
+;; `drgnx-git-shown-functions' name are worked out) and `branch'.  The view lives in a buffer no window shows (its env
+;; is the selected window's class, `drgnx-view-env-register' HEADLESS) and is never drawn; `drgnx-git-status',
+;; `drgnx-git-branch' and `drgnx-git-unread-p' read its rows, and `drgnx-git-changed-functions' run after each patch.
+;; At most `drgnx-git-roots-max' repositories keep one (the least recently refreshed goes).
+
+(declare-function drgnx-hub--call-on "drgnx-hub-client")
+(declare-function drgnx-view-patch-attach "drgnx-view")
+(declare-function drgnx-view-patch-detach "drgnx-view")
+(declare-function drgnx-view-patch-rows "drgnx-view")
+(declare-function drgnx-view-patch-version "drgnx-view")
+(declare-function drgnx-view-patch-view "drgnx-view")
+(declare-function drgnx-view-env-register "drgnx-view-env" (view buffer &optional resubscribe headless))
+(declare-function drgnx-view-env-unregister "drgnx-view-env" (view))
+(defvar drgnx-hub--events)
+(defvar drgnx-hub-event-functions)
+(defvar drgnx-view-old-path)
+(defvar drgnx-view-patch)
+
+(defvar drgnx-git-shown-functions nil
+  "Functions of no argument, each returning the folders (absolute) whose changes are shown, for the hub's folder
+marks (the Explorer's roots and open folders).")
+
+(defvar drgnx-git--letters (make-hash-table :test #'equal)
+  "Repository root → the buffer of its letters view, at most `drgnx-git-roots-max'.")
+(defvar drgnx-git--letters-order nil "The roots in `drgnx-git--letters', the most recently refreshed first.")
+(defvar drgnx-git--letters-views (make-hash-table :test #'equal) "View id → its root.")
+
+(defun drgnx-git--hub-ready-p ()
+  "Non-nil when the status is read by the hub: not `drgnx-view-old-path', Sjá in this Emacs, the hub connected."
+  (and (not (bound-and-true-p drgnx-view-old-path)) (fboundp 'nidhogg-view--call)
+       (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events)))
+
+(defun drgnx-git--letters-buffer (root)
+  "ROOT's letters buffer, or nil: a cache read."
+  (let ((b (gethash root drgnx-git--letters))) (and (buffer-live-p b) b)))
+
+(defun drgnx-git-letters-active-p ()
+  "Non-nil when some repository's status comes from the hub's letters."
+  (> (hash-table-count drgnx-git--letters) 0))
+
+(defun drgnx-git--letters-view (root)
+  "The hub view id of ROOT's letters: 20 bytes, whatever the length of the path."
+  (concat "git-" (substring (md5 root) 0 16)))
+
+(defun drgnx-git--letters-rows (buf)
+  (drgnx-view-patch-rows (buffer-local-value 'drgnx-view-patch buf)))
+
+(defun drgnx-git--letters-kind (rows key)
+  "The status symbol the row KEY of ROWS names, or nil."
+  (when-let* ((row (gethash key rows))
+              (p (seq-find (lambda (p) (equal (nth 2 p) "drgnx-git-status")) (plist-get row :props))))
+    (intern (nth 3 p))))
+
+(defun drgnx-git--letters-status (buf rel)
+  "`drgnx-git-status' of the path REL (relative to the root, no trailing /) from the rows of BUF."
+  (let ((rows (drgnx-git--letters-rows buf)))
+    (or (drgnx-git--letters-kind rows (concat "f:" rel))
+        (drgnx-git--letters-kind rows (concat "d:" rel))
+        (let ((dir (file-name-directory rel)) found)
+          (while (and dir (not found))
+            (let ((s (drgnx-git--letters-kind rows (concat "f:" (directory-file-name dir)))))
+              (when (memq s '(ignored untracked)) (setq found s)))
+            (setq dir (file-name-directory (directory-file-name dir))))
+          found))))
+
+(defun drgnx-git--letters-branch (buf)
+  "`drgnx-git-branch' from the branch row of BUF: (:head NAME :ahead A :behind B), or (:head nil :detached t)."
+  (when-let* ((row (gethash "branch" (drgnx-git--letters-rows buf)))
+              (v (nth 3 (car (plist-get row :props)))))
+    (if (plist-get v :head) (list :head (plist-get v :head) :ahead (plist-get v :ahead) :behind (plist-get v :behind))
+      (list :head nil :detached t))))
+
+(defun drgnx-git--letters-drop (root)
+  "Forget ROOT's letters: its buffer goes (the hub is not told: its rows for the view stop with the connection)."
+  (when-let* ((b (gethash root drgnx-git--letters)))
+    (remhash root drgnx-git--letters)
+    (setq drgnx-git--letters-order (delete root drgnx-git--letters-order))
+    (when (buffer-live-p b)
+      (with-current-buffer b
+        (when drgnx-view-patch
+          (let ((view (drgnx-view-patch-view drgnx-view-patch)))
+            (remhash view drgnx-git--letters-views)
+            (drgnx-view-env-unregister view)
+            (drgnx-view-patch-detach))))
+      (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
+    (unless (drgnx-git-letters-active-p) (remove-hook 'drgnx-hub-event-functions #'drgnx-git--hub-event))))
+
+(defun drgnx-git-letters-clear ()
+  "Forget every repository's letters (the module's teardown, tests)."
+  (dolist (root (hash-table-keys drgnx-git--letters)) (drgnx-git--letters-drop root)))
+
+(defun drgnx-git--letters-attach (root)
+  "ROOT's letters buffer, made (a hub-fed view no window shows) when it is not."
+  (require 'drgnx-view)
+  (or (drgnx-git--letters-buffer root)
+      (let ((view (drgnx-git--letters-view root)))
+        (while (>= (hash-table-count drgnx-git--letters) drgnx-git-roots-max)
+          (drgnx-git--letters-drop (car (last drgnx-git--letters-order))))
+        (with-current-buffer (generate-new-buffer (format " *drgnx git letters %s*" view) t)
+          (buffer-disable-undo)
+          (drgnx-view-patch-attach view "unshown")
+          (require 'drgnx-view-env)
+          (puthash root (current-buffer) drgnx-git--letters)
+          (puthash view root drgnx-git--letters-views)
+          (add-hook 'drgnx-hub-event-functions #'drgnx-git--hub-event 90)
+          (drgnx-view-env-register view (current-buffer) #'drgnx-git--letters-resubscribe t)
+          (current-buffer)))))
+
+(defun drgnx-git--letters-shown (root)
+  "The folders under ROOT that `drgnx-git-shown-functions' name, relative to it, without the root itself."
+  (let (out)
+    (dolist (f drgnx-git-shown-functions)
+      (dolist (dir (funcall f))
+        (let ((rel (string-remove-suffix "/" (file-relative-name (expand-file-name dir) root))))
+          (unless (or (member rel '("." "")) (string-prefix-p ".." rel)) (cl-pushnew rel out :test #'equal)))))
+    out))
+
+(defun drgnx-git--letters-refresh (root &optional wait)
+  "Ask the hub for ROOT's letters, without waiting (WAIT: until a patch arrives, for tests).  A call while one is
+running is overtaken by the hub: the newer read wins."
+  (let* ((buf (drgnx-git--letters-attach root)) (view (drgnx-git--letters-view root))
+         (before (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))))
+    (setq drgnx-git--letters-order (cons root (delete root drgnx-git--letters-order)))
+    (unless (fboundp 'drgnx-hub--call-on) (require 'drgnx-hub-client))
+    (condition-case nil
+        ;; on the subscribed connection: the rows go to the connection that asks
+        (drgnx-hub--call-on drgnx-hub--events "git/letters" (list :view view :root (directory-file-name root)
+                                                                  :shown (vconcat (drgnx-git--letters-shown root)))
+                            #'ignore)
+      (error nil))
+    (when wait
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (buffer-live-p buf) (< (float-time) deadline)
+                    (equal before (drgnx-view-patch-version (buffer-local-value 'drgnx-view-patch buf))))
+          (accept-process-output nil 0.05))))))
+
+(defun drgnx-git--letters-resubscribe (view)
+  "The hub is up again: its letters for VIEW were lost, ask again."
+  (when-let* ((root (gethash view drgnx-git--letters-views))) (drgnx-git--letters-refresh root)))
+
+(defun drgnx-git--hub-event (event data)
+  "`drgnx-hub-event-functions': after a patch of a letters view (the view's own handler ran first), the panels
+read the status again."
+  (when (equal event "view-patch")
+    (when-let* ((root (gethash (plist-get data :view) drgnx-git--letters-views)))
+      (run-hook-with-args 'drgnx-git-changed-functions root))))
 
 ;;;; The fsmonitor offer
 

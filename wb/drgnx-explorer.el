@@ -676,11 +676,13 @@ With Nidhogg's workers on, a local DIR is read off the main thread instead: its 
     (save-excursion (goto-char p) (insert (if expanded "▾" "▸")))))
 
 (defun drgnx-explorer-toggle-at (pos)
-  "Expand or collapse the folder whose row is at POS (roots stay expanded)."
+  "Expand or collapse the folder whose row is at POS (roots stay expanded).  With the hub's git letters the folders
+shown changed: they are asked for again."
   (with-current-buffer (drgnx-explorer--buffer)
     (if (drgnx-explorer--rows-p)
         (drgnx-explorer--rows-toggle (drgnx-explorer-node-at pos))
-      (drgnx-explorer--toggle-at-old pos))))
+      (prog1 (drgnx-explorer--toggle-at-old pos)
+        (when (drgnx-git-letters-active-p) (drgnx-explorer--git-refresh))))))
 
 (defun drgnx-explorer--toggle-at-old (pos)
   "`drgnx-explorer-toggle-at' off the rows path, in the Explorer's buffer."
@@ -1616,7 +1618,8 @@ is over — its release will not come here (Wayland)."
   (add-function :after after-focus-change-function #'drgnx-explorer--focus-changed '((name . drgnx-explorer)))
   (drgnx-modules-push-undo "after-focus-change-function drgnx-explorer"
                            (lambda () (remove-function after-focus-change-function 'drgnx-explorer)))
-  (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed))
+  (add-hook 'drgnx-git-changed-functions #'drgnx-explorer--git-changed)
+  (add-hook 'drgnx-git-shown-functions #'drgnx-explorer--shown-folders))
 
 (provide 'drgnx-explorer)
 ;;; drgnx-explorer.el ends here
