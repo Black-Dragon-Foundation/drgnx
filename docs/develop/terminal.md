@@ -95,7 +95,16 @@ and its attach starts with a reset. The hub going away never ends the program.
 were not sent yet (a reset: all, the table starting again). The 16 palette colours go as `{ansi: N}`, the rest of the
 256-colour palette and direct colours as `{rgb}` (program data). A row has one character per cell, trailing default
 blanks dropped; a wide character's second cell is a stop at the next column's pixel, so columns keep their place
-whatever width the editor's font gives the character. The cursor's column in `term` is an index into the row's text.
+whatever width the editor's font gives the character. A glyph wider than its two cells would still push its row right
+up to the next stop, so the terminal's buffer replaces the hub-fed rows' fit guard (an ellipsis before the first stop,
+for labels) with its own (`drgnx-view-patch-guard-function` = `drgnx-term--cell-guard`): the wide cluster before each
+stop is measured once per cell width (`drgnx-term--cell-scales`, 4,096 entries) and, when wider than two cells, drawn
+smaller by a `(height F)` display over all its characters (so a joined emoji stays one glyph). A guard per stop with
+a scale was chosen over rescaling the emoji font (`face-font-rescale-alist`): that is global, names a font, and would
+shrink emoji in every buffer; the scale here is measured from the glyph actually drawn, in this buffer only. Grapheme
+clusters are one width as Unicode gives it by default (`drgnx-term-grapheme-width-method` "unicode": mode 2027 on, as
+Ghostty does), so 👩‍💻 is two cells; a shell whose line editor counts code points (wcwidth) can misplace its cursor on
+such a line, which "legacy" avoids. The cursor's column in `term` is an index into the row's text.
 
 **Input:** a key name maps to libghostty's key (letters, digits and US-layout symbols by character, named keys, else
 unidentified with its text; `src/keys.rs`) and is encoded from the terminal's modes (kitty keyboard flags,
@@ -259,8 +268,9 @@ program runs).
 
 **Tests:** `test/unit/term-test.el` (`drgnx-term/`, a gated hub with the real worker: the shell in a worker, echo,
 a flood backfilled, the scrollback setting both ways, undo off, input queued while the hub is away, a theme change
-without a reset, a tty frame) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align,
-cursor shapes).
+without a reset, a tty frame), `test/unit/term-cells-test.el` (`drgnx-term-cells/`: the cell guard with a fixed
+measure) and the GUI rows `test/ui/term-gui-test.el` (`drgnx-term-gui/`: wide cells align, CJK, emoji and a joined
+emoji among them, cursor shapes).
 
 ## Settings
 

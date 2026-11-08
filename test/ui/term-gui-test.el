@@ -1,8 +1,8 @@
 ;;; term-gui-test.el --- GUI rows: drgnx's terminal in a graphical frame (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; A real hub (a test-hooks build from DRGNX_RATATOSKR_BIN, `drgnx-rows-demo-with') starts the terminal worker beside
-;; it; the shell is /bin/sh.  The rows measure what a graphical frame shows: wide cells (CJK, a ZWJ emoji, a combining
-;; mark) keep the columns after them in place, and the cursor's shape follows what the program asks (DECSCUSR).
+;; it; the shell is /bin/sh.  The rows measure what a graphical frame shows: wide cells (CJK, emoji, a ZWJ emoji, a
+;; combining mark) keep the columns after them in place, and the cursor's shape follows what the program asks (DECSCUSR).
 ;; Runnable from a checkout on any GUI build with the hub and the worker built.
 
 (require 'ert)
@@ -66,17 +66,21 @@ character's row holds a placeholder after it, the stop at its second cell: the r
         (car (posn-x-y (posn-at-point (match-beginning 1) (get-buffer-window buffer))))))))
 
 (ert-deftest drgnx-term-gui/wide-cells-align ()
-  "Rows of a CJK pair (4 cells) and a letter with a combining mark (1), each followed by `|': the bar is drawn at its
-cell, whatever width the font gives the characters before it."
+  "Rows of a CJK pair (4 cells), a letter with a combining mark (1), a leading emoji (2), an emoji after two letters
+\(2) and a joined emoji (👩‍💻, one cluster of 2 cells: grapheme width \"unicode\", mode 2027 on), each followed by
+`|': the bar is drawn at its cell, whatever width the font gives the characters before it, and no emoji becomes an
+ellipsis (a glyph wider than its two cells is drawn smaller)."
   (skip-unless (display-graphic-p))
   (drgnx-term-gui--with
     (let* ((b (drgnx-term-gui--start)) (cw (frame-char-width))
-           (rows `(("A" ,(string #x6f22 #x5b57) 5) ("C" ,(string ?e #x301) 2))))
+           (rows `(("A" ,(string #x6f22 #x5b57) 5) ("C" ,(string ?e #x301) 2) ("B" ,(string #x1f600) 3)
+                   ("D" ,(concat "ab" (string #x1f600)) 5) ("E" ,(string #x1f469 #x200d #x1f4bb) 3))))
       (drgnx-term-gui--run b (concat "printf '"
                                      (mapconcat (lambda (r) (concat (car r) (drgnx-term-gui--octal (cadr r)) "|\\n")) rows "")
                                      "'"))
       (drgnx-test-wait (lambda () (cl-every (lambda (r) (drgnx-term-gui--bar-x b (car r))) rows))
-                       :secs 30 :what "the two rows")
+                       :secs 30 :what "the five rows")
+      (should-not (seq-some (lambda (l) (string-search "…" l)) (drgnx-term-gui--lines b)))
       (dolist (r rows)
         (let ((x (drgnx-term-gui--bar-x b (car r))) (want (* (nth 2 r) cw)))
           (message "drgnx-term-gui: %s bar at %s px, its cell at %s px" (car r) x want)
