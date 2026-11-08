@@ -37,6 +37,7 @@ fn env(class: &str, epoch: u64, width: u32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        attach: false,
     }
 }
 

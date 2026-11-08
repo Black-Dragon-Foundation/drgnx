@@ -150,6 +150,12 @@ file system monitor (`git fsmonitor--daemon status` answers), `core.fsmonitor`; 
 repository, and drgnx never remembers that you declined. `drgnx-explorer-git` turns it off. What git complains
 about is kept in the hidden buffer ` *drgnx git errors*` (its last `drgnx-git-errors-max` characters).
 
+With the hub up, the hub reads the status instead (`git/letters`, [hub.md](../develop/hub.md)) and sends the letters as rows
+of a view of its own per repository, which no window shows; the Explorer and the Buffers list read their marks from those
+rows, and the folders that get a `●` are the roots and the open folders (opening one asks the hub again).  Without the hub,
+with the old path switch or when a repository has no letters yet, the status is read by Emacs as above.  The same 16
+repositories are kept.  `test/unit/git-letters-test.el` covers the rows with no hub.
+
 ### Buffers panel
 
 Save All (`C-k s` · palette — `C-x s` stays Emacs' asking save · `SPC f S`), Close Saved (`C-k u` · palette · `SPC b u`), Close All (`C-k C-w` · palette ·

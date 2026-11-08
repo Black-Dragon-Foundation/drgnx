@@ -99,3 +99,16 @@ their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attache
 the matches over the file rows, wrapping; a tick box unticks a match (its file's box: all of them) and stays as it is
 when the hub redraws the row; Replace All writes the ticked matches from the model's fields, then searches again.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
+
+With the hub up, the search itself goes to the hub too: a text search is `search/grep` (the view `search`, the fields' text and
+toggles, the folder or file, the include and exclude globs, the replacement), and the results are the hub's rows, a
+reset and then each file's header and matches, inserted below the fields by `drgnx-view-apply-patch`.  A new search
+makes the hub send a reset and drop the old search's late rows, and the editor drops one that still arrives by its
+base.  `search-grep-done` ends the search and gives the count the status line shows; the status line shows
+"Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
+nothing is searched again.  Symbol mode (the language server's edits), a hub that is down and
+`drgnx-view-old-path` keep the Lisp engine and its rows, and the view changes between the two with each search.  The
+file watches stay Lisp: a listed file that changes on disk is searched again through the hub after half a second.  The hub reads the disk, so a file whose buffer has unsaved edits is rescanned by Emacs from the buffer
+(`drgnx-replace--scan`, after each search and half a second after an edit), also when the hub found nothing in the file:
+those matches take the place of the hub's rows of the file, are counted and are what Replace All and Replace This
+write.  Next Match and Previous Match walk them after the hub's matches; they have no tick boxes (they are not in the hub's model); a new search forgets them.  `test/unit/replace-rows-test.el` covers the stream with no hub.

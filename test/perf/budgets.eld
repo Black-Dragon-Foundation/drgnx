@@ -105,6 +105,12 @@
  (replace-typing (:alloc :p50) 41340) (replace-typing (:cpu_ms :p90) 183.7) (replace-typing (:rows) 1)
  ;; replace-retype seeded 2026-10-20 from two GUI-container runs at --cpus 2 (alloc 4097 / 4097, cpu p90 4.97 / 5.93,
  ;; rows 0 / 0; a third at --cpus 1 gave 4097, 6.22, 0): the keys only edit the field, the rows are patched by timers
+ ;; replace-typing-rows: the same workload with the hub searching and streaming the rows.  alloc 4134 is the render offload's
+ ;; target, a tenth of replace-typing's 41340; measured once (2026-11-08, Nidhogg's line image, pinned to 4 CPUs): 5996 objects
+ ;; per command (replace-typing in the same session: 6073, the 41340 follows a slow runner's wall clock), cpu p90 3.21 ms, rows 1.
+ ;; All three are report-only until the combined pass reads them.
+ (replace-typing-rows (:alloc :p50) 4134 :report-only rro-scan) (replace-typing-rows (:cpu_ms :p90) 4.0 :report-only rro-scan)
+ (replace-typing-rows (:rows) 1 :report-only rro-scan)
  (replace-retype (:alloc :p50) 5122) (replace-retype (:cpu_ms :p90) 11.9) (replace-retype (:rows) 0)
  (remote-typing (:alloc :p50) 17300) (remote-typing (:cpu_ms :p50) 8) (remote-typing (:cpu_ms :p90) 11) (remote-typing (:rows) 1)
  (window-switch (:alloc :p50) 29638) (window-switch (:cpu_ms :p90) 43.6) (window-switch (:rows) 0)
@@ -157,6 +163,11 @@
  ;; agents-line-motion (the outline's name) alloc 5495, cpu 3.53; -old (`add-log-current-defun' per frame) 5838, 4.15.
  (explorer-git (:alloc :p50) 8555 :report-only ot5) (explorer-git (:cpu_ms :p90) 5.1 :report-only ot5)
  (explorer-git (:rows) 1 :report-only ot5)
+ ;; explorer-git-rows (the hub reads the status; the letters are its rows): alloc 856 is a tenth of explorer-git's 8555, the render
+ ;; offload's target; measured once (2026-11-08, Nidhogg's line image, 4 CPUs, same session): 6542 objects per command against 6589
+ ;; on the old path (the keys are what allocates), cpu p90 3.1, rows 1.  Report-only until the combined pass.
+ (explorer-git-rows (:alloc :p50) 856 :report-only ot5) (explorer-git-rows (:cpu_ms :p90) 3.9 :report-only ot5)
+ (explorer-git-rows (:rows) 1 :report-only ot5)
  (quick-open-typing (:alloc :p50) 4905 :report-only ot5) (quick-open-typing (:cpu_ms :p90) 1.4 :report-only ot5)
  (quick-open-typing (:rows) 0 :report-only ot5)
  (quick-open-typing-old (:alloc :p50) 8003808 :report-only ot5)

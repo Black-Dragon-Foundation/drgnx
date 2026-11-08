@@ -50,6 +50,7 @@ fn env(class: &str, epoch: u64, width: u32) -> ViewEnv {
         tty_widths: vec![],
         tz: String::new(),
         reduced_motion: false,
+        attach: false,
     }
 }
 
@@ -682,4 +683,34 @@ fn removals_send_edges_before_nodes() {
     assert!(ops[0]["edges"]["remove"].is_array(), "{ops:?}");
     assert_eq!(ops[1]["remove"], serde_json::json!(["b"]));
     assert_eq!(ops[2]["list"]["ids"], serde_json::json!([]));
+}
+
+/// [D] A first env of a new buffer (`attach`) for a pair the hub already holds, with no `view/close` between (a buffer
+/// killed without its hook, an Emacs restarted on the same connection), starts the pair over: the next rows go out
+/// whole, as a reset from version 1, though they equal what the hub believes the editor holds.  An env with no
+/// `attach` (a width) is still answered by a diff, and nothing changed sends nothing.
+#[test]
+fn an_attach_over_a_held_pair_starts_with_a_reset() {
+    let mut s = Store::new(5);
+    s.env(CONN, env("gui-1", 1, 400));
+    let k = key("gui-1");
+    let first = s
+        .publish(&k, rows("gui-1", 3, 1), &[])
+        .expect("the first rows");
+    assert!(is_reset(&first) && first.version == 1);
+    let mut wider = env("gui-1", 1, 500);
+    wider.attach = false;
+    s.env(CONN, wider);
+    assert!(
+        s.publish(&k, rows("gui-1", 3, 1), &[]).is_none(),
+        "a width alone sends nothing"
+    );
+    let mut again = env("gui-1", 1, 400);
+    again.attach = true;
+    s.env(CONN, again);
+    let p = s
+        .publish(&k, rows("gui-1", 3, 1), &[])
+        .expect("the rows again, to the new buffer");
+    assert!(is_reset(&p) && p.base == 0 && p.version == 1);
+    assert!(matches!(p.ops.as_slice(), [Op::Reset(r)] if r.len() == 3));
 }

@@ -2158,6 +2158,33 @@
     },
     {
       "data": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The event `git-letters-error`: `git/letters` could not read the status of ROOT for VIEW (git's complaint), so the\nview keeps the rows it has.  To the asking connection only.",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "error"
+        ],
+        "title": "LettersError",
+        "type": "object"
+      },
+      "doc": "git/letters could not read a repository's status (git's complaint): the view keeps the rows it has; to the asking connection only",
+      "name": "git-letters-error"
+    },
+    {
+      "data": {
         "$defs": {
           "HuddleReply": {
             "additionalProperties": false,
@@ -31259,6 +31286,10 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "description": "`view/env`: how VIEW looks in display class CLASS, measured in the view's buffer. EPOCH is the editor's number for\nthis env (the hub echoes it on every patch); a new epoch makes the next patch a reset.",
         "properties": {
+          "attach": {
+            "description": "The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no\n`view/close` came) is dropped and starts again, so the new buffer gets the rows whole.",
+            "type": "boolean"
+          },
           "cell": {
             "description": "The frame's character cell, `[width, height]` px.",
             "maxItems": 2,

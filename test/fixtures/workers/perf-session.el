@@ -597,6 +597,7 @@ compared, and a round's own list starts wherever the flood is)."
 
 (defun drgnx-perf-w-explorer-git-each ()
   (drgnx-cache--clear 'git-status)
+  (when (fboundp 'drgnx-git-letters-clear) (drgnx-git-letters-clear))
   (setq drgnx-explorer-git t)
   (drgnx-perf-w--arm #'drgnx-perf-w--git-fire)
   t)
@@ -610,6 +611,7 @@ compared, and a round's own list starts wherever the flood is)."
   (drgnx-perf-w--disarm)
   (drgnx-perf-w--explorer-close)
   (drgnx-cache--clear 'git-status)
+  (when (fboundp 'drgnx-git-letters-clear) (drgnx-git-letters-clear))
   (drgnx-perf-w--clean)
   t)
 

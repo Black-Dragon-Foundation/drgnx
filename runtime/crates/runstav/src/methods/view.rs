@@ -60,6 +60,10 @@ pub struct ViewEnv {
     pub tz: String,
     #[serde(default)]
     pub reduced_motion: bool,
+    /// The first env of a new buffer for this (view, class): a pair the hub already holds for the connection (no
+    /// `view/close` came) is dropped and starts again, so the new buffer gets the rows whole.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub attach: bool,
 }
 
 /// `view/resync`: the editor's rows of (VIEW, CLASS) are not what the hub thinks (a patch's base it does not hold, an
