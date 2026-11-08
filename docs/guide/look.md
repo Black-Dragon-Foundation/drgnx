@@ -212,7 +212,9 @@ tabs' faces and the header rows' band (`drgnx-wb-bar`) name no `:height` at all.
 ## Density
 
 `drgnx-look-density` is `compact`, `comfortable` (the default) or `roomy`, and applies at once. Sizes are logical
-pixels (a frame at scale 2 draws twice as many):
+pixels (a frame at scale 2 draws twice as many). At a fractional scale a size rounds half up, so a 26 px row is 33
+device pixels at 125 % and a 38 px row 48, and a thin line (a card's edge, a divider) is always whole: 1 device pixel
+at 125 % and 133 %, 2 at 200 %:
 
 | Thing | Compact | Comfortable | Roomy |
 | --- | --- | --- | --- |

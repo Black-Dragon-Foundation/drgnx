@@ -1,8 +1,12 @@
-;;; drgnx-pixels.el --- the look's pixel measure: how wide a string is, in a face -*- lexical-binding: t -*-
+;;; drgnx-pixels.el --- the look's pixels: logical to frame pixels, and how wide a string is -*- lexical-binding: t -*-
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
+;; The look's sizes are logical pixels.  `drgnx-px' turns one into the frame's own pixels (device pixels on Nidhogg's
+;; native shells, at any scale) with one rounding rule, half up, and `drgnx-px-line' does it for lines, which stay
+;; whole and at least one pixel.  Every size the look draws goes through them, never its own `frame-scale-factor'.
+;;
 ;; The bars and the tab rows are laid out in pixels, not columns.  `drgnx-look-pixel-width' is the one function that
 ;; measures a string in a face.  It runs only when a row's memo changes, never from an `:eval' on its own: callers
 ;; keep the result in their memo, keyed on `drgnx-pixels-generation' (which the font roles bump) and on the frame's
@@ -55,9 +59,39 @@ its own faces.  Call it when a row's memo changes, never on every redisplay."
 
 ;;;; Rows of an exact height
 
+;;;; Logical pixels to frame pixels: the one rule
+
+(defun drgnx-pixels-device-p ()
+  "Non-nil when frame pixels are device pixels: Nidhogg's native shells (Wayland and Naglfar).  Elsewhere (a
+terminal, a port that lays out in logical pixels) a frame pixel is a logical pixel."
+  (or (featurep 'nidhogg-wayland) (featurep 'naglfar)))
+
+(defun drgnx-pixels-ui-scale (&optional _frame)
+  "The UI scale on FRAME: 1.0 (the look's own sizes)."
+  1.0)
+
 (defun drgnx-pixels-scale (&optional frame)
-  "FRAME's scale (1.0 without a native shell): a logical pixel is this many device pixels."
-  (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
+  "FRAME's frame pixels per logical pixel: its display scale on a native shell (1.0 elsewhere) times the UI scale."
+  (* (if (and (drgnx-pixels-device-p) (fboundp 'frame-scale-factor)) (float (frame-scale-factor frame)) 1.0)
+     (drgnx-pixels-ui-scale frame)))
+
+(defconst drgnx-pixels--epsilon 1e-9
+  "What `drgnx-px' and `drgnx-px-line' forgive a product: 1.5 × 4/3 is 1.9999999999999998 in floats.")
+
+(defun drgnx-px (logical &optional frame scale)
+  "LOGICAL pixels in FRAME's own pixels, rounded half up (Emacs's `round' sends 32.5 to 32 but 47.5 to 48, so
+neighbouring sizes would wobble in opposite directions).  SCALE, when given, replaces FRAME's (`drgnx-pixels-scale').
+A size made of parts adds the parts' results: the sum of rounded parts, never the rounded sum."
+  (floor (+ (* logical (or scale (drgnx-pixels-scale frame))) 0.5 drgnx-pixels--epsilon)))
+
+(defun drgnx-px-line (width &optional frame scale)
+  "A line WIDTH logical pixels wide in FRAME's own pixels, whole and never blurred: a thin line (1 logical pixel or
+less) is max(1, floor(scale)) pixels, 1 at 1.25 and 4/3 and 2 at 2; a line under 2 is max(1, floor(WIDTH × scale));
+a wider one is `drgnx-px'.  SCALE, when given, replaces FRAME's."
+  (let ((s (or scale (drgnx-pixels-scale frame))))
+    (cond ((<= width 1) (max 1 (floor (+ s drgnx-pixels--epsilon))))
+          ((< width 2) (max 1 (floor (+ (* width s) drgnx-pixels--epsilon))))
+          (t (drgnx-px width frame s)))))
 
 (defvar drgnx-pixels--fonts (make-hash-table :test #'eq :weakness 'key)
   "A font's name (the string `face-font' gives: the font's own, the same string while a face shows that font) →

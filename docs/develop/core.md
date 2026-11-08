@@ -1467,6 +1467,27 @@ the count too high ("lower the count"). See [check.md](check.md#lints-on-the-sou
 (`drgnx-lint/no-timers-in-workbench-follow-paths`) counts a `drgnx-timer-start`, `-soon`, `-debounce` or `-poll`
 form without `:idle t` as a timer start in `wb/`.
 
+## Logical and device pixels (`drgnx-pixels.el`)
+
+The look's sizes are logical pixels. On Nidhogg's native shells (Wayland and Naglfar, `drgnx-pixels-device-p`) a
+frame's pixels are device pixels, so every size is turned into the frame's own pixels before it is drawn, through one
+function and one rounding rule:
+
+- `(drgnx-px LOGICAL &optional FRAME SCALE)` rounds half up: 26 is 33 at 1.25 and 35 at 4/3, 38 is 48 and 51. Emacs's
+  `round` sends halves to the even number (26 → 32 but 38 → 48), which made neighbouring sizes move in opposite
+  directions.
+- `(drgnx-px-line WIDTH &optional FRAME SCALE)` is for lines: a thin line (1 logical pixel or less) is max(1,
+  floor(scale)) pixels (1 at 1.25 and 4/3, 2 at 2, as the mockups' 1 CSS px at scale 2); a line under 2 is
+  max(1, floor(WIDTH × scale)); a wider one is `drgnx-px`.
+- `(drgnx-pixels-scale &optional FRAME)` is the factor both use: the display scale on a native shell (1.0 elsewhere)
+  times the UI scale.
+- A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
+  row and its gap add up to what is drawn.
+
+Never multiply by `frame-scale-factor` yourself, and never test `(featurep 'nidhogg-wayland)` for it: a Naglfar
+frame counts device pixels too. Tests pass SCALE to check the four scales (1, 1.25, 4/3, 2) without a display
+(`test/unit/look-pixels-test.el`).
+
 ## Epochs, memos and caches (`drgnx-memo.el`)
 
 Code that runs on redisplay or per keystroke only reads what is cached. Three tools keep the cache honest and
