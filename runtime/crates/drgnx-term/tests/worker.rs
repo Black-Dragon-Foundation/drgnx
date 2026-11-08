@@ -681,3 +681,32 @@ fn settings_reach_the_engine() {
             .is_some_and(|t| t.bracketed_paste)
     );
 }
+
+#[test]
+fn deccolm_is_refused_the_grid_keeps_its_width() {
+    // A program asks for 132 columns (mode 40 allows DECCOLM, mode 3 is DECCOLM). The workbench owns the pane's size,
+    // so the grid keeps the window's 20 columns: 30 characters wrap after 20, whichever way the bytes arrive.
+    let chunks: [&[&[u8]]; 5] = [
+        &[b"\x1b[?40h\x1b[?3h"],
+        &[b"\x1b[?4", b"0h\x1b[", b"?3h"],
+        &[b"\x1b[?40;3h"],
+        &[b"\x1b[?3;40h", b"\x1b[?3h"],
+        &[b"\x1b\x1b[?0040:3h"],
+    ];
+    for (n, parts) in chunks.iter().enumerate() {
+        let (mut w, mut m) = (worker(20, 4, 100), Model::default());
+        draw(&mut w, &mut m, 0);
+        let mut now = 100;
+        for p in *parts {
+            w.output(p, now);
+            now += 1;
+        }
+        w.output(&[b'x'; 30], now);
+        draw(&mut w, &mut m, now + 100);
+        let texts: Vec<&str> = m.rows.iter().map(|r| r.text.trim_end()).collect();
+        assert!(
+            texts.contains(&"x".repeat(20).as_str()) && texts.contains(&"x".repeat(10).as_str()),
+            "case {n}: the grid kept 20 columns: {texts:?}"
+        );
+    }
+}
