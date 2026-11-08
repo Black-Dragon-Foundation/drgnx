@@ -122,9 +122,14 @@ code size) and weight.  A change applies at once."
 
 ;;;; Sizes
 
+(defun drgnx-look-fonts--points-p ()
+  "Non-nil on Naglfar, where Emacs counts 72 points to a logical inch: a logical pixel is a point there."
+  (featurep 'naglfar))
+
 (defun drgnx-look-fonts-px-to-height (px)
-  "PX logical pixels as a face `:height' (tenths of a point), at 1 pt = 4/3 px: 13.5 px is 101."
-  (round (* px 7.5)))
+  "PX logical pixels as a face `:height' (tenths of a point): at 1 pt = 4/3 px (13.5 px is 101), and on Naglfar at
+1 pt = 1 px (13.5 px is 135), so the text is the same size on the screen on both."
+  (round (* px (if (drgnx-look-fonts--points-p) 10 7.5))))
 
 (defun drgnx-look-fonts-px-to-ratio (px)
   "PX logical pixels as a ratio to the code size, to three places: 13 px is 0.963."

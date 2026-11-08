@@ -127,7 +127,9 @@ A role's plist has these keys, and you give only the ones you want to change:
 - `:family` a family name, or `ui` / `code` for "the same as that role";
 - `:fallback` families to try, in order, when the family is not installed;
 - `:size` a **ratio to the code size** (1.0 is the code size, 13.5 px), so zooming (`View: Zoom In`) scales every role
-  together; 13 px is 0.963, and a size typed on the settings page as pixels is stored as that ratio;
+  together; 13 px is 0.963, and a size typed on the settings page as pixels is stored as that ratio. A pixel here is
+  a logical pixel (a point on macOS), so 13.5 px is the same size on the screen on Linux (10.1 pt at 96 dpi) and on
+  macOS (13.5 pt);
 - `:weight` a weight name such as `regular`, `semibold` or `bold`;
 - `:line-height` (the code roles) pixels per line;
 - `:ligatures` (the code role) `t` or `nil`.
