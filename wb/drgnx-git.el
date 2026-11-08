@@ -413,6 +413,9 @@ marks (the Explorer's roots and open folders).")
         (when drgnx-view-patch
           (let ((view (drgnx-view-patch-view drgnx-view-patch)))
             (remhash view drgnx-git--letters-views)
+            ;; the hub forgets the pair and the rows it believes this editor holds: a view made again gets them anew
+            (when (and (boundp 'drgnx-hub--events) (process-live-p drgnx-hub--events))
+              (ignore-errors (drgnx-hub--call-on drgnx-hub--events "view/close" (list :view view) #'ignore)))
             (drgnx-view-env-unregister view)
             (drgnx-view-patch-detach))))
       (let ((kill-buffer-query-functions nil)) (kill-buffer b)))
