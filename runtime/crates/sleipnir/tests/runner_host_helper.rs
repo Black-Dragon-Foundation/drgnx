@@ -361,7 +361,7 @@ fn a_job_that_grew_most_is_stopped_below_the_floor() {
 mod relay_keys {
     use super::*;
     use sleipnir::linux::podman::JobNet;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     /// The relay's image, imported from the static binary once.
     fn px_image() -> String {
@@ -394,8 +394,8 @@ mod relay_keys {
     }
 
     /// A keyed job ID's attempt and its started helper (the sidecar ready), keys NAMES, the key TOKEN handed over
-    /// (its value returned), and how long the helper took to be ready (the sidecar's start, C6).
-    fn keyed(id: &str, names: &[&str]) -> (Attempt, Helper, String, Duration) {
+    /// (its value returned).
+    fn keyed(id: &str, names: &[&str]) -> (Attempt, Helper, String) {
         let a = attempt(id);
         let n = podman::net_names(&ra(), id).unwrap();
         let argv = podman::sidecar_argv(&n, &ra(), &px_image(), true)
@@ -415,12 +415,10 @@ mod relay_keys {
         spec(id, &a.dir, vec!["true".into()], h)
             .write(&a.dir)
             .unwrap();
-        let t0 = Instant::now();
         let helper = Helper::start(&a.dir, &["--key-wait-s", "3"]);
-        let took = t0.elapsed();
         let value = secret();
         keys::hand(&a.dir.join(keys::HELPER_SOCK), names[0], value.as_bytes()).unwrap();
-        (a, helper, value, took)
+        (a, helper, value)
     }
 
     fn caps(id: &str) -> Caps {
@@ -494,15 +492,11 @@ mod relay_keys {
 
     /// [C, VM gate] A keyed job without network reads its key: the command runs with it in its environment only
     /// (its `/proc/<pid>/environ`), podman's argv, `podman inspect` and the stored state hold the names only, and the
-    /// job's namespace has `lo` alone. Prints the sidecar's start (C6).
+    /// job's namespace has `lo` alone.
     #[test]
     #[ignore = "keys"]
     fn a_keyed_job_reads_its_key_through_its_sidecar() {
-        let (a, _h, value, took) = keyed("rk1", &["TOKEN"]);
-        eprintln!(
-            "C6: the helper was ready (its sidecar READY) after {} ms",
-            took.as_millis()
-        );
+        let (a, _h, value) = keyed("rk1", &["TOKEN"]);
         let argv = job_argv(
             "rk1",
             &a.dir,
@@ -514,7 +508,6 @@ mod relay_keys {
             "the key is in podman's argv"
         );
         let name = format!("{PREFIX}rk1");
-        let t0 = Instant::now();
         let mut run = Command::new("podman")
             .args(&argv)
             .stdout(Stdio::null())
@@ -524,10 +517,6 @@ mod relay_keys {
         skuld::wait_until("the command started", 120, || {
             a.dir.join("target/started").exists().then_some(())
         });
-        eprintln!(
-            "C6: the keyed job's command ran after {} ms",
-            t0.elapsed().as_millis()
-        );
         assert_eq!(
             fs::read_to_string(a.dir.join("target/ifaces"))
                 .unwrap()
@@ -569,7 +558,7 @@ mod relay_keys {
     #[test]
     #[ignore = "keys"]
     fn a_missing_key_is_75_and_an_unlisted_one_is_no() {
-        let (a, _h, _value, _) = keyed("rk2", &["TOKEN", "LATER"]);
+        let (a, _h, _value) = keyed("rk2", &["TOKEN", "LATER"]);
         let net = format!("container:{}", sidecar_of("rk2"));
         let out = key_cmd(&a.dir, &net, &["get", "LATER"]);
         assert_eq!(
@@ -610,8 +599,8 @@ mod relay_keys {
     #[test]
     #[ignore = "keys"]
     fn other_namespaces_and_other_jobs_get_nothing() {
-        let (a, _ha, _va, _) = keyed("rk3", &["TOKEN"]);
-        let (b, _hb, vb, _) = keyed("rk4", &["TOKEN_B"]);
+        let (a, _ha, _va) = keyed("rk3", &["TOKEN"]);
+        let (b, _hb, vb) = keyed("rk4", &["TOKEN_B"]);
         let out = key_cmd(&a.dir, "none", &["get", "TOKEN"]);
         assert_eq!(out.status.code(), Some(75));
         assert!(out.stdout.is_empty());
@@ -653,7 +642,7 @@ mod relay_keys {
     #[test]
     #[ignore = "keys"]
     fn the_job_can_neither_take_the_name_nor_ask_the_proxy() {
-        let (a, _h, value, _) = keyed("rk5", &["TOKEN"]);
+        let (a, _h, value) = keyed("rk5", &["TOKEN"]);
         let dir = std::env::var_os("DRGNX_TEST_PX_DIR")
             .map(PathBuf::from)
             .unwrap();
@@ -723,7 +712,7 @@ mod relay_keys {
     #[test]
     #[ignore = "keys"]
     fn the_sidecar_has_no_core_and_no_test_hooks() {
-        let (_a, _h, _v, _) = keyed("rk6", &["TOKEN"]);
+        let (_a, _h, _v) = keyed("rk6", &["TOKEN"]);
         let pid: u32 = String::from_utf8_lossy(&podman_out(&[
             "inspect",
             "-f",
