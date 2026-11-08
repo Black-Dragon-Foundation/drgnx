@@ -155,7 +155,7 @@ ASCII form on a terminal that is not UTF-8; × without ui/face."
 
 (defun drgnx-chrome--px (n frame)
   "A stretch of N logical pixels on FRAME (the `display' value)."
-  `(space :width (,(round (* (drgnx-pixels-scale frame) n)))))
+  `(space :width (,(drgnx-px n frame))))
 
 (defun drgnx-chrome--tab-rows (w)
   "(ROW BOX FRAME) for W's tab line on a graphical frame, else nil: ROW is the `tab-row' height in device pixels,
@@ -165,7 +165,7 @@ middle of the tab, which is at the bottom of the row)."
     (when (display-graphic-p frame)
       (let* ((scale (drgnx-pixels-scale frame))
              (row (round (* scale (if (fboundp 'drgnx-look-density-value) (drgnx-look-density-value 'tab-row) 34))))
-             (tab (- row (round (* scale drgnx-chrome--tab-lift)))))
+             (tab (- row (drgnx-px drgnx-chrome--tab-lift frame))))
         (list row (drgnx-pixels-box-height 'drgnx-chrome-tab tab frame) frame)))))
 
 (defun drgnx-chrome--tab-paint (rows descent)
@@ -174,14 +174,14 @@ baseline), read from the theme when the line is made: (LIFT . RULE).  LIFT is th
 `drgnx-chrome--tab-lift' pixels of the row's colour above it (a box spans its row), none at its sides, its bottom open
 and its top corners rounded where the compositor rounds boxes.  RULE is the hairline under the rest of the row: an
 underline in `drgnx-border-subtle' on the row's last pixels, or nil when the theme gives that face no colour."
-  (let* ((frame (nth 2 rows)) (s (drgnx-pixels-scale frame))
+  (let* ((frame (nth 2 rows))
          (row-bg (face-background 'drgnx-chrome-tab frame t))
          (rule (face-foreground 'drgnx-border-subtle frame t)))
-    (cons (list :box `(:line-width (0 . ,(round (* s drgnx-chrome--tab-lift)))
+    (cons (list :box `(:line-width (0 . ,(drgnx-px drgnx-chrome--tab-lift frame))
                                    ,@(if (stringp row-bg) (list :color row-bg) '(:style flat-button))
                                    ,@(when (and (fboundp 'glitnir-active-p) (glitnir-active-p))   ; drawing, not just loaded
                                        `(:corner-radius ,drgnx-chrome--tab-top-radius :open (bottom)))))
-          (and (stringp rule) (list :underline `(:color ,rule :position ,(max 0 (- descent (round s)))))))))
+          (and (stringp rule) (list :underline `(:color ,rule :position ,(max 0 (- descent (drgnx-px-line 1 frame)))))))))
 
 (defun drgnx-chrome--tab (w b shown active rows &optional paint)
   "The text of B's tab in W's tab line.  SHOWN: B is the window's buffer; ACTIVE: W is the active editor group;

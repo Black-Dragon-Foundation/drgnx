@@ -16,6 +16,7 @@
 (require 'drgnx-modules)
 (require 'drgnx-faces)
 (require 'drgnx-type-faces)
+(require 'drgnx-pixels)                  ; `drgnx-px'
 
 (defgroup drgnx-decor nil "Chips, badges, buttons, cards and agent cursors." :group 'drgnx-face)
 
@@ -81,7 +82,9 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
 0 7px: 6 px stretches and the box's 1 on a graphical frame, a space on a terminal), so that high contrast's ring
 \(the theme's box) keeps the same room.  ICON, an image spec, comes first inside the room, 5 px before TEXT."
   (let* ((face (or face 'drgnx-chip)) (graphic (display-graphic-p))
-         (pad (lambda (n) (if graphic (propertize " " 'display `(space :width (,n)) 'face face) (propertize " " 'face face)))))
+         (pad (lambda (n) (if graphic
+                              (propertize " " 'display `(space :width (,(drgnx-px n))) 'face face)
+                            (propertize " " 'face face)))))
     (concat " "
             (funcall pad 6)
             (when icon
