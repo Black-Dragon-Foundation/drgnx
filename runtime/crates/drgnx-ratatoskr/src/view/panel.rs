@@ -5,10 +5,9 @@
 //! their rows.  What the user chose (the step types open, rows opened by hand, how far back the rows go) is per
 //! (connection, view): `agents/panel/look`.  The steps' facts (time, cost, checkpoint, undone, subagent, hooks) come
 //! from the step bus as steps close, and from the `step` table when a panel first shows a session and after a revert.
-//! Before its rows each (connection, view) gets the panel's model ([`panel_doc`], `view-model`): the steps in
-//! transcript order, the tool calls, the steps with a diff and the user's messages, each step linked to the next and
-//! previous of each kind, so the editor's keys move through it without asking; every row names its step
-//! (`drgnx-work-id`).
+//! Before its rows each (connection, view) gets the panel's model ([`panel_doc`], `view-model`): its steps, each with
+//! its kind and whether it has a diff, so the editor's keys find the next of a kind without asking; an appended entry
+//! sends its new steps alone. Every row names its step (`drgnx-work-id`).
 
 use super::model::Doc;
 use super::{Key, lock};
@@ -88,11 +87,21 @@ pub fn panel_doc(heads: &[Head]) -> Doc {
         ..Doc::default()
     };
     for h in heads {
-        let id = format!("e:{}", h.0);
-        let node = json!({"id": id, "kind": h.1, "flags": 0, "fields": [["entry", h.0], ["diff", u8::from(h.2)]]});
-        d.nodes.insert(id, node);
+        d.nodes.insert(format!("e:{}", h.0), node_of(h));
     }
     d
+}
+
+/// Step H's node in a panel's model.
+fn node_of(h: &Head) -> Value {
+    json!({"id": format!("e:{}", h.0), "kind": h.1, "flags": 0, "fields": [["entry", h.0], ["diff", u8::from(h.2)]]})
+}
+
+/// A panel's model to send: the whole of these steps, or these steps added to (or changed in) the one last sent.
+#[derive(Debug, PartialEq)]
+enum Made {
+    Whole(Vec<Head>),
+    Steps(Vec<Head>),
 }
 
 /// A session's groups from an index on, only those holding one of a set of indexes when given.
@@ -126,6 +135,8 @@ struct Chosen {
     version: u64,
     /// The (first entry, entry count) the last model sent was made of.
     modeled: Option<(usize, usize)>,
+    /// The steps of the last model sent; none when the next one goes whole.
+    heads: Option<Vec<Head>>,
 }
 
 /// The panels' state: the looks, the caches and the steps' facts.
@@ -314,12 +325,21 @@ impl Panels {
                 f.core.views.model_restart(c, view);
             }
             // a streamed chunk of a message changes no step: the model is made again only when the entries or the window
-            // changed, on a full build, or when a tool call changed (its diff)
-            let force = restart || dirty.is_none_or(|d| s.any_tool(d));
-            if let Some(from) = self.model_due(c, view, s.entry_count(), force) {
-                f.core
-                    .views
-                    .publish_model(f, c, view, panel_doc(&s.panel_heads(from)));
+            // changed, on a full build, or when a tool call changed (its diff); new entries make their steps alone
+            let force = restart || dirty.is_none();
+            let tool = dirty.and_then(|d| s.first_tool(d));
+            if let Some(start) = self.model_due(c, view, s.entry_count(), force, tool) {
+                let heads = match self.model_made(c, view, start, s.panel_heads(start)) {
+                    Made::Steps(steps) => {
+                        let nodes = steps.iter().map(node_of).collect();
+                        if f.core.views.extend_model(f, c, view, nodes) {
+                            continue;
+                        }
+                        self.model_heads(c, view)
+                    }
+                    Made::Whole(heads) => heads,
+                };
+                f.core.views.publish_model(f, c, view, panel_doc(&heads));
             }
         }
         for key in keys {
@@ -329,15 +349,61 @@ impl Panels {
         }
     }
 
-    /// The first entry CONN's VIEW shows (the newest [`WINDOW`] until it asks for older), of N entries, when its model
-    /// is due: FORCE, or the window or N changed since the last.
-    fn model_due(&self, conn: u64, view: &str, n: usize, force: bool) -> Option<usize> {
+    /// The entry CONN's VIEW's model is made again from, of N entries, when it is due: FORCE, the window or N changed
+    /// since the last, or the tool call at TOOL changed.  The first entry it shows (the newest [`WINDOW`] until it asks
+    /// for older) when it goes whole (FORCE, the window changed, none sent); else the earlier of the last step and TOOL.
+    fn model_due(
+        &self,
+        conn: u64,
+        view: &str,
+        n: usize,
+        force: bool,
+        tool: Option<usize>,
+    ) -> Option<usize> {
         let mut chosen = lock(&self.chosen);
         let c = chosen.entry((conn, view.to_owned())).or_default();
         let from = *c.from.get_or_insert(n.saturating_sub(WINDOW));
-        let due = force || c.modeled != Some((from, n));
+        let same = c.modeled.is_some_and(|(f, m)| f == from && m <= n);
+        let due = force || !same || c.modeled != Some((from, n)) || tool.is_some();
         c.modeled = Some((from, n));
-        due.then_some(from)
+        if force || !same {
+            c.heads = None;
+        }
+        if !due {
+            return None;
+        }
+        let last = c.heads.as_ref().map(|h| h.last().map_or(from, |h| h.0));
+        Some(last.map_or(from, |l| tool.map_or(l, |t| l.min(t.max(from)))))
+    }
+
+    /// CONN's VIEW's steps from START on are now TAIL: the model to send, its steps alone when a model went whole
+    /// before, none went since, and the cap ([`MODEL_MAX`]) holds.
+    fn model_made(&self, conn: u64, view: &str, start: usize, tail: Vec<Head>) -> Made {
+        let mut chosen = lock(&self.chosen);
+        let c = chosen.entry((conn, view.to_owned())).or_default();
+        let Some(heads) = c.heads.as_mut() else {
+            c.heads = Some(tail.clone());
+            return Made::Whole(tail);
+        };
+        let keep = heads.partition_point(|h| h.0 < start);
+        let old = heads.split_off(keep);
+        let kept = old.iter().all(|o| tail.iter().any(|t| t.0 == o.0));
+        let steps: Vec<Head> = tail.iter().filter(|t| !old.contains(t)).copied().collect();
+        heads.extend(tail);
+        if kept && heads.len() <= MODEL_MAX {
+            Made::Steps(steps)
+        } else {
+            Made::Whole(heads.clone())
+        }
+    }
+
+    /// The steps of CONN's VIEW's last model.
+    fn model_heads(&self, conn: u64, view: &str) -> Vec<Head> {
+        let chosen = lock(&self.chosen);
+        chosen
+            .get(&(conn, view.to_owned()))
+            .and_then(|c| c.heads.clone())
+            .unwrap_or_default()
     }
 
     fn rows_for(

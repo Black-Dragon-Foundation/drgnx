@@ -615,6 +615,42 @@ fn fields_only_change_sends_model_and_no_rows() {
     assert!(s.publish_model(CONN, "v", doc(2)).is_none());
 }
 
+/// [D] Nodes added to (or changed in) the model an editor holds go alone; with no model held, or a reset due, there
+/// is none to extend and the builder sends the whole.
+#[test]
+fn extending_a_model_sends_its_new_nodes_alone() {
+    use serde_json::json;
+    let mut s = Store::new(7);
+    let b = json!({"id": "b", "kind": "k", "fields": [["label", "B1"]]});
+    assert!(
+        s.extend_model(CONN, "v", vec![b.clone()]).is_none(),
+        "no model to extend"
+    );
+    s.publish_model(CONN, "v", doc(1)).expect("a model");
+    let c = json!({"id": "c", "kind": "k", "fields": []});
+    let m = s
+        .extend_model(CONN, "v", vec![b, c.clone()])
+        .expect("a model to extend")
+        .expect("c is new");
+    assert_eq!((m.base, m.version, m.reset), (1, 2, false));
+    assert_eq!(ops_of(&m), vec![json!({"nodes": [c]})], "b is unchanged");
+    assert!(
+        s.extend_model(CONN, "v", vec![c.clone()])
+            .expect("a model to extend")
+            .is_none(),
+        "nothing changed"
+    );
+    // it holds the extended model: the whole of it sends nothing
+    let mut whole = doc(1);
+    whole.nodes.insert("c".into(), c.clone());
+    assert!(s.publish_model(CONN, "v", whole).is_none());
+    s.model_hidden(CONN, "v");
+    assert!(
+        s.extend_model(CONN, "v", vec![c]).is_none(),
+        "a reset is due"
+    );
+}
+
 /// [D] A hidden view's next model is a reset; a resync answers one too, and a closed view has none to resync.
 #[test]
 fn hidden_view_gets_no_model_then_reset() {

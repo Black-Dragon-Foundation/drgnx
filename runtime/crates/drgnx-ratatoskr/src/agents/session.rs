@@ -2670,12 +2670,13 @@ impl Session {
         crate::view::panel::heads_of(&tail)
     }
 
-    /// Whether one of the entries at INDEXES is a tool call.
-    pub(crate) fn any_tool(&self, indexes: &BTreeSet<usize>) -> bool {
+    /// The first of the entries at INDEXES that is a tool call.
+    pub(crate) fn first_tool(&self, indexes: &BTreeSet<usize>) -> Option<usize> {
         let st = lock(&self.state);
         indexes
             .iter()
-            .any(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
+            .copied()
+            .find(|&i| st.entries.get(i).is_some_and(|e| e.kind == EntryType::Tool))
     }
 
     /// Whether a live Always grant of this session covers tool entry E (its kind, when both name one, and its title).

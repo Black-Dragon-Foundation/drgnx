@@ -2425,7 +2425,10 @@ the rows themselves are `agents/session/rows.rs`, pure).
   changes, so a list of the tool calls would go whole with each new one (about 4.7 MB over a 1,900-entry stream,
   against about 140 kB of nodes). A new step adds its node and nothing else changes. The model is made again only
   when the entries or the window changed, on a full build or when a tool call changed (a streamed chunk of a message
-  changes no step). At most the newest 20,000 steps. A connection's first rows of the view start the model again (a
+  changes no step), and then only from the last step (or the changed tool call) on: the hub keeps each connection's
+  steps and sends the new or changed ones as their own op (`extend_model`), so an appended entry costs its steps, not
+  the transcript's (1,900 appends: 7 s whole in a debug build, 26 ms extended). It goes whole on a full build, a
+  window change, a step that went, past the cap, or when the view owes a reset. At most the newest 20,000 steps. A connection's first rows of the view start the model again (a
   reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
   kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
   after with `agents/panel/look`.

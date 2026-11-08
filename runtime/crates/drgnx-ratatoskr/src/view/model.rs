@@ -121,6 +121,29 @@ impl Sent {
         Some(self.send(ops))
     }
 
+    /// Whether there is a model to [`Sent::extend`]: one was sent and no reset is due.
+    pub fn extendable(&self) -> bool {
+        self.doc.is_some() && !self.reset_due
+    }
+
+    /// The editor's model gains NODES (wire objects, `id` included), new or changed: their op alone, none when none
+    /// changed; the cost is theirs, not the model's. Only when [`Sent::extendable`].
+    pub fn extend(&mut self, nodes: Vec<Value>) -> Option<Out> {
+        let doc = self.doc.as_mut()?;
+        let mut changed = Vec::new();
+        for n in nodes {
+            let id = n["id"].as_str().unwrap_or_default().to_owned();
+            if doc.nodes.get(&id) != Some(&n) {
+                doc.nodes.insert(id, n.clone());
+                changed.push(n);
+            }
+        }
+        if changed.is_empty() {
+            return None;
+        }
+        Some(self.send(vec![json!({ "nodes": changed })]))
+    }
+
     /// The editor's replica asked again: a reset of what it was last sent (none before the first send).
     pub fn resync(&mut self) -> Option<Out> {
         let reset = self.doc.as_ref()?.reset();

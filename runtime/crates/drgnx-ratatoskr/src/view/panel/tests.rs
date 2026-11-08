@@ -446,13 +446,73 @@ fn rows_name_the_step_they_draw() {
 fn the_model_is_made_again_only_when_a_step_can_change() {
     // pattern D (pure)
     let p = Panels::default();
-    assert_eq!(p.model_due(1, "v", 3, false), Some(0), "the first");
+    assert_eq!(p.model_due(1, "v", 3, false, None), Some(0), "the first");
     assert_eq!(
-        p.model_due(1, "v", 3, false),
+        p.model_due(1, "v", 3, false, None),
         None,
         "a streamed chunk of a message"
     );
-    assert_eq!(p.model_due(1, "v", 3, true), Some(0), "a tool call changed");
-    assert_eq!(p.model_due(1, "v", 4, false), Some(0), "a new entry");
-    assert_eq!(p.model_due(2, "v", 4, false), Some(0), "another connection");
+    assert_eq!(p.model_due(1, "v", 3, true, None), Some(0), "a full build");
+    assert_eq!(p.model_due(1, "v", 4, false, None), Some(0), "a new entry");
+    assert_eq!(
+        p.model_due(2, "v", 4, false, None),
+        Some(0),
+        "another connection"
+    );
+}
+
+#[test]
+fn an_appended_step_extends_the_model() {
+    // pattern D (pure): the steps from the last one on are made again, not the whole transcript
+    use super::Made;
+    use EntryType::{Agent, Tool, User};
+    let p = Panels::default();
+    let three = vec![(0, User, false), (1, Tool, false), (2, Agent, false)];
+    assert_eq!(p.model_due(1, "v", 3, false, None), Some(0));
+    assert_eq!(p.model_made(1, "v", 0, three.clone()), Made::Whole(three));
+    assert_eq!(
+        p.model_due(1, "v", 5, false, None),
+        Some(2),
+        "new entries: from the last step"
+    );
+    assert_eq!(
+        p.model_made(1, "v", 2, vec![(2, Agent, false), (4, User, false)]),
+        Made::Steps(vec![(4, User, false)]),
+        "the last step is unchanged"
+    );
+    assert_eq!(
+        p.model_due(1, "v", 5, false, Some(1)),
+        Some(1),
+        "a tool call changed: from it"
+    );
+    assert_eq!(
+        p.model_made(
+            1,
+            "v",
+            1,
+            vec![(1, Tool, true), (2, Agent, false), (4, User, false)]
+        ),
+        Made::Steps(vec![(1, Tool, true)])
+    );
+    assert_eq!(
+        p.model_due(1, "v", 6, false, None),
+        Some(4),
+        "from the last step"
+    );
+    let all = vec![
+        (0, User, false),
+        (1, Tool, true),
+        (2, Agent, false),
+        (5, Agent, false),
+    ];
+    assert_eq!(
+        p.model_made(1, "v", 4, vec![(5, Agent, false)]),
+        Made::Whole(all),
+        "a step went: the whole"
+    );
+    assert_eq!(
+        p.model_due(1, "v", 6, true, None),
+        Some(0),
+        "a full build: the whole"
+    );
 }
