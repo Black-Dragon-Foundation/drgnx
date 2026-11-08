@@ -118,9 +118,11 @@ draw replaced), every node drawn in them gets its current class again and the ov
       (when keys
         (let ((ids (drgnx-view-patch-ids drgnx-view-patch)) (keyset (make-hash-table :test #'equal)))
           (dolist (k keys) (puthash k t keyset))
+          ;; no closure per node: a panel draws one per step, and every draw walks them all
           (maphash (lambda (id rows)
-                     (when (and (not (gethash id done)) (cl-some (lambda (k) (gethash k keyset)) rows))
-                       (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id))))
+                     (unless (gethash id done)
+                       (while (and rows (not (gethash (car rows) keyset))) (setq rows (cdr rows)))
+                       (when rows (drgnx-view-nav--put-class view id (nidhogg-view-get h 'class id)))))
                    ids)
           ;; a draw may have deleted text under an overlay: the empty ones go (a key alone deletes no text)
           (let ((table (drgnx-view-patch-spans drgnx-view-patch)))
