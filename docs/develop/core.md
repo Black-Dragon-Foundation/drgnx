@@ -1981,7 +1981,7 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 - **Rendering a row:** faces only when interned, a face, and `drgnx-` or one of `drgnx-view-patch-faces`; text
   properties only `drgnx-` ones and `drgnx-view-patch-props` (`intern-soft`, never `intern`). A stop's placeholder
   character shows one shared `(space :align-to (PX))` per PX; an image's shows the image (an id-keyed cache, at most
-  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline. A run
+  256, evicting only ids no row names), or its alt on a terminal; a height is a `line-height` on the newline (the default line height is read once per draw pass, at the first row that has a height, not per row; the next pass reads it again). A run
   `s:<id>` names a style the patch's `styles` sent (kept until the next reset; one the view lacks sends
   `view/resync`): an ansi foreground is the face `drgnx-term-color-N`, the rest one anonymous face per distinct
   style from an LRU of `drgnx-view-patch-style-face-max` (4,096) entries (docs/develop/hub.md, "Rows"); faint adds

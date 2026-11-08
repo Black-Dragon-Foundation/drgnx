@@ -52,6 +52,26 @@
                              :base 1 :version 2))
     (should (equal "row a\nrow B\n" (drgnx-view-patch-test--draw)))))
 
+(ert-deftest drgnx-view-patch/a-pass-reads-the-line-height-once ()
+  ;; every row with a height needs the default line height; it cannot change inside one draw pass, so the pass reads it
+  ;; once, and the next pass reads it again (a `text-scale' in between shows)
+  (drgnx-view-patch-test--with
+    (let ((calls 0) (orig (symbol-function 'default-line-height)))
+      (cl-letf (((symbol-function 'default-line-height) (lambda (&rest args) (cl-incf calls) (apply orig args))))
+        (drgnx-view-apply-patch
+         (drgnx-view-patch-test--patch
+          (list (list :reset (mapcar (lambda (k) (drgnx-view-patch-test--row k "tall" :height (list :lines 2)))
+                                     '("a" "b" "c" "d"))))))
+        (drgnx-view-patch-test--draw)
+        (should (= calls 1))
+        (drgnx-view-apply-patch
+         (drgnx-view-patch-test--patch
+          (list (list :replace (list (drgnx-view-patch-test--row "b" "taller" :height (list :lines 3))
+                                     (drgnx-view-patch-test--row "c" "taller" :height (list :lines 3)))))
+          :base 1 :version 2))
+        (drgnx-view-patch-test--draw)
+        (should (= calls 2))))))
+
 (ert-deftest drgnx-view-patch/unknown-face-is-dropped-not-interned ()
   (drgnx-view-patch-test--with
     (let ((name "drgnx-view-patch-test-no-such-face-4711"))
