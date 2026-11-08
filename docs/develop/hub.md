@@ -2417,7 +2417,18 @@ the rows themselves are `agents/session/rows.rs`, pure).
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
 - **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to
   `drgnx-agent-panel-checkpoint` (its step's seq); a hook line `drgnx-agent-panel-hook` (`[seq, row, record]`, for
-  the provenance); a hunk `drgnx-agent-panel-hunk` (`[path, hunk, part]`).
+  the provenance); a hunk `drgnx-agent-panel-hunk` (`[path, hunk, part]`); and every row of a group
+  `drgnx-work-id` `e:HEAD`, its step's node in the model.
+- **The model** (`view-model`, before the rows, which name its version; `panel_doc`): a `list` scheme of the steps
+  shown alone (each group's head that draws rows, `e:I`, kind the entry's type, fields `entry` and `diff`, 1 for a
+  tool call with an edit). No step links to another and no list is kept: Sjá sends a list whole each time it
+  changes, so a list of the tool calls would go whole with each new one (about 4.7 MB over a 1,900-entry stream,
+  against about 140 kB of nodes). A new step adds its node and nothing else changes. The model is made again only
+  when the entries or the window changed, on a full build or when a tool call changed (a streamed chunk of a message
+  changes no step). At most the newest 20,000 steps. A connection's first rows of the view start the model again (a
+  reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
+  kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
+  after with `agents/panel/look`.
 - **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
   come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
   every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.

@@ -14,6 +14,8 @@
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (defvar drgnx-agent-panel--stats-render)
+(defvar drgnx-agent-panel--subscribed)
+(defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--take-entries "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--take-snapshot "drgnx-agent-panel")
@@ -826,3 +828,16 @@ unanswered, and panel \"s1\" as `buf'."
                 ((symbol-function 'completing-read) (lambda (&rest _) "Gemini")))
         (drgnx-agent-panel-start)
         (should (equal '("agents/start" :profile "Gemini" :cwd "/work/p") (car drgnx-agent-panel-test--calls)))))))
+
+(ert-deftest drgnx-agent-panel/killed-without-the-hub-asks-nothing ()
+  "Pattern D: a subscribed panel killed after the hub went (no events connection) asks the hub nothing and signals
+nothing: the subscription went with the connection, and a kill hook never signals."
+  (drgnx-test-with-modules '(tools/agent-panel)
+    (let ((calls 0) buf)
+      (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (&rest _) (cl-incf calls) 1))
+                ((symbol-function 'drgnx-hub--call-on) (lambda (&rest _) (cl-incf calls) 1)))
+        (let ((drgnx-hub--events nil))
+          (setq buf (drgnx-agent-panel-buffer "gone-hub") calls 0)
+          (with-current-buffer buf (setq drgnx-agent-panel--subscribed t))
+          (kill-buffer buf))
+        (should (zerop calls))))))

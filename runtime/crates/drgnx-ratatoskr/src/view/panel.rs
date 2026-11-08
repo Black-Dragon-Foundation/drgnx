@@ -5,7 +5,12 @@
 //! their rows.  What the user chose (the step types open, rows opened by hand, how far back the rows go) is per
 //! (connection, view): `agents/panel/look`.  The steps' facts (time, cost, checkpoint, undone, subagent, hooks) come
 //! from the step bus as steps close, and from the `step` table when a panel first shows a session and after a revert.
+//! Before its rows each (connection, view) gets the panel's model ([`panel_doc`], `view-model`): the steps in
+//! transcript order, the tool calls, the steps with a diff and the user's messages, each step linked to the next and
+//! previous of each kind, so the editor's keys move through it without asking; every row names its step
+//! (`drgnx-work-id`).
 
+use super::model::Doc;
 use super::{Key, lock};
 use crate::agents::session::Session;
 use crate::agents::session::rows::{self, Cx, Facts, Look};
@@ -13,11 +18,11 @@ use crate::dispatch::Caller;
 use crate::front::Front;
 use drgnx_rows::fit::{self, FontSet};
 use drgnx_rows::{Row, RowBuilder};
-use runstav::methods::agents::PanelLook;
+use runstav::methods::agents::{Entry, EntryType, PanelLook};
 use runstav::methods::timeline::Step;
 use runstav::methods::view::{Display, ViewEnv};
 use runstav::wire::Error;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -30,6 +35,65 @@ const PREFIX: &str = "agent-panel/";
 
 /// The entries a panel's rows start with: the last this many, and as many again each time the editor asks for older.
 pub const WINDOW: usize = 200;
+
+/// The most steps a panel's model holds (Sjá's cap on a list sent whole): the newest.
+const MODEL_MAX: usize = 20_000;
+
+/// One step of a panel's model: its group's head index, its entry's type, and whether it is a tool call with a diff.
+pub type Head = (usize, EntryType, bool);
+
+/// Whether tool entry E has an edit ([`rows::diffs_of`] not empty), without copying its texts.
+fn has_diff(e: &Entry) -> bool {
+    let item = |i: &Value| i.get("type").and_then(Value::as_str) == Some("diff");
+    e.rest
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|a| a.iter().any(item))
+        || e.rest.get("rawInput").is_some_and(|r| {
+            r.get("old").is_some_and(Value::is_string) && r.get("new").is_some_and(Value::is_string)
+        })
+}
+
+/// The steps of ENTRIES (index, entry, in order, contiguous) that draw rows: each group's head ([`rows::groups`]; a
+/// plan and a usage draw none).
+pub fn heads_of(entries: &[(usize, &Entry)]) -> Vec<Head> {
+    let first = entries.first().map_or(0, |e| e.0);
+    rows::groups(entries)
+        .into_iter()
+        .filter_map(|(h, _)| {
+            let e = entries.get(h - first)?.1;
+            let diff = e.kind == EntryType::Tool && has_diff(e);
+            (!matches!(e.kind, EntryType::Plan | EntryType::Usage)).then_some((h, e.kind, diff))
+        })
+        .collect()
+}
+
+/// A panel's model of HEADS: a `list` scheme of the steps alone (`e:I`, kind the entry's type, fields `entry` and
+/// `diff`, 1 for a tool call with an edit).  No step links to another and no list is kept: Sjá sends a list whole
+/// when it changes, so a list of the tool calls would go whole with each one.  A new step adds its node and nothing
+/// else changes; the editor finds the next step of a kind among the rows it draws.
+pub fn panel_doc(heads: &[Head]) -> Doc {
+    let heads = &heads[heads.len().saturating_sub(MODEL_MAX)..];
+    let mut d = Doc {
+        descriptor: json!({
+            "scheme": "list",
+            "chain_kinds": [],
+            "match_fields": [],
+            "lists": [],
+            "classes": ["selected"],
+            "flags": [],
+            "forms": [],
+            "start": null,
+        }),
+        ..Doc::default()
+    };
+    for h in heads {
+        let id = format!("e:{}", h.0);
+        let node = json!({"id": id, "kind": h.1, "flags": 0, "fields": [["entry", h.0], ["diff", u8::from(h.2)]]});
+        d.nodes.insert(id, node);
+    }
+    d
+}
 
 /// A session's groups from an index on, only those holding one of a set of indexes when given.
 type GroupsFn<'a> = dyn Fn(usize, Option<&BTreeSet<usize>>) -> Vec<rows::GroupIn> + 'a;
@@ -60,6 +124,8 @@ struct Chosen {
     look: Look,
     from: Option<usize>,
     version: u64,
+    /// The (first entry, entry count) the last model sent was made of.
+    modeled: Option<(usize, usize)>,
 }
 
 /// The panels' state: the looks, the caches and the steps' facts.
@@ -240,11 +306,38 @@ impl Panels {
         if first {
             f.core.views.panels.load_facts(&sid);
         }
+        // the model before the rows, which name its version; a connection's first rows of the view start it again
+        let conns: BTreeSet<u64> = keys.iter().map(|k| k.0).collect();
+        for c in conns {
+            let restart = !lock(&self.caches).keys().any(|k| k.0 == c && k.1 == view);
+            if restart {
+                f.core.views.model_restart(c, view);
+            }
+            // a streamed chunk of a message changes no step: the model is made again only when the entries or the window
+            // changed, on a full build, or when a tool call changed (its diff)
+            let force = restart || dirty.is_none_or(|d| s.any_tool(d));
+            if let Some(from) = self.model_due(c, view, s.entry_count(), force) {
+                f.core
+                    .views
+                    .publish_model(f, c, view, panel_doc(&s.panel_heads(from)));
+            }
+        }
         for key in keys {
             f.core.views.publish_built(f, &key, |env, fonts| {
                 (self.rows_for(s, &key, env, fonts, dirty), Vec::new())
             });
         }
+    }
+
+    /// The first entry CONN's VIEW shows (the newest [`WINDOW`] until it asks for older), of N entries, when its model
+    /// is due: FORCE, or the window or N changed since the last.
+    fn model_due(&self, conn: u64, view: &str, n: usize, force: bool) -> Option<usize> {
+        let mut chosen = lock(&self.chosen);
+        let c = chosen.entry((conn, view.to_owned())).or_default();
+        let from = *c.from.get_or_insert(n.saturating_sub(WINDOW));
+        let due = force || c.modeled != Some((from, n));
+        c.modeled = Some((from, n));
+        due.then_some(from)
     }
 
     fn rows_for(
@@ -311,7 +404,17 @@ impl Panels {
         };
         for g in (src.groups)(from, only) {
             let thoughts: Vec<&runstav::methods::agents::Entry> = g.thoughts.iter().collect();
-            let built = rows::group_rows(g.head, &g.entry, &thoughts, g.blocks.as_deref(), &cx);
+            let mut built = rows::group_rows(g.head, &g.entry, &thoughts, g.blocks.as_deref(), &cx);
+            // each row names its step, the model's node, for the editor's selection
+            for r in &mut built {
+                let end = r.text.chars().count() as u32;
+                r.props.push((
+                    0,
+                    end,
+                    "drgnx-work-id".into(),
+                    json!(format!("e:{}", g.head)),
+                ));
+            }
             cache.groups.insert(g.head, built);
         }
         let mut out = Vec::new();

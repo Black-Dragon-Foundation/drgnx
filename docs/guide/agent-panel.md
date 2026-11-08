@@ -79,6 +79,11 @@ A step that failed opens by itself. `1`, `2` and `3` are presets: **watch** (tit
 commands open) and **debug** (everything, thinking included). What is open belongs to the chat. `M` makes the current
 choice the default for new panels and saves it in your settings (`drgnx-agent-panel-disclosure`).
 
+**Moving between steps.** `]` and `[` go to the next and previous tool call, `}` and `{` to the next and previous step
+that changed a file, `>` and `<` to your next and previous message, from the step at point and wrapping at the ends
+(**Next Tool Call**, **Next Change**, **Next Message You Sent** and their **Previous** twins, in every profile). They
+answer at once, without asking the hub. With nothing at point, `TAB` opens or folds the step you moved to.
+
 ## Steering
 
 Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer.

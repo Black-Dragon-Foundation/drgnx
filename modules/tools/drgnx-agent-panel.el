@@ -31,6 +31,8 @@
 (require 'drgnx-modules)
 (require 'drgnx-view)
 (require 'drgnx-hub-client)
+(require 'drgnx-view-nav)                ; the moves between steps of a kind, through the replica
+(require 'text-property-search)          ; the moves look through the drawn rows
 
 (declare-function drgnx-hub--call-on "drgnx-hub-client")
 (declare-function drgnx-view-env-register "drgnx-view-env")
@@ -254,8 +256,12 @@ folds under it."
   (when drgnx-view-patch
     (when-let* ((rows (seq-filter #'stringp keys))) (drgnx-view-patch--patched view rows))))
 
+(defun drgnx-agent-panel--sync (view)
+  "SYNC of the panel's view: with the hub's rows, the models their patches named go to Sjá before they are drawn."
+  (when drgnx-view-patch (drgnx-view-patch--sync view)))
+
 (drgnx-view-define 'agent-panel :render #'drgnx-agent-panel--render :follow-tail t :slice drgnx-view-slice
-                   :patched #'drgnx-agent-panel--patched)
+                   :patched #'drgnx-agent-panel--patched :sync #'drgnx-agent-panel--sync)
 
 ;;;; The hub's rows
 
@@ -523,10 +529,13 @@ further back too."
                (unless drgnx-agent-panel--loaded (drgnx-agent-panel--load))))))))))
 
 (defun drgnx-agent-panel--unsubscribe ()
-  "No window shows this panel: the hub stops sending the session's entries."
+  "No window shows this panel: the hub stops sending the session's entries.  Without the events connection nothing is
+asked: the subscription went with it, and this runs from `kill-buffer-hook' (a call would open a connection, and
+signal when no hub serves)."
   (when drgnx-agent-panel--subscribed
     (setq drgnx-agent-panel--subscribed nil)
-    (drgnx-agent-panel--ask "agents/entries/unsubscribe" (list :session drgnx-agent-panel--session))))
+    (when (drgnx-agent-panel--hub-up-p)
+      (drgnx-agent-panel--ask "agents/entries/unsubscribe" (list :session drgnx-agent-panel--session)))))
 
 ;;;; Panels
 
@@ -667,6 +676,20 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
   (drgnx-command-define 'agents-panel-older :category "Agents" :title "Load Earlier Steps"
                         :command #'drgnx-agent-panel-older :map 'drgnx-agent-panel-mode-map
                         :doc "The page of steps before the first one shown")
+  (dolist (c '((agents-panel-next-tool "Next Tool Call" drgnx-agent-panel-next-tool
+                                       "Go to the next tool call in the panel, wrapping")
+               (agents-panel-previous-tool "Previous Tool Call" drgnx-agent-panel-previous-tool
+                                           "Go to the previous tool call in the panel, wrapping")
+               (agents-panel-next-change "Next Change" drgnx-agent-panel-next-change
+                                         "Go to the next step that changed a file, wrapping")
+               (agents-panel-previous-change "Previous Change" drgnx-agent-panel-previous-change
+                                             "Go to the previous step that changed a file, wrapping")
+               (agents-panel-next-prompt "Next Message You Sent" drgnx-agent-panel-next-prompt
+                                         "Go to your next message in the panel, wrapping")
+               (agents-panel-previous-prompt "Previous Message You Sent" drgnx-agent-panel-previous-prompt
+                                             "Go to your previous message in the panel, wrapping")))
+    (drgnx-command-define (nth 0 c) :category "Agents" :title (nth 1 c) :command (nth 2 c)
+                          :map 'drgnx-agent-panel-mode-map :doc (nth 3 c)))
   (when (fboundp 'drgnx-pane-define-kind)
     (drgnx-pane-define-kind 'agent-panel :title " AGENT" :home 'right :buffer #'drgnx-agent-panel--current-buffer))
   (drgnx-module-hook 'drgnx-hub-event-functions panel-event (event data) (drgnx-agent-panel--event event data))
@@ -689,11 +712,78 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
   (dolist (b (drgnx-agent-panel-buffers)) (kill-buffer b)))
 
 (defun drgnx-agent-panel-toggle ()
-  "Open or fold the thinking and the detail of the step at point."
+  "Open or fold the thinking and the detail of the step at point (with the hub's rows, off a step: the selected one).
+A fold is this panel's own state at once; the hub hears it after (`agents/panel/look') and draws the rows again."
   (interactive)
   (let ((key (drgnx-agent-panel--key-at)))
+    (unless (eq (car-safe key) :e)
+      (when-let* (((drgnx-agent-panel--rows-p)) (id (drgnx-view-nav-selection)))
+        (setq key (list :e (drgnx-view-nav-field "entry" id)))))
     (unless (eq (car-safe key) :e) (user-error "Point is not on a step"))
     (drgnx-agent-panel--row-toggle key)))
+
+;;;; Moving between the steps of a kind (the hub's model, in Sjá)
+
+(declare-function nidhogg-view-get "nidhogg-views" (h what &optional arg arg2))
+
+(defun drgnx-agent-panel--of-kind-p (h id kind)
+  "Whether step ID of the panel's model (handle H) is of KIND: `tool', `hunk' (a tool call with an edit) or `ask'
+\(your message)."
+  (pcase kind
+    ("tool" (equal (nidhogg-view-get h 'kind id) "tool"))
+    ("hunk" (eql (nidhogg-view-get h 'field "diff" id) 1))
+    (_ (equal (nidhogg-view-get h 'kind id) "user"))))
+
+(defun drgnx-agent-panel--find-step (h kind step from)
+  "The first step of KIND after (STEP 1) or before (STEP -1) the step FROM among the drawn rows, from point, wrapping
+past the ends; nil when none is drawn."
+  (let ((pred (lambda (_ v) (and v (not (equal v from)) (drgnx-agent-panel--of-kind-p h v kind))))
+        (search (if (> step 0) #'text-property-search-forward #'text-property-search-backward)))
+    (save-excursion
+      (or (when-let* ((m (funcall search 'drgnx-work-id nil pred))) (prop-match-value m))
+          (progn (goto-char (if (> step 0) (point-min) (point-max)))
+                 (when-let* ((m (funcall search 'drgnx-work-id nil pred))) (prop-match-value m)))
+          ;; FROM is the only one: it stays
+          (and from (drgnx-agent-panel--of-kind-p h from kind) from)))))
+
+(defun drgnx-agent-panel--move (kind step)
+  "Select the next (STEP 1) or previous (STEP -1) step of KIND from point and put point on it, wrapping: KIND
+`tool', `hunk' (a step with an edit) or `ask' (your message).  Each step's kind comes from the panel's model in Sjá,
+which then selects it."
+  (unless (drgnx-agent-panel--rows-p) (user-error "The panel moves between steps with the hub's rows only"))
+  (let* ((h (drgnx-view-patch-handle drgnx-view-patch))
+         (to (and h (drgnx-agent-panel--find-step h kind step (get-text-property (point) 'drgnx-work-id)))))
+    (if to (drgnx-view-nav 'select to) (message "No step of that kind"))))
+
+(defun drgnx-agent-panel-next-tool ()
+  "The next tool call in the panel, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "tool" 1))
+
+(defun drgnx-agent-panel-previous-tool ()
+  "The previous tool call in the panel, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "tool" -1))
+
+(defun drgnx-agent-panel-next-change ()
+  "The next step that changed a file, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "hunk" 1))
+
+(defun drgnx-agent-panel-previous-change ()
+  "The previous step that changed a file, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "hunk" -1))
+
+(defun drgnx-agent-panel-next-prompt ()
+  "Your next message in the panel, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "ask" 1))
+
+(defun drgnx-agent-panel-previous-prompt ()
+  "Your previous message in the panel, wrapping."
+  (interactive)
+  (drgnx-agent-panel--move "ask" -1))
 
 (drgnx-module-define 'tools/agent-panel
                      :doc "One agent session's steps, live, in the right dock: a step on a line, thinking folded under it."

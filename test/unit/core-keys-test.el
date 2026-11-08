@@ -965,6 +965,8 @@ The commands of modules that need no installed package are in it, the later stag
                               shortcuts-tty-fallback  ; M12b's terminal fallback in the Shortcuts editor
                               terminal-copy terminal-paste terminal-find terminal-copy-mode ; drgnx's terminal's own map
                               terminal-find-next terminal-find-previous ; its copy mode's
+                              agents-panel-next-tool agents-panel-previous-tool agents-panel-next-change ; the panel's moves
+                              agents-panel-previous-change agents-panel-next-prompt agents-panel-previous-prompt
                               ;; the Extensions list: its open key and its own keys
                               extensions-open extensions-search extensions-details extensions-install extensions-update
                               extensions-update-all extensions-uninstall extensions-toggle-project extensions-refresh
