@@ -663,15 +663,15 @@ Checked per display, with a graphical frame: `find-font' in a daemon with no suc
 
 (defun drgnx-look-fonts--check-frame ()
   "`server-after-make-frame-hook': check the new frame's display, and write what the checks found to fonts-report.eld
-in the state dir for `drgnx doctor' (a batch Emacs with no frame of its own to check).  Never signals."
+in the state dir for `drgnx doctor' (a batch Emacs with no frame of its own to check).  Never signals: a report that
+cannot be written leaves the last one, which the session's own doctor does not need."
   (let ((frame (selected-frame)))
     (when (display-graphic-p frame)
       (setf (alist-get (terminal-name frame) drgnx-look-fonts--fallback-report nil nil #'equal)
             (list (drgnx-look-fonts-fallbacks frame)))
-      (condition-case err
-          (drgnx-file-write (expand-file-name "fonts-report.eld" (drgnx-state-dir)) (drgnx-look-fonts-fallback-report)
-                            :fsync nil)
-        (error (message "drgnx: cannot write the font report: %s" (error-message-string err)))))))
+      (ignore-errors
+        (drgnx-file-write (expand-file-name "fonts-report.eld" (drgnx-state-dir)) (drgnx-look-fonts-fallback-report)
+                          :fsync nil)))))
 
 (defun drgnx-look-fonts--distro ()
   "`fedora', `arch', `ubuntu' (or Debian-like), `homebrew' on a Mac, else nil; and whether Fedora is image-based."
