@@ -333,6 +333,7 @@ impl Terms {
         };
         match out {
             Out::Patch { patch } => self.send_event(owner, "view-patch", json!(patch)),
+            Out::Model { model } => self.send_event(owner, "view-model", model),
             Out::Title { title } => ev("term/title", json!({"title": title})),
             Out::Cwd { cwd } => {
                 if let Some(t) = lock(&self.inner.state).terms.get_mut(id) {

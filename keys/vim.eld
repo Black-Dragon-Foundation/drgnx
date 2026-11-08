@@ -319,6 +319,8 @@
         (terminal-copy "C-S-c" :map (drgnx-term . drgnx-term-mode-map) :mac "s-c")
         (terminal-paste "C-S-v" :map (drgnx-term . drgnx-term-mode-map) :mac "s-v")
         (terminal-find :none "the palette")
+        (terminal-find-next :none "the palette")
+        (terminal-find-previous :none "the palette")
         (terminal-copy-mode :none "the palette")
         (shell-reload-environment :none "in the palette")
         (go-quick-open "SPC f p")

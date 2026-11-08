@@ -305,6 +305,8 @@
         (terminal-copy "C-S-c" :map (drgnx-term . drgnx-term-mode-map) :mac "s-c")
         (terminal-paste "C-S-v" :map (drgnx-term . drgnx-term-mode-map) :mac "s-v")
         (terminal-find "C-f" :map (drgnx-term . drgnx-term-mode-map) :mac "s-f")
+        (terminal-find-next "<f3>" :map (drgnx-term . drgnx-term-copy-mode-map))
+        (terminal-find-previous "S-<f3>" :map (drgnx-term . drgnx-term-copy-mode-map))
         (terminal-copy-mode :none "the palette")
         (shell-reload-environment :none "in the palette")
         (go-quick-open "C-p")

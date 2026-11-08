@@ -1512,7 +1512,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `term/paste` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/resize` | user | `{cell_px: [natnum, natnum], cols: natnum, id: string, rows: natnum}` | `boolean` | no |
 | `term/scroll` | user | `{delta?: integer, from?: string, id: string, prompt_delta?: integer, to?: string}` | `{key?: string}` | no |
-| `term/search` | user | `{dir?: string, id: string, query: string}` | `{matches: [[string \| null, natnum, natnum]]}` | no |
+| `term/search` | user | `{dir?: string, id: string, query: string}` | `{found: natnum, held: natnum, model?: natnum}` | no |
 | `term/session-end` | user | `{}` | `natnum` | no |
 | `term/text` | user | `{id: string, text: string}` | `boolean` | no |
 | `term/text-range` | user | `{from_key?: string, id: string, to_key?: string}` | `{text: string}` | no |

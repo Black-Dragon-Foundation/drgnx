@@ -491,7 +491,8 @@ Mode*) then `M-w`.
 **Copy mode** (*Terminal: Copy Mode*) stops the screen and makes the terminal an ordinary read-only buffer: move,
 select, `C-s` and `M-w` as anywhere else. The program's output is kept meanwhile and drawn when you leave; `C-g` (or
 the command again) leaves it. *Find in Terminal* asks for text, enters copy mode and jumps to the nearest match
-above.
+above; *Find Next in Terminal* and *Find Previous in Terminal* (`F3` and `S-F3` in copy mode in the VS Code profile,
+the palette in the others) go to the next older and newer match, wrapping, and so does Find again with the same text while in copy mode.
 
 **Mouse**: while the program asks for the mouse (htop, vim with `mouse=a`, tmux), clicks, drags and the wheel go to
 it; otherwise they select text as in any buffer. A link the program prints (OSC 8, `ls --hyperlink`) is underlined on

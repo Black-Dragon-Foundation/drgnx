@@ -30113,37 +30113,30 @@
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "description": "`term/search`'s answer: `[key, col, len]` per match, in characters; a row the buffer does not hold has no key.",
+        "description": "`term/search`'s answer: FOUND matches, HELD of them in rows the buffer holds; those went first to the terminal's\nview as its `view-model` MODEL (a list `matches`; none when no editor is attached).",
         "properties": {
-          "matches": {
-            "items": {
-              "maxItems": 3,
-              "minItems": 3,
-              "prefixItems": [
-                {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                {
-                  "format": "uint32",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              ],
-              "type": "array"
-            },
-            "type": "array"
+          "found": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "held": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
-          "matches"
+          "found",
+          "held"
         ],
         "title": "TermMatches",
         "type": "object"

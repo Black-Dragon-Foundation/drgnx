@@ -25,7 +25,7 @@ terminal's buffer only shows the screen it sends. So:
   a paste is bracketed when the program asks for it, so a shell does not run a pasted line on its own.
 - **Copy mode** (*Terminal: Copy Mode*, `C-c C-e` in the Emacs profile) stops the screen so you can move, search and
   copy in it; `C-g` leaves it and draws what the program printed meanwhile. *Find in Terminal* searches the screen and
-  the terminal's scrollback.
+  the terminal's scrollback; *Find Next* and *Find Previous in Terminal* step through the matches without asking again.
 - **Mouse** clicks and the wheel go to the program only while it asks for the mouse; otherwise they select text.
 - **Links** a program prints (OSC 8, `ls --hyperlink`) open on a click: a file in the other window, a URL in the
   browser. Only links on the screen itself are clickable; scrolled-off rows show their text only.

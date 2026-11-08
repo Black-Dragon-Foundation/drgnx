@@ -83,6 +83,10 @@ pub struct Worker {
     prompt_due: bool,
     /// The keys of prompt rows, oldest first.
     prompts: std::collections::VecDeque<Key>,
+    /// The version of the view's model (Find's matches) last sent, and that model as a reset (none: no search since
+    /// the view was attached).
+    model_version: u64,
+    model: Option<String>,
 }
 
 impl Worker {
@@ -116,6 +120,8 @@ impl Worker {
             shell_pid: 0,
             prompt_due: false,
             prompts: std::collections::VecDeque::new(),
+            model_version: 0,
+            model: None,
         })
     }
 
@@ -205,6 +211,9 @@ impl Worker {
                     hub,
                     env_epoch,
                 });
+                // a new editor's replica: its model starts again
+                self.model_version = 0;
+                self.model = None;
                 self.resync();
             }
             In::Env { env_epoch } => {
@@ -252,7 +261,12 @@ impl Worker {
                 cell_px,
             } => self.resize(cols, rows, cell_px),
             In::Ack { version } => self.ack(version),
-            In::Resync => self.resync(),
+            In::Resync { model: false } => self.resync(),
+            In::Resync { model: true } => {
+                if let Some(m) = self.model.clone() {
+                    self.send_model(m);
+                }
+            }
             In::Config { config } => {
                 for (name, value) in config {
                     self.config(&name, &value);
@@ -288,7 +302,16 @@ impl Worker {
             }
             In::Search { req, query, dir } => {
                 let matches = self.search(&query, dir.as_deref() != Some("down"));
-                self.answer(req, serde_json::json!({ "matches": matches }));
+                let (model, held) = matches_model(&matches);
+                let version = self.attach.is_some().then(|| {
+                    self.send_model(model);
+                    self.model_version
+                });
+                let found = matches.len();
+                self.answer(
+                    req,
+                    serde_json::json!({ "found": found, "held": held, "model": version }),
+                );
             }
             In::TextRange {
                 req,
@@ -732,6 +755,20 @@ impl Worker {
         true
     }
 
+    /// The attached view's model is now MODEL (a reset): its `view-model` goes out, from the version last sent.
+    fn send_model(&mut self, model: String) {
+        let Some(a) = &self.attach else { return };
+        let base = self.model_version;
+        self.model_version += 1;
+        self.out.push(Out::Model {
+            model: serde_json::json!({
+                "view": a.view, "hub": a.hub, "base": base, "version": self.model_version, "reset": true,
+                "model": model,
+            }),
+        });
+        self.model = Some(model);
+    }
+
     fn answer(&mut self, req: u64, result: serde_json::Value) {
         self.out.push(Out::Answer { req, result });
     }
@@ -866,6 +903,32 @@ impl Worker {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// The most matches Find's model holds: Sjá's cap on a list sent whole (the oldest past it are left out).
+const MODEL_MATCHES_MAX: usize = 20_000;
+
+/// Find's model from a search's MATCHES: a `list` scheme whose list `matches` holds, in their order, those in rows the
+/// editor holds (id `KEY:COL`, fields `key`, `col`, `len`), as one reset op; and how many it holds.
+fn matches_model(matches: &[(Option<Key>, u32, u32)]) -> (String, usize) {
+    let (mut nodes, mut ids) = (Vec::new(), Vec::new());
+    for (key, col, len) in matches {
+        if ids.len() >= MODEL_MATCHES_MAX {
+            break;
+        }
+        let Some(key) = key else { continue };
+        let id = format!("{key}:{col}");
+        nodes.push(serde_json::json!({"id": id, "kind": "match", "flags": 0,
+                                      "fields": [["key", key], ["col", col], ["len", len]]}));
+        ids.push(id);
+    }
+    let n = ids.len();
+    let model = serde_json::json!({"ops": [{"reset": {
+        "descriptor": {"scheme": "list", "chain_kinds": [], "match_fields": [], "lists": ["matches"],
+                       "classes": ["selected"], "flags": [], "forms": [], "start": "matches"},
+        "nodes": nodes, "edges": [], "lists": [{"name": "matches", "ids": ids}],
+    }}]});
+    (model.to_string(), n)
 }
 
 /// `#rrggbb` as bytes.

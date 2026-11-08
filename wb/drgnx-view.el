@@ -1679,6 +1679,10 @@ model version a row patch of the stream named.  RESYNC: non-nil while a `view/re
 LAST: Sjá's answer to the last apply."
   view hub gen version queue (named 0) resync last (applied 0) (resyncs 0))
 
+(defvar drgnx-view-model-functions nil
+  "Called with (VIEW VERSION) after a `view-model' of VIEW (a view's name) was queued: a command that asked the hub
+for a model and got the answer first takes it here (Find in Terminal).")
+
 (defvar drgnx-view-model--views (make-hash-table :test #'equal)
   "VIEW → its `drgnx-view-model', while a buffer of VIEW lives (pruned with the last: `drgnx-view-patch--killed').")
 
@@ -1740,7 +1744,8 @@ draw.  Returns the decision, or nil when no buffer shows the view or this Emacs 
            (setf (drgnx-view-model-queue state)
                  (nconc (drgnx-view-model-queue state)
                         (list (cons (plist-get data :version) (plist-get data :model)))))
-           (drgnx-view-model--arm state))))
+           (drgnx-view-model--arm state)
+           (run-hook-with-args 'drgnx-view-model-functions (plist-get data :view) (plist-get data :version)))))
       what)))
 
 (defun drgnx-view-model--apply (state upto)
@@ -1756,6 +1761,14 @@ and asks for a reset; `too-large' drops it (the view keeps what it holds)."
                     (drgnx-view-model--forget-faces (drgnx-view-model-view state)))
           ('resync (drgnx-view-model--lose state) (drgnx-view-model--resync state))
           ('too-large (drgnx-view-model--lose state)))))))
+
+(defun drgnx-view-model-apply-queued (view)
+  "The queued models of VIEW (a view's name) go to Sjá now: for a view whose row patches name no model (a
+terminal's), the command that asked the hub for one uses it at once instead of one throttle later.  Returns the
+version of the last model VIEW's stream queued (now applied), or nil."
+  (when-let* ((state (gethash view drgnx-view-model--views)))
+    (drgnx-view-model--apply state t)
+    (drgnx-view-model-version state)))
 
 (defun drgnx-view-model--forget-faces (view)
   "VIEW's buffers make their faces by class again: a reset may name other classes."

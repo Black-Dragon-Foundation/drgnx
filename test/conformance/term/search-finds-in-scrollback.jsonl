@@ -1,4 +1,4 @@
-{"scenario": "term/search-finds-in-scrollback", "requires": ["v1", "linux"], "doc": "term/search finds text in every row the terminal holds, rows the buffer never received too (those have no key), with the column and length in characters."}
+{"scenario": "term/search-finds-in-scrollback", "requires": ["v1", "linux"], "doc": "term/search finds text in every row the terminal holds, rows the buffer never received too (those are not in its model)."}
 {"do": "start", "hub": "h"}
 {"do": "connect", "conn": "e", "hub": "h"}
 {"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
@@ -6,5 +6,5 @@
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "term/open", "params": {"dir": "/", "command": ["/bin/sh", "-c", "echo NEEDLE-42; seq 1 50; exec sleep 600"], "env": [["PATH", "/usr/bin:/bin"]], "cols": 40, "rows": 5, "cell_px": [8, 16], "class": "gui-1"}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": {"id": "$capture:t", "view": "$capture:tv"}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "$tv", "base": 0, "ops": [{"reset": "$any"}]}}, "within_ms": 10000}
-{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "NEEDLE-42"}}, "expect": {"id": 3, "result": {"matches": [[null, 0, 9]]}}, "within_ms": 10000}
-{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/search", "params": {"id": "$t", "query": "EEDLE", "dir": "down"}}, "expect": {"id": 4, "result": {"matches": [[null, 1, 5]]}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 3, "method": "term/search", "params": {"id": "$t", "query": "NEEDLE-42"}}, "expect": {"id": 3, "result": {"found": 1, "held": 0, "model": "$any"}}, "within_ms": 10000}
+{"do": "poll", "conn": "e", "json": {"id": 4, "method": "term/search", "params": {"id": "$t", "query": "EEDLE", "dir": "down"}}, "expect": {"id": 4, "result": {"found": 1, "held": 0, "model": "$any"}}, "within_ms": 10000}

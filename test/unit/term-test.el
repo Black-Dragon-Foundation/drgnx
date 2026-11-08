@@ -295,6 +295,36 @@ hub or its worker."
         (should (eq (overlay-get drgnx-term--find-overlay 'face) 'drgnx-term-search-selected))
         (drgnx-term-copy-mode -1)))))
 
+(ert-deftest drgnx-term/find-next-and-previous-walk-the-replica ()
+  ;; pattern C (handshake: each step settles on the condition the hub's lines bring)
+  (skip-unless (fboundp 'nidhogg-view--call))
+  (drgnx-term-test--with
+    (let ((b (drgnx-term-test--start)) (asked 0))
+      (drgnx-term-test--run b "printf 'f%s\\n' x-1 x-2 x-3")
+      (drgnx-term-test--until-line b "fx-3" "the three rows")
+      (cl-letf* ((call (symbol-function 'drgnx-hub--call-on))
+                 ((symbol-function 'drgnx-hub--call-on)
+                  (lambda (proc method &rest args)
+                    (when (equal method "term/search") (cl-incf asked))
+                    (apply call proc method args))))
+        (with-current-buffer b (drgnx-term-find "fx-"))
+        (drgnx-term-test--settle (lambda () (buffer-local-value 'drgnx-term-copy-mode b)) "the first match shown")
+        (with-current-buffer b
+          ;; newest first, then older, then back; only the first Find asked the hub
+          (should (looking-at "fx-3"))
+          (drgnx-term-find-next)
+          (should (looking-at "fx-2"))
+          (drgnx-term-find-next)
+          (should (looking-at "fx-1"))
+          (drgnx-term-find-previous)
+          (should (looking-at "fx-2"))
+          (drgnx-term-find "fx-")          ; asked again with the same text: the next older one
+          (should (looking-at "fx-1"))
+          (should (eq (overlay-get drgnx-term--find-overlay 'face) 'drgnx-term-search-selected))
+          (should (= (overlay-end drgnx-term--find-overlay) (+ (point) 3)))
+          (should (= asked 1))
+          (drgnx-term-copy-mode -1))))))
+
 (ert-deftest drgnx-term/osc8-link-opens-file ()
   (drgnx-term-test--with
     (let* ((b (drgnx-term-test--start)) (file (make-temp-file "drgnx-term-link")) (uri (concat "file://" file)))

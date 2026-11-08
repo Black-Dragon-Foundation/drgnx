@@ -598,6 +598,124 @@ fn search_and_text_range_read_beyond_the_window() {
     assert_eq!(w.search("A", false).len(), 6);
 }
 
+/// One `view-model` a worker sent: base, version, reset, the model's ops.
+type Sent = (u64, u64, bool, serde_json::Value);
+
+/// The `view-model`s a worker sent, and its answers.
+fn models(w: &mut Worker) -> (Vec<Sent>, Vec<serde_json::Value>) {
+    let (mut models, mut answers) = (Vec::new(), Vec::new());
+    for o in w.take_out() {
+        match o {
+            Out::Model { model } => {
+                assert_eq!(model["view"], "term:1");
+                assert_eq!(model["hub"], 7);
+                let ops: serde_json::Value =
+                    serde_json::from_str(model["model"].as_str().expect("a string")).expect("JSON");
+                models.push((
+                    model["base"].as_u64().unwrap(),
+                    model["version"].as_u64().unwrap(),
+                    model["reset"] == true,
+                    ops,
+                ));
+            }
+            Out::Answer { result, .. } => answers.push(result),
+            _ => {}
+        }
+    }
+    (models, answers)
+}
+
+#[test]
+fn search_sends_its_held_matches_as_a_list_model() {
+    // pattern D (pure: the worker driven with a fake clock)
+    let mut w = worker(20, 3, 2);
+    let mut m = Model::default();
+    w.output(b"A1\r\nA2\r\nA3\r\nA4\r\nA5\r\nA6", 0);
+    for n in 1..5 {
+        draw(&mut w, &mut m, n * 500);
+    }
+    let search = |req| In::Search {
+        req,
+        query: "A".into(),
+        dir: None,
+    };
+    w.handle(search(1), 3000);
+    let (ms, answers) = models(&mut w);
+    assert_eq!(ms.len(), 1, "one model per search");
+    let (base, version, reset, ops) = &ms[0];
+    assert_eq!(
+        (*base, *version, *reset),
+        (0, 1, true),
+        "the first model of a view"
+    );
+    let r = &ops["ops"][0]["reset"];
+    assert_eq!(r["descriptor"]["scheme"], "list");
+    assert_eq!(r["lists"][0]["name"], "matches");
+    let ids = r["lists"][0]["ids"].as_array().unwrap();
+    // A1 is beyond the window of 2: only the held rows' matches, newest first
+    let held = w.search("A", true);
+    let keyed: Vec<_> = held.iter().filter(|m| m.0.is_some()).collect();
+    assert_eq!(ids.len(), keyed.len());
+    assert!(
+        keyed.len() < held.len(),
+        "some matches are in rows the editor lacks"
+    );
+    let first = r["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == ids[0])
+        .expect("the first match's node");
+    let field = |name: &str| {
+        first["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f[0] == name)
+            .map(|f| f[1].clone())
+    };
+    assert_eq!(field("key"), Some(serde_json::json!(keyed[0].0)));
+    assert_eq!(field("col"), Some(serde_json::json!(0)));
+    assert_eq!(field("len"), Some(serde_json::json!(1)));
+    assert_eq!(
+        answers,
+        [serde_json::json!({"found": held.len(), "held": keyed.len(), "model": 1})]
+    );
+    // the next search goes on from it; a model resync resends it and draws no rows
+    w.handle(search(2), 3100);
+    let (ms, _) = models(&mut w);
+    assert_eq!(
+        (ms[0].0, ms[0].1, ms[0].2),
+        (1, 2, true),
+        "each search's model is a reset"
+    );
+    w.handle(In::Resync { model: true }, 3200);
+    let out = w.take_out();
+    assert!(out.iter().all(|o| !matches!(o, Out::Patch { .. })));
+    let Some(Out::Model { model }) = out.first() else {
+        panic!("a model: {out:?}")
+    };
+    assert_eq!(
+        (model["base"].as_u64(), model["version"].as_u64()),
+        (Some(2), Some(3))
+    );
+    assert_eq!(model["reset"], true);
+    // attached again (a new editor): its model starts again
+    w.handle(
+        In::Attach {
+            view: "term:1".into(),
+            class: "gui".into(),
+            hub: 7,
+            env_epoch: 1,
+        },
+        3300,
+    );
+    w.take_out();
+    w.handle(search(3), 3400);
+    let (ms, _) = models(&mut w);
+    assert_eq!((ms[0].0, ms[0].1), (0, 1));
+}
+
 #[test]
 fn settings_reach_the_engine() {
     let (mut w, mut m) = (worker(20, 2, 10), Model::default());

@@ -306,6 +306,8 @@
         (terminal-paste "C-y" :map (drgnx-term . drgnx-term-mode-map))
         (terminal-copy-mode "C-c C-e" :map (drgnx-term . drgnx-term-mode-map))
         (terminal-find :none "the palette")
+        (terminal-find-next :none "the palette")
+        (terminal-find-previous :none "the palette")
         (shell-reload-environment :none "in the palette")
         (go-quick-open :none "C-x p f (stock)")
         (search-project :none "C-x p g (stock)")
