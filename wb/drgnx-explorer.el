@@ -314,17 +314,32 @@ of the row removes it.  Add and remove with `drgnx-explorer-add-decorator' and `
 (defvar drgnx-explorer--fontify-point nil "Point of the Explorer buffer while `drgnx-explorer--fontify' paints.")
 
 (defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
-  "Colour the name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
+  "Dim an ignored file's name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
 \(`drgnx-wb-row-tail-overlay'): the control shows on the row at point, and is hidden on the others until hovered.
 A row of a repository whose status is not read yet asks for it (`drgnx-explorer--git-unread')."
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
          (look (and status (drgnx-git-look status)))
          (mark (and status (if (and dirp (not (memq status '(ignored untracked)))) "●" (car look)))))
-    (when look (add-face-text-property name-start eol (cadr look)))
+    ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
+    (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
     ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
     (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status))
                                (and drgnx-explorer--fontify-point (<= bol drgnx-explorer--fontify-point eol)))))
+
+(defvar drgnx-explorer--icon-gaps (make-hash-table :test #'equal)
+  "(IMAGE . PX) → the icon IMAGE followed by PX pixels of room, shared by the rows.  Bounded: cleared past 64
+entries (a scale or icon change adds a set).")
+
+(defun drgnx-explorer--icon-gap (image)
+  "IMAGE (an icon's display spec) followed by the room before the name, window-dark.html `.row' gap 6px: a display
+string, made once per icon and scale."
+  (let ((key (cons image (drgnx-px 6))))
+    (or (gethash key drgnx-explorer--icon-gaps)
+        (progn (when (> (hash-table-count drgnx-explorer--icon-gaps) 64) (clrhash drgnx-explorer--icon-gaps))
+               (puthash key (concat (propertize " " 'display image)
+                                    (propertize " " 'display `(space :width (,(cdr key)))))
+                        drgnx-explorer--icon-gaps)))))
 
 (defun drgnx-explorer--icons (bol depth name-start dirp name)
   "Draw the row's chevron and file or folder icon over the two characters of its prefix, and the indent of each
@@ -335,7 +350,7 @@ level as `tree-indent' pixels, when icons are drawn as images (graphical frames)
     (when-let* ((file (funcall img (if dirp (if open 'folder-open 'folder) (drgnx-look-file-name-icon-name name)))))
       (when (and dirp (funcall img 'chevron-down))
         (put-text-property chevron (1+ chevron) 'display (funcall img (if open 'chevron-down 'chevron-right))))
-      (put-text-property (1+ chevron) (+ chevron 2) 'display file)
+      (put-text-property (1+ chevron) (+ chevron 2) 'display (drgnx-explorer--icon-gap file))
       (when (and (fboundp 'drgnx-look-density-value) (> depth 1))
         (let ((px (round (* (drgnx-pixels-scale) (drgnx-look-density-value 'tree-indent)))) (p bol))
           (while (< p chevron)
@@ -446,6 +461,14 @@ faces come later, from jit-lock, for the rows on screen."
       (drgnx-explorer--subscribe)
     (drgnx-explorer--render-old)))
 
+(defun drgnx-explorer--insert-root (path)
+  "Insert the row of the root PATH: its name as it is.  With one root the row is not shown (window-dark.html: the
+tree starts at its entries, the island's header names the project); it stays in the rows, so every index holds."
+  (let ((start (point)))
+    (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (file-name-nondirectory path)) "\n")
+    (when (null (cdr drgnx-explorer--roots))
+      (put-text-property start (point) 'invisible 'drgnx-explorer-root))))
+
 (defun drgnx-explorer--render-old ()
   "`drgnx-explorer--render' off the rows path."
   (with-current-buffer (get-buffer-create drgnx-explorer-buffer-name)
@@ -457,7 +480,7 @@ faces come later, from jit-lock, for the rows on screen."
         (erase-buffer)
         (dolist (root drgnx-explorer--roots)
           (let ((path (directory-file-name (expand-file-name root))))
-            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
+            (drgnx-explorer--insert-root path)
             (push (list (vector path 0 t nil)) data)
             (push (drgnx-explorer--insert-subtree path 1) data)))
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data))))
@@ -1213,7 +1236,7 @@ tree is filtered by them once input pauses."
         (erase-buffer)
         (dolist (root drgnx-explorer--roots)
           (let ((path (directory-file-name (expand-file-name root))))
-            (insert (drgnx-explorer--prefix 0 'open) (drgnx-wb-display-name (upcase (file-name-nondirectory path))) "\n")
+            (drgnx-explorer--insert-root path)
             (push (list (vector path 0 t nil)) data)
             (push (drgnx-explorer--insert-subtree path 1) data)))
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data)))

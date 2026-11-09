@@ -139,9 +139,13 @@ main thread: it keeps showing the rows it had (a folder never listed shows one r
 last part of the listing is in. A folder you close before that shows nothing, and a listing that a newer change or a
 Refresh overtook is not shown. A remote folder is listed as before.
 
-**Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, in the colours of your
-theme's version-control faces; a folder with changes inside shows `●` (also one whose only change is a new file;
-a new folder itself shows `U`), and so does a root; ignored files are dimmed. One background `git status` per
+**Git**: `M` modified, `A` added, `U` untracked, `R` renamed, `D` deleted, `C` conflict, at the row's right edge in
+the colours of your theme's version-control faces; the name itself stays in the text colour. A folder with changes
+inside shows `●` (also one whose only change is a new file; a new folder itself shows `U`), and so does a root;
+ignored files are dimmed.
+
+**Rows**: an icon, 6 px of room, then the name. With one root the tree starts at the root's entries (the sidebar's
+header names the project); with several, each root has a row with its name as it is. One background `git status` per
 repository on screen (never holding your git lock), repositories nested inside the tree included; a repository made
 after the tree was shown (`git init`) is picked up at the next refresh (a save, or Emacs getting the focus back).
 The status of at most 16 repositories is kept, so the Explorer reads at most the top 16 it shows; a repository
