@@ -94,13 +94,21 @@ instead of `drgnx-look-scale', and changes when it moves to another monitor.  A 
       (drgnx-look-scale-apply-frame frame))))
 
 (defun drgnx-look-scale--refresh-frame (frame)
-  "FRAME's root at its monitor's UI scale, when that changed (it moved, or its monitor went)."
+  "FRAME's root at its monitor's UI scale, when that changed (it moved, or its monitor went).  Non-nil when it did."
   (when (frame-live-p frame)
     (while (frame-parent frame) (setq frame (frame-parent frame)))
     (when (and (display-graphic-p frame)
                (/= (drgnx-pixels-ui-scale frame) (/ (drgnx-look-scale--frame-percent frame) 100.0)))
       (drgnx-look-scale-apply-frame frame)
-      (drgnx-look-scale--follow))))
+      (drgnx-look-scale--follow)
+      t)))
+
+(defun drgnx-look-scale--frame-scale-changed (frame)
+  "Nidhogg's `nidhogg-frame-scale-change-functions': FRAME's display scale or text zoom changed (its fonts were
+opened again).  It takes its monitor's UI scale, and what is sized from the scale is given again either way: the
+code line's spacing, the gap and the bars were worked out at the old scale."
+  (unless (drgnx-look-scale--refresh-frame frame)
+    (drgnx-look-scale--follow)))
 
 (defun drgnx-look-scale--monitors-changed (&optional _terminal)
   "A monitor came or went: every frame at its monitor's UI scale."
@@ -113,6 +121,8 @@ instead of `drgnx-look-scale', and changes when it moves to another monitor.  A 
   (let ((p (max 100 (min 200 percent))))
     (require 'drgnx-settings-defaults)
     (drgnx-settings-defaults-save 'drgnx-look-scale p)
+    ;; the frames below read it now, whether or not the settings' live sync is running
+    (set-default 'drgnx-look-scale p)
     (mapc #'drgnx-look-scale-apply-frame (drgnx-look-scale--roots))
     (drgnx-look-scale--follow)
     p))
@@ -148,6 +158,7 @@ settings.el and applied at once."
          (new (if percent (cons (cons name (max 100 (min 200 percent))) rest) rest)))
     (require 'drgnx-settings-defaults)
     (drgnx-settings-defaults-save 'drgnx-look-scale-monitors new)
+    (set-default 'drgnx-look-scale-monitors new)
     (drgnx-look-scale-apply)
     name))
 
@@ -167,7 +178,7 @@ settings.el and applied at once."
   "Every frame at its UI scale, frames made later too, and again when a frame changes monitor or a monitor goes."
   (drgnx-state-subscribe 'frame-added #'drgnx-look-scale--frame-added :lane 'now)
   (add-hook 'move-frame-functions #'drgnx-look-scale--refresh-frame)
-  (add-hook 'nidhogg-frame-scale-change-functions #'drgnx-look-scale--refresh-frame)
+  (add-hook 'nidhogg-frame-scale-change-functions #'drgnx-look-scale--frame-scale-changed)
   (add-hook 'display-monitors-changed-functions #'drgnx-look-scale--monitors-changed)
   (unless (and (= drgnx-look-scale 100) (null drgnx-look-scale-monitors)) (drgnx-look-scale-apply)))
 
@@ -175,7 +186,7 @@ settings.el and applied at once."
   "Undo `drgnx-look-scale-on': every frame at its own sizes and text zoom 1.  The settings stay."
   (drgnx-state-unsubscribe 'frame-added #'drgnx-look-scale--frame-added)
   (remove-hook 'move-frame-functions #'drgnx-look-scale--refresh-frame)
-  (remove-hook 'nidhogg-frame-scale-change-functions #'drgnx-look-scale--refresh-frame)
+  (remove-hook 'nidhogg-frame-scale-change-functions #'drgnx-look-scale--frame-scale-changed)
   (remove-hook 'display-monitors-changed-functions #'drgnx-look-scale--monitors-changed)
   (dolist (f (drgnx-look-scale--roots))
     (drgnx-look-scale-apply-frame f 100))

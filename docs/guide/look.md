@@ -259,6 +259,9 @@ sidebar made before any graphical frame (a daemon's) gets its rows when a graphi
 100 % (the default) to 200 % in steps of 5. It applies at once to every frame, frames made later included, with no
 restart. At 110 % on a 125 % display a 26 px row is 36 device pixels (26 × 1.25 × 1.1, rounded half up) and a 16 px
 icon 22, and the fonts are opened at 96 dpi × 1.25 × 1.1, so each is the size a fresh start at that scale gives.
+When a frame's display scale changes (you change it in the display settings, or drag the frame to a monitor at
+another scale), every size follows at once, the code line, the gap, the bars and the boxes included, and a scale
+back where it was gives every size back exactly.
 
 - **Zoom In** and **Zoom Out** (`C-=` and `C--` in the VS Code profile) add or take 10 %; **Reset Zoom** (`C-0`)
   gives 100 %. After one, `+`, `-` or `0` repeat it. Each step is saved in your settings.el.
