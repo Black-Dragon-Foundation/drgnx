@@ -261,6 +261,7 @@ to the right edge, the selection's: two would overflow the line (a truncation ar
 end comes back when the selection leaves."
   (with-temp-buffer
     (insert "current\nother\n")
+    (setq-local drgnx-wb-selection-unfocused t)   ; a buffer in no window: its selection shows anyway
     (let ((o (make-overlay 1 8)) (own (drgnx-wb--row-end 'drgnx-outline-current)))
       (overlay-put o 'drgnx-row-end own)
       (overlay-put o 'after-string own)

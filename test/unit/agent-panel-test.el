@@ -903,7 +903,10 @@ under the chips reads \"Open:\" and its step types are pills, the open ones rais
         (should (string-match-p "\\`[[:space:]]*Open:" strip))
         (should-not (string-match-p "[▸▾]" strip))
         (should (memq 'drgnx-agent-panel-tag-on (drgnx-agent-panel-test--face-at strip "edit")))
-        (should (memq 'drgnx-agent-panel-tag (drgnx-agent-panel-test--face-at strip "read")))))))
+        (should (memq 'drgnx-agent-panel-tag (drgnx-agent-panel-test--face-at strip "read")))
+        ;; every pill is ringed (`.disc .t'), the open ones on the quiet selection
+        (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag 'drgnx-pill))
+        (should (drgnx-agent-panel-test--inherits-p 'drgnx-agent-panel-tag-on 'drgnx-pill-on))))))
 
 (ert-deftest drgnx-agent-panel/composer-is-a-field-card ()
   "agent-panel.html `.composer': the field's card (\"Steer the agent…\", a click writes to the agent) and the bar:
@@ -966,7 +969,12 @@ on the last, nothing past the edge; in a wide one it is one line.  A change of t
         (should (= 1 (cl-count ?\n wide)))
         (should (< 1 (cl-count ?\n narrow)))
         (dolist (line (split-string narrow "\n" t))
-          (should (<= (string-pixel-width line) narrow-px)))
+          ;; measured without the stretch that puts "make default" at the right end (it ends where the window does)
+          (let (parts)
+            (dotimes (i (length line))
+              (let* ((c (substring line i (1+ i))) (d (get-text-property 0 'display c)))
+                (unless (and (eq (car-safe d) 'space) (plist-get (cdr d) :align-to)) (push c parts))))
+            (should (<= (string-pixel-width (apply #'concat (nreverse parts))) narrow-px))))
         (should (string-search "make default" (car (last (split-string narrow "\n" t))))))
       ;; the store's event about the panel's window lays the strip out for its width
       (set-window-buffer (selected-window) buf)
@@ -983,3 +991,16 @@ on the last, nothing past the edge; in a wide one it is one line.  A change of t
       (drgnx-view-draw-now drgnx-view)
       (drgnx-agent-panel-preset 3)
       (should (gethash (list :header) (drgnx-view--dirty drgnx-view))))))
+
+(ert-deftest drgnx-agent-panel/header-status-gives-way-to-the-lens ()
+  "In a narrow panel the header's status is cut (…) so it ends before the lens; nothing overlaps."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--snap (list :name "replay-46dd" :agent "replay" :status "running"))
+      (let* ((wide (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () 4000))) (drgnx-agent-panel--header-row)))
+             (lens (drgnx-agent-panel--lens))
+             (px (+ (string-pixel-width (car (split-string wide "·"))) (string-pixel-width lens) (drgnx-px 24) (string-pixel-width " · Ag")))
+             (narrow (cl-letf (((symbol-function 'drgnx-agent-panel--width) (lambda () px))) (drgnx-agent-panel--header-row))))
+        (should-not (string-search "…" wide))
+        (should (string-search "…" narrow))
+        (should (string-search "watch" narrow))))))

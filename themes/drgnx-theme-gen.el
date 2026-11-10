@@ -122,6 +122,12 @@ taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where
          (drgnx-control-primary :foreground ,(c 'on-accent) :background ,(c 'accent-fill)
                                 :box (:line-width (1 . 1) :color ,(c 'accent-fill)
                                                   ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         ;; a toggle pill (agent-panel.html `.disc .t', 18 px: radius 9): ringed; on: on the quiet selection.  Not radius
+         ;; 99: a radius past half the row's height erodes the text at the pill's ends
+         (drgnx-pill :inherit drgnx-ui-caption :foreground ,(c 'subtle)
+                     :box (:line-width (1 . 1) :color ,(c 'border) ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         (drgnx-pill-on :inherit drgnx-ui-caption :foreground ,(c 'fg) :background ,(c 'sel-quiet)
+                        :box (:line-width (1 . 1) :color ,(c 'border) ,@(and (featurep 'glitnir) '(:corner-radius 6))))
          ;; a keycap is as tall as its text, also on a list row made taller by `line-spacing' (the palette's)
          (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
                        :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4))
