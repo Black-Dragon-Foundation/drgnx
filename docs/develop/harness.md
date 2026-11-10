@@ -533,8 +533,13 @@ How it works:
   `gateway-test.el` modified, `jobs-test.el` untracked, the lock file ignored, and a shell script with a Python
   heredoc. It opens what the mockups have open: `drgnx-gateway.el` at line 216, `gateway-test.el` with unsaved text,
   `drgnx-job.el`, Magit's status and the Explorer.
-- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`. The last,
-  `start-page`, has no mockup: it is judged against the components' spec (buttons, keycaps, the shield).
+- It calls each scene's `drgnx-look-scene-NAME`. The scenes, in order, are listed in `drgnx-look-scenes`.
+  `start-page` has no mockup: it is judged against the components' spec (buttons, keycaps, the shield). The last
+  three, `highlights-dark`, `highlights-light` and `highlights-hc`, have none either: each puts every highlight in one
+  shot, judged against the mockups' tokens. The editor holds the current line, isearch's current and other matches,
+  show-paren, eglot's symbol highlight, Flymake's marks, a rectangle and a region. A second group beside it holds a
+  diff, so the focused card's ring shows. A row in each sidebar section is hovered. Highlights that a command makes are
+  drawn as overlays in their faces, the way those commands draw them.
 - It writes `NAME-sN-facts.eld` beside each shot: the themes, the fonts the chrome faces got, the windows, the
   modules, and `:limits`, what the line cannot show of that mockup yet (`drgnx-look-scene-limits`). A limit is
   written down, never hidden by changing the scene. It also writes `scenes-sN.eld`, with the shots and each scene's

@@ -325,6 +325,94 @@ from 201."
   (drgnx-look-scene--try "work space" (drgnx-work-space-open))
   (drgnx-look-scene--answer))
 
+;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
+;; (look.css) in strips cut from these shots.  Highlights a command makes (isearch's, show-paren's, eglot's, Flymake's,
+;; a rectangle's) are drawn with their faces as overlays, the way those commands draw them, so one shot holds all.
+
+(defconst drgnx-look-scene--diff
+  "diff --git a/core/drgnx-gateway.el b/core/drgnx-gateway.el
+--- a/core/drgnx-gateway.el
++++ b/core/drgnx-gateway.el
+@@ -213,5 +213,5 @@ (defun drgnx-gateway--reply (p reply)
+   \"Send REPLY to the client process P.\"
+-  (when (process-live-p p)
++  (if (process-live-p p)
+       (process-send-string p reply)
+-    nil))
++    (drgnx-gateway--queue p reply)))
+"
+  "A hunk with a changed line pair, for the diff highlights.")
+
+(defun drgnx-look-scene--hl-put (beg end face)
+  "An overlay of the scene's from BEG to END in FACE."
+  (let ((o (make-overlay beg end)))
+    (overlay-put o 'face face) (overlay-put o 'drgnx-hl-scene t) (overlay-put o 'priority 10)
+    o))
+
+(defun drgnx-look-scene--hl-at (line text face &optional nth)
+  "FACE over the NTH (from 0) TEXT on LINE of the current buffer."
+  (save-excursion
+    (goto-char (point-min)) (forward-line (1- line))
+    (let ((eol (pos-eol)))
+      (dotimes (_ (1+ (or nth 0))) (search-forward text eol))
+      (drgnx-look-scene--hl-put (- (point) (length text)) (point) face))))
+
+(defun drgnx-look-scene--highlights (theme)
+  "THEME's highlights in one shot: two editor groups (the focused card's ring), the gateway file with the current
+line, a multi-line region, a rectangle, isearch's current and other matches, show-paren, eglot's symbol, Flymake's
+marks; a diff with a refined pair beside it; a hovered row in the Explorer and in Open."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "highlights"
+    (require 'flymake) (require 'eglot) (require 'paren)     ; their faces
+    (drgnx-look-scene--editor)
+    (let ((left (selected-window)))
+      ;; the diff beside it, in a narrow second group (set directly: showing it would go to the editor window)
+      (unless (window-in-direction 'right left)
+        (set-window-buffer
+         (split-window left (- (round (* 0.36 (window-total-width left)))) 'right)
+         (with-current-buffer (get-buffer-create "hl-scene.diff")
+           (let ((inhibit-read-only t)) (erase-buffer) (insert drgnx-look-scene--diff))
+           (diff-mode) (goto-char (point-min)) (diff-hunk-next) (ignore-errors (diff-refine-hunk))
+           (current-buffer))))
+      (with-current-buffer (window-buffer left)
+        (remove-overlays (point-min) (point-max) 'drgnx-hl-scene t)
+        (when (fboundp 'hl-line-mode) (hl-line-mode 1))
+        (setq-local highlight-nonselected-windows t)
+        ;; isearch on drgnx-gateway--pending: the current match, the others lazily
+        (drgnx-look-scene--hl-at 203 "drgnx-gateway--pending" 'isearch)
+        (drgnx-look-scene--hl-at 208 "drgnx-gateway--pending" 'lazy-highlight)
+        (drgnx-look-scene--hl-at 210 "drgnx-gateway--pending" 'lazy-highlight)
+        ;; show-paren on the defun of line 213 and its close, eglot's symbol on `reply'
+        (drgnx-look-scene--hl-at 213 "(" 'show-paren-match)
+        (drgnx-look-scene--hl-at 217 ")" 'show-paren-match 2)
+        (drgnx-look-scene--hl-at 216 "reply" 'eglot-highlight-symbol-face)
+        (drgnx-look-scene--hl-at 217 "reply" 'eglot-highlight-symbol-face)
+        ;; Flymake: the unused `old' and the unknown function
+        (drgnx-look-scene--hl-at 208 "old" 'flymake-warning)
+        (drgnx-look-scene--hl-at 229 "drgnx-gateway--log" 'flymake-error)
+        ;; a rectangle (rectangle-mark-mode draws its lines as region overlays)
+        (dolist (l '(220 221 222))
+          (save-excursion (goto-char (point-min)) (forward-line (1- l)) (move-to-column 2)
+                          (drgnx-look-scene--hl-put (point) (progn (move-to-column 24) (point)) 'region))))
+      ;; the region, lines 225-227, drawn as the region is (its face over the text, so point stays on line 216's
+      ;; current line)
+      (with-current-buffer (window-buffer left)
+        (save-excursion
+          (goto-char (point-min)) (forward-line 224) (move-to-column 1)
+          (let ((beg (point))) (forward-line 2) (move-to-column 20) (drgnx-look-scene--hl-put beg (point) 'region)))))
+    ;; a hovered row in Open and in the Explorer (the pointer's `mouse-face', drawn as its face)
+    (dolist (w (window-list nil 'never))
+      (when (window-parameter w 'window-side)
+        (with-current-buffer (window-buffer w)
+          (remove-overlays (point-min) (point-max) 'drgnx-hl-scene t)
+          (save-excursion (goto-char (point-min)) (forward-line 2)
+                          (drgnx-look-scene--hl-put (pos-bol) (1+ (pos-eol)) 'drgnx-hover-row))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-highlights-dark () (drgnx-look-scene--highlights 'drgnx-dark))
+(defun drgnx-look-scene-highlights-light () (drgnx-look-scene--highlights 'drgnx-light))
+(defun drgnx-look-scene-highlights-hc () (drgnx-look-scene--highlights 'drgnx-high-contrast))
+
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
   (drgnx-look-scene--theme 'drgnx-dark)
