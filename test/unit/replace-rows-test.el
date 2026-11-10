@@ -312,4 +312,64 @@ unticked again; a search with nothing unticked sends no `off'."
       (should (equal '("m:2:1") (nidhogg-view-get h 'ticked)))
       (should-not drgnx-replace--carry))))
 
+(defun drgnx-replace-rows-test--status ()
+  "The view's status line."
+  (buffer-substring-no-properties drgnx-replace--status-beg drgnx-replace--status-end))
+
+(defun drgnx-replace-rows-test--active (name)
+  "Non-nil when widget NAME takes input (not greyed out)."
+  (widget-apply (drgnx-replace--widget name) :active))
+
+(ert-deftest drgnx-replace-rows/the-mode-chip-says-what-find-means ()
+  "Pattern D: the mode chip at the left of Find cycles Text → Symbol → Meaning → Text (Next Mode, or a mode's own
+command), each a `search/run' of its query; the empty field's hint says what to type.  Symbol and Meaning are
+read-only: the replace field, the globs and the toggles they do not use are greyed out, no replacement is sent and
+Replace All refuses."
+  (drgnx-replace-rows-test--with
+    (should (equal "Text" (string-trim (widget-value (drgnx-replace--widget 'mode)))))
+    (drgnx-replace--update-status)
+    (should (string-match-p "text or regex" (drgnx-replace-rows-test--status)))
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace--fill 'replace "pin")
+    (drgnx-replace-search-mode-next)
+    (should (eq 'symbol (drgnx-replace--opt :mode)))
+    (should (equal "Symbol" (string-trim (widget-value (drgnx-replace--widget 'mode)))))
+    (let ((params (cdr (car drgnx-replace-rows-test--calls))))
+      (should (equal '(:mode "symbol" :name "needle" :case :false) (drgnx-replace-rows-test--search params :query)))
+      (should-not (plist-member (plist-get params :search) :replace)))
+    (dolist (w '(replace include exclude :word :regexp)) (should-not (drgnx-replace-rows-test--active w)))
+    (should (drgnx-replace-rows-test--active :case))
+    (should-error (drgnx-replace-all) :type 'user-error)
+    (drgnx-replace-search-mode-next)
+    (should (equal '(:mode "meaning" :question "needle")
+                   (drgnx-replace-rows-test--search (cdr (car drgnx-replace-rows-test--calls)) :query)))
+    (should-not (drgnx-replace-rows-test--active :case))
+    (drgnx-replace--fill 'find "")
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 0 :matches 0))
+    (should (string-match-p "describe what the code does" (drgnx-replace-rows-test--status)))
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace-search-mode-next)
+    (should (eq 'text (drgnx-replace--opt :mode)))
+    (should (equal "pin" (drgnx-replace-rows-test--search (cdr (car drgnx-replace-rows-test--calls)) :replace)))
+    (dolist (w '(replace include exclude :case :word :regexp)) (should (drgnx-replace-rows-test--active w)))
+    (drgnx-replace-search-mode-symbol)
+    (should (eq 'symbol (drgnx-replace--opt :mode)))))
+
+(ert-deftest drgnx-replace-rows/a-text-search-that-finds-nothing-offers-meaning ()
+  "Pattern D: no automatic mode: a Text search that finds nothing says so with a \"Try Meaning\" link on the status
+line, which searches the same words by meaning; a search that found something offers nothing."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "retry with backoff")
+    (drgnx-replace--search-now)
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 0 :matches 0))
+    (should (string-match-p "No results.*Try Meaning" (drgnx-replace-rows-test--status)))
+    (goto-char drgnx-replace--status-beg)
+    (should (search-forward "Try Meaning" drgnx-replace--status-end t))
+    (push-button (match-beginning 0))
+    (should (eq 'meaning (drgnx-replace--opt :mode)))
+    (should (equal '(:mode "meaning" :question "retry with backoff")
+                   (drgnx-replace-rows-test--search (cdr (car drgnx-replace-rows-test--calls)) :query)))
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 0 :matches 0))
+    (should-not (string-match-p "Try Meaning" (drgnx-replace-rows-test--status)))))
+
 ;;; replace-rows-test.el ends here

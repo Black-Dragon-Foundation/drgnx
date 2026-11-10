@@ -175,9 +175,10 @@ bar's keymaps), one editor window, no view or bar left over."
             (drgnx-replace-all))
           (should (equal (drgnx-replace-view-test--read a) "(defun bar () (bar))\n;; foo in a comment\n"))
           (should (equal (drgnx-replace-view-test--read b) "(bar)\n"))
-          ;; Symbol off: the toggles come back
+          ;; Text mode ends Rename: the toggles come back
           (with-current-buffer (drgnx-replace-view-test--view)
-            (drgnx-replace--toggle :symbol)
+            (should (equal "Rename" (string-trim (widget-value (drgnx-replace--widget 'mode)))))
+            (drgnx-replace-search-mode-text)
             (should-not (drgnx-replace--opt :symbol))
             (should (widget-apply (drgnx-replace--widget :case) :active)))
           ;; Replace in Files turns Symbol on by itself at a name the server can rename, not without a server
@@ -539,13 +540,14 @@ file order, as a search sends them."
              (abuf (find-file-noselect a)))
         (find-file-noselect b)
         (drgnx-replace-view-test--with-server server requests reply
-          ;; no server: pressing Symbol says why, and the text is searched (through the hub, which is not up here)
+          ;; no server: Rename Symbol says why, and the text is searched (through the hub, which is not up here)
           (drgnx-replace-view-test--visit repo "a.el" 9)
           (drgnx-replace-in-files)
           (drgnx-replace-view-test--wait)
+          (with-current-buffer (drgnx-replace-view-test--view) (should-not (drgnx-replace--opt :symbol)))
+          (drgnx-replace-view-test--visit repo "a.el" 9)
+          (drgnx-replace-rename-symbol)
           (with-current-buffer (drgnx-replace-view-test--view)
-            (should-not (drgnx-replace--opt :symbol))
-            (drgnx-replace--toggle :symbol)
             (should-not (drgnx-replace--opt :symbol))
             (should (string-match-p "No language server" drgnx-replace--status)))
           (drgnx-replace-view-test--wait)

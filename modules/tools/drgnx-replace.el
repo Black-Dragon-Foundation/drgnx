@@ -497,11 +497,76 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
       (widget-put w :button-face (drgnx-replace--button-face name))
       (save-excursion (widget-value-set w (widget-value w))))))
 
-(defun drgnx-replace--insert-toggles ()
-  "The ⟨⟩ Symbol, Aa, ab and .* toggles."
-  (pcase-dolist (`(,name ,label ,help) '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")
+(defun drgnx-replace--insert-toggles (&optional symbol)
+  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them."
+  (pcase-dolist (`(,name ,label ,help) `(,@(and symbol '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")))
                                          (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")))
     (drgnx-replace--insert-button name label help (lambda () (drgnx-replace--toggle name)))))
+
+(defconst drgnx-replace--modes
+  '((text "Text" "text or regex") (symbol "Symbol" "a name: its definitions, then its uses")
+    (meaning "Meaning" "describe what the code does"))
+  "The Search view's modes, in the chip's order: (MODE LABEL HINT); HINT says what to type in Find.")
+
+(defun drgnx-replace--chip-label ()
+  "The mode chip's text: the mode, or Rename while the view shows the language server's edits."
+  (format "%-7s" (if (drgnx-replace--opt :symbol) "Rename"
+                   (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)))))
+
+(defun drgnx-replace--hint ()
+  "What to type in Find, for the view's mode."
+  (if (drgnx-replace--opt :symbol) "" (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) "")))
+
+(defun drgnx-replace--apply-mode ()
+  "Name the mode on the chip and grey out what it does not use: Symbol and Meaning are read-only (no replace field,
+no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the replace field only."
+  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp))
+                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp))
+                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp)))))
+    (dolist (name '(replace include exclude :case :word :regexp))
+      (when-let* ((w (drgnx-replace--widget name)))
+        (let ((buffer-undo-list t)) (widget-apply w (if (memq name off) :deactivate :activate)))))
+    (when-let* ((w (drgnx-replace--widget 'mode)))
+      (let ((buffer-undo-list t)) (save-excursion (widget-value-set w (drgnx-replace--chip-label)))))))
+
+(defun drgnx-replace--set-mode (mode)
+  "Search in MODE (`text', `symbol' or `meaning'), out of Rename, and search again."
+  (when (drgnx-replace--opt :symbol) (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol nil)))
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode))
+  (drgnx-replace--apply-mode)
+  (drgnx-replace--search-now))
+
+(defun drgnx-replace--check-writable ()
+  "A user error in a mode that finds without replacing (Symbol, Meaning)."
+  (when (and (not (drgnx-replace--opt :symbol)) (memq (drgnx-replace--opt :mode) '(symbol meaning)))
+    (user-error "%s searches only find: Text mode replaces" (string-trim (drgnx-replace--chip-label)))))
+
+(defun drgnx-replace--mode-command (mode)
+  "Search the Search view in MODE (nil: the next one after its mode)."
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--set-mode
+     (or mode (car (or (cadr (memq (assq (drgnx-replace--opt :mode) drgnx-replace--modes) drgnx-replace--modes))
+                       (car drgnx-replace--modes)))))))
+
+(defun drgnx-replace-search-mode-next ()
+  "The Search view's next mode: Text → Symbol → Meaning → Text; it searches again."
+  (interactive)
+  (drgnx-replace--mode-command nil))
+
+(defun drgnx-replace-search-mode-text ()
+  "Search the Search view's words as text (Replace works here)."
+  (interactive)
+  (drgnx-replace--mode-command 'text))
+
+(defun drgnx-replace-search-mode-symbol ()
+  "Search the Search view's name as a symbol: its definitions, then its uses (read-only)."
+  (interactive)
+  (drgnx-replace--mode-command 'symbol))
+
+(defun drgnx-replace-search-mode-meaning ()
+  "Search by meaning: the code the Search view's words describe (read-only)."
+  (interactive)
+  (drgnx-replace--mode-command 'meaning))
 
 (defun drgnx-replace--toggle (name)
   "Turn the toggle NAME (:symbol :case :word :regexp) on or off, and search again.  A greyed-out toggle stays."
@@ -536,9 +601,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   "Symbol mode ON or off: on, the find field holds the name and what does not apply is greyed out."
   (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol on))
   (drgnx-replace--restyle :symbol)
-  (dolist (name '(include exclude :case :word :regexp))
-    (when-let* ((w (drgnx-replace--widget name)))
-      (let ((buffer-undo-list t)) (widget-apply w (if on :deactivate :activate)))))
+  (drgnx-replace--apply-mode)
   (when-let* ((on) (name (drgnx-replace--symbol-at drgnx-replace--origin)))
     (drgnx-replace--fill 'find name)))
 
@@ -587,7 +650,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 
 (defun drgnx-replace--render-view ()
   "Draw the view's fields, toggles and buttons; the results go below."
-  (setq drgnx-replace--opts (list :symbol nil :case nil :word nil :regexp nil :scope 'project)
+  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project)
         drgnx-replace--widgets nil
         drgnx-replace--off (make-hash-table :test #'eq)
         drgnx-replace--seen (make-hash-table :test #'equal)
@@ -595,8 +658,11 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
         drgnx-replace--off-files (make-hash-table :test #'equal)
         drgnx-replace--headers (make-hash-table :test #'equal)
         drgnx-replace--last-row (make-hash-table :test #'equal))
-  (drgnx-replace--insert-field 'find "Find     " nil)
-  (drgnx-replace--insert-field 'replace "Replace  " nil)
+  ;; the mode chip is Find's label: it says what Find means
+  (drgnx-replace--insert-button 'mode (drgnx-replace--chip-label) "Search mode: Text, Symbol or Meaning (the next one)"
+                                #'drgnx-replace-search-mode-next)
+  (drgnx-replace--insert-field 'find "" nil)
+  (drgnx-replace--insert-field 'replace "Replace   " nil)
   (drgnx-replace--insert-toggles)
   (widget-insert "\n")
   (drgnx-replace--insert-button 'project "Project" "Search every file of the project"
@@ -604,8 +670,8 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   (drgnx-replace--insert-button 'file "This file" "Search only the file the view was opened from"
                                 (lambda () (drgnx-replace--set-scope 'file)))
   (widget-insert "\n")
-  (drgnx-replace--insert-field 'include "Include  " nil)
-  (drgnx-replace--insert-field 'exclude "Exclude  " nil)
+  (drgnx-replace--insert-field 'include "Include   " nil)
+  (drgnx-replace--insert-field 'exclude "Exclude   " nil)
   (drgnx-replace--insert-button nil "Replace All" "Replace every ticked match" #'drgnx-replace-all)
   (drgnx-replace--insert-button nil "Undo" "Undo the last replacement, in every file" #'drgnx-replace-view-undo)
   (widget-insert "\n")
@@ -627,14 +693,19 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   (let* ((n (if drgnx-view-patch (or (cdr drgnx-replace--hub-counts) 0) (length drgnx-replace--matches)))
          (files (if drgnx-view-patch (or (car drgnx-replace--hub-counts) 0) (hash-table-count drgnx-replace--seen)))
          (counts (cond ((and (zerop n) drgnx-replace--searching) "Searching…")
-                       ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) "" "No results"))
+                       ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) (drgnx-replace--hint) "No results"))
                        (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching "Searching… " "")
                                   n (if (= n 1) "" "s") files (if (= files 1) "" "s")))))
          (line (string-join (seq-remove #'string-empty-p (list counts drgnx-replace--status)) " · ")))
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
-     (insert (propertize line 'face 'drgnx-replace-dim)))))
+     (insert (propertize line 'face 'drgnx-replace-dim))
+     ;; no automatic mode: a text search that found nothing offers the same words by meaning
+     (when (and (equal counts "No results") (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol)))
+       (insert (propertize " · " 'face 'drgnx-replace-dim))
+       (insert-text-button "Try Meaning" 'face 'link 'follow-link t 'help-echo "Search these words by meaning"
+                           'action (lambda (_) (drgnx-replace-search-mode-meaning)))))))
 
 (defun drgnx-replace--message (fmt &rest args)
   "Show FMT with ARGS on the status line."
@@ -1333,22 +1404,27 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
   (drgnx-replace--hub-attach)
   (when (and (eq (drgnx-replace--opt :scope) 'file) (not file))
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
-  (let ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
-        (on (lambda (name) (if (drgnx-replace--opt name) t :false)))
-        (off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil))))
+  (let* ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
+         (on (lambda (name) (if (drgnx-replace--opt name) t :false)))
+         (off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil)))
+         (mode (drgnx-replace--opt :mode))
+         (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
     (setq drgnx-replace--searching t)
     (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
      "search/run"
      (append (list :view drgnx-replace-view :root drgnx-replace--root
-                   :search (append (list :query (list :mode "text" :text text :case (funcall on :case)
-                                                      :word (funcall on :word) :regexp (funcall on :regexp))
-                                         :replace (drgnx-replace--text 'replace)
-                                         :scope (if file
+                   :search (append (list :query (pcase mode
+                                                  ('symbol (list :mode "symbol" :name text :case (funcall on :case)))
+                                                  ('meaning (list :mode "meaning" :question text))
+                                                  (_ (list :mode "text" :text text :case (funcall on :case)
+                                                           :word (funcall on :word) :regexp (funcall on :regexp)))))
+                                   (and text-p (list :replace (drgnx-replace--text 'replace)))
+                                   (list :scope (if file
                                                     (list :kind "file" :files (vector file))
                                                   (list :kind "project")))
-                                   (when-let* ((g (funcall globs 'include))) (list :include (vconcat g)))
-                                   (when-let* ((g (funcall globs 'exclude))) (list :exclude (vconcat g)))))
+                                   (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
+                                   (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g)))))
              (and off (list :off (vconcat off)))))))
 
 (defun drgnx-replace--rows-carry ()
@@ -1470,6 +1546,7 @@ was sent were lost."
   (if (drgnx-replace--bar-context-p)
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-replace-all))
     (with-current-buffer (drgnx-replace--live-view)
+      (drgnx-replace--check-writable)
       (if (drgnx-replace--rows-p)
           (drgnx-replace--rows-replace-all (drgnx-replace--new-name))
         (drgnx-replace--replace-all-symbol)))))
@@ -1490,6 +1567,7 @@ was sent were lost."
   "Replace the match on this row of the Search view, ticked or not."
   (interactive)
   (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--check-writable)
     (if (drgnx-replace--rows-p) (drgnx-replace--rows-this (drgnx-replace--new-name)) (drgnx-replace--this-symbol))))
 
 (defun drgnx-replace--this-symbol ()
@@ -1605,7 +1683,7 @@ was sent were lost."
               drgnx-replace--widgets nil)
         (drgnx-replace--insert-field 'find "Find    " 24)
         (widget-insert " ")
-        (drgnx-replace--insert-toggles)
+        (drgnx-replace--insert-toggles t)
         (setq drgnx-replace--status-beg (point-marker))
         (widget-insert " ")
         (setq drgnx-replace--status-end (copy-marker (1- (point)) t))
@@ -1857,7 +1935,15 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (replace-next-file "Next File" drgnx-replace-next-file "The next file of the Search view's results")
                    (replace-prev-file "Previous File" drgnx-replace-prev-file
                                       "The previous file of the Search view's results")
-                   (replace-bar-close "Close Find Bar" drgnx-replace-bar-close "Close the find bar and its highlights")))
+                   (replace-bar-close "Close Find Bar" drgnx-replace-bar-close "Close the find bar and its highlights")
+                   (search-mode-next "Next Mode (Text → Symbol → Meaning)" drgnx-replace-search-mode-next
+                                     "The Search view's next mode; it searches again")
+                   (search-mode-text "Text Mode" drgnx-replace-search-mode-text
+                                     "The Search view finds text (and replaces it)")
+                   (search-mode-symbol "Symbol Mode" drgnx-replace-search-mode-symbol
+                                       "The Search view finds a name's definitions, then its uses (read-only)")
+                   (search-mode-meaning "Meaning Mode" drgnx-replace-search-mode-meaning
+                                        "The Search view finds the code its words describe (read-only)")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"

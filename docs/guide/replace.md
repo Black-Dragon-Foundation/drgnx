@@ -9,8 +9,9 @@ buffer.
 **Replace in Files** shows the sidebar's Search view (the sidebar's other view is the Explorer; **View: Explorer**
 brings it back) with the word at point, or the selected text, in **Find**. It has:
 
-- **Find** and **Replace**;
-- toggles: **⟨⟩ Symbol**, **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
+- the **mode chip** at the left of **Find** (what Find means: **Text**, **Symbol** or **Meaning**; below), and
+  **Replace**;
+- toggles: **Aa** (match case), **ab** (whole word), **.\*** (regular expression);
 - the scope: **Project** (the project of the file you were in) or **This file**;
 - **Include** and **Exclude**: globs, comma-separated (`src/**, *.el`); a glob without a slash matches at any depth;
 - **Replace All** and **Undo**, then a status line (how many results, what the last replacement did).
@@ -18,7 +19,7 @@ brings it back) with the word at point, or the selected text, in **Find**. It ha
 The search runs a quarter of a second after you stop typing (`RET` in a field searches at once), in drgnx's hub, in
 the background. Results stream in, grouped by file. A search typed before the hub is up (the first seconds after
 drgnx starts, or while it restarts) says "Waiting for the hub" and starts when the hub comes; an Emacs without
-Nidhogg's view model (Sjá) says it cannot search text (Symbol still works). Each match is a row with
+Nidhogg's view model (Sjá) says it cannot search (Rename still works). Each match is a row with
 a tick box and shows the change as old → new (the old text struck through). A file's box ticks or unticks all its
 matches. A click or `RET` on a row opens the file at the match.
 
@@ -27,13 +28,30 @@ shows first), and a new search replaces the rows without keeping typing waiting,
 changing above the ones you look at do not scroll them away. While the Search view is hidden (another sidebar view,
 the sidebar closed) it draws nothing; it catches up when it is shown again.
 
-## Symbol or text
+## Modes: Text, Symbol, Meaning
 
-**Symbol** is on when point is on a name the buffer's language server can rename (Replace in Files turns it on by
-itself there); **Rename Symbol** always asks for it and puts you in Replace. With Symbol on, the list is the
-server's rename edits: only real uses, never comments or look-alikes. Include, Exclude, Aa, ab and .\* do not
-apply and are greyed out. Typing other text in Find turns Symbol off: that is a text search. Without a server that
-can rename, the status line says why and the view searches the text.
+The mode chip says what Find means; clicking it, or **Search: Next Mode** (`M-m` in the view; `C-c C-m` in the Emacs
+and Vim profiles), goes Text → Symbol → Meaning → Text and searches again. The palette has one command per mode
+(**Search: Text Mode**, **Symbol Mode**, **Meaning Mode**). With Find empty, the status line says what to type.
+
+- **Text** (the default): the files' text, with Aa, ab, .\*, the globs and Replace.
+- **Symbol**: a name's definitions first, then the lines that use it, from drgnx's code index (Hrafn): each line's
+  whole-word uses of the name are the matches. It is by name only, so same-named things in other scopes are listed
+  too. **Aa** says whether case counts; Replace, the globs, ab and .\* do not apply and are greyed out.
+- **Meaning**: the code your words describe (the same search as Semantic Search): one row per piece of code found,
+  its symbol, its first line and its score. Nothing but the words applies.
+
+Symbol and Meaning only find: Replace All and Replace This say so. A Text search that finds nothing offers **Try
+Meaning** on the status line; the view never changes mode by itself. Symbol and Meaning need the index: before it is
+built the status line says why.
+
+## Rename
+
+**Rename** is on when point is on a name the buffer's language server can rename (Replace in Files turns it on by
+itself there); **Rename Symbol** always asks for it and puts you in Replace. The chip then says **Rename**, and the
+list is the server's rename edits: only real uses, never comments or look-alikes. Include, Exclude, Aa, ab and .\* do
+not apply and are greyed out. Typing other text in Find, or picking a mode, ends Rename: that is a search. Without a
+server that can rename, the status line says why and the view searches the text.
 
 With **.\*** on, Replace can use the regexp's groups: `\1`, `\2`.
 
@@ -80,6 +98,8 @@ view, scope This file.
 | Next File | `C-M-<down>` (the Search view) | `C-c M-n` | `C-c M-n` |
 | Previous File | `C-M-<up>` (the Search view) | `C-c M-p` | `C-c M-p` |
 | Close Find Bar | `<escape>` | `<escape>` | `<escape>` |
+| Next Mode (the Search view) | `M-m` | `C-c C-m` | `C-c C-m` |
+| Text / Symbol / Meaning Mode | palette | palette | palette |
 
 Except where marked, the keys work in the Search view and the find bar, their fields too; `RET` in a find bar field
 is its next match (in Replace: replace it). Next and Previous Match show the match in the editor; Next and Previous
