@@ -22,10 +22,10 @@
 
 (ert-deftest drgnx-extras-teardown/options-come-back ()
   (drgnx-extras-teardown-test--with-packages
-   (skip-unless (drgnx-extras-teardown-test--installed-p 'vertico 'orderless 'marginalia 'corfu 'diff-hl 'apheleia
+   (skip-unless (drgnx-extras-teardown-test--installed-p 'vertico 'orderless 'marginalia 'corfu 'apheleia
                                                          'indent-bars))
-   (dolist (f '(orderless corfu diff-hl apheleia indent-bars)) (require f))
-   (let ((vars '(completion-styles completion-category-overrides corfu-auto diff-hl-disable-on-remote
+   (dolist (f '(orderless corfu apheleia indent-bars)) (require f))
+   (let ((vars '(completion-styles completion-category-overrides corfu-auto
                                    apheleia-log-only-errors apheleia-mode-alist indent-bars-treesit-support))
          before during)
      (setq before (mapcar #'symbol-value vars))
@@ -33,8 +33,7 @@
                               (setq during (mapcar #'symbol-value vars)))
      (should (equal (nth 0 during) '(orderless basic)))                       ; the setups did set them
      (should (eq (nth 2 during) t))
-     (should (eq (nth 3 during) t))
-     (should-not (rassq 'lisp-indent (nth 5 during)))
+     (should-not (rassq 'lisp-indent (nth 4 during)))
      (should (equal (mapcar #'symbol-value vars) before)))))
 
 (ert-deftest drgnx-extras-teardown/modes-in-live-buffers-go-off ()

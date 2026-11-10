@@ -351,6 +351,19 @@ after record `since` to the text now, in whichever project's history holds the b
 of `history/hunks` and of the bus event `history/file-version` is frozen for the Work space and the runners; a change to
 either is a change to those.
 
+**Git views** (`views.rs`). `git/blame {path, worktree_root}` answers git's blame of the whole file in one answer: `{head,
+commits: [{sha, author, time?, summary}], lines: [commit index per line], agents: [{from, to, session?, step?}]}`. The text is
+the editor's tracked buffer's, unsaved typing included (else the file on disk), through one `git blame --porcelain
+--contents -` child; lines git does not hold or has not committed are the commit of zeros (`You`, `Uncommitted changes`);
+`agents` are the line ranges the history's blame names an agent's. The last 16 answers are kept by (path, HEAD, text), so
+the editor asks again only when the file was saved or reverted and maps its own edits onto the answer. `history/hunks/head
+{path, worktree_root}` answers `{tracked, hunks}`: the tracked buffer's text against HEAD's, numbered as `git diff
+--unified=0` numbers them (a file HEAD does not hold is one hunk of all its lines), each with `old_lines`, HEAD's lines it
+replaces (what Revert Change puts back); `tracked: false` when no buffer of the file is tracked. Both are user-only reads.
+`git/stage-hunk {path, worktree_root, new_start}` stages the hunk that starts at that line of the buffer: the index's text
+with that hunk applied (hunks staged before stay), written as a blob and `git update-index`d; the work tree is not touched.
+It answers `{staged}`, false when the buffer is untracked or has no such hunk against the index.
+
 **Steps and records.** A step that edited, and the first step of a turn, get `step.history_op`: the newest record the
 session caused at or before the step's end (none for a session outside a git worktree). `timeline/get` then shows the
 step as `revertible`, and a fork from it cuts the history at exactly that record.

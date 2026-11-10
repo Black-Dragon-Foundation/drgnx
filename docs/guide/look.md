@@ -52,7 +52,7 @@ its own back. A package that loads later gets them when it loads.
 - **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
   headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
   chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn.
-- **diff-hl.** The change gutter in the status colours: added ok, changed info, deleted error.
+- **The change gutter** (`extra/hunks`, not a package): a solid 3 px bar beside each added line (ok) and changed line (info), and a short mark where lines were deleted (error), in the status colours.
 - **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
   13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
   height. TODO is an attention chip, DONE an ok chip; source blocks are flat panels with their begin and end lines

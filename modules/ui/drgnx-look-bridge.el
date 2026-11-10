@@ -3,11 +3,10 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Packages draw with their own faces, and their own default specs (Magit's gold headings, diff-hl's tints) know
+;; Packages draw with their own faces, and their own default specs (Magit's gold headings) know
 ;; nothing of the look.  The bridge gives those faces default specs that inherit the look's semantic faces (design
 ;; §3.3, PUI-B): Magit's headings in the UI heading role, its refs as chips (local in the accent, remote in ok, tags
-;; in warn), its hunks on the quiet selection, its diff lines on the diff tints; diff-hl's gutter in the status
-;; colours.  Only default specs change, through the module's face-spec door: a theme that styles the package itself
+;; in warn), its hunks on the quiet selection, its diff lines on the diff tints.  Only default specs change, through the module's face-spec door: a theme that styles the package itself
 ;; wins, and the old specs come back when ui/look is turned off.  A package not loaded yet gets its specs when it
 ;; loads.  No colour is named here.  See docs/guide/look.md, "Packages".
 
@@ -48,11 +47,7 @@ the text and never grows the line (look.css `.mg .ref').")
      (magit-branch-current (drgnx-ui-caption drgnx-chip-accent) :box ,drgnx-look-bridge--chip-box)
      (magit-branch-remote (drgnx-ui-caption drgnx-chip-ok) :box ,drgnx-look-bridge--chip-box)
      (magit-branch-remote-head (drgnx-ui-caption drgnx-chip-ok) :box ,drgnx-look-bridge--chip-box)
-     (magit-tag (drgnx-ui-caption drgnx-chip-warn) :box ,drgnx-look-bridge--chip-box))
-    (diff-hl
-     (diff-hl-insert (drgnx-status-ok))
-     (diff-hl-change (drgnx-status-info))
-     (diff-hl-delete (drgnx-status-fail))))
+     (magit-tag (drgnx-ui-caption drgnx-chip-warn) :box ,drgnx-look-bridge--chip-box)))
   "Per feature: (FACE INHERITS . MORE): FACE's default spec inherits the faces INHERITS, with the attributes MORE.")
 
 (defun drgnx-look-bridge--apply (feature)
