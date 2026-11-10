@@ -1,8 +1,8 @@
 //! Hrafn's methods (code search; docs/develop/runtime.md, "Hrafn"): the query, the index and its status, the embedders
 //! the wizard and the doctor show, the consented model download, and the typing signal that holds the vectors back.
 //!
-//! All are the user's: they take the caller's `root`. An agent has no search method; its way in is the MCP `search`
-//! tool on its session's `search.sock`, pinned to its job's root (runtime design §5.8).
+//! All are the user's: they take the caller's `root`. An agent has no search method; its way in is the MCP search
+//! tools (`search`, `symbols`, `outline`) on its session's `search.sock`, pinned to its job's root (runtime design §5.8).
 
 use super::{Empty, method};
 use crate::registry::Method;
@@ -466,6 +466,124 @@ pub struct SymbolAt {
     pub name: Option<String>,
 }
 
+/// How `search/symbols` matches a name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NameMatch {
+    /// Exact, else prefix, else contains; the answer says which matched.
+    Auto,
+    /// Equal, case and all.
+    Exact,
+    /// Starts with it, ignoring case.
+    Prefix,
+    /// Holds it, ignoring case.
+    Contains,
+    /// A regular expression (Rust's `regex` syntax) over the names.
+    Regex,
+}
+
+/// `search/symbols`: where names are defined, in ROOT's view.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolsParams {
+    pub root: AbsPath,
+    /// A name, a prefix, part of a name or a regular expression, 1 to 200 characters.
+    pub name: String,
+    /// Default `auto`.
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub mode: Option<NameMatch>,
+    /// Only these kinds (`function`, `method`, `struct`, `class`, `macro`, `variable`, …), at most 12.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Vec<String>>,
+    /// Only files this glob (relative to ROOT) matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Default `all`; tests are listed after code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Scope>,
+    /// 1 to 100; default 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<u32>,
+    /// True: the base's rows even when ROOT is a linked worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<bool>,
+}
+
+/// One definition.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolHit {
+    pub path: String,
+    pub name: String,
+    pub kind: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    /// The definition's head (its lines up to the one that names it, before a `{`).
+    pub sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc1: Option<String>,
+    /// The definition around it in the same file (a method's impl or class).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    /// `code`, `test` or `docs`.
+    pub class: String,
+}
+
+/// How current a structural answer is: the files tier 1 has still to index, and the view that answered.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Fresh {
+    pub files_pending: u32,
+    pub view: QueryView,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolsAnswer {
+    /// The match that answered (never `auto`).
+    pub matched: NameMatch,
+    pub symbols: Vec<SymbolHit>,
+    pub fresh: Fresh,
+}
+
+/// `search/outline`: one file's definitions, in ROOT's view.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineParams {
+    pub root: AbsPath,
+    /// Relative to ROOT, inside it.
+    pub path: String,
+    /// Each definition's first doc line; default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<bool>,
+}
+
+/// One definition of an outline; DEPTH counts the definitions around it.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineEntry {
+    pub name: String,
+    pub kind: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc1: Option<String>,
+    pub depth: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlineAnswer {
+    pub path: String,
+    /// The language the index parsed it as (`rust`, `elisp`, `text`, …).
+    pub lang: String,
+    pub entries: Vec<OutlineEntry>,
+    pub fresh: Fresh,
+}
+
 /// `search/files`'s answer: QUERY numbers the query.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -542,6 +660,16 @@ pub(crate) fn methods() -> Vec<Method> {
             "search/symbol-at", SearchSymbolAt(SymbolAtParams) -> SymbolAt,
             classes: [User], writes: false,
             doc: "the name of the innermost symbol a file (read from disk) defines around a line, from Hrafn's outline; none outside every symbol",
+        ),
+        method!(
+            "search/symbols", SearchSymbols(SymbolsParams) -> SymbolsAnswer,
+            classes: [User], writes: false,
+            doc: "where names are defined in a project's view (exact, prefix, contains or a regular expression), from the index alone: lines, signature, first doc line, the definition around it; code before tests",
+        ),
+        method!(
+            "search/outline", SearchOutline(OutlineParams) -> OutlineAnswer,
+            classes: [User], writes: false,
+            doc: "one indexed file's definitions in file order with their lines, signatures and nesting, from the index alone; an error for a file the view does not index",
         ),
         method!(
             "search/grep-replace", SearchGrepReplace(GrepReplaceParams) -> bool,

@@ -157,6 +157,36 @@ pub fn wire_answer(a: &hrafn::Answer, view: w::QueryView) -> w::QueryAnswer {
     }
 }
 
+/// A path or glob an agent names: relative to the root and inside it (no leading `/`, no `..` part), 1 to 500
+/// characters.
+fn check_rel(p: &str, field: &str) -> Result<(), Error> {
+    let bad = p.is_empty()
+        || p.len() > 500
+        || p.starts_with('/')
+        || p.contains('\0')
+        || p.split('/').any(|c| c == "..");
+    if bad {
+        return Err(error(
+            ErrorCode::InvalidParams,
+            "a path relative to the project root, inside it (no leading /, no ..), 1 to 500 characters",
+            Some(field),
+        ));
+    }
+    Ok(())
+}
+
+fn symbols_error(e: hrafn::symbols::SymbolsError) -> Error {
+    match e {
+        hrafn::symbols::SymbolsError::BadRegex(_) => {
+            error(ErrorCode::InvalidParams, e.to_string(), Some("name"))
+        }
+        hrafn::symbols::SymbolsError::NotIndexed => {
+            error(ErrorCode::InvalidParams, e.to_string(), Some("path"))
+        }
+        hrafn::symbols::SymbolsError::Store(e) => internal(e),
+    }
+}
+
 fn scope_of(s: Option<w::Scope>) -> Scope {
     match s {
         Some(w::Scope::Tests) => Scope::Tests,
@@ -522,21 +552,7 @@ impl Hub {
         k: u32,
         base: bool,
     ) -> Result<w::QueryAnswer, Error> {
-        let p = self.project(front, root).await?;
-        p.fresh_for_query().await.map_err(project_error)?;
-        let of = if base {
-            ViewOf {
-                view: hrafn::View::Base,
-                worktree: None,
-                root: p.root().to_path_buf(),
-                state: None,
-                checking: false,
-            }
-        } else {
-            // plain git never runs where a sandboxed agent worked: such a tree gets the gix door
-            let touched = front.core.runs.git().is_touched(root).await.unwrap_or(true);
-            p.view_for(root, touched).await.map_err(project_error)?
-        };
+        let (p, of) = self.view_of(front, root, base).await?;
         let builtin = if Self::builtin_on(front) {
             self.builtin()
         } else {
@@ -621,6 +637,156 @@ impl Hub {
         }
         let view = wire_view(&of, &a);
         Ok(wire_answer(&a, view))
+    }
+
+    /// ROOT's project, with tier 1 current, and the view its questions answer from: the base when BASE, else the
+    /// worktree's own (H16).
+    async fn view_of(
+        &self,
+        front: &Front,
+        root: &Path,
+        base: bool,
+    ) -> Result<(Arc<Project>, ViewOf), Error> {
+        let p = self.project(front, root).await?;
+        p.fresh_for_query().await.map_err(project_error)?;
+        let of = if base {
+            ViewOf {
+                view: hrafn::View::Base,
+                worktree: None,
+                root: p.root().to_path_buf(),
+                state: None,
+                checking: false,
+            }
+        } else {
+            // plain git never runs where a sandboxed agent worked: such a tree gets the gix door
+            let touched = front.core.runs.git().is_touched(root).await.unwrap_or(true);
+            p.view_for(root, touched).await.map_err(project_error)?
+        };
+        Ok((p, of))
+    }
+
+    /// How current a structural answer from OF is.
+    async fn fresh(&self, p: &Project, of: &ViewOf) -> Result<w::Fresh, Error> {
+        let lag = p.lag_in(None, of.view).await.map_err(project_error)?;
+        Ok(w::Fresh {
+            files_pending: lag.dirty_files,
+            view: w::QueryView {
+                worktree: of.worktree.clone(),
+                differing_files: lag.differing_files.unwrap_or(0),
+                state: of
+                    .state
+                    .map_or("base", hrafn::TreeState::as_str)
+                    .to_string(),
+            },
+        })
+    }
+
+    /// `search/symbols`.
+    pub async fn symbols(
+        &self,
+        front: &Front,
+        a: w::SymbolsParams,
+    ) -> Result<w::SymbolsAnswer, Error> {
+        let n = a.name.chars().count();
+        if a.name.trim().is_empty() || n > 200 {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "a name of 1 to 200 characters",
+                Some("name"),
+            ));
+        }
+        if a.k.is_some_and(|k| !(1..=100).contains(&k)) {
+            return Err(error(ErrorCode::InvalidParams, "1 to 100", Some("k")));
+        }
+        if a.kind.as_ref().is_some_and(|k| k.len() > 12) {
+            return Err(error(
+                ErrorCode::InvalidParams,
+                "at most 12 kinds",
+                Some("kind"),
+            ));
+        }
+        if let Some(g) = &a.path {
+            check_rel(g, "path")?;
+        }
+        let (p, of) = self
+            .view_of(front, Path::new(a.root.as_str()), a.base == Some(true))
+            .await?;
+        let f = hrafn::symbols::Find {
+            name: a.name,
+            mode: match a.mode {
+                Some(w::NameMatch::Exact) => hrafn::symbols::Match::Exact,
+                Some(w::NameMatch::Prefix) => hrafn::symbols::Match::Prefix,
+                Some(w::NameMatch::Contains) => hrafn::symbols::Match::Contains,
+                Some(w::NameMatch::Regex) => hrafn::symbols::Match::Regex,
+                Some(w::NameMatch::Auto) | None => hrafn::symbols::Match::Auto,
+            },
+            kinds: a.kind.unwrap_or_default(),
+            glob: a.path,
+            scope: a.scope.map_or(Scope::All, |s| scope_of(Some(s))),
+            k: a.k.unwrap_or(20) as usize,
+        };
+        let found = hrafn::symbols::find(p.store(), of.view, &f)
+            .await
+            .map_err(symbols_error)?;
+        Ok(w::SymbolsAnswer {
+            matched: match found.matched {
+                hrafn::symbols::Match::Exact => w::NameMatch::Exact,
+                hrafn::symbols::Match::Prefix => w::NameMatch::Prefix,
+                hrafn::symbols::Match::Contains => w::NameMatch::Contains,
+                hrafn::symbols::Match::Regex => w::NameMatch::Regex,
+                hrafn::symbols::Match::Auto => w::NameMatch::Auto,
+            },
+            symbols: found
+                .hits
+                .into_iter()
+                .map(|h| w::SymbolHit {
+                    path: h.path,
+                    name: h.name,
+                    kind: h.kind,
+                    line_start: h.line_start,
+                    line_end: h.line_end,
+                    sig: h.sig,
+                    doc1: h.doc1,
+                    container: h.container,
+                    class: h.class,
+                })
+                .collect(),
+            fresh: self.fresh(&p, &of).await?,
+        })
+    }
+
+    /// `search/outline`.
+    pub async fn outline(
+        &self,
+        front: &Front,
+        a: w::OutlineParams,
+    ) -> Result<w::OutlineAnswer, Error> {
+        check_rel(&a.path, "path")?;
+        let (p, of) = self
+            .view_of(front, Path::new(a.root.as_str()), a.base == Some(true))
+            .await?;
+        let o = hrafn::symbols::outline(p.store(), of.view, &a.path)
+            .await
+            .map_err(symbols_error)?;
+        let docs = a.docs != Some(false);
+        Ok(w::OutlineAnswer {
+            path: o.path,
+            lang: o.lang,
+            entries: o
+                .entries
+                .into_iter()
+                .map(|e| w::OutlineEntry {
+                    name: e.name,
+                    kind: e.kind,
+                    line_start: e.line_start,
+                    line_end: e.line_end,
+                    sig: e.sig,
+                    doc1: e.doc1.filter(|_| docs),
+                    depth: e.depth,
+                })
+                .collect(),
+            fresh: self.fresh(&p, &of).await?,
+        })
     }
 
     async fn status(&self, front: &Front, root: &Path) -> Result<w::StatusAnswer, Error> {
@@ -1018,6 +1184,8 @@ pub async fn serve(
         Params::SearchServerStart(s) => hub.server_start(s).await.map(|r| json!(r)),
         Params::SearchServerStop(k) => hub.server_stop(k.kind).await.map(|r| json!(r)),
         Params::SearchSymbolAt(a) => symbol_at(a).await.map(|s| json!(s)),
+        Params::SearchSymbols(a) => hub.symbols(front, a).await.map(|s| json!(s)),
+        Params::SearchOutline(a) => hub.outline(front, a).await.map(|o| json!(o)),
         Params::SearchTyping(_) => {
             hub.typing().await;
             Ok(json!({}))

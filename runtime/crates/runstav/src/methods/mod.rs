@@ -300,6 +300,8 @@ params! {
     SearchGrep(search::GrepParams),
     SearchFiles(search::FilesParams),
     SearchSymbolAt(search::SymbolAtParams),
+    SearchSymbols(search::SymbolsParams),
+    SearchOutline(search::OutlineParams),
     SearchGrepReplace(search::GrepReplaceParams),
     SearchGrepLook(search::GrepLookParams),
     ExplorerSubscribe(search::ExplorerParams),

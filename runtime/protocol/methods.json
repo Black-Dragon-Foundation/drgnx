@@ -27557,6 +27557,179 @@
       "classes": [
         "user"
       ],
+      "doc": "one indexed file's definitions in file order with their lines, signatures and nesting, from the index alone; an error for a file the view does not index",
+      "name": "search/outline",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/outline`: one file's definitions, in ROOT's view.",
+        "properties": {
+          "base": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "docs": {
+            "description": "Each definition's first doc line; default true.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Relative to ROOT, inside it.",
+            "type": "string"
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          }
+        },
+        "required": [
+          "root",
+          "path"
+        ],
+        "title": "OutlineParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Fresh": {
+            "additionalProperties": false,
+            "description": "How current a structural answer is: the files tier 1 has still to index, and the view that answered.",
+            "properties": {
+              "files_pending": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "view": {
+                "$ref": "#/$defs/QueryView"
+              }
+            },
+            "required": [
+              "files_pending",
+              "view"
+            ],
+            "type": "object"
+          },
+          "OutlineEntry": {
+            "additionalProperties": false,
+            "description": "One definition of an outline; DEPTH counts the definitions around it.",
+            "properties": {
+              "depth": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "doc1": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "sig": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "line_start",
+              "line_end",
+              "sig",
+              "depth"
+            ],
+            "type": "object"
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/$defs/OutlineEntry"
+            },
+            "type": "array"
+          },
+          "fresh": {
+            "$ref": "#/$defs/Fresh"
+          },
+          "lang": {
+            "description": "The language the index parsed it as (`rust`, `elisp`, `text`, …).",
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "lang",
+          "entries",
+          "fresh"
+        ],
+        "title": "OutlineAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
       "doc": "hybrid keyword, symbol, path and vector results for a question about a project's code; every answer says which model took part and what lags",
       "name": "search/query",
       "params": {
@@ -28432,6 +28605,306 @@
           }
         },
         "title": "SymbolAt",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "where names are defined in a project's view (exact, prefix, contains or a regular expression), from the index alone: lines, signature, first doc line, the definition around it; code before tests",
+      "name": "search/symbols",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "NameMatch": {
+            "description": "How `search/symbols` matches a name.",
+            "oneOf": [
+              {
+                "const": "auto",
+                "description": "Exact, else prefix, else contains; the answer says which matched.",
+                "type": "string"
+              },
+              {
+                "const": "exact",
+                "description": "Equal, case and all.",
+                "type": "string"
+              },
+              {
+                "const": "prefix",
+                "description": "Starts with it, ignoring case.",
+                "type": "string"
+              },
+              {
+                "const": "contains",
+                "description": "Holds it, ignoring case.",
+                "type": "string"
+              },
+              {
+                "const": "regex",
+                "description": "A regular expression (Rust's `regex` syntax) over the names.",
+                "type": "string"
+              }
+            ]
+          },
+          "Scope": {
+            "description": "Which files a query looks in.",
+            "oneOf": [
+              {
+                "enum": [
+                  "tests",
+                  "docs",
+                  "all"
+                ],
+                "type": "string"
+              },
+              {
+                "const": "code",
+                "description": "Code, and tests below it.",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/symbols`: where names are defined, in ROOT's view.",
+        "properties": {
+          "base": {
+            "description": "True: the base's rows even when ROOT is a linked worktree.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "k": {
+            "description": "1 to 100; default 20.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Only these kinds (`function`, `method`, `struct`, `class`, `macro`, `variable`, …), at most 12.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "match": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NameMatch"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `auto`."
+          },
+          "name": {
+            "description": "A name, a prefix, part of a name or a regular expression, 1 to 200 characters.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Only files this glob (relative to ROOT) matches.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Scope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default `all`; tests are listed after code."
+          }
+        },
+        "required": [
+          "root",
+          "name"
+        ],
+        "title": "SymbolsParams",
+        "type": "object"
+      },
+      "result": {
+        "$defs": {
+          "Fresh": {
+            "additionalProperties": false,
+            "description": "How current a structural answer is: the files tier 1 has still to index, and the view that answered.",
+            "properties": {
+              "files_pending": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "view": {
+                "$ref": "#/$defs/QueryView"
+              }
+            },
+            "required": [
+              "files_pending",
+              "view"
+            ],
+            "type": "object"
+          },
+          "NameMatch": {
+            "description": "How `search/symbols` matches a name.",
+            "oneOf": [
+              {
+                "const": "auto",
+                "description": "Exact, else prefix, else contains; the answer says which matched.",
+                "type": "string"
+              },
+              {
+                "const": "exact",
+                "description": "Equal, case and all.",
+                "type": "string"
+              },
+              {
+                "const": "prefix",
+                "description": "Starts with it, ignoring case.",
+                "type": "string"
+              },
+              {
+                "const": "contains",
+                "description": "Holds it, ignoring case.",
+                "type": "string"
+              },
+              {
+                "const": "regex",
+                "description": "A regular expression (Rust's `regex` syntax) over the names.",
+                "type": "string"
+              }
+            ]
+          },
+          "QueryView": {
+            "additionalProperties": false,
+            "description": "Which view answered: the base, or a linked worktree's rows over it.",
+            "properties": {
+              "differing_files": {
+                "description": "The paths where the worktree differs from the base (tombstones too); 0 in the base view.",
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "state": {
+                "description": "`base`; or the tree's `seeding` (the base answered meanwhile), `live`, `stale` or `unwatched` (the stored rows\nanswered and a check runs).",
+                "type": "string"
+              },
+              "worktree": {
+                "description": "The worktree's key (history's worktree id); absent in the base view.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "differing_files",
+              "state"
+            ],
+            "type": "object"
+          },
+          "SymbolHit": {
+            "additionalProperties": false,
+            "description": "One definition.",
+            "properties": {
+              "class": {
+                "description": "`code`, `test` or `docs`.",
+                "type": "string"
+              },
+              "container": {
+                "description": "The definition around it in the same file (a method's impl or class).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "doc1": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "line_end": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "line_start": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "sig": {
+                "description": "The definition's head (its lines up to the one that names it, before a `{`).",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "name",
+              "kind",
+              "line_start",
+              "line_end",
+              "sig",
+              "class"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "fresh": {
+            "$ref": "#/$defs/Fresh"
+          },
+          "matched": {
+            "$ref": "#/$defs/NameMatch",
+            "description": "The match that answered (never `auto`)."
+          },
+          "symbols": {
+            "items": {
+              "$ref": "#/$defs/SymbolHit"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "matched",
+          "symbols",
+          "fresh"
+        ],
+        "title": "SymbolsAnswer",
         "type": "object"
       },
       "writes": false
