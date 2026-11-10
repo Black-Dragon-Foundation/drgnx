@@ -298,7 +298,7 @@ keys and the runner may have them, they are read from your key store first (this
   (pcase-dolist (`(,id ,title ,fn ,doc ,global)
                  '((runners "Show Runners" drgnx-runners-show "Your runners: the machines that run your jobs" t)
                    (runners-add "Add Runner…" drgnx-runners-add "Add a machine as a runner of your jobs" t)
-                   (runners-load-keys "Runners: Load Keys" drgnx-runners-load-keys
+                   (runners-load-keys "Load Keys" drgnx-runners-load-keys
                                       "Hand the job keys the hub asks for from your key store to the hub" t)
                    (runners-check "Check Runner" drgnx-runners-check "Check the runner on this row now" nil)
                    (runners-bench "Bench Runner" drgnx-runners-bench "Take the runner on this row out of rotation" nil)

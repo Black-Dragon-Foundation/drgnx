@@ -500,6 +500,12 @@ configuration is saved first; \\[drgnx-work-diff-quit] puts it back.  Returns th
   (interactive)
   (user-error "Rejecting a hunk is done in the review view"))
 
+(defun drgnx-work-code--frame-replaced (old _new)
+  "`drgnx-frame-replaced-functions': a window configuration cannot move to another frame, so the layout from before
+the diffs, saved on OLD, is let go; closing the diffs then leaves the windows as they are."
+  (when (and drgnx-work-code--saved-windows (eq (window-configuration-frame drgnx-work-code--saved-windows) old))
+    (setq drgnx-work-code--saved-windows nil)))
+
 (defun drgnx-work-code-teardown ()
   "The module is off: the diffs close and the saved window configuration is dropped."
   (setq drgnx-work-code--saved-windows nil)

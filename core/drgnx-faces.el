@@ -45,6 +45,14 @@
 (defface drgnx-selected '((t :inherit region)) "The selection." :group 'drgnx-look)
 (defface drgnx-selected-quiet '((t :inherit drgnx-surface-raised)) "The selection in a pane that has not the focus."
   :group 'drgnx-look)
+(defface drgnx-selected-inactive '((t :inherit drgnx-selected-quiet))
+  "The selected row of a list whose window has not the focus (Explorer, Open, Outline), as VS Code's inactive
+selection: at least 1.25:1 against the panel, above the hover."
+  :group 'drgnx-look)
+(defface drgnx-selected-secondary '((t :inherit drgnx-text-muted))
+  "Secondary text (a keycap, an annotation) on the selected row: muted, which keeps 4.5:1 on the selection, where
+subtle does not (3.8:1 on the dark selection, 4.3 on the light); in high contrast the selection's own text colour."
+  :group 'drgnx-look)
 (defface drgnx-focus '((t :box (:line-width (-2 . -2)))) "The keyboard focus ring.  Themes and derive set its colour."
   :group 'drgnx-look)
 
@@ -60,6 +68,12 @@
   "A chip of what waits for you, on the attention tint." :group 'drgnx-look)
 (defface drgnx-chip-accent '((t :inherit (drgnx-accent drgnx-selected-quiet)))
   "A chip in the accent, on its tint: the agents at work, a mode." :group 'drgnx-look)
+(defface drgnx-chip-ok '((t :inherit (success drgnx-selected-quiet)))
+  "A chip of something fine, on the ok tint: a remote branch, DONE." :group 'drgnx-look)
+(defface drgnx-chip-warn '((t :inherit (warning drgnx-selected-quiet)))
+  "A chip to look at, on the warn tint: a tag, a warning." :group 'drgnx-look)
+(defface drgnx-chip-error '((t :inherit (error drgnx-selected-quiet)))
+  "A chip of something wrong, on the error tint: an error." :group 'drgnx-look)
 
 ;;;; Controls (design §3.5): a button and a keycap.  Their rings take colours, so the themes give them (a box's
 ;;;; colour is not inherited); here they are the standard faces' fill and a ring in the text colour.

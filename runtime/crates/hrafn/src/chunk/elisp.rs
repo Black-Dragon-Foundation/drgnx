@@ -3,26 +3,29 @@
 
 use super::definers;
 use super::merge::{self, Form};
+use super::refs::{self, Ref};
 use super::{Chunk, Symbol};
 
-/// The byte spans of the file's top-level forms, in order (the Emacs reader's spans, which the tests hold it to).
-pub fn top_level_forms(text: &str) -> Vec<(usize, usize)> {
+fn parse(text: &str) -> Option<tree_sitter::Tree> {
     let mut parser = tree_sitter::Parser::new();
-    if parser
+    parser
         .set_language(&tree_sitter_elisp::LANGUAGE.into())
-        .is_err()
-    {
-        return Vec::new();
-    }
-    let Some(tree) = parser.parse(text, None) else {
-        return Vec::new();
-    };
+        .ok()?;
+    parser.parse(text, None)
+}
+
+fn forms_of(tree: &tree_sitter::Tree) -> Vec<(usize, usize)> {
     let root = tree.root_node();
     let mut cursor = root.walk();
     root.children(&mut cursor)
         .filter(|n| n.kind() != "comment")
         .map(|n| (n.start_byte(), n.end_byte()))
         .collect()
+}
+
+/// The byte spans of the file's top-level forms, in order (the Emacs reader's spans, which the tests hold it to).
+pub fn top_level_forms(text: &str) -> Vec<(usize, usize)> {
+    parse(text).map(|t| forms_of(&t)).unwrap_or_default()
 }
 
 fn analyse(text: &str, start: usize, end: usize) -> Form {
@@ -101,17 +104,20 @@ pub(super) fn chunk(
     generated: bool,
     text: &str,
     budget: usize,
-) -> (Vec<Chunk>, Vec<Symbol>) {
+) -> (Vec<Chunk>, Vec<Symbol>, Vec<Ref>) {
     let title = title_of(text);
-    merge::assemble(merge::Input {
+    let tree = parse(text);
+    let (chunks, symbols) = merge::assemble(merge::Input {
         path,
         generated,
         text,
         budget,
         title: title.as_deref(),
-        spans: top_level_forms(text),
+        spans: tree.as_ref().map(forms_of).unwrap_or_default(),
         analyse: &|s, e| analyse(text, s, e),
         heading: &|a, b| heading_in(text, a, b),
         cuts: &|f| cuts(text, f),
-    })
+    });
+    let refs = tree.map(|t| refs::of_lisp(&t, text)).unwrap_or_default();
+    (chunks, symbols, refs)
 }

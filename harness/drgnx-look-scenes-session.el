@@ -11,6 +11,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-palette)                ; the palette scene's commands and history
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -28,6 +29,12 @@
 (declare-function drgnx-chrome--note "drgnx-chrome")
 (declare-function drgnx-chrome-note-preview "drgnx-chrome")
 (declare-function drgnx-start-show "drgnx-start")
+(declare-function drgnx-wb--selected-changed "drgnx-wb")
+(declare-function drgnx-wb--tail-paint "drgnx-wb")
+(declare-function drgnx-wb-row-hover-face "drgnx-wb")
+(declare-function diff-refine-hunk "diff-mode")
+(declare-function diff-hunk-next "diff-mode")
+(defvar drgnx-explorer-buffer-name)
 
 ;; drgnx-gateway.el's lines 201-232 as the mockups show them (window-dark.html), the working copy; the committed copy
 ;; has the two lines the agent changed (215-217) as they were before
@@ -285,10 +292,30 @@ from 201."
       (drgnx-look-scene--show drgnx-look-scene--panel)))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene--palette-commands ()
+  "palette.html's commands for \"run te\": the test runner's three and the terminal's, with the mockup's keys, first in
+the registry as the mockup lists them; Rerun Last Tests was run 2 minutes ago.  drgnx has no test runner commands of
+its own yet, so the scene registers stand-ins that do nothing."
+  (drgnx-look-scene--try "palette commands"
+    (pcase-dolist (`(,id ,title ,category ,key)
+                   '((look-scene-run-file "Run Tests in This File" "Tests" "C-; f")
+                     (look-scene-run-at-point "Run Test at Point" "Tests" "C-; t")
+                     (look-scene-rerun "Rerun Last Tests" "Tests" "C-; r")
+                     (look-scene-run-in-terminal "Run in Terminal…" "Terminal" nil)))
+      (drgnx-command-define id :title title :category category :command #'ignore)
+      (when key (setf (drgnx-cmd-bound (drgnx-commands-get id)) (list (cons key nil)))))
+    (let ((ids '(look-scene-run-file look-scene-run-at-point look-scene-rerun look-scene-run-in-terminal)))
+      (setq drgnx-commands--order (append ids (seq-difference drgnx-commands--order ids))))
+    (drgnx-palette--history)
+    (setq drgnx-palette--history (cons (list 'look-scene-rerun (- (floor (float-time)) 125))
+                                       (assq-delete-all 'look-scene-rerun drgnx-palette--history)))))
+
 (defun drgnx-look-scene-palette ()
-  "The editor focused; the session's own keys open the palette (`drgnx ui look-scenes' types them)."
+  "The editor focused, the mockup's commands registered; the session's own keys open the palette (`drgnx ui
+look-scenes' types them)."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
+  (drgnx-look-scene--palette-commands)
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-window-light ()
@@ -325,6 +352,118 @@ from 201."
   (drgnx-look-scene--try "work space" (drgnx-work-space-open))
   (drgnx-look-scene--answer))
 
+;; The highlights (look step 5b's audit): no mockup of their own; each is judged against the mockups' tokens
+;; (look.css) in strips cut from these shots.  Highlights a command makes (isearch's, show-paren's, eglot's, Flymake's,
+;; a rectangle's) are drawn with their faces as overlays, the way those commands draw them, so one shot holds all.
+
+(defconst drgnx-look-scene--diff
+  "diff --git a/core/drgnx-gateway.el b/core/drgnx-gateway.el
+--- a/core/drgnx-gateway.el
++++ b/core/drgnx-gateway.el
+@@ -213,4 +213,4 @@ (defun drgnx-gateway--reply (p reply)
+   \"Send REPLY to the client process P.\"
+-  (when (process-live-p p)
++  (if (process-live-p p)
+       (process-send-string p reply)
+-    nil))
++    (drgnx-gateway--queue p reply)))
+"
+  "A hunk with two changed line pairs, for the diff highlights.  Its header counts its lines (four a side): with a
+wrong count `diff-refine-hunk' finds no pairs and refines nothing.")
+
+(defun drgnx-look-scene--hl-put (beg end face)
+  "An overlay of the scene's from BEG to END in FACE."
+  (let ((o (make-overlay beg end)))
+    (overlay-put o 'face face) (overlay-put o 'drgnx-hl-scene t) (overlay-put o 'priority 10)
+    o))
+
+(defun drgnx-look-scene--hl-at (line text face &optional nth)
+  "FACE over the NTH (from 0) TEXT on LINE of the current buffer."
+  (save-excursion
+    (goto-char (point-min)) (forward-line (1- line))
+    (let ((eol (pos-eol)))
+      (dotimes (_ (1+ (or nth 0))) (search-forward text eol))
+      (drgnx-look-scene--hl-put (- (point) (length text)) (point) face))))
+
+(defun drgnx-look-scene--highlights (theme)
+  "THEME's highlights in one shot: two editor groups (the focused card's ring), the gateway file with the current
+line, a multi-line region with a match inside it, a rectangle, isearch's current and other matches, show-paren,
+eglot's symbol, Flymake's marks; a diff with a refined pair beside it; a hovered row in the Explorer and in Open."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--try "highlights"
+    (require 'flymake) (require 'eglot) (require 'paren)     ; their faces
+    (drgnx-look-scene--editor)
+    (let ((left (selected-window)))
+      ;; the diff beside it, in a narrow second group (set directly: showing it would go to the editor window)
+      (unless (window-in-direction 'right left)
+        (set-window-buffer
+         (split-window left (- (round (* 0.36 (window-total-width left)))) 'right)
+         (with-current-buffer (get-buffer-create "hl-scene.diff")
+           (let ((inhibit-read-only t)) (erase-buffer) (insert drgnx-look-scene--diff))
+           (diff-mode) (goto-char (point-min)) (diff-hunk-next) (ignore-errors (diff-refine-hunk))
+           (current-buffer))))
+      (with-current-buffer (window-buffer left)
+        (remove-overlays (point-min) (point-max) 'drgnx-hl-scene t)
+        (when (fboundp 'hl-line-mode) (hl-line-mode 1))
+        (setq-local highlight-nonselected-windows t)
+        ;; isearch on drgnx-gateway--pending: the current match, the others lazily
+        (drgnx-look-scene--hl-at 203 "drgnx-gateway--pending" 'isearch)
+        (drgnx-look-scene--hl-at 208 "drgnx-gateway--pending" 'lazy-highlight)
+        (drgnx-look-scene--hl-at 210 "drgnx-gateway--pending" 'lazy-highlight)
+        ;; show-paren on the defun of line 213 and its close, eglot's symbol on `reply'
+        (drgnx-look-scene--hl-at 213 "(" 'show-paren-match)
+        (drgnx-look-scene--hl-at 217 ")" 'show-paren-match 2)
+        (drgnx-look-scene--hl-at 216 "reply" 'eglot-highlight-symbol-face)
+        (drgnx-look-scene--hl-at 217 "reply" 'eglot-highlight-symbol-face)
+        ;; Flymake: the unused `old' and the unknown function
+        (drgnx-look-scene--hl-at 208 "old" 'flymake-warning)
+        (drgnx-look-scene--hl-at 229 "drgnx-gateway--log" 'flymake-error)
+        ;; a rectangle (rectangle-mark-mode draws its lines as region overlays)
+        (dolist (l '(220 221 222))
+          (save-excursion (goto-char (point-min)) (forward-line (1- l)) (move-to-column 2)
+                          (drgnx-look-scene--hl-put (point) (progn (move-to-column 24) (point)) 'region))))
+      ;; the region, lines 225-227, drawn as the region is (its face over the text, so point stays on line 216's
+      ;; current line)
+      (with-current-buffer (window-buffer left)
+        (save-excursion
+          (goto-char (point-min)) (forward-line 224) (move-to-column 1)
+          (let ((beg (point))) (forward-line 2) (move-to-column 20) (drgnx-look-scene--hl-put beg (point) 'region))
+          ;; a match inside it (over the region, as isearch's matches are)
+          (forward-line -1) (move-to-column 4)
+          (overlay-put (drgnx-look-scene--hl-put (point) (progn (move-to-column 16) (point)) 'lazy-highlight)
+                       'priority 20))))
+    ;; a hovered row in Open and in the Explorer (the pointer's `mouse-face', drawn as its face: the row's text and
+    ;; its tail at the right edge, which the pointer lights with it)
+    (dolist (w (window-list nil 'never))
+      (when (window-parameter w 'window-side)
+        (with-current-buffer (window-buffer w)
+          (remove-overlays (point-min) (point-max) 'drgnx-hl-scene t)
+          (save-excursion
+            (goto-char (point-min)) (forward-line 2)
+            (let ((tail (seq-find (lambda (o) (overlay-get o 'drgnx-row-tail)) (overlays-in (pos-bol) (pos-eol))))
+                  (hover (drgnx-wb-row-hover-face)))
+              (drgnx-look-scene--hl-put (pos-bol) (pos-eol) hover)
+              (when tail (drgnx-wb--tail-paint tail hover))))))))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-highlights-dark () (drgnx-look-scene--highlights 'drgnx-dark))
+(defun drgnx-look-scene-highlights-light () (drgnx-look-scene--highlights 'drgnx-light))
+(defun drgnx-look-scene-highlights-hc () (drgnx-look-scene--highlights 'drgnx-high-contrast))
+
+(defun drgnx-look-scene--explorer-focused (theme)
+  "The window scene under THEME with the Explorer focused: its selected row with the focus ring, the other
+sections' with the inactive selection."
+  (drgnx-look-scene--theme theme)
+  (drgnx-look-scene--editor)
+  (when-let* ((w (get-buffer-window drgnx-explorer-buffer-name)))
+    (select-window w)
+    (drgnx-wb--selected-changed nil))
+  (drgnx-look-scene--answer))
+
+(defun drgnx-look-scene-explorer-focused-dark () (drgnx-look-scene--explorer-focused 'drgnx-dark))
+(defun drgnx-look-scene-explorer-focused-light () (drgnx-look-scene--explorer-focused 'drgnx-light))
+(defun drgnx-look-scene-explorer-focused-hc () (drgnx-look-scene--explorer-focused 'drgnx-high-contrast))
+
 (defun drgnx-look-scene-start-page ()
   "The start page in the editor, dark (no mockup: its buttons, keycaps and shield are the components of design §3.5)."
   (drgnx-look-scene--theme 'drgnx-dark)
@@ -351,9 +490,50 @@ chrome faces, frame metrics, windows, modules."
                   :windows (mapcar (lambda (w) (list (buffer-name (window-buffer w)) :x (window-pixel-left w)
                                                      :y (window-pixel-top w) :w (window-pixel-width w)
                                                      :h (window-pixel-height w)
+                                                     ;; the text area and its line: whole rows or a part of one
+                                                     :body (window-body-height w t)
+                                                     :header (window-header-line-height w)
+                                                     :line (window-default-line-height w)
+                                                     :end (cdr (posn-x-y (posn-at-point (window-end w t) w)))
                                                      :mode (buffer-local-value 'major-mode (window-buffer w))))
                                    (window-list f 'no-mini))
                   :children (cl-count-if (lambda (c) (and (frame-visible-p c) (frame-parent c))) (frame-list))
+                  ;; why the palette floats or not, while a minibuffer is open
+                  :palette (when-let* ((w (active-minibuffer-window)))
+                             (with-current-buffer (window-buffer w)
+                               (list :wanted (and (fboundp 'drgnx-palette-frame-wanted-p)
+                                                  (drgnx-palette-frame-wanted-p))
+                                     :glitnir (and (fboundp 'glitnir-active-p) (glitnir-active-p))
+                                     :vertico (ignore-errors (package-get-version))
+                                     :vertico-dir (ignore-errors (file-name-directory (locate-library "vertico")))
+                                     :entry (assq 'drgnx-command (bound-and-true-p vertico-multiform-categories))
+                                     :category (ignore-errors
+                                                 (completion-metadata-get
+                                                  (completion-metadata "" minibuffer-completion-table
+                                                                       minibuffer-completion-predicate)
+                                                  'category))
+                                     :buffer-mode (bound-and-true-p vertico-buffer-mode)
+                                     :action (bound-and-true-p vertico-buffer-display-action)
+                                     :shown-in (buffer-name (window-buffer (get-buffer-window (current-buffer) t)))
+                                     :frame (and (boundp 'drgnx-palette-frame--frame)
+                                                 (frame-live-p drgnx-palette-frame--frame)
+                                                 (frame-visible-p drgnx-palette-frame--frame))
+                                     ;; the frosting: what was asked, and what Glitnir drew
+                                     :frost (and (boundp 'drgnx-palette-frame--frame)
+                                                 (frame-live-p drgnx-palette-frame--frame)
+                                                 (let ((pf drgnx-palette-frame--frame))
+                                                   (list :alpha (frame-parameter pf 'alpha-background)
+                                                         :blur (frame-parameter pf 'backdrop-blur)
+                                                         :chrome (and (fboundp 'glitnir--chrome)
+                                                                      (ignore-errors (glitnir--chrome pf)))
+                                                         :stats (and (fboundp 'glitnir-stats)
+                                                                     (ignore-errors (glitnir-stats pf)))))))))
+                  ;; the echo area's box: the first frame is born with it, so a start swaps no frame
+                  :echo (list :row (bound-and-true-p drgnx-look-echo-row)
+                              :box (and (fboundp 'drgnx-look-echo-box) (drgnx-look-echo-box f) t)
+                              :swaps (bound-and-true-p drgnx-look-echo-swaps)
+                              :root-bottom (nth 3 (window-pixel-edges (frame-root-window f)))
+                              :inner-height (frame-inner-height f))
                   :modules (ignore-errors (mapcar (lambda (r) (list (car r) (plist-get (cdr r) :status)))
                                                   (drgnx-modules-report))))
             (current-buffer)))))

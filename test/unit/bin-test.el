@@ -1414,28 +1414,28 @@ macOS (no /proc there)."
           (should-not (drgnx-bin-test--left parent)))
       (delete-directory dir t))))
 
-(ert-deftest drgnx-bin/a-test-run-stops-the-podman-pause-process-it-made ()
-  ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
-  ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
-  ;; stops exactly that one at its end, and never another catatonit (the user's own, with its pid file elsewhere).
-  ;; Linux only: bin/drgnx tells catatonit by /proc/PID/comm, and on macOS podman runs in a VM, so a run leaves no
-  ;; local pause process.
-  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+;; The run's pause process, as a script named catatonit: TRAP is its TERM handling (what it does after the signal).
+(defun drgnx-bin-test--pause-run (trap)
   (let* ((dir (make-temp-file "drgnx-bin-tmp" t))
          (parent (expand-file-name "parent" dir))
          (ours (expand-file-name "ours.pid" dir))
          (other (expand-file-name "other" dir))
-         (catatonit (expand-file-name "catatonit" dir))
+         (catatonit (expand-file-name "pause/catatonit" dir))
+         (users-catatonit (expand-file-name "catatonit" dir))
          (emacs (drgnx-bin-test--fake-emacs
                  (expand-file-name "fake-emacs" dir)
-                 (format "mkdir -p \"$XDG_RUNTIME_DIR/libpod/tmp\"; %s 300 >/dev/null 2>&1 </dev/null & echo $! > \"$XDG_RUNTIME_DIR/libpod/tmp/pause.pid\"; echo $! > %s"
+                 (format "mkdir -p \"$XDG_RUNTIME_DIR/libpod/tmp\"; %s >/dev/null 2>&1 </dev/null & echo $! > \"$XDG_RUNTIME_DIR/libpod/tmp/pause.pid\"; echo $! > %s"
                          catatonit ours)))
          (users nil))
     (unwind-protect
         (progn
           (make-directory parent)
-          (make-symbolic-link (executable-find "sleep") catatonit)
-          (setq users (start-process "drgnx-bin-test-catatonit" nil catatonit "300"))
+          (make-directory (file-name-directory catatonit))
+          (with-temp-file catatonit
+            (insert (format "#!/bin/sh\ntrap '%s' TERM\nwhile :; do sleep 0.05; done\n" trap)))
+          (set-file-modes catatonit #o755)
+          (make-symbolic-link (executable-find "sleep") users-catatonit)
+          (setq users (start-process "drgnx-bin-test-catatonit" nil users-catatonit "300"))
           (make-directory (expand-file-name "libpod/tmp" other) t)
           (with-temp-file (expand-file-name "libpod/tmp/pause.pid" other) (insert (format "%d\n" (process-id users))))
           (should (eql 0 (car (drgnx-bin-test--call drgnx-bin-test--bin
@@ -1448,6 +1448,19 @@ macOS (no /proc there)."
           (should (process-live-p users)))
       (when (process-live-p users) (delete-process users))
       (delete-directory dir t))))
+
+(ert-deftest drgnx-bin/a-test-run-stops-the-podman-pause-process-it-made ()
+  ;; TEST-PODMAN-PAUSE-1: rootless podman under the run's private XDG_RUNTIME_DIR starts a `catatonit -P' pause
+  ;; process (pid file RUN/libpod/tmp/pause.pid) that outlives the run, and the systemd scope it lives in.  The run
+  ;; stops exactly that one at its end, waits until it is gone, and never another catatonit (the user's own, with its
+  ;; pid file elsewhere).  Here the pause process takes 0.3 s to act on TERM.  Linux only: bin/drgnx tells catatonit
+  ;; by /proc/PID/comm, and on macOS podman runs in a VM, so a run leaves no local pause process.
+  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+  (drgnx-bin-test--pause-run "sleep 0.3; exit 0"))
+
+(ert-deftest drgnx-bin/a-test-run-kills-a-pause-process-that-ignores-term ()
+  (skip-unless (and (executable-find "sleep") (file-readable-p "/proc/self/comm")))
+  (drgnx-bin-test--pause-run ":"))
 
 (ert-deftest drgnx-bin/a-test-run-removes-podman-storage-through-unshare ()
   ;; Podman storage in a run's temp HOME holds sub-UID files a plain `rm -rf' leaves behind (stood in for by an

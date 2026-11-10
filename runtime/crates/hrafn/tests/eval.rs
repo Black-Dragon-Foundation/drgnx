@@ -3,7 +3,7 @@
 //! test-pattern: pure (D): git runs to its exit in a temporary repository, the store thread answers in order, and the
 //! metrics and the bootstrap are functions of their inputs (the bootstrap's generator is seeded); no clock, no wait.
 
-use hrafn::eval::{EvalRow, Report, compare, generate, judge, run};
+use hrafn::eval::{EvalRow, Gate, Report, compare, compare_on, generate, judge, run};
 use hrafn::{Answer, CodeStore, Config, GitCli, Hit, Lag, Query, refresh};
 use std::path::Path;
 use std::process::Command;
@@ -261,6 +261,61 @@ fn metrics_known_values() {
     assert_eq!(r.overall.n, 50);
 }
 
+/// Pattern D. File MRR@10: the reciprocal rank of the first hit in any target file, whatever its symbol (a chunker that
+/// gives no symbol still scores), and its summary.
+#[test]
+fn file_mrr_counts_the_first_hit_in_a_target_file() {
+    let t = |p: &str, s: &str| (p.to_string(), s.to_string());
+    let plain = |p: &str| Hit {
+        symbol: None,
+        ..hit(p, "")
+    };
+    let hits = vec![plain("x.el"), plain("y.el"), plain("a.el")];
+    let j = judge(&[t("a.el", "f")], &hits);
+    assert_eq!(j.rr, 0.0, "no symbol: no chunk-level hit");
+    assert!((j.file_rr.unwrap() - 1.0 / 3.0).abs() < 1e-12);
+    let hits: Vec<Hit> = (0..12).map(|i| hit("z.el", &format!("z{i}"))).collect();
+    assert_eq!(judge(&[t("a.el", "f")], &hits).file_rr, Some(0.0));
+    let mut hits: Vec<Hit> = (0..10).map(|i| hit("z.el", &format!("z{i}"))).collect();
+    hits.push(hit("a.el", "f"));
+    assert_eq!(
+        judge(&[t("a.el", "f")], &hits).file_rr,
+        Some(0.0),
+        "rank 11"
+    );
+
+    let rows = rows_of(&[("symbol", 20)]);
+    let r = run(&rows, &|_q: &Query| {
+        answer(vec![plain("z.el"), plain("a.el")])
+    });
+    assert_eq!((r.overall.mrr, r.overall.file_mrr), (0.0, 0.5));
+}
+
+/// Pattern D. The gate on file MRR: the same floors over the paired file-level difference; a report made before file
+/// MRR existed (no `file_rr`) is refused rather than read as zeros.
+#[test]
+fn compare_on_file_mrr() {
+    let rows = rows_of(&[("symbol", 400)]);
+    let base = report(&rows, &[]);
+    // B finds the file at rank 1 with no symbols: chunk MRR falls to 0, file MRR holds
+    let cand = run(&rows, &|_q: &Query| {
+        answer(vec![Hit {
+            symbol: None,
+            ..hit("a.el", "")
+        }])
+    });
+    assert!(!compare_on(&base, &cand, Gate::Chunk).unwrap().pass);
+    let v = compare_on(&base, &cand, Gate::File).unwrap();
+    assert!(v.pass, "{v:?}");
+    assert_eq!(v.overall.mean, 0.0);
+    let mut old = base.clone();
+    for r in old.rows.values_mut() {
+        r.judged.file_rr = None;
+    }
+    assert!(compare_on(&old, &cand, Gate::File).is_err());
+    assert!(compare_on(&old, &cand, Gate::Chunk).is_ok());
+}
+
 fn rows_of(strata: &[(&str, usize)]) -> Vec<EvalRow> {
     let mut rows = Vec::new();
     for (s, n) in strata {
@@ -291,24 +346,28 @@ fn report(rows: &[EvalRow], worse: &[&str]) -> Report {
 }
 
 /// Pattern D. The gate: the lower bound of the paired MRR@10 difference must stay above -0.01 overall and -0.03 in
-/// each stratum; two reports over different rows are refused.
+/// each stratum of 30 rows or more (a smaller one is reported, not gated); two reports over different rows are refused.
 #[test]
 fn compare_noninferiority_rule() {
-    let rows = rows_of(&[("symbol", 400), ("docs", 20)]);
+    let rows = rows_of(&[("symbol", 400), ("docs", 30), ("config", 29)]);
     let base = report(&rows, &[]);
     // the same: passes, difference exactly 0
     let v = compare(&base, &report(&rows, &[])).unwrap();
     assert!(v.pass, "{v:?}");
     assert_eq!(v.overall.mean, 0.0);
-    // one row of 420 slips a rank: inside both bounds
+    // one row of 459 slips a rank: inside both bounds
     let v = compare(&base, &report(&rows, &["symbol-000"])).unwrap();
     assert!(v.pass, "{v:?}");
     assert!(v.overall.mean < 0.0 && v.overall.lo > -0.01);
-    // one row of the 20-row stratum slips: overall is fine, the stratum's bound is not
+    // one row of the 30-row stratum slips: overall is fine, the stratum's bound is not
     let v = compare(&base, &report(&rows, &["docs-000"])).unwrap();
     assert!(!v.pass, "{v:?}");
     assert!(v.overall.lo > -0.01, "{v:?}");
     assert!(v.reasons.iter().any(|r| r.contains("docs")), "{v:?}");
+    // one row of the 29-row stratum slips: its bound is as low, but it is reported, not gated
+    let v = compare(&base, &report(&rows, &["config-000"])).unwrap();
+    assert!(v.pass, "{v:?}");
+    assert!(v.strata["config"].lo < -0.03, "{v:?}");
     // everything slips: overall fails
     let all: Vec<String> = rows.iter().map(|r| r.query.clone()).collect();
     let all: Vec<&str> = all.iter().map(String::as_str).collect();
@@ -344,4 +403,86 @@ fn coverage_failure_fails_gate() {
     );
     cand.exact_symbol_r1 = Some(1.0);
     assert!(compare(&base, &cand).unwrap().pass);
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter()
+        .map(|(p, s)| (p.to_string(), s.to_string()))
+        .collect()
+}
+
+/// Pattern D. The map yield on hand-made maps: the share of target definitions shown, and of target files.
+#[test]
+fn map_yield_on_hand_made_maps() {
+    use hrafn::eval::map_yield;
+    let targets = pairs(&[("a.rs", "f"), ("a.rs", "g"), ("b.rs", "h")]);
+    let shown = pairs(&[("a.rs", "f"), ("b.rs", "h"), ("c.rs", "f"), ("a.rs", "x")]);
+    let y = map_yield(&targets, &shown);
+    assert!((y.def.unwrap() - 2.0 / 3.0).abs() < 1e-9, "{y:?}");
+    assert_eq!(y.file, 1.0);
+    let y = map_yield(&targets, &pairs(&[("a.rs", "x")]));
+    assert_eq!(
+        (y.def, y.file),
+        (Some(0.0), 0.5),
+        "a file shown without its target definition"
+    );
+    // a target that names no symbol (any chunk of the file) counts for files only
+    let y = map_yield(
+        &pairs(&[("docs/a.md", "")]),
+        &pairs(&[("docs/a.md", "Intro")]),
+    );
+    assert_eq!((y.def, y.file), (None, 1.0));
+}
+
+/// Pattern D. The search baseline packs hits in rank order, each with its header line, until the next would pass the
+/// budget's estimate (characters ÷ 4).
+#[test]
+fn search_hits_pack_until_the_budget() {
+    use hrafn::eval::pack;
+    let hits = vec![hit("a.rs", "f"), hit("b.rs", "g"), hit("c.rs", "h")];
+    // "a.rs:1-2\n" is 9 characters; each chunk is 391: 400 characters, 100 tokens a hit
+    let chars = |_: &Hit| 391;
+    assert_eq!(
+        pack(&hits, 250, &chars),
+        pairs(&[("a.rs", "f"), ("b.rs", "g")])
+    );
+    assert_eq!(pack(&hits, 300, &chars).len(), 3);
+    assert!(pack(&hits, 99, &chars).is_empty());
+}
+
+/// Pattern D. Yields summarised per stratum and overall, def-yield over the rows that have one.
+#[test]
+fn yields_summarise_per_stratum() {
+    use hrafn::eval::{MapYield, summarize_yield};
+    let rows = vec![
+        (
+            "symbol".to_string(),
+            MapYield {
+                def: Some(1.0),
+                file: 1.0,
+            },
+        ),
+        (
+            "symbol".to_string(),
+            MapYield {
+                def: Some(0.0),
+                file: 0.5,
+            },
+        ),
+        (
+            "docs".to_string(),
+            MapYield {
+                def: None,
+                file: 0.0,
+            },
+        ),
+    ];
+    let s = summarize_yield(&rows);
+    assert_eq!((s["all"].n, s["all"].def_n), (3, 2));
+    assert!(
+        (s["all"].def - 0.5).abs() < 1e-9 && (s["all"].file - 0.5).abs() < 1e-9,
+        "{s:?}"
+    );
+    assert_eq!(s["symbol"].file, 0.75);
+    assert_eq!((s["docs"].def_n, s["docs"].def), (0, 0.0));
 }

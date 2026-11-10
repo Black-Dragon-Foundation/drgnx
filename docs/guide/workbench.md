@@ -11,16 +11,24 @@ restart.
 island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
 menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
 below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline**: a chevron and the title in
-`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. Their rows are drawn in the UI font at the density's
+`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
+its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
+which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's
 row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
 indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
 is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the
 `⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
 failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer, a `×` (close) in the Buffers panel,
 where a file with unsaved changes shows `●` there instead, always. The `⋯` and the `×`
-are drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
-and so does every row on a terminal. The row at point is the selection: with the focus ring while the panel has the
-focus, quiet while another window has it.
+are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
+every row on a terminal shows it. The row at point is the selection: in the selection colour while the panel
+has the focus, inside a 1-pixel ring of the focus colour where Glitnir draws (Nidhogg), and the inactive selection (`drgnx-selected-inactive`, a clearly visible grey) while another window
+has it, as VS Code does. The Outline's current definition is drawn the same way, in bold. A row's selection and
+its hover are one fill from the row's start to its right edge, the git mark and the control included, 6 pixels in
+from the island's sides (the sections' fringes, in the island's colour), with rounded corners where Glitnir draws
+them. Neither changes a row's width or moves its text. The current line's highlight (`hl-line`) is not used in
+the sections. A section with another below it ends at a whole row (the one below takes the pixels left over), so
+no part of a row shows at its foot.
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS
 Code's Explorer and Open Editors; see [Compared](#compared-with-treemacs-ibuffer-and-vs-code)), and does every
@@ -45,7 +53,8 @@ file tree, the Search view with the cursor in its Find field), like VS Code's `C
 Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
 the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
-sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had, and gives each editor
+group back the width it had: the sidebar's width goes to the groups and comes back from them in proportion.
 
 **Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
 else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
@@ -82,7 +91,8 @@ Below the Explorer, the **Outline** lists the definitions of the file in the edi
 same way). A click shows the definition in the editor and keeps you in the Outline; `RET` goes there. It follows the
 editor, and half a second after you stop typing, your edits — only while it is shown (hidden, it lets go of the file
 at the next pause or editor change), and a key you press while it works wins (it tries again at the next pause). Files without an index, remote files and buffers over 1 MB get a
-one-line notice instead. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
+one-line notice instead: an info icon and the reason in the muted text ("No outline for this file"), an empty
+state that is never selected. The definition your cursor is in is highlighted in the Outline (an overlay, set a moment
 after the cursor stops — the Outline's own cursor is yours and never moves while you work in a file). Another file
 starts the Outline at its top, its cursor on the definition your cursor is in (scrolled into view). An edit that only
 moves definitions redraws nothing, and the Outline keeps your place in it when definitions are added above. Its rows
@@ -211,7 +221,8 @@ its own (`split-height-threshold` and `split-width-threshold` nil, `even-window-
 
 The table is one entry at the **end** of `display-buffer-alist`, so your own entries and
 `display-buffer-overriding-action` still win, and so does a caller that asks for a frame or for no window (`C-x 5 b`,
-`display-buffer-no-window`). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
+`display-buffer-no-window`), or that marks its own action with `(drgnx-explicit . t)` in the action's alist (the floating
+palette does). `C-x 4 b` shows the buffer in another editor when there is one; a window you locked with
 `C-x w d` is left alone. If your configuration replaces the variable after drgnx started (`(setq display-buffer-alist …)`
 instead of `add-to-list`), drgnx's entry is gone and buffers go wherever Emacs puts them: once init is done,
 every start checks the entry and posts a warning notice (source `wb`) when it is missing, and `drgnx doctor`

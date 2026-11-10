@@ -97,5 +97,95 @@ rest."
             (should (equal (seq-take sorted 3) '("Z: C" "X: A" "Cmd: 1")))
             (should (equal (cddr sorted) (seq-take labels 300)))))))))
 
+(defun drgnx-look-palette-test--faces (face)
+  "FACE (a text property value) as a flat list of face names and plists."
+  (if (and (consp face) (not (keywordp (car face)))) face (list face)))
+
+(defun drgnx-look-palette-test--boxed-p (face)
+  "Non-nil when FACE carries the row's inside box."
+  (cl-some (lambda (f) (and (consp f) (plist-get f :box))) (drgnx-look-palette-test--faces face)))
+
+(ert-deftest drgnx-look-palette/the-current-row-is-one-rounded-inset-run ()
+  "Pattern D, palette.html `.row.sel': the current candidate is one rounded fill, 6 logical pixels in from the
+popup's sides: an inset before it (outside the fill), the text and a stretch to 6 pixels short of the right edge in the
+current face with the row's inside box (one box run: the stretch ends it, so its right corners are drawn), then a
+plain newline (no fill past the row).  Every row gets the same left inset, so the text does not move."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (let* ((cand (let ((s (concat "Run Tests" "\n"))) (add-face-text-property 0 (length s) 'vertico-current t s) s))
+         (row (drgnx-completion--row cand t))
+         (n (length row)))
+    (should (equal "\n" (substring row -1)))
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property (1- n) 'face row))))
+    (should (get-text-property 0 'display row))                                         ; the left inset
+    (should-not (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property 0 'face row))))
+    (should (string-search "Run Tests" row))
+    (cl-loop for i from 1 below (1- n)
+             do (should (memq 'vertico-current (drgnx-look-palette-test--faces (get-text-property i 'face row))))
+             do (should (drgnx-look-palette-test--boxed-p (get-text-property i 'face row))))
+    (should (string-match-p "align-to" (format "%S" (get-text-property (- n 2) 'display row))))
+    (let ((other (drgnx-completion--row (copy-sequence "Run Test at Point\n") nil)))
+      (should (get-text-property 0 'display other))
+      (should (equal "Run Test at Point\n" (substring other 1)))
+      (should-not (drgnx-look-palette-test--boxed-p (get-text-property 1 'face other))))))
+
+(ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
+  "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an
+annotation) is `drgnx-selected-secondary' (muted: subtle is 3.8:1 on the dark selection, 4.3 on the light); the
+candidate's own text keeps its face; other rows keep subtle.  Under each drgnx theme the face is at least 4.5:1 on
+the selection (7 in high contrast)."
+  (load (expand-file-name "modules/extra/drgnx-completion" drgnx-dir) nil t)
+  (load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
+  (pcase-dolist (`(,theme . ,bar) '((drgnx-dark . 4.5) (drgnx-light . 4.5) (drgnx-high-contrast . 7.0)))
+    (unwind-protect
+        (progn
+          (mapc #'disable-theme custom-enabled-themes)
+          (load-theme theme t)
+          (let* ((cand (concat "Run Tests" (propertize "  C-; F" 'face 'drgnx-keycap)
+                               (propertize "  Tests" 'face 'completions-annotations) "\n"))
+                 (row (drgnx-completion--row (let ((s (copy-sequence cand)))
+                                               (add-face-text-property 0 (length s) 'vertico-current t s) s)
+                                             t))
+                 (other (drgnx-completion--row (copy-sequence cand) nil))
+                 (at (lambda (s text) (drgnx-look-palette-test--faces (get-text-property (string-search text s) 'face s)))))
+            (should (memq 'drgnx-selected-secondary (funcall at row "C-; F")))
+            (should (memq 'drgnx-selected-secondary (funcall at row "  Tests")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at row "Run")))
+            (should-not (memq 'drgnx-selected-secondary (funcall at other "C-; F")))
+            (let ((ratio (drgnx-color-contrast (face-foreground 'drgnx-selected-secondary nil t)
+                                               (face-background 'drgnx-selected nil t))))
+              (should (>= ratio bar)))))
+      (mapc #'disable-theme custom-enabled-themes))))
+
+(ert-deftest drgnx-look-palette/a-row-is-icon-title-category-and-keys ()
+  "Pattern D: palette.html's row.  The shown row is the title without its category (the matched letters keep their
+faces) after an icon; the annotation is the category in the subtle colour and no doc; keycaps sit at the right edge;
+a group's title is the group's name in its own face (no count, no rule line)."
+  (let ((drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil) (meta nil))
+    (drgnx-command-define 'look-palette-test-run :title "Run Tests in This File" :category "Tests"
+                          :doc "Run every test of the file." :command #'ignore)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt table &rest _) (setq meta (completion-metadata "" table nil)) "")))
+      (drgnx-palette))
+    (let* ((label "Tests: Run Tests in This File")
+           (lit (concat (propertize "Tests: Run" 'face 'completions-common-part) " Tests in This File"))
+           (group (completion-metadata-get meta 'group-function))
+           (shown (funcall group lit t))
+           (note (funcall (completion-metadata-get meta 'annotation-function) label)))
+      (should (string-suffix-p "Run Tests in This File" shown))
+      (should-not (string-search "Tests: " shown))
+      (should (eq 'completions-common-part (get-text-property (string-search "Run" shown) 'face shown)))
+      (should (string-search "Tests" note))
+      (should-not (string-search "every test" note))
+      (should (memq 'drgnx-text-subtle (ensure-list (get-text-property (string-search "Tests" note) 'face note))))
+      (should (equal "Commands" (string-trim (substring-no-properties (funcall group label nil)))))
+      (let ((title (funcall group label nil)))
+        (should (eq 'drgnx-palette-group (get-text-property (string-search "Commands" title) 'face title))))))
+  ;; keys: right-aligned caps on a graphical frame
+  (let ((note (cl-letf (((symbol-function 'display-graphic-p) #'always))
+                (drgnx-palette--annotation "Tests" nil "C-; f"))))
+    (should (string-search "Ctrl" note))
+    (should (seq-some (lambda (i) (eq :align-to (car-safe (cdr-safe (get-text-property i 'display note)))))
+                      (number-sequence 0 (1- (length note)))))))
+
 (provide 'look-palette-test)
 ;;; look-palette-test.el ends here

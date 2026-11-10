@@ -55,20 +55,35 @@ only notes the frame in `drgnx-frames-test--synced' (the frames are symbols)."
   (cl-letf (((symbol-function 'frame-visible-p) (lambda (_) nil)))
     (should-not (drgnx-frames--workbench-p (selected-frame)))))
 
+(ert-deftest drgnx-frames/a-client-without-a-frame-closing-conses-nothing ()
+  "A budget: every emacsclient request (`emacsclient -e', a file shown in a window already there) ends in
+`server-delete-client'.  A client that made no frame closes no window, so the check before it conses nothing
+\(`frame-parameter' of `client' copies each frame's whole parameter list)."
+  (let ((proc (make-pipe-process :name "drgnx-test-client" :noquery t))
+        ;; compiled, so the loop itself conses nothing; the difference to an empty loop is the calls' own
+        (conses (byte-compile (lambda (proc n) (let ((c (car (memory-use-counts))))
+                                                 (dotimes (_ n) (drgnx-persist--before-client-delete proc))
+                                                 (- (car (memory-use-counts)) c))))))
+    (unwind-protect (should (= (funcall conses proc 100) (funcall conses proc 0)))
+      (delete-process proc))))
+
 (ert-deftest drgnx-frames/a-closing-client-saves-every-window ()
   ;; I1: `server-delete-client' deletes a daemon client's frames one by one; save them all first.
   (let* ((dir (make-temp-file "drgnx-frames" t)) (drgnx-persist-file (expand-file-name "s.eld" dir))
-         (drgnx-persist--saved-at-exit nil))
+         (drgnx-persist--saved-at-exit nil)
+         (proc (make-pipe-process :name "drgnx-test-client" :noquery t)))
+    (process-put proc 'frame (selected-frame))          ; the client made a frame, as server.el records it
     (unwind-protect
         (cl-letf (((symbol-function 'drgnx-state-frame-kind) (lambda (f) (and (framep f) 'gui))))   ; batch's frame, as a window
-          (set-frame-parameter nil 'client 'kx-proc)
-          (drgnx-persist--before-client-delete 'kx-proc)
+          (set-frame-parameter nil 'client proc)
+          (drgnx-persist--before-client-delete proc)
           (should (file-exists-p drgnx-persist-file))
           (should drgnx-persist--saved-at-exit)
           (delete-file drgnx-persist-file)
           (drgnx-persist--on-delete-frame (selected-frame))     ; the frames go: no second, partial save
           (should-not (file-exists-p drgnx-persist-file)))
       (set-frame-parameter nil 'client nil)
+      (delete-process proc)
       (delete-directory dir t))))
 
 (ert-deftest drgnx-frames/the-bus-tells-when-the-window-or-tabs-change ()

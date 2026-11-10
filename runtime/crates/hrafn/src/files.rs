@@ -30,6 +30,12 @@ pub enum Lang {
     Rust,
     C,
     Shell,
+    Python,
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Go,
+    Java,
     Org,
     Markdown,
     Text,
@@ -52,10 +58,38 @@ impl Lang {
             Lang::Rust => "rust",
             Lang::C => "c",
             Lang::Shell => "shell",
+            Lang::Python => "python",
+            Lang::JavaScript => "javascript",
+            Lang::TypeScript => "typescript",
+            Lang::Tsx => "tsx",
+            Lang::Go => "go",
+            Lang::Java => "java",
             Lang::Org => "org",
             Lang::Markdown => "markdown",
             Lang::Text => "text",
         }
+    }
+
+    /// The language a stored name (`as_str`) names; anything else is text.
+    pub fn parse(name: &str) -> Lang {
+        const ALL: [Lang; 13] = [
+            Lang::Elisp,
+            Lang::Rust,
+            Lang::C,
+            Lang::Shell,
+            Lang::Python,
+            Lang::JavaScript,
+            Lang::TypeScript,
+            Lang::Tsx,
+            Lang::Go,
+            Lang::Java,
+            Lang::Org,
+            Lang::Markdown,
+            Lang::Text,
+        ];
+        ALL.into_iter()
+            .find(|l| l.as_str() == name)
+            .unwrap_or(Lang::Text)
     }
 }
 
@@ -560,6 +594,12 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
         Some("rs") => Lang::Rust,
         Some("c" | "h") => Lang::C,
         Some("sh" | "bash" | "zsh") => Lang::Shell,
+        Some("py" | "pyi") => Lang::Python,
+        Some("js" | "mjs" | "cjs" | "jsx") => Lang::JavaScript,
+        Some("ts" | "mts" | "cts") => Lang::TypeScript,
+        Some("tsx") => Lang::Tsx,
+        Some("go") => Lang::Go,
+        Some("java") => Lang::Java,
         Some("org") => Lang::Org,
         Some("md" | "markdown") => Lang::Markdown,
         Some(_) => Lang::Text,
@@ -575,15 +615,22 @@ fn shebang_lang(head: &[u8]) -> Lang {
     let line = head.split(|b| *b == b'\n').next().unwrap_or(&[]);
     let line = String::from_utf8_lossy(line);
     if line.contains("emacs") {
-        Lang::Elisp
-    } else if line.split_whitespace().any(|w| {
-        let base = w.rsplit('/').next().unwrap_or(w);
-        matches!(base, "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh")
-    }) {
-        Lang::Shell
-    } else {
-        Lang::Text
+        return Lang::Elisp;
     }
+    for w in line.split_whitespace() {
+        let base = w.rsplit('/').next().unwrap_or(w);
+        match base {
+            "sh" | "bash" | "zsh" | "dash" | "ash" | "ksh" => return Lang::Shell,
+            "node" | "nodejs" => return Lang::JavaScript,
+            _ if base.starts_with("python")
+                && base[6..].chars().all(|c| c.is_ascii_digit() || c == '.') =>
+            {
+                return Lang::Python;
+            }
+            _ => {}
+        }
+    }
+    Lang::Text
 }
 
 /// A path's language and class as the file list gives them; HEAD is the first bytes of the file (for a `#!` line).

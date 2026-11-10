@@ -6,6 +6,7 @@
 ;; the ink of a letter.  Run at whatever scale the session has (DRGNX_UI_SCALE: 1, 1.25, 2).
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'seq)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
@@ -45,9 +46,12 @@
 
 (defmacro drgnx-ui-look-bars--with-bar (&rest body)
   "BODY in a bare frame with one window on an Emacs Lisp buffer, the status bar on, and a right segment `edge' whose
-text is one block on the `region' face.  Everything undone after."
+text is one block on the `region' face.  Everything undone after: the modes, the default mode line and the window's
+parameters (a row that runs the chrome leaves its tab and header lines there; the next look row reuses the window)."
   (declare (indent 0))
   `(let ((state-was (bound-and-true-p drgnx-state-mode)) (bar-was (bound-and-true-p drgnx-statusbar-mode))
+         (mode-line-was (default-value 'mode-line-format))   ; the bar's off adds the modal indicator to it
+         (window (selected-window)) (params-was (window-parameters))   ; the chrome sets its tab and header lines
          (drgnx-statusbar--segments (make-hash-table :test #'eq)) (drgnx-statusbar--errors nil)
          (drgnx-statusbar-left nil) (drgnx-statusbar-right '(edge)) (drgnx-statusbar-compact '(edge))
          (buf (get-buffer-create "*look-bars*")))
@@ -69,6 +73,9 @@ text is one block on the `region' face.  Everything undone after."
          (drgnx-statusbar-mode (if bar-was 1 -1))
          (drgnx-state-mode (if state-was 1 -1)))
        (set-window-parameter (selected-window) 'mode-line-format nil)
+       (when (window-live-p window)
+         (pcase-dolist (`(,p . ,_) (window-parameters window)) (set-window-parameter window p (alist-get p params-was))))
+       (setq-default mode-line-format mode-line-was)
        (kill-buffer buf))))
 
 (defun drgnx-ui-look-bars--right-gap ()
@@ -87,7 +94,7 @@ text is one block on the `region' face.  Everything undone after."
 padding 8 and the segment's own room 6, in logical pixels."
   (round (* 14 (if (fboundp 'frame-scale-factor) (frame-scale-factor) 1.0))))
 
-(ert-deftest drgnx-ui-look-bars/right-edge-in-pixels ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/right-edge-in-pixels ()
   "Pattern D: the rightmost status segment's text ends within 1 device pixel of the window's right edge minus the
 design's room (`drgnx-ui-look-bars--end-room')."
   (skip-unless (display-graphic-p))
@@ -95,7 +102,7 @@ design's room (`drgnx-ui-look-bars--end-room')."
     (let ((want (drgnx-ui-look-bars--end-room)))
       (should (member (drgnx-ui-look-bars--right-gap) (list (1- want) want (1+ want)))))))
 
-(ert-deftest drgnx-ui-look-bars/right-edge-after-zoom ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/right-edge-after-zoom ()
   "Pattern D: after `global-text-scale-adjust' +2 and a change of the code font size, the bar is laid out again:
 the segment still ends the design's room from the edge."
   (skip-unless (display-graphic-p))
@@ -118,7 +125,7 @@ the segment still ends the design's room from the edge."
   "The token NAME of VARIANT as the (R G B) a snapshot pixel holds."
   (mapcar (lambda (c) (round (* 255 c))) (drgnx-color-rgb (drgnx-look-token name variant))))
 
-(ert-deftest drgnx-ui-look-bars/status-bar-height-and-surface ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/status-bar-height-and-surface ()
   "Pattern D: the mode line is round (24 x scale) pixels high, and a pixel of it where no text is equals the `gap'
 token under each of the three themes."
   (skip-unless (display-graphic-p))
@@ -142,7 +149,7 @@ token under each of the three themes."
                                                           px (drgnx-ui-look-bars--token-rgb 'gap variant))))))))))
       (mapc #'disable-theme custom-enabled-themes))))
 
-(ert-deftest drgnx-ui-look-bars/status-bar-height-at-every-density ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/status-bar-height-at-every-density ()
   "Pattern D: after a density change, with no restart, the mode line is round (H x scale) pixels high, H the
 density's `status-bar' (22, 24, 28): an odd difference between the row and its text included."
   (skip-unless (display-graphic-p))
@@ -159,7 +166,7 @@ density's `status-bar' (22, 24, 28): an odd difference between the row and its t
       (should (equal (mapcar (lambda (r) (list (nth 0 r) (nth 1 r))) got)
                      (mapcar (lambda (r) (list (nth 0 r) (nth 2 r))) got))))))
 
-(ert-deftest drgnx-ui-look-bars/one-bar-across-the-window ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/one-bar-across-the-window ()
   "Design §4 (window-dark.png): with two editors side by side there is one bar, the frame's bottom row as wide as the
 frame, the density's `status-bar' high; the editors have no mode line; the bar shows the `edge' block of the editor
 you are in, 14 logical pixels from the frame's right edge."
@@ -191,7 +198,7 @@ you are in, 14 logical pixels from the frame's right edge."
         (let ((drgnx-statusbar-place 'editors)) (drgnx-statusbar--frame-apply) (drgnx-chrome-apply (selected-frame)))
         (delete-other-windows editor)))))
 
-(ert-deftest drgnx-ui-look-bars/double-click-on-the-title-row-is-bound ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/double-click-on-the-title-row-is-bound ()
   "Pattern D: with the top line on, a double click in the tab bar finds Maximize or Restore Window in the keymap Emacs
 builds for the bar (the harness's synthetic clicks do not reach the tab bar's own prefix, so the binding is read, not
 clicked)."
@@ -209,7 +216,7 @@ clicked)."
       (drgnx-topline--off)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-bars/hint-centred ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/hint-centred ()
   "Pattern D: the title row's search box (a block on the `region' face, as wide as the box) is drawn where the row's
 layout puts it (after the left items and the first gap, within 1 device pixel), and the same with the design's chips
 shown as without them: it never moves when a chip comes or goes."
@@ -240,7 +247,7 @@ shown as without them: it never moves when a chip comes or goes."
       (drgnx-topline--off)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-bars/title-row-is-38-px-on-the-gap ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-is-38-px-on-the-gap ()
   "Design §4: the title row is the `title-row' density's height (38 px at the default) and, where nothing is drawn,
 the `gap' token's colour."
   (skip-unless (display-graphic-p))
@@ -261,7 +268,7 @@ the `gap' token's colour."
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-bars/title-row-controls-take-a-real-click ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-controls-take-a-real-click ()
   "Design §4: the title row's window controls are buttons.  A real pointer (mutter's virtual one, through the
 compositor and the shell as a mouse's motion and buttons go; `drgnx-uitest-pointer-click') on Minimise runs its
 registry command, Minimize Window.  On Nidhogg's native shell this needs its line from 0f89eff4 (the tab bar takes a
@@ -296,7 +303,7 @@ real press with its item: NH-TITLE-CLICK-1); the .6 tarball predates it."
       (drgnx-topline--off)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-bars/title-row-control-hover-is-a-circle ()
+(drgnx-look-gui-deftest drgnx-ui-look-bars/title-row-control-hover-is-a-circle ()
   "Design §4 (`.wctl span:hover'): a real pointer (mutter's virtual one) resting on Close lights a 26 px circle in the
 hover colour: about 26 px across through its middle, and a chord of about 14 px 11 px above it (a square would be 26)."
   (skip-unless (display-graphic-p))

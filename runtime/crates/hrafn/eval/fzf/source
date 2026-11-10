@@ -1,0 +1,5 @@
+url https://github.com/junegunn/fzf
+commit c7bf2b8eea25952dd257a466c0afa72faae206fb
+language Go
+licence MIT
+fetched at test time by commit; never vendored

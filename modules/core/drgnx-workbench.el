@@ -32,6 +32,8 @@
 (declare-function drgnx-wb-panel-next-tab "drgnx-actions")
 (declare-function drgnx-help-mode-menu "drgnx-actions")
 (declare-function drgnx-frames-mode "drgnx-frames")
+(declare-function drgnx-pane--frame-replaced "drgnx-panes")
+(declare-function drgnx-popup--frame-replaced "drgnx-popup")
 (declare-function drgnx-frames-move-editor "drgnx-frames")
 (declare-function drgnx-frames-open-editor "drgnx-frames")
 (declare-function drgnx-frames-move-group "drgnx-frames")
@@ -94,6 +96,10 @@
                        ;; The bottom panel and the right dock; popups borrow the panel.
                        (require 'drgnx-area)
                        (require 'drgnx-popup)
+                       ;; A frame replaced by one like it (the echo box's swap): the panes and the popup lanes move.
+                       (drgnx-module-hook 'drgnx-frame-replaced-functions frame-replaced (old new)
+                         (when (featurep 'drgnx-panes) (drgnx-pane--frame-replaced old new))
+                         (drgnx-popup--frame-replaced old new))
                        (drgnx-command-define 'toggle-panel :category "View" :title "Toggle Panel" :scope 'window
                                              :command #'drgnx-wb-toggle-panel :menu '("View") :doc "Show or hide the bottom panel (Terminal, Problems, Output, Results, Help)")
                        (drgnx-command-define 'focus-panel :category "View" :title "Focus Panel" :scope 'window
@@ -175,10 +181,10 @@
                                              :command #'drgnx-wb-show-unrouted :doc "Buffers no placement rule matched (each one is a rule to add)")
                        (drgnx-command-define 'toggle-sidebar :category "View" :title "Toggle Sidebar" :scope 'window
                                              :command #'drgnx-wb-toggle-sidebar :menu '("View") :doc "Show or hide the Buffers panel and the Explorer")
-                       (drgnx-command-define 'view-explorer :category "View" :title "View: Explorer" :scope 'window
+                       (drgnx-command-define 'view-explorer :category "View" :title "Explorer" :scope 'window
                                              :command #'drgnx-wb-view-explorer
                                              :doc "Show the Buffers panel and the Explorer in the sidebar and focus the file tree")
-                       (drgnx-command-define 'view-search :category "View" :title "View: Search" :scope 'window
+                       (drgnx-command-define 'view-search :category "View" :title "Search" :scope 'window
                                              :command #'drgnx-wb-view-search
                                              :doc "Show the Search view in the sidebar and focus it")
                        (drgnx-command-define 'focus-editor :category "View" :title "Focus Editor" :scope 'window

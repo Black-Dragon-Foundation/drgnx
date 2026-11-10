@@ -344,6 +344,10 @@ answered `drgnx-platform-watchdog-margin' seconds after TIMEOUT.  CALLBACK runs 
                                  (lambda (reply) (funcall fn ctx reply))
                                  #'identity))))
 
+(defvar drgnx-platform-moving nil
+  "The frames a move or place is under way for: the window manager may still look for them (by their title, set for
+the while).  Code that replaces a frame waits until it is not here.")
+
 (defun drgnx-platform--move (key timeout frame monitor callback)
   (let* ((ctx (drgnx-platform-ctx frame timeout))
          (spec (drgnx-platform-adapter (plist-get ctx :wm)))
@@ -351,7 +355,11 @@ answered `drgnx-platform-watchdog-margin' seconds after TIMEOUT.  CALLBACK runs 
          (can (drgnx-platform-can-move frame)))
     (if (or (not fn) (not (eq can t)))
         (drgnx-platform--refuse callback (list :error (drgnx-platform--reason can)))
-      (drgnx-platform--operation timeout callback
+      (push frame drgnx-platform-moving)
+      (drgnx-platform--operation timeout
+                                 (lambda (r)
+                                   (setq drgnx-platform-moving (delq frame drgnx-platform-moving))
+                                   (funcall callback r))
                                  (lambda (reply) (funcall fn ctx monitor reply))
                                  (lambda (_r) 'ok)))))
 

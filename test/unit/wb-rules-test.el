@@ -150,7 +150,10 @@
      (should (= n (length (window-list nil 'nomini)))))
    (should-not (drgnx-rules--condition "*t1*" '(display-buffer-pop-up-frame)))
    (should-not (drgnx-rules--condition "*t1*" '((display-buffer-use-some-frame))))
-   (should (drgnx-rules--condition "*t1*" '(display-buffer-same-window)))))
+   (should (drgnx-rules--condition "*t1*" '(display-buffer-same-window)))
+   ;; a caller's own function marked explicit in its alist (the floating palette's frame) wins too
+   (should-not (drgnx-rules--condition "*t1*" '(ignore (drgnx-explicit . t))))
+   (should (drgnx-rules--condition "*t1*" '(ignore)))))
 
 (ert-deftest drgnx-rules/inhibit-same-window-picks-another-editor ()
   ;; I3: C-x 4 b with two editors shows in the other one; with one editor, in it (never a split).

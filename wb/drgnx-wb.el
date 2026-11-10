@@ -59,10 +59,11 @@ follower is not a jank-guard violation (invariant I9).")
 
 (defun drgnx-wb-bar (string &optional filled)
   "STRING as a header row: `drgnx-wb-bar' behind it (under any face it has), and a filler to the window's right edge,
-so the whole row is the bar's colour and not the header line's.  FILLED: STRING already reaches the edge."
+over the right fringe too (the dock's sections have one: the rows' inset), so the whole row is the bar's colour and
+not the header line's.  FILLED: STRING already reaches the edge."
   (let ((s (copy-sequence string)))
     (add-face-text-property 0 (length s) 'drgnx-wb-bar t s)
-    (if filled s (concat s (propertize " " 'display '(space :align-to right) 'face 'drgnx-wb-bar)))))
+    (if filled s (concat s (propertize " " 'display '(space :align-to (+ right right-fringe)) 'face 'drgnx-wb-bar)))))
 
 (defun drgnx-wb-header-with-close (title command help &rest props)
   "TITLE, then the close button for COMMAND (see `drgnx-wb-close-button') at the right edge of the window."
@@ -230,70 +231,195 @@ no gap or padding."
     ((or 'deleted 'conflict) 'drgnx-status-fail)
     (_ 'drgnx-status-info)))
 
-(defun drgnx-wb-row-tail (mark face shown &optional control)
-  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control, SHOWN in
-its real face or hidden until the row is hovered.  CONTROL is the ⋯ by default; a CONTROL with a face of its own (the
-Buffers panel's ● of a modified file) is always shown in it.  The control carries `drgnx-row-control', so a click
-can tell it from the row.  Both are placed from the window's right edge, so the marks of
-all rows line up; the whole string carries the row's mouse face.
-The places are in columns (the measured pixels over the cell), not pixels: the overlay is painted once into a
-buffer that graphical and terminal frames may both show, and each frame reads a column as its own cell, where a
-terminal would read a pixel as a column.  A terminal's last two columns stay free (the last shows the truncation
-`$'), so the tail ends 2 columns in at least, the ⋯ starts 3 in and the mark 4: the same on every frame, whichever
-painted it."
+;;;; Row states (window-dark.html `.row'): one rounded run from the row's start to the card's inset
+
+(defconst drgnx-wb--row-radius 6 "A row's corner radius in logical pixels where the compositor rounds (`--r-btn').")
+(defconst drgnx-wb--row-inset 6
+  "Logical pixels between a row's fill and the card's edge, either side (`.tree' 6px): the dock windows' fringes.")
+
+(defun drgnx-wb-row-box (&optional ring)
+  "A row's `:box': inside the row (negative widths, so nothing moves when it appears), in the fill's own colour (a
+flat button: only its rounded corners show), or with RING (a colour) a 1 px ring in it; rounded where Glitnir draws.
+A ring needs Glitnir: Nidhogg closes a box at a line's end on the tail's last stretch, and the selection puts its face
+on the row's newline too (`drgnx-wb-selection-sync'), so text and tail are one run."
+  (let ((w (- (drgnx-px-line 1))) (glitnir (and (fboundp 'glitnir-active-p) (glitnir-active-p))))
+    `(:line-width (,w . ,w) ,@(if (and ring glitnir) (list :color ring) '(:style flat-button))
+                  ,@(and glitnir (list :corner-radius (drgnx-px drgnx-wb--row-radius))))))
+
+(defun drgnx-wb--focus-colour ()
+  "The focus ring's colour: the theme's `drgnx-focus' ring, or nil."
+  (let ((c (plist-get (face-attribute 'drgnx-focus :box nil t) :color))) (and (stringp c) c)))
+
+(defvar drgnx-wb--hover-faces (make-hash-table :test #'equal)
+  "(LINE RADIUS ROUNDED) → the hover's mouse face, shared by the rows (a scale change adds one).")
+
+(defun drgnx-wb-row-hover-face ()
+  "The mouse face of a row: `drgnx-hover-row' in the row's rounded inside box.  No colour of its own: a theme switch
+reaches it."
+  (let ((key (list (drgnx-px-line 1) (drgnx-px drgnx-wb--row-radius) (and (fboundp 'glitnir-active-p) (glitnir-active-p)))))
+    (or (gethash key drgnx-wb--hover-faces)
+        (progn (when (> (hash-table-count drgnx-wb--hover-faces) 16) (clrhash drgnx-wb--hover-faces))
+               (puthash key `(:inherit drgnx-hover-row :box ,(drgnx-wb-row-box)) drgnx-wb--hover-faces)))))
+
+(defvar drgnx-wb--row-faces nil
+  "((FOCUSED FACE . END)...): the selected row's face and its end (`drgnx-wb--row-end'), made once, so the selection's
+post-command sync only reads them.  Forgotten at a theme switch, a focus change and a new scale
+\(`drgnx-wb--row-faces-clear').")
+
+(defun drgnx-wb--row-faces-clear ()
+  "Forget the selected row's faces (they hold the scale's sizes)."
+  (setq drgnx-wb--row-faces nil))
+
+(defun drgnx-wb--row-faces-entry (focused)
+  "The (FOCUSED FACE . END) entry of `drgnx-wb--row-faces', made on first use."
+  (or (assq focused drgnx-wb--row-faces)
+      (let ((face `(:inherit ,(if focused 'drgnx-selected 'drgnx-selected-inactive)
+                             :box ,(drgnx-wb-row-box (and focused (drgnx-wb--focus-colour))))))
+        (car (push (cons focused (cons face (drgnx-wb--row-end face))) drgnx-wb--row-faces)))))
+
+(defun drgnx-wb-row-face (focused)
+  "The face of the selected row: FOCUSED (its window is the selected one), the selection in the focus ring
+\(`.row.sel.focus', under Glitnir: `drgnx-wb-row-box'); else the inactive selection (`.row.sel', VS Code's inactive
+selection), rounded alike.
+The same object until `drgnx-wb--row-faces-clear'."
+  (cadr (drgnx-wb--row-faces-entry focused)))
+
+(defun drgnx-wb--row-end (face)
+  "The end of a row with no tail: on a graphical frame a stretch in FACE to the text area's right edge (the fringe
+is the inset), invisible on a terminal."
+  (propertize " " 'display '(when (display-graphic-p) space :align-to right) 'invisible t 'face face))
+
+(defun drgnx-wb-row-tail (mark face row &optional control)
+  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control: on a
+graphical frame hidden until the row is hovered (window-dark.html), drawn in the row's colour; on a terminal shown.
+CONTROL is the ⋯ by default; a CONTROL with a face of its own (the Buffers panel's ● of a modified file) is always
+shown in it.  The control carries `drgnx-row-control', so a click can tell it from the row.  ROW is the face of the
+selected row (`drgnx-wb-row-face') or nil: the whole string is in it, as the row's text is (an overlay string takes
+no face from the overlays around it), and its mouse face keeps the selection.
+Both are placed from the window's right edge, so the marks of all rows line up.  The places are in columns (the
+measured pixels over the cell), not pixels: the overlay is painted once into a buffer that graphical and terminal
+frames may both show, and each frame reads a column as its own cell, where a terminal would read a pixel as a column.
+A terminal's last two columns stay free (the last shows the truncation `$'), so the tail ends 2 columns in at least,
+the ⋯ starts 3 in and the mark 4: the same on every frame, whichever painted it.  A graphical frame then stretches
+the tail on to the text area's right edge (`drgnx-wb--row-end'), so the fill, the hover and the ring end at the
+card's inset."
   (pcase-let* ((`(,dots ,mark-px ,gap ,pad ,cell) (drgnx-wb--tail-geometry))
                (cell (float cell))
                (end (max 2.0 (/ pad cell)))
                (at-dots (max 3.0 (+ end (/ dots cell))))
-               (at-mark (max 4.0 (+ at-dots (/ (+ gap mark-px) cell)))))
-    (propertize (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
-                        (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
-                        (propertize " " 'display `(space :align-to (- right ,at-dots)))
-                        (let ((c (or control drgnx-wb--control)))
-                          (propertize (if (get-text-property 0 'face c) c (drgnx-look-hover-control c shown))
-                                      'drgnx-row-control t))
-                        (propertize " " 'display `(space :align-to (- right ,end))))
-                'mouse-face 'drgnx-hover-row)))
+               (at-mark (max 4.0 (+ at-dots (/ (+ gap mark-px) cell))))
+               (c (or control drgnx-wb--control))
+               (c (if (get-text-property 0 'face c) c
+                    (let ((hidden (drgnx-look-hover-control c nil)))
+                      ;; hidden in the selection's colour on the selected row
+                      (if (and row (eq (get-text-property 0 'face hidden) 'drgnx-control-hidden))
+                          (propertize c 'face (list :foreground (face-background (plist-get row :inherit) nil t)))
+                        hidden))))
+               (s (concat (propertize " " 'display `(space :align-to (- right ,at-mark)))
+                          (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
+                          (propertize " " 'display `(space :align-to (- right ,at-dots)))
+                          (propertize c 'drgnx-row-control t)
+                          ;; the terminal's end; on a graphical frame a plain space, so the row's end is a stretch
+                          ;; of its own: Emacs draws a run of adjacent stretches with the first one's box edges, and
+                          ;; Nidhogg puts the closing edge on the last
+                          (propertize " " 'display `(when (not (display-graphic-p)) space :align-to (- right ,end)))
+                          (drgnx-wb--row-end nil))))
+    (when row (add-face-text-property 0 (length s) row t s))
+    (put-text-property 0 (length s) 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)) s)
+    s))
 
-(defun drgnx-wb-row-tail-overlay (eol mark face shown &optional control)
-  "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay that remembers MARK, FACE and
-CONTROL."
-  (let ((o (make-overlay eol eol)))
-    (overlay-put o 'drgnx-git t)
-    (overlay-put o 'drgnx-row-tail (list mark face control))
-    (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown control))
-    o))
+(defun drgnx-wb--row-mouse-face (row)
+  "The mouse face of the selected row in ROW: the selection stays (`.row.sel' outranks `:hover'), with the body
+text's colour, which shows the hidden control."
+  (append (list :foreground (face-foreground 'default nil t)) row))
 
 (defvar-local drgnx-wb--selected-overlay nil "The overlay on the selected row (point's).")
-(defvar-local drgnx-wb--tail-shown nil "The tail overlay whose ⋯ is drawn in its real face now.")
+(defvar-local drgnx-wb--selected-tail nil "The tail overlay drawn in the selected row's face now.")
+(defvar-local drgnx-wb--selected-newline nil
+  "The overlay putting the selected row's face on its newline: the face at the line's end then has the row's box,
+so Emacs runs the box on into the tail at the end instead of closing it after the text.")
 
-(defun drgnx-wb--set-tail-shown (o shown)
-  "Redraw the tail overlay O with its ⋯ SHOWN or hidden."
-  (when (overlayp o)
+(defun drgnx-wb-row-tail-overlay (eol mark face &optional control)
+  "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay over the row that remembers MARK,
+FACE and CONTROL and carries the row's mouse face (Emacs lights an overlay's string with its text: one run).  On the
+selected row (the selection overlay's, `drgnx-wb-selection-sync') it is drawn in the selection's face, and becomes
+the tail the next sync draws plain again when the selection moves."
+  (let* ((bol (save-excursion (goto-char eol) (pos-bol)))
+         (o (make-overlay bol eol))
+         (sel drgnx-wb--selected-overlay)
+         (row (and (overlayp sel) (eq (overlay-buffer sel) (current-buffer)) (= bol (overlay-start sel))
+                   (overlay-get sel 'face))))
+    (overlay-put o 'drgnx-git t)
+    (overlay-put o 'drgnx-row-tail (list mark face control))
+    (drgnx-wb--tail-paint o row)
+    (when row (setq drgnx-wb--selected-tail o))
+    o))
+
+(defun drgnx-wb--tail-paint (o row)
+  "Draw the tail overlay O for a row in face ROW (nil: not selected), unless it already is.  An overlay that ends
+its row its own way (its `drgnx-row-end' is its end, `drgnx-wb--row-end') gets the selection's end while selected,
+and its own back after."
+  (cond
+   ((not (overlayp o)))
+   ((overlay-get o 'drgnx-row-end)
+    (overlay-put o 'after-string (if row (drgnx-wb--row-end row) (overlay-get o 'drgnx-row-end))))
+   ((or (not (overlay-get o 'after-string)) (not (eq row (overlay-get o 'drgnx-row-face))))
     (pcase-let ((`(,mark ,face ,control) (overlay-get o 'drgnx-row-tail)))
-      (overlay-put o 'after-string (drgnx-wb-row-tail mark face shown control)))))
+      (overlay-put o 'drgnx-row-face row)
+      (overlay-put o 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)))
+      (overlay-put o 'after-string (drgnx-wb-row-tail mark face row control))))))
+
+
+(defun drgnx-wb--focused-p ()
+  "Non-nil when the current buffer's window is the selected window."
+  (let ((window (get-buffer-window (current-buffer)))) (and window (eq window (selected-window)))))
 
 (defun drgnx-wb-selection-sync ()
-  "Mark point's row as the selected one: `drgnx-selected' with the focus ring while this buffer's window is the
-selected window, `drgnx-selected-quiet' otherwise.  The row's ⋯ is shown in its real face, the previous row's hidden
-again.  Cheap: two overlays are touched."
-  (let* ((window (get-buffer-window (current-buffer))) (focused (and window (eq window (selected-window))))
-         (beg (pos-bol)) (end (min (point-max) (1+ (pos-eol)))))
+  "Mark point's row as the selected one (`drgnx-wb-row-face'): the selection with the focus ring while this
+buffer's window is the selected window, the inactive selection otherwise.  The fill covers the row's text, its tail
+\(drawn again in the face) or, on a row with none, a stretch to the right edge.  Cheap: three overlays at most are
+touched.  A line marked `drgnx-row-inert' (an empty state) is text, not a row: nothing is selected on it."
+  (if (get-text-property (pos-bol) 'drgnx-row-inert)
+      (drgnx-wb--selection-off)
+    (drgnx-wb--selection-on)))
+
+(defun drgnx-wb--selection-off ()
+  "No row is selected: point is on an empty state (`drgnx-row-inert'), which is text, not a row."
+  (dolist (o (list drgnx-wb--selected-overlay drgnx-wb--selected-newline))
+    (when (overlayp o) (delete-overlay o)))
+  (drgnx-wb--tail-paint drgnx-wb--selected-tail nil)
+  (setq drgnx-wb--selected-tail nil))
+
+(defun drgnx-wb--selection-on ()
+  "`drgnx-wb-selection-sync' on a row."
+  (let* ((beg (pos-bol)) (end (pos-eol)) (entry (drgnx-wb--row-faces-entry (drgnx-wb--focused-p)))
+         (face (cadr entry)) (tail nil))
     (unless (overlayp drgnx-wb--selected-overlay)
       (setq drgnx-wb--selected-overlay (make-overlay beg end nil t))
       (overlay-put drgnx-wb--selected-overlay 'drgnx-row-selected t)
       (overlay-put drgnx-wb--selected-overlay 'priority 5))
     (move-overlay drgnx-wb--selected-overlay beg end)
-    (overlay-put drgnx-wb--selected-overlay 'face (if focused '(drgnx-selected drgnx-focus) 'drgnx-selected-quiet))
-    (let ((now nil))                    ; post-command: a primitive loop, no closure
-      (dolist (o (overlays-in beg end)) (when (and (not now) (overlay-get o 'drgnx-row-tail)) (setq now o)))
-      (unless (eq now drgnx-wb--tail-shown)
-        (drgnx-wb--set-tail-shown drgnx-wb--tail-shown nil)
-        (drgnx-wb--set-tail-shown now t)
-        (setq drgnx-wb--tail-shown now)))))
+    (unless (eq face (overlay-get drgnx-wb--selected-overlay 'face))
+      (overlay-put drgnx-wb--selected-overlay 'face face))
+    (unless (overlayp drgnx-wb--selected-newline)
+      (setq drgnx-wb--selected-newline (make-overlay end end nil t))
+      (overlay-put drgnx-wb--selected-newline 'priority 5))
+    (move-overlay drgnx-wb--selected-newline end (min (point-max) (1+ end)))
+    (unless (eq face (overlay-get drgnx-wb--selected-newline 'face))
+      (overlay-put drgnx-wb--selected-newline 'face face))
+    (dolist (o (overlays-in beg (min (point-max) (1+ end))))   ; post-command: a primitive loop, no closure
+      (when (and (not tail) (or (overlay-get o 'drgnx-row-tail) (overlay-get o 'drgnx-row-end))) (setq tail o)))
+    (let ((after (and (not tail) (cddr entry))))
+      (unless (eq after (overlay-get drgnx-wb--selected-overlay 'after-string))
+        (overlay-put drgnx-wb--selected-overlay 'after-string after)))
+    (unless (eq tail drgnx-wb--selected-tail) (drgnx-wb--tail-paint drgnx-wb--selected-tail nil))
+    (drgnx-wb--tail-paint tail face)
+    (setq drgnx-wb--selected-tail tail)))
 
 (defun drgnx-wb--selected-changed (_data)
-  "The store's `selected-changed': the dock buffers' selected rows follow the focus (ring or quiet)."
+  "The store's `selected-changed', and a theme enabled or disabled: the dock buffers' selected rows follow the focus
+\(ring or inactive) and the theme."
+  (drgnx-wb--row-faces-clear)
   (dolist (w (drgnx-wb--dock-windows))
     (with-current-buffer (window-buffer w)
       (when (local-variable-p 'drgnx-wb--selected-overlay) (drgnx-wb-selection-sync)))))
@@ -314,22 +440,31 @@ properties instead was measured dearer still (the perf lab's explorer allocation
 remap)."
   ;; the island's surface (window-dark.html `.card.ex': `--panel'), under the UI font
   (face-remap-add-relative 'default 'drgnx-ui-text 'drgnx-surface-panel)
-  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--tail-shown nil drgnx-wb--rows-key nil)
+  ;; the fringes are the rows' inset (`drgnx-wb--rows-fit'): in the island's colour, not the editor's
+  (face-remap-add-relative 'fringe 'drgnx-surface-panel)
+  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--selected-tail nil drgnx-wb--selected-newline nil
+              drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
   (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
   (drgnx-wb--rows-fit (let ((w (get-buffer-window nil t))) (if w (window-frame w) (selected-frame)))))
 
 (defun drgnx-wb--rows-fit (frame)
   "Give the current dock buffer the density's tree row on FRAME (its `line-spacing'), when FRAME is graphical and
-what the spacing depends on moved since: the row at FRAME's scale, FRAME's line height, the fonts.  A terminal frame
-leaves the spacing as it is."
+what the spacing depends on moved since: the row at FRAME's scale, FRAME's line height, the fonts.  Its fringes become
+the rows' inset (`drgnx-wb--row-inset').  A terminal frame leaves the spacing as it is."
   (when (and (fboundp 'drgnx-look-ui-line-spacing) (frame-live-p frame) (display-graphic-p frame))
     (let* ((scale (drgnx-pixels-scale frame))
            (key (+ (round (* scale (drgnx-look-density-value 'tree-row))) (* 1000 (frame-char-height frame))
                    (* 1000000 (mod drgnx-pixels-generation 1000)))))
       (unless (eql key drgnx-wb--rows-key)
         (setq-local drgnx-wb--rows-key key)
-        (setq-local line-spacing (drgnx-look-ui-line-spacing (drgnx-wb--natural-row-height frame) nil scale))))))
+        (setq-local line-spacing (drgnx-look-ui-line-spacing (drgnx-wb--natural-row-height frame) nil scale))
+        ;; the rows' inset either side: the fringes, in the panel's colour (`drgnx-wb-rows-setup')
+        (drgnx-wb--row-faces-clear)                ; their sizes are the scale's
+        (let ((inset (drgnx-px drgnx-wb--row-inset frame)))
+          (setq-local left-fringe-width inset right-fringe-width inset)
+          (dolist (w (get-buffer-window-list nil nil t))
+            (when (eq (window-frame w) frame) (set-window-fringes w inset inset))))))))
 
 (defun drgnx-wb-rows-refresh (&optional frame)
   "Fit the dock buffers' rows again (`drgnx-wb--rows-fit'): those shown on FRAME, or with no FRAME every one, on the
@@ -340,17 +475,74 @@ frame that shows it (else the selected frame).  On `drgnx-look-density-changed-h
       (when (or w (null frame))
         (with-current-buffer b (drgnx-wb--rows-fit (if w (window-frame w) (selected-frame))))))))
 
+(defun drgnx-wb--row-px (frame)
+  "The height of one dock row on FRAME in pixels: the tree row at FRAME's scale on a graphical frame, else a line."
+  (if (and (display-graphic-p frame) (fboundp 'drgnx-look-density-value))
+      (round (* (drgnx-pixels-scale frame) (drgnx-look-density-value 'tree-row)))
+    (frame-char-height frame)))
+
+(defun drgnx-wb--rows-whole (frame)
+  "Make each dock section on graphical FRAME that has another below it show whole rows: its bottom edge moves up by
+what is left over below its last whole row (the section below takes it), so no part of a row is drawn at a section's
+foot.  Only UI-row buffers (`drgnx-wb-rows-setup'); a second call changes nothing."
+  (when (and (display-graphic-p frame) (fboundp 'drgnx-look-density-value))
+    (let ((window-resize-pixelwise t))
+      (dolist (w (sort (drgnx-wb--dock-windows frame) (lambda (a b) (< (window-pixel-top a) (window-pixel-top b)))))
+        (when-let* (((window-live-p w))
+                    ((memq (window-buffer w) drgnx-wb--rows-buffers))
+                    (below (window-in-direction 'below w t))   ; T: the sections are `no-other-window'
+                    ((eq (window-parameter below 'drgnx-role) 'dock))
+                    (row (drgnx-wb--row-px frame))   ; the rows' height
+                    ((> row 0))
+                    (over (mod (window-body-height w t) row))
+                    ((> over 0)))
+          (ignore-errors (adjust-window-trailing-edge w (- over) nil t)))))))
+
+(defun drgnx-wb--fit-window (w)
+  "Make dock section window W as tall as its buffer's rows and its header (VS Code's Open Editors), at most its
+section's `:fit' fraction of the frame, where it holds whole rows and scrolls; no rows: the header and the one text
+line Emacs keeps in a live window.  Its bottom
+edge moves (the section below takes the rest).  A second call changes nothing."
+  (when-let* (((window-live-p w))
+              (frame (window-frame w))
+              (cap (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :fit))
+              (row (drgnx-wb--row-px frame))
+              ((> row 0))
+              ((window-in-direction 'below w t)))
+    (let* ((rows (with-current-buffer (window-buffer w) (count-lines (point-min) (point-max))))
+           (chrome (- (window-pixel-height w) (window-body-height w t)))
+           (most (* row (max 0 (/ (- (floor (* cap (frame-inner-height frame))) chrome) row))))
+           (delta (- (min most (* rows row)) (window-body-height w t)))
+           (window-resize-pixelwise t)
+           (window-min-height 1))                       ; no rows: the header and one line, not four
+      (unless (zerop delta)
+        (ignore-errors (adjust-window-trailing-edge w delta nil t))))))
+
+(defun drgnx-wb-fit-sections (&optional buffer)
+  "Fit the dock sections that fit their rows (`:fit', `drgnx-wb--fit-window'): those showing BUFFER, or every one.
+From the section's render when its rows change and on the store's window and frame-size changes; never in redisplay."
+  (dolist (frame (frame-list))
+    (dolist (w (drgnx-wb--dock-windows frame))
+      (when (or (null buffer) (eq (window-buffer w) buffer)) (drgnx-wb--fit-window w)))))
+
 (defun drgnx-wb--rows-frame-changed (data)
   "The store's `windows-changed' and `frame-resized' (idle): the dock buffers FRAME shows fit its scale (a dock
-buffer made before any graphical frame, in a daemon, gets its rows when one first shows it)."
-  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame))) (drgnx-wb-rows-refresh frame)))
+buffer made before any graphical frame, in a daemon, gets its rows when one first shows it), and its sections show
+whole rows (`drgnx-wb--rows-whole') after the sections that fit their rows are fitted (`drgnx-wb--fit-window')."
+  (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
+    (drgnx-wb-rows-refresh frame)
+    (dolist (w (drgnx-wb--dock-windows frame)) (drgnx-wb--fit-window w))
+    (drgnx-wb--rows-whole frame)))
 
 (defun drgnx-wb-rows-follow ()
   "The dock's rows follow the density, the scale and the frames that show them.  From a dock section's setup (the
 subscriptions and the hook are recorded there, and go with the module)."
   (drgnx-state-subscribe 'windows-changed #'drgnx-wb--rows-frame-changed)
   (drgnx-state-subscribe 'frame-resized #'drgnx-wb--rows-frame-changed)
-  (add-hook 'drgnx-look-density-changed-hook #'drgnx-wb-rows-refresh))
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-wb-rows-refresh)
+  ;; the selected row's face holds the focus ring's colour: a theme switch draws it again
+  (add-hook 'enable-theme-functions #'drgnx-wb--selected-changed)
+  (add-hook 'disable-theme-functions #'drgnx-wb--selected-changed))
 
 (defun drgnx-wb--natural-row-height (&optional frame)
   "The height in pixels of a dock row on FRAME (default: the selected one) before any line spacing: text in the UI
@@ -373,7 +565,8 @@ them sets the line)."
 
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
-:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
+:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :fit FRACTION: as tall as the buffer's
+lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title).
@@ -456,6 +649,11 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
         (set-window-scroll-bars w nil nil nil nil t)        ; a clean sidebar, like VS Code's
         ;; After the scroll bars: Emacs keeps the width only while it equals the body width it recorded (I11)
         (window-preserve-size w t t))
+      (dolist (w (drgnx-wb--dock-windows))                     ; Open: as tall as its rows
+        (when (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :fit)
+          ;; again when its body changes size: the header line's height is known after the first redisplay
+          (with-current-buffer (window-buffer w) (add-hook 'window-size-change-functions #'drgnx-wb--fit-window nil t))
+          (drgnx-wb--fit-window w)))
       (drgnx-wb-island-refresh)
       (unless (eq (selected-window) selected) (select-window selected 'norecord))
       (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)
@@ -468,6 +666,12 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
   (when-let* ((windows (drgnx-wb--dock-windows)))
     (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
+    (drgnx-wb--delete-dock windows)))
+
+(defun drgnx-wb--delete-dock (windows)
+  "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
+dock takes it back, so a hide and a show leave each group as wide as it was."
+  (let ((window-combination-resize t))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
@@ -487,7 +691,7 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
       (when-let* ((windows (drgnx-wb--dock-windows)))
         (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
-        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+        (drgnx-wb--delete-dock windows))
       (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))

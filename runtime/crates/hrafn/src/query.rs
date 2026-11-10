@@ -5,7 +5,8 @@
 //!   test, then by kind). Prefix and trigram matches on names, from the identifier-like tokens of the question, add a
 //!   ranked list that is never pinned. A token that names a file (a path, a file name, a file's stem) adds a path
 //!   list. Identifier tokens are exact phrases on the `symbols` column and their parts a phrase on `doc` and `body`;
-//!   the other words are OR'ed over `doc` and `body`; `bm25(chunk_fts, 5, 5, 2, 1)` ranks them.
+//!   the other words are OR'ed over `doc` and `body`; `bm25(chunk_fts, 5, 5, 2, 1)` ranks them on the FTS index,
+//!   and the view's predicate is applied to the ranked candidates until the list is full.
 //! - **Vectors** (when the caller gives the query's vector and its model) are scanned by Hamming distance over the sign
 //!   bits, and the nearest [`SCAN`] re-ranked by their int8 values.
 //! - **Fusion** is RRF with k = 60. A chunk of a test file or a generated file keeps [`DEMOTE`] of its score.
@@ -211,8 +212,8 @@ pub(crate) fn kind_rank(kind: &str) -> u8 {
     match kind {
         "function" | "defun" | "fn" => 0,
         "macro" => 1,
-        "method" => 2,
-        "struct" | "class" | "type" | "enum" | "trait" => 3,
+        "method" | "constructor" => 2,
+        "struct" | "class" | "type" | "enum" | "trait" | "interface" | "record" => 3,
         "variable" | "const" | "static" => 4,
         _ => 5,
     }
@@ -460,13 +461,44 @@ fn signs(c: &Connection, model: &str, dims: usize, bytes: usize) -> rusqlite::Re
     Ok(out)
 }
 
-/// The keyword list (?1 the MATCH, ?2 its length). FTS5 gives no top-N guarantee, so the whole match set is scored;
-/// with shared content that set is about the distinct content, not trees times content.
-pub const KEYWORD_SQL: &str = concat!(
-    "select chunk_fts.rowid from chunk_fts join chunk c on c.id = chunk_fts.rowid cross join ",
-    seen_through!("c", "?3"),
-    " where chunk_fts match ?1 and f.blob = c.blob order by bm25(chunk_fts, 5, 5, 2, 1) limit ?2"
+/// The keyword ranking (?1 the MATCH, ?2 how many), on the FTS index alone: every match is scored (with shared content,
+/// once per distinct content, not per tree), the rowid breaking ties so a longer ranking extends a shorter one.
+pub const KEYWORD_RANK_SQL: &str = "select rowid from chunk_fts where chunk_fts match ?1 \
+     order by bm25(chunk_fts, 5, 5, 2, 1), rowid limit ?2";
+
+/// Whether the view (?2) sees chunk ?1.
+pub const VISIBLE_SQL: &str = concat!(
+    "select 1 from chunk c cross join ",
+    seen_through!("c", "?2"),
+    " where c.id = ?1 and f.blob = c.blob"
 );
+
+/// The keyword list: the best LIST chunks for the MATCH M that VIEW sees. FTS5 ranks first, on its own index
+/// ([`KEYWORD_RANK_SQL`], a top-N sort), and the view's predicate ([`VISIBLE_SQL`], two primary-key probes) is then
+/// applied in rank order until LIST are seen: still before the limit (H16 overlay design §4), but only on candidates
+/// that can enter the list. Joining every match before ranking was 80 of the query's 143 ms at 50,000 chunks, where a
+/// common word matches 40,000 of them. When the view hides most of the best (another tree's content), the ranking is
+/// asked again for four times as many.
+fn keywords(c: &Connection, m: &str, view: View) -> rusqlite::Result<Vec<i64>> {
+    let mut visible = c.prepare(VISIBLE_SQL)?;
+    let mut out = Vec::new();
+    let (mut checked, mut n) = (0, 4 * LIST);
+    loop {
+        let ranked = ids(c, KEYWORD_RANK_SQL, params![m, n as i64])?;
+        for id in &ranked[checked.min(ranked.len())..] {
+            if visible.exists(params![id, view.tree()])? {
+                out.push(*id);
+                if out.len() == LIST {
+                    return Ok(out);
+                }
+            }
+        }
+        if ranked.len() < n {
+            return Ok(out);
+        }
+        (checked, n) = (ranked.len(), n * 4);
+    }
+}
 
 fn lists(
     c: &Connection,
@@ -500,7 +532,7 @@ fn lists(
     }
     if let Some(m) = fts_match(&tokens, whole) {
         // a MATCH the engine cannot read (a stray operator) is no list, not an error
-        if let Ok(found) = ids(c, KEYWORD_SQL, params![m, LIST as i64, view.tree()]) {
+        if let Ok(found) = keywords(c, &m, view) {
             out.ranked.push(("keyword", found));
         }
     }
@@ -804,5 +836,80 @@ mod tests {
             .unwrap();
         assert_eq!(pinned.len(), 35);
         assert!(pinned.iter().all(|id| base.contains(id)));
+    }
+
+    /// Pattern D. 500 chunks only a worktree has outrank 150 of the base's on the keyword (a shorter body that says it
+    /// more often): the Base view's keyword list is still LIST base chunks, best first, and the tree's view still
+    /// starts with its own.
+    #[tokio::test]
+    async fn keyword_list_filters_before_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = CodeStore::open(&dir.path().join("p.db")).unwrap();
+        let t = s.tree_open("wt", "/w", "/g", DoorKind::Cli).await.unwrap();
+        let chunk = |path: &str, i: usize, body: &str| {
+            let text = format!("{path} {i} {body}");
+            ChunkIn {
+                start: 0,
+                end: 1,
+                line_start: i as u32 + 1,
+                line_end: i as u32 + 1,
+                symbol: None,
+                key: vec_key(1, &text),
+                embed: true,
+                embed_text: text,
+                symbols: String::new(),
+                doc: String::new(),
+                body: body.into(),
+            }
+        };
+        let mut tree = HashSet::new();
+        for f in 0..50 {
+            let path = format!("t{f}.el");
+            let cs = (0..10).map(|i| chunk(&path, i, "walrus walrus")).collect();
+            tree.extend(
+                s.write_file(View::Tree(t), row(&path, &format!("T{f}")), cs, vec![])
+                    .await
+                    .unwrap(),
+            );
+        }
+        let mut base = HashSet::new();
+        for f in 0..15 {
+            let path = format!("b{f}.el");
+            let cs = (0..10)
+                .map(|i| {
+                    chunk(
+                        &path,
+                        i,
+                        &format!("walrus and the {i} other words of a longer body"),
+                    )
+                })
+                .collect();
+            base.extend(
+                s.write_file(View::Base, row(&path, &format!("B{f}")), cs, vec![])
+                    .await
+                    .unwrap(),
+            );
+        }
+        let m = fts_match(&["walrus".to_string()], false).unwrap();
+        let (b, w) = s
+            .handle()
+            .read(move |c| {
+                Ok((
+                    keywords(c, &m, View::Base)?,
+                    keywords(c, &m, View::Tree(t))?,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(b.len(), LIST, "{} base hits", b.len());
+        assert!(
+            b.iter().all(|id| base.contains(id)),
+            "a hidden chunk in the base's list"
+        );
+        assert_eq!(w.len(), LIST);
+        assert!(
+            w.iter().all(|id| tree.contains(id)),
+            "the tree's own chunks rank first in its view"
+        );
     }
 }

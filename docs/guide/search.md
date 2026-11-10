@@ -92,6 +92,33 @@ narrow it. `outline` lists one file's definitions in order, with their lines, ne
 answer from the index, so a file search leaves out (see [What is never indexed](#what-is-never-indexed)) is never in
 them, and both end with how current the index is ("index: current", or how many files are waiting).
 
+**The repo map**
+
+```
+drgnx search map ROOT [--budget N] [--focus FILE]… [--name ID]… [--scope code|all] [--json]
+```
+
+`map` gives a first look at a project: the definitions the rest of the code refers to most, as their signatures with
+their line numbers, grouped by file, members indented under what holds them and `⋮` where rows of a file are left out.
+It ranks files the way Aider's repo map does: by PageRank over which file uses names that which file defines. `--focus`
+centres the ranking on the files you are working on (what they use, and what uses them, comes first; the files
+themselves are not listed) and `--name` raises the definitions of names you care about. The map holds as many
+definitions as fit `--budget` tokens (2,000 by default, 256 to 32,000). The token count is an estimate, a character
+count divided by four, and the last line says so: `map: 41 files of 1,203, ~1,980 tokens (estimate), budget 2,000`.
+Tests and docs are left out unless `--scope all`.
+
+**Finding usages**
+
+```
+drgnx search usages ROOT NAME [--scope code|tests|docs|all] [-k N] [--json]
+```
+
+`usages` says where NAME is defined, then lists the files that use it: the first line, the definition the use is in
+(or "(top level)"), how often the file uses it and its first few lines, e.g.
+`src/user.rs:2  in use_widget  ×1  [lines 2]`. Code comes first, ranked by how central the using file is, then tests.
+It is **by name only**: there is no type resolution, so a same-named method of another type, or a local of the same
+name in another scope, shows up too. Uses inside the name's own definition (a recursive call) are left out.
+
 **The MCP tools**
 
 `drgnx search mcp [ROOT]` serves the search tools over stdio (ROOT defaults to the current directory); their questions
@@ -102,6 +129,8 @@ go to the hub.
 | `search` | `query` (required, in words or a name), `scope`, `k` (1 to 50, default 10) | the best chunks, as `search query` prints them |
 | `symbols` | `name` (required), `match`, `kind` (a list), `path` (a glob), `scope` (default `all`), `k` (1 to 100, default 20) | where names are defined, as `search symbols` prints them |
 | `outline` | `path` (required, relative to the project), `docs` (default true) | one file's definitions, as `search outline` prints them |
+| `repo_map` | `budget` (256 to 32,000, default 2,000), `focus` (up to 50 files), `names` (up to 50), `scope` (`code` or `all`) | the map, as `search map` prints it |
+| `find_usages` | `name` (required), `scope` (default `all`), `k` (1 to 100, default 20) | where the name is used, as `search usages` prints it |
 
 Paths an agent names are relative to the project and stay inside it. The agents
 drgnx starts get the same tools on a socket of their own, pinned to their job's project, when `settings.el` says
@@ -126,6 +155,9 @@ An agent has no other way in: the hub's `search/*` methods are the editor's.
   catches up after a branch switch once git's lock is gone. Tier 2 makes the vectors, with the built-in model and with
   each server that answers, in the background: capped in memory, at low priority, paced so that typing keeps its
   frame, and held back on battery until AC (Index Project with `--now` overrides that).
+- **Languages.** Emacs Lisp, Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java are parsed: their chunks follow
+  definitions, and their definitions are what `symbols` and `outline` list. Org and Markdown follow headings; other
+  text is cut into windows of lines, with no definitions.
 - **Content-keyed.** A vector belongs to the text of its chunk (and the chunker's version), so a file that changed only
   re-embeds the chunks that changed, and switching to another branch and back embeds nothing.
 - **Which model answers.** A running server whose vectors cover at least 95 % of the project's chunks is used; else
@@ -214,6 +246,11 @@ linear in tokens, so throughput is in tokens.
 | Built-in model on 4 CPU cores | 680 tokens/s (about 1 chunk/s) |
 | One question embedded | 50 ms (95th percentile) |
 | A query, warm, 50,000 chunks | 100 ms (95th percentile) |
+| A query, warm, 100,000 chunks | 200 ms (95th percentile) |
+| The repo map, 50,000 chunks: first after a change (the graph built) / then | 1 s / 150 ms (95th percentile) |
+| Usages of a name, 50,000 chunks | 50 ms (95th percentile) |
+| Symbols / a file's outline, 50,000 chunks | 20 ms / 10 ms (95th percentile) |
+| The reference graphs kept between maps | 64 MB |
 | The editor's main thread per answer | 16 ms (it only renders) |
 | The embed worker's memory | 1.5 GiB, unloaded after 5 idle minutes |
 

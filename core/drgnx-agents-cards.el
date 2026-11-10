@@ -86,10 +86,10 @@ result, which `drgnx doctor' shows on its agent-browser line.  It takes a few se
 
 (defun drgnx-agents-cards-register-commands ()
   "The permission card commands (`drgnx--core-commands' calls this)."
-  (drgnx-command-define 'agents-browser-check :category "Agents" :title "Agents: Check the Agent Browser"
+  (drgnx-command-define 'agents-browser-check :category "Agents" :title "Check the Agent Browser"
                         :command #'drgnx-agents-browser-check
                         :doc "Run a throwaway browser session and take a screenshot in it; the doctor's agent-browser line shows the result")
-  (drgnx-command-define 'agents-answer-card :category "Agents" :title "Agents: Answer Permission Card"
+  (drgnx-command-define 'agents-answer-card :category "Agents" :title "Answer Permission Card"
                         :command #'drgnx-agents-answer-card
                         :doc "Answer a permission card that lists its answers (the agent browser's): once, this session, this plan, a wider target, or refuse"))
 

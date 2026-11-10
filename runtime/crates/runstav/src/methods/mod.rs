@@ -303,6 +303,8 @@ params! {
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),
     SearchOutline(search::OutlineParams),
+    SearchMap(search::MapParams),
+    SearchUsages(search::UsagesParams),
     SearchGrepReplace(search::GrepReplaceParams),
     SearchGrepLook(search::GrepLookParams),
     SearchGrepSkipped(search::GrepSkippedParams),

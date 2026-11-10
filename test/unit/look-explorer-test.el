@@ -6,6 +6,7 @@
 (require 'cl-lib)
 (require 'drgnx)
 (load (expand-file-name "test/unit/wb-explorer-edge-test" drgnx-dir) nil t)   ; its fixtures: a root with files
+(load (expand-file-name "themes/drgnx-theme-gen" drgnx-dir) nil t)
 
 (defmacro drgnx-look-explorer-test--as (kind status &rest body)
   "BODY with the selected frame's kind stubbed to KIND (`gui' or `tty') and every file's git status STATUS."
@@ -114,44 +115,162 @@ made once and not again for another redraw of the same rows."
   (should (eq 'drgnx-status-ok (drgnx-wb-git-mark-face 'added)))
   (should (eq 'drgnx-status-fail (drgnx-wb-git-mark-face 'deleted))))
 
+(defun drgnx-look-explorer-test--faces (v)
+  "The faces of a `face' property value V, as a list (a lone anonymous face is a plist, not a list of faces)."
+  (if (keywordp (car-safe v)) (list v) (ensure-list v)))
+
+(defun drgnx-look-explorer-test--selected (buf)
+  "The selection overlay of BUF."
+  (with-current-buffer buf
+    (car (seq-filter (lambda (o) (overlay-get o 'drgnx-row-selected)) (overlays-in (point-min) (point-max))))))
+
 (ert-deftest drgnx-look-explorer/selected-and-quiet ()
-  "Pattern D: the row at point is `drgnx-selected' with the focus ring while the Explorer's window is the selected
-one, and `drgnx-selected-quiet' when another window is."
+  "Pattern D, window-dark.html `.row.sel.focus' and `.row.sel': the row at point is the selection while the
+Explorer's window is the selected one, and the inactive selection when another window is (as VS Code's inactive
+selection).  Both are an inside box: no width changes when a row is selected.  The focused one is ringed in the
+focus colour (`drgnx-focus''s ring); the inactive one's box is its fill's own colour.  The row's newline carries the
+selection's face too, so its text and its tail are one box run (one ring, no seam between them).  Under the dark
+theme (the ring's colour is a theme's), with Glitnir drawing (the ring needs it)."
   (drgnx-explorer-edge--with root
     (drgnx-look-explorer-test--as 'gui nil
-      (let ((buf (drgnx-explorer--buffer)) (row (drgnx-look-explorer-test--row "README.md")))
+      (cl-letf* (((symbol-function 'glitnir-active-p) #'always)
+                 (buf (drgnx-explorer--buffer)) (row (drgnx-look-explorer-test--row "README.md"))
+                 (was custom-enabled-themes))
+        (mapc #'disable-theme custom-enabled-themes)
+        (load-theme 'drgnx-dark t)
+        (drgnx-wb--row-faces-clear)
         (set-window-buffer (selected-window) buf)
         (with-current-buffer buf (goto-char row) (drgnx-wb-selection-sync))
-        (let ((o (with-current-buffer buf (car (seq-filter (lambda (o) (overlay-get o 'drgnx-row-selected))
-                                                           (overlays-in (point-min) (point-max)))))))
-          (should (equal '(drgnx-selected drgnx-focus) (overlay-get o 'face)))
+        (let* ((o (drgnx-look-explorer-test--selected buf)) (face (overlay-get o 'face))
+               (box (plist-get face :box)))
+          (should (eq 'drgnx-selected (plist-get face :inherit)))
+          (should (equal (list nil (plist-get (face-attribute 'drgnx-focus :box nil t) :color))
+                         (list (plist-get box :style) (plist-get box :color))))
+          (should (stringp (plist-get box :color)))
+          (should (< (car (plist-get box :line-width)) 0))
           (should (= row (overlay-start o)))
+          (with-current-buffer buf
+            (let ((eol (save-excursion (goto-char row) (pos-eol))))
+              (should (eq face (get-char-property eol 'face)))))
           (let ((other (split-window)))
             (select-window other)
             (set-window-buffer other (get-buffer-create "*look-explorer-other*"))
             (with-current-buffer buf (drgnx-wb-selection-sync))
-            (should (eq 'drgnx-selected-quiet (overlay-get o 'face)))))))))
+            (should (eq 'drgnx-selected-inactive (plist-get (overlay-get o 'face) :inherit)))
+            (should (eq 'flat-button (plist-get (plist-get (overlay-get o 'face) :box) :style)))))
+        (mapc #'disable-theme custom-enabled-themes)
+        (mapc (lambda (th) (enable-theme th)) (reverse was))
+        (drgnx-wb--row-faces-clear)))))
 
 (ert-deftest drgnx-look-explorer/ellipsis-hidden-shown-on-point-and-selected ()
-  "Pattern D: on a graphical frame a row's ⋯ is drawn in the hidden face; the row at point shows it in its real
-face; every row carries the one mouse face that lights the control."
+  "Pattern D, window-dark.html: on a graphical frame a row's ⋯ is hidden, drawn in its row's colour: the hidden face
+on a row, the selection's colour on the selected row (it shows on hover only); a terminal shows it on every row; every
+row's text carries the one mouse face that lights the control."
   (drgnx-explorer-edge--with root
     (drgnx-look-explorer-test--as 'gui nil
       (let* ((buf (drgnx-explorer--buffer)) (a (drgnx-look-explorer-test--row "README.md"))
              (b (drgnx-look-explorer-test--row "docs"))
              (face-at (lambda (row) (let* ((tail (drgnx-look-explorer-test--tail row)) (i (string-search "⋯" tail)))
-                                      (get-text-property i 'face tail)))))
+                                      (car (drgnx-look-explorer-test--faces (get-text-property i 'face tail)))))))
         (set-window-buffer (selected-window) buf)
         (with-current-buffer buf (goto-char b) (drgnx-wb-selection-sync))
         (should (eq 'drgnx-control-hidden (funcall face-at a)))
-        (should (eq 'drgnx-ui-close (funcall face-at b)))
+        (should (equal (list :foreground (face-background 'drgnx-selected nil t)) (funcall face-at b)))
         (with-current-buffer buf (goto-char a) (drgnx-wb-selection-sync))
-        (should (eq 'drgnx-ui-close (funcall face-at a)))
+        (should (equal (list :foreground (face-background 'drgnx-selected nil t)) (funcall face-at a)))
         (should (eq 'drgnx-control-hidden (funcall face-at b)))
         (with-current-buffer buf
           (should (equal '(drgnx-hover-row) (ensure-list (get-text-property a 'mouse-face))))
           (should (eq (get-text-property (1+ a) 'mouse-face)
                       (get-text-property (1- (save-excursion (goto-char a) (pos-eol))) 'mouse-face))))))))
+
+(ert-deftest drgnx-look-explorer/the-selected-row-is-one-run ()
+  "Pattern D, window-dark.html `.row.sel': the selection is one fill from the row's start to its right edge: the
+overlay on the row's text (not its newline: no fill past the row) and the same face on the tail at the right edge
+(an overlay string takes no face from the overlays around it), so no gap opens under the tail.  Moving the selection
+gives the old row's tail back its plain face."
+  (drgnx-explorer-edge--with root
+    (drgnx-look-explorer-test--as 'gui 'modified
+      (let* ((buf (drgnx-explorer--buffer)) (a (drgnx-look-explorer-test--row "README.md"))
+             (b (drgnx-look-explorer-test--row "docs"))
+             (covered (lambda (row face)
+                        (let ((tail (drgnx-look-explorer-test--tail row)))
+                          (cl-loop for i below (length tail)
+                                   always (member face (drgnx-look-explorer-test--faces
+                                                        (get-text-property i 'face tail))))))))
+        (set-window-buffer (selected-window) buf)
+        (with-current-buffer buf (goto-char a) (drgnx-wb-selection-sync))
+        (let* ((o (drgnx-look-explorer-test--selected buf)) (face (overlay-get o 'face)))
+          (should (= (overlay-end o) (with-current-buffer buf (save-excursion (goto-char a) (pos-eol)))))
+          (should (funcall covered a face))
+          (should-not (funcall covered b face))
+          (with-current-buffer buf (goto-char b) (drgnx-wb-selection-sync))
+          (should (funcall covered b (overlay-get o 'face)))
+          (should-not (funcall covered a (overlay-get o 'face)))
+          ;; a repaint while point is on another row (no sync yet) follows the selection, not point
+          (with-current-buffer buf
+            (goto-char a)
+            (drgnx-explorer--fontify (point-min) (point-max)))
+          (should (funcall covered b (overlay-get o 'face)))
+          (should-not (funcall covered a (overlay-get o 'face))))))))
+
+(ert-deftest drgnx-look-explorer/a-row-reaches-the-right-edge ()
+  "Pattern D, window-dark.html `.row': on a graphical frame a row's fill, hover and ring end at the card's inset, not
+two columns short of it: the tail's last character stretches to the text area's right edge there, and is invisible
+on a terminal, whose last columns stay free."
+  (drgnx-explorer-edge--with root
+    (drgnx-look-explorer-test--as 'gui nil
+      (let* ((tail (drgnx-look-explorer-test--tail (drgnx-look-explorer-test--row "README.md")))
+             (i (1- (length tail))))
+        (should (equal '(when (display-graphic-p) space :align-to right) (get-text-property i 'display tail)))
+        (should (get-text-property i 'invisible tail))))))
+
+(ert-deftest drgnx-look-explorer/hover-lights-the-whole-row ()
+  "Pattern D, window-dark.html `.row:hover': the hover is one rounded run over the row and its tail: the tail's
+overlay spans the row's text and carries the mouse face, so Emacs lights its string with the text; the box is inside
+the row (negative widths: nothing moves when it lights)."
+  (drgnx-explorer-edge--with root
+    (drgnx-look-explorer-test--as 'gui nil
+      (let* ((row (drgnx-look-explorer-test--row "README.md"))
+             (o (with-current-buffer (drgnx-explorer--buffer)
+                  (seq-find (lambda (o) (overlay-get o 'drgnx-row-tail))
+                            (overlays-in row (1+ (save-excursion (goto-char row) (pos-eol)))))))
+             (mouse (overlay-get o 'mouse-face)))
+        (should (= row (overlay-start o)))
+        (should (eq 'drgnx-hover-row (plist-get mouse :inherit)))
+        (should (< (car (plist-get (plist-get mouse :box) :line-width)) 0))))))
+
+(ert-deftest drgnx-look-explorer/no-current-line-under-the-rows ()
+  "Pattern D: the dock's sections draw the selection, not `hl-line' (the current line's colour sat under the
+selection's tail and past its end, and below the hover); their fringes are the panel, not the editor's colour."
+  (drgnx-explorer-edge--with root
+    (drgnx-buffers-setup)
+    (dolist (make (list #'drgnx-explorer--buffer #'drgnx-buffers--buffer #'drgnx-outline--buffer))
+      (with-current-buffer (funcall make)
+        (should-not (bound-and-true-p hl-line-mode))
+        (should (member '(fringe drgnx-surface-panel fringe) face-remapping-alist))))))
+
+(ert-deftest drgnx-look-explorer/the-outline-current-is-the-inactive-selection ()
+  "Pattern D: the Outline's current definition is drawn as a selection in a list without the focus (bold), not the
+hover's colour (which ranked it with a hovered row)."
+  (should (eq 'drgnx-selected-inactive (face-attribute 'drgnx-outline-current :inherit))))
+
+(ert-deftest drgnx-look-explorer/a-row-has-one-end ()
+  "A row that ends its own way (the Outline's current definition: `drgnx-row-end') and is selected draws one stretch
+to the right edge, the selection's: two would overflow the line (a truncation arrow in the fringe).  The row's own
+end comes back when the selection leaves."
+  (with-temp-buffer
+    (insert "current\nother\n")
+    (let ((o (make-overlay 1 8)) (own (drgnx-wb--row-end 'drgnx-outline-current)))
+      (overlay-put o 'drgnx-row-end own)
+      (overlay-put o 'after-string own)
+      (goto-char 1) (drgnx-wb-selection-sync)
+      (should-not (overlay-get drgnx-wb--selected-overlay 'after-string))
+      (should (eq (get-text-property 0 'face (overlay-get o 'after-string))
+                  (overlay-get drgnx-wb--selected-overlay 'face)))
+      (forward-line 1) (drgnx-wb-selection-sync)
+      (should (eq own (overlay-get o 'after-string)))
+      (should (overlay-get drgnx-wb--selected-overlay 'after-string)))))
 
 (load (expand-file-name "modules/ui/drgnx-look-density" drgnx-dir) nil t)
 

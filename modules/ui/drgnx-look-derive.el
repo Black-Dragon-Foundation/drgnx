@@ -27,7 +27,7 @@
 (declare-function drgnx-look-token "drgnx-theme-gen" (name &optional variant))
 
 (defconst drgnx-look-derive--faces
-  '(drgnx-surface-panel drgnx-surface-gap drgnx-surface-raised drgnx-surface-overlay drgnx-selected-quiet
+  '(drgnx-surface-panel drgnx-surface-gap drgnx-surface-raised drgnx-surface-overlay drgnx-selected-quiet drgnx-selected-inactive
                         drgnx-text-muted drgnx-text-subtle drgnx-focus drgnx-accent drgnx-control-hidden
                         drgnx-agent-1 drgnx-agent-2 drgnx-agent-3 drgnx-agent-4 drgnx-agent-5 drgnx-agent-6
                         drgnx-agent-7 drgnx-agent-8 drgnx-agent-9 drgnx-agent-10 drgnx-agent-11 drgnx-agent-12)
@@ -156,6 +156,8 @@ order: the six slots, then the variants kept besides."
         `((drgnx-surface-panel :background ,panel) (drgnx-surface-gap :background ,gap)
           (drgnx-surface-raised :background ,raised) (drgnx-surface-overlay :background ,raised)
           (drgnx-selected-quiet :background ,raised)
+          ;; the inactive selected row: from the raised colour toward the text until 1.25:1 against the panel
+          (drgnx-selected-inactive :background ,(or (drgnx-color-solve raised f panel 1.25 'srgb) raised))
           (drgnx-text-muted :foreground ,text) (drgnx-text-subtle :foreground ,text)
           (drgnx-focus :box (:line-width (-2 . -2) :color ,(or link f)))
           (drgnx-accent :foreground ,(or link f) :underline nil)

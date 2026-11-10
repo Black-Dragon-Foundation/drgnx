@@ -562,6 +562,18 @@ Work that need not happen at startup hangs on a stage and runs once, when the st
 runs under its own error guard; an error is a `warn` event of notice source `hooks` (id `(HOOK . FN)`), never shown
 as a prompt.
 
+A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row`) replaces each
+graphical frame with one like it: the same windows, buffers, points, window and frame parameters, size and selection.
+`drgnx-frame-replaced-functions` runs with OLD and NEW after NEW is up and before OLD is deleted. Whoever keeps a frame
+or a window in a variable moves it there (`drgnx-frame-replaced-window` finds a window's counterpart in NEW) or lets
+it go, from its module's setup through `drgnx-module-hook`, so the teardown removes it. The main window stays main
+(the swap clears OLD's role first, so `drgnx-frames--deleted` hands it to no other window). Today's owners: the panes'
+last buffers (`drgnx-pane--last`, moved), the popup lanes (their `quit-restore` moved; a floating popup ends, as its
+child frame goes with OLD), the agent follow window (moved), the Work map's layout motion (stopped on both frames)
+and the side-by-side diffs' saved layout (`drgnx-work-code--saved-windows`: a window configuration cannot move to
+another frame, so it is let go and closing the diffs leaves the windows as they are). A swap waits while the platform
+moves the frame (`drgnx-platform-moving`), since the window manager may still be looking for it by its title.
+
 ## No prompts in automatic paths (`drgnx-guard.el`)
 
 A prompt asked from a timer, a hook or while the daemon starts has nobody to answer it, and the daemon freezes.
@@ -1475,8 +1487,11 @@ function and one rounding rule:
   floor(scale)) pixels (1 at 1.25 and 4/3, 2 at 2, as the mockups' 1 CSS px at scale 2); a line under 2 is
   max(1, floor(WIDTH × scale)); a wider one is `drgnx-px`.
 - `(drgnx-pixels-scale &optional FRAME)` is the factor both use: the display scale on a native shell (1.0 elsewhere)
-  times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's `drgnx-ui-scale` parameter, which ui/look's
-  `drgnx-look-scale` sets on every graphical root frame (1.0 without one).
+  times the UI scale, `(drgnx-pixels-ui-scale FRAME)`: the root frame's, which ui/look's `drgnx-look-scale` sets on
+  every graphical root frame with `(drgnx-pixels-set-ui-scale FRAME SCALE)` (1.0 without one). It is kept in a
+  frame-weak table, not a frame parameter: `frame-parameter` copies the frame's whole parameter list to read a
+  parameter of drgnx's own, and the scale is read on every bar build and row. Reading it conses nothing, a budget
+  `drgnx-pixels/the-scale-conses-nothing` holds.
 - A size made of parts adds the rounded parts (`(+ (drgnx-px 26) (drgnx-px 6))`), never `drgnx-px` of the sum, so a
   row and its gap add up to what is drawn.
 
@@ -1563,6 +1578,7 @@ What redisplay reads, built once per change (PERF-L L6):
 | `statusbar-bar` (`drgnx-statusbar.el`) | window | one of six epochs moves, or a plain value: the position the bar shows (not point: the text of `statusbar-position`, nil for a bar with no position), the change tick, the narrowing, width, full or compact, the selection, the buffer, `default-directory`, `mode-line-process`, a macro being recorded, keycast's keys, which-function's name, the text of other packages' entries this redisplay, the count of toasts waiting (24 keys). Built again, it measures only texts it has not met: the cache `statusbar-widths` (256, least recently used out) keeps each width per text, face properties, face and layout key, so a cursor move measures the new position alone, and a long branch is cut by halving. A segment that says the same again gives the same string (`drgnx-statusbar--texts`, per segment id), whose width is kept by the string object (`drgnx-statusbar--width-of`, weak), so the fit's repeated widths allocate nothing; a bar too wide drops its segments into one list of cells and makes its lists once; the row's font height comes from `drgnx-pixels-font-metrics` (one `font-info` per font name) |
 | `statusbar-position` (`drgnx-statusbar.el`) | window | the point it shows (the window's, or the buffer's when the window shows another), the change tick, the narrowing, the selection, whether you are in it or the large-file flag (7 keys) |
 | tab buttons (`drgnx-chrome--buttons`, `drgnx-chrome.el`; a plain table, weak on the frame) | frame | the tab's box, `drgnx-pixels-generation`, the frame's character cell, rounded corners or `drgnx-look-icons` change: a tab line made at every tab switch reuses the overflow and split buttons and their measured width | — |
+| tab lines (`drgnx-chrome--tab-lines`, `drgnx-chrome.el`; weak on the window) | window | what the line shows changes (`drgnx-chrome--tab-line-key`: its tabs, names, modified flags, the width, the settings it is drawn with, the enabled themes and the row's colour). A theme enabled or disabled sets every frame's chrome again (`enable-theme-functions`): nothing else an editor reads moves then, and the shown tab's lift is painted in the row's colour | — |
 | `topline` (`drgnx-topline.el`) | frame | the editor buffer, its directory, file or breadcrumb project cache, the frame's width, the drawn title, the glyphs, the count of folders whose repository the git cache knows, or one of the three hint commands or its keys changes, or an epoch moves (16 keys; the git cache itself is read only to build) | the status bar's `buffer-look` (its `vc-mode` text) and `git`; while the status bar is off, the line's own `drgnx-git-changed-functions` hook moves `git` for the root that was read. Named through constants (`drgnx-topline--look-epoch`, `--git-epoch`), because the build compiles the file alone | `buffer-look` (per buffer, `:redisplay`: `after-change-major-mode-hook`; watches `vc-mode`, the encoding, `tab-width`, `indent-tabs-mode`, `drgnx-statusbar-indent-vars`, the modal state, evil's tag, trust, the large-file flag `drgnx-large-file`), `flymake` (per buffer: `flymake-mode-hook`, a backend's report), `eglot` (per buffer: `eglot-managed-mode-hook`; the base: `eglot-server-initialized-hook`), `git` (per root: a branch or its ahead/behind changed), `misc-info` (watches `global-mode-string`, `mode-line-misc-info` and the two lists of what the bar leaves out), `statusbar` (`drgnx-statusbar--bump`; watches the glyphs, the Explorer's roots, the segment lists) |
 
 **Other packages' entries** (`mode-line-misc-info`, `global-mode-string`) stay real time, the user's call, but are

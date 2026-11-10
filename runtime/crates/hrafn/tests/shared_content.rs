@@ -162,7 +162,9 @@ async fn v2_store_migrates_keeping_rows_and_vectors() {
     std::thread::spawn(move || store.shutdown()).join().unwrap();
 
     let s = CodeStore::open(&path).unwrap();
-    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("4"));
+    assert_eq!(s.meta_get("schema").await.unwrap().as_deref(), Some("5"));
+    // the references come with the next parse (`PARSE_VERSION`); the migration only makes the table
+    assert!(rows(s.handle(), "select path from ref").await.is_empty());
     for (q, b) in KEPT.iter().zip(&before) {
         assert_eq!(&rows(s.handle(), q).await, b, "{q}");
     }

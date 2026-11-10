@@ -5,8 +5,12 @@
 //! - `eval gen ROOT [--out DIR]`: the questions of ROOT's history, written once to `DIR/dev.jsonl` and `DIR/test.jsonl`
 //!   (default `runtime/crates/hrafn/eval/<name of ROOT>`); an existing set is never overwritten.
 //! - `eval run ROOT [--model ID] [--set dev|test] [--rows FILE] [--device cpu|gpu:ADAPTER] [--models DIR] [--state DIR]
-//!   [--out FILE]`: embeds ROOT with the model, asks the set, prints the numbers and writes the run as JSON.
-//! - `eval compare A.json B.json`: B against A, paired; exit 0 when B passes the gate, 1 when it does not.
+//!   [--out FILE] [--map TOKENS]`: embeds ROOT with the model, asks the set, prints the numbers and writes the run as
+//!   JSON. With `--map`, also the repo map's yield at that budget: the share of each question's target definitions and
+//!   files that the global map shows, that the top 5 hits followed by the map focused on their files show, and that
+//!   search hits packed in rank order show (each in the same token estimate).
+//! - `eval compare [--by chunk|file] A.json B.json`: B against A, paired, on chunk-level MRR@10 (the default) or on
+//!   file MRR@10 (fair to a chunker that gives a language no symbols); exit 0 when B passes the gate, 1 when it does not.
 
 use crate::clock;
 use hrafn::eval::{self, EvalRow, Report};
@@ -14,7 +18,7 @@ use hrafn::{Answer, CodeStore, Config, GitCli, Lag, Query};
 use hrafn_embed::{Device, LocalEmbedder, MODELS, ModelSpec, default_model};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -33,10 +37,13 @@ pub enum EvalCommand {
         models: Option<PathBuf>,
         state: Option<PathBuf>,
         out: Option<PathBuf>,
+        /// Also measure the repo map's yield at this many tokens.
+        map: Option<usize>,
     },
     Compare {
         a: PathBuf,
         b: PathBuf,
+        by: eval::Gate,
     },
 }
 
@@ -56,11 +63,19 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
     }
     let (mut model, mut set, mut rows, mut device) =
         (None, "dev".to_string(), None, "cpu".to_string());
-    let (mut models, mut state, mut out) = (None, None, None);
+    let (mut models, mut state, mut out, mut map) = (None, None, None, None);
+    let mut by = eval::Gate::Chunk;
     let mut words: Vec<PathBuf> = Vec::new();
     while let Some(arg) = p.next().map_err(e)? {
         match arg {
             Long("out") => out = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("by") if name == "compare" => {
+                by = match p.value().map_err(e)?.string().map_err(e)?.as_str() {
+                    "chunk" => eval::Gate::Chunk,
+                    "file" => eval::Gate::File,
+                    other => return Err(format!("--by is chunk or file, not {other:?}")),
+                }
+            }
             Long("model") if name == "run" => {
                 model = Some(p.value().map_err(e)?.string().map_err(e)?)
             }
@@ -79,6 +94,13 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             }
             Long("models") if name == "run" => models = Some(PathBuf::from(p.value().map_err(e)?)),
             Long("state") if name == "run" => state = Some(PathBuf::from(p.value().map_err(e)?)),
+            Long("map") if name == "run" => {
+                let v = p.value().map_err(e)?.string().map_err(e)?;
+                match v.parse::<usize>() {
+                    Ok(n) if (256..=32000).contains(&n) => map = Some(n),
+                    _ => return Err(format!("--map is a token budget, 256 to 32000, not {v:?}")),
+                }
+            }
             Word(v) => words.push(PathBuf::from(v)),
             other => return Err(other.unexpected().to_string()),
         }
@@ -103,10 +125,12 @@ pub fn parse(args: Vec<OsString>) -> Result<EvalCommand, String> {
             models,
             state,
             out,
+            map,
         },
         _ => EvalCommand::Compare {
             a: next("two reports")?,
             b: next("two reports")?,
+            by,
         },
     })
 }
@@ -188,6 +212,150 @@ struct RunFile {
     /// What one question cost (embedding it and searching), in seconds.
     query_latency: Latency,
     report: Report,
+    /// With `--map`: the yield of each context per stratum (`all` too), by variant (`map`, `map-around-search`,
+    /// `search`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    map_yield: Option<MapYields>,
+}
+
+/// The map's yield at one budget: the global map (M0), the top 5 search hits then the map focused on their files in
+/// the budget left (M1), and search hits packed in rank order (S).
+#[derive(Serialize, Deserialize)]
+struct MapYields {
+    budget: usize,
+    variants: BTreeMap<String, BTreeMap<String, eval::YieldSummary>>,
+    /// The global map's own size.
+    map_tokens: usize,
+    map_files: usize,
+}
+
+/// Characters of lines START to END (1-based, inclusive) of TEXT, newlines counted.
+fn chunk_chars(text: &str, start: u32, end: u32) -> usize {
+    text.split_inclusive('\n')
+        .skip(start.saturating_sub(1) as usize)
+        .take((end + 1).saturating_sub(start) as usize)
+        .map(str::len)
+        .sum()
+}
+
+/// How many search hits the baseline may pack (more than fit in any budget allowed).
+const PACK_HITS: u32 = 100;
+
+/// The `(path, symbol)` of the definitions MAP shows.
+fn shown(map: &hrafn::map::RepoMap) -> Vec<(String, String)> {
+    map.files
+        .iter()
+        .flat_map(|f| f.defs.iter().map(|d| (f.path.clone(), d.name.clone())))
+        .collect()
+}
+
+/// The three contexts' yields for every question at BUDGET tokens. ASK searches; TEXT gives a file as it is now.
+fn map_yields(
+    rt: &tokio::runtime::Runtime,
+    store: &CodeStore,
+    questions: &[EvalRow],
+    budget: usize,
+    ask: &dyn Fn(&Query) -> Answer,
+    text: &dyn Fn(&str) -> Option<String>,
+) -> Result<MapYields, String> {
+    use hrafn::map::{MapAsk, repo_map};
+    let map_of = |focus: Vec<String>, budget: usize| {
+        rt.block_on(repo_map(
+            store,
+            hrafn::View::Base,
+            &MapAsk {
+                budget,
+                focus,
+                names: Vec::new(),
+                all: true,
+            },
+        ))
+        .map_err(|e| e.to_string())
+    };
+    let global = map_of(Vec::new(), budget)?;
+    let global_shown = shown(&global);
+    let files: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
+    let chars = |h: &hrafn::Hit| {
+        files
+            .borrow_mut()
+            .entry(h.path.clone())
+            .or_insert_with(|| text(&h.path))
+            .as_deref()
+            .map_or(0, |t| chunk_chars(t, h.line_start, h.line_end))
+    };
+    let mut rows: BTreeMap<&str, Vec<(String, eval::MapYield)>> = BTreeMap::new();
+    let mut tally = Tally::new("map yield", questions.len(), 25);
+    for r in questions {
+        let started = clock::real_now();
+        let hits = ask(&Query {
+            text: r.query.clone(),
+            scope: hrafn::Scope::All,
+            k: PACK_HITS,
+        })
+        .hits;
+        let top = &hits[..hits.len().min(5)];
+        let mut around = eval::pack(top, budget, &chars);
+        let used: usize = top[..around.len()]
+            .iter()
+            .map(|h| format!("{}:{}-{}\n", h.path, h.line_start, h.line_end).len() + chars(h))
+            .sum::<usize>()
+            .div_ceil(4);
+        let mut focus: Vec<String> = Vec::new();
+        for h in &top[..around.len()] {
+            if !focus.contains(&h.path) {
+                focus.push(h.path.clone());
+            }
+        }
+        if budget.saturating_sub(used) >= 256 {
+            around.extend(shown(&map_of(focus, budget - used)?));
+        }
+        let packed = eval::pack(&hits, budget, &chars);
+        for (variant, got) in [
+            ("map", &global_shown),
+            ("map-around-search", &around),
+            ("search", &packed),
+        ] {
+            rows.entry(variant)
+                .or_default()
+                .push((r.stratum.clone(), eval::map_yield(&r.targets, got)));
+        }
+        if let Some(line) = tally.note(started.elapsed().as_secs_f64()) {
+            eprintln!("{line}");
+        }
+    }
+    Ok(MapYields {
+        budget,
+        variants: rows
+            .into_iter()
+            .map(|(v, r)| (v.to_string(), eval::summarize_yield(&r)))
+            .collect(),
+        map_tokens: global.tokens,
+        map_files: global.files.len(),
+    })
+}
+
+fn yield_table(y: &MapYields) -> String {
+    let mut s = format!(
+        "map yield at {} tokens (the global map: {} files, ~{} tokens)\n\
+         | stratum | n | variant | def-yield (95 % CI) | file-yield (95 % CI) |\n|---|---|---|---|---|\n",
+        y.budget, y.map_files, y.map_tokens
+    );
+    let strata: Vec<&String> = y
+        .variants
+        .values()
+        .next()
+        .map(|m| m.keys().collect())
+        .unwrap_or_default();
+    for st in strata {
+        for (v, m) in &y.variants {
+            let x = &m[st];
+            s.push_str(&format!(
+                "| {st} | {} | {v} | {:.3} ({:.3} to {:.3}, {}) | {:.3} ({:.3} to {:.3}) |\n",
+                x.n, x.def, x.def_ci.0, x.def_ci.1, x.def_n, x.file, x.file_ci.0, x.file_ci.1
+            ));
+        }
+    }
+    s
 }
 
 fn project_name(root: &Path) -> String {
@@ -327,6 +495,7 @@ fn run_set(
     models: PathBuf,
     state: Option<PathBuf>,
     out: Option<PathBuf>,
+    map: Option<usize>,
 ) -> Result<String, String> {
     let spec = spec_of(model.as_deref())?;
     let rows_path = rows.unwrap_or_else(|| {
@@ -454,6 +623,16 @@ fn run_set(
         "one question (embed + search), {} asked: p50 {:.3}s, p95 {:.3}s, max {:.3}s\n",
         query_latency.n, query_latency.p50, query_latency.p95, query_latency.max
     ));
+    let map_yield = match map {
+        Some(budget) => {
+            eprintln!("map yield at {budget} tokens");
+            let file = |p: &str| std::fs::read_to_string(base.join(p)).ok();
+            let y = map_yields(&rt, &store, &questions, budget, &ask, &file)?;
+            text.push_str(&yield_table(&y));
+            Some(y)
+        }
+        None => None,
+    };
     let file = RunFile {
         model: spec.id.to_string(),
         set: set.to_string(),
@@ -462,6 +641,7 @@ fn run_set(
         embed_seconds,
         query_latency,
         report,
+        map_yield,
     };
     if let Some(out) = out {
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
@@ -473,12 +653,22 @@ fn run_set(
 fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String {
     let mut s = format!(
         "{model} on the {set} set: {chunks} chunks embedded in {secs:.0}s\n\
-         | stratum | n | MRR@10 (95 % CI) | nDCG@10 | recall@5 | recall@10 |\n|---|---|---|---|---|---|\n"
+         | stratum | n | MRR@10 (95 % CI) | nDCG@10 | recall@5 | recall@10 | file MRR@10 (95 % CI) |\n\
+         |---|---|---|---|---|---|---|\n"
     );
     let line = |name: &str, x: &eval::Summary| {
         format!(
-            "| {name} | {} | {:.3} ({:.3} to {:.3}) | {:.3} | {:.3} | {:.3} |\n",
-            x.n, x.mrr, x.mrr_ci.0, x.mrr_ci.1, x.ndcg, x.recall5, x.recall10
+            "| {name} | {} | {:.3} ({:.3} to {:.3}) | {:.3} | {:.3} | {:.3} | {:.3} ({:.3} to {:.3}) |\n",
+            x.n,
+            x.mrr,
+            x.mrr_ci.0,
+            x.mrr_ci.1,
+            x.ndcg,
+            x.recall5,
+            x.recall10,
+            x.file_mrr,
+            x.file_mrr_ci.0,
+            x.file_mrr_ci.1
         )
     };
     s.push_str(&line("all", &r.overall));
@@ -493,15 +683,19 @@ fn summary(model: &str, set: &str, r: &Report, chunks: u64, secs: f64) -> String
     s
 }
 
-fn compare_files(a: &Path, b: &Path) -> Result<(String, bool), String> {
+fn compare_files(a: &Path, b: &Path, by: eval::Gate) -> Result<(String, bool), String> {
     let load = |p: &Path| -> Result<RunFile, String> {
         let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", p.display()))
     };
     let (fa, fb) = (load(a)?, load(b)?);
-    let v = eval::compare(&fa.report, &fb.report)?;
+    let v = eval::compare_on(&fa.report, &fb.report, by)?;
+    let label = match by {
+        eval::Gate::Chunk => "MRR@10",
+        eval::Gate::File => "file MRR@10",
+    };
     let mut s = format!(
-        "{} (B) against {} (A): overall MRR@10 difference {:+.4} (95 % CI {:+.4} to {:+.4}, {} queries)\n",
+        "{} (B) against {} (A): overall {label} difference {:+.4} (95 % CI {:+.4} to {:+.4}, {} queries)\n",
         fb.model, fa.model, v.overall.mean, v.overall.lo, v.overall.hi, v.overall.n
     );
     for (name, d) in &v.strata {
@@ -542,13 +736,14 @@ pub fn run(env: &runstav::paths::Env, cmd: EvalCommand) -> i32 {
             models,
             state,
             out,
+            map,
         } => {
             let models = models.unwrap_or_else(|| crate::search::models_root(env));
             done(run_set(
-                &root, model, &set, rows, &device, models, state, out,
+                &root, model, &set, rows, &device, models, state, out, map,
             ))
         }
-        EvalCommand::Compare { a, b } => match compare_files(&a, &b) {
+        EvalCommand::Compare { a, b, by } => match compare_files(&a, &b, by) {
             Ok((text, pass)) => {
                 print!("{text}");
                 i32::from(!pass)
@@ -654,11 +849,44 @@ mod tests {
             p(&["compare", "a.json", "b.json"]).unwrap(),
             EvalCommand::Compare {
                 a: "a.json".into(),
-                b: "b.json".into()
+                b: "b.json".into(),
+                by: eval::Gate::Chunk
             }
         );
+        assert_eq!(
+            p(&["compare", "--by", "file", "a.json", "b.json"]).unwrap(),
+            EvalCommand::Compare {
+                a: "a.json".into(),
+                b: "b.json".into(),
+                by: eval::Gate::File
+            }
+        );
+        assert!(p(&["compare", "--by", "symbol", "a.json", "b.json"]).is_err());
+        assert!(p(&["run", "/r", "--by", "file"]).is_err());
         assert!(p(&[]).is_err());
         assert!(p(&["run", "/r", "--device", "tpu"]).is_err());
         assert!(p(&["compare", "a.json"]).is_err());
+    }
+
+    #[test]
+    fn run_takes_a_map_budget() {
+        let map_of = |args: &[&str]| match p(args).unwrap() {
+            EvalCommand::Run { map, .. } => map,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(map_of(&["run", "/r"]), None);
+        assert_eq!(map_of(&["run", "/r", "--map", "8000"]), Some(8000));
+        assert!(p(&["run", "/r", "--map", "255"]).is_err());
+        assert!(p(&["run", "/r", "--map", "lots"]).is_err());
+        assert!(p(&["compare", "--map", "8000", "a.json", "b.json"]).is_err());
+    }
+
+    /// The lines of a chunk, by the hit's range, counted as the search baseline packs them.
+    #[test]
+    fn a_hit_is_measured_by_its_lines() {
+        let text = "one\ntwo\nthree\nfour\n";
+        assert_eq!(chunk_chars(text, 2, 3), "two\nthree\n".len());
+        assert_eq!(chunk_chars(text, 4, 9), "four\n".len());
+        assert_eq!(chunk_chars(text, 7, 9), 0);
     }
 }

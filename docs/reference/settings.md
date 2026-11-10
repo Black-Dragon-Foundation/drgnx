@@ -979,6 +979,26 @@ change applies at once.
 | `:agents` | `never` |
 | `:schema` | `(enum compact comfortable roomy)` |
 
+## drgnx-look-echo-row
+
+Where a graphical frame's echo area lives.  `float': no row at the bottom; a prompt floats in a box at the top
+centre, in the palette's look, and hides when nothing asks; messages and the keys of a prefix show in the status bar.
+`classic': the row at the bottom, as in stock Emacs.  A terminal frame keeps its row either way.  A change applies at
+once: each graphical frame is swapped for a new one with the same windows, buffers, size and place.
+
+| Key | Value |
+| --- | --- |
+| Default | `float` |
+| Type | `(choice (const float) (const classic))` |
+| `:scope` | `global` |
+| `:workspace` | `data` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | `drgnx-look-echo--apply-setting` |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | `(enum float classic)` |
+
 ## drgnx-look-font-agent
 
 The font of the agent panel's prose.  `:family ui' is the UI font.  A change applies at once.

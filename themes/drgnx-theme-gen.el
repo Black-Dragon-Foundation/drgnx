@@ -39,15 +39,32 @@ From the active drgnx theme; with none, from the frame's background mode (`hc' o
 
 (defun drgnx-look-token (name &optional variant)
   "The colour of token NAME as \"#rrggbb\", in VARIANT (`dark', `light' or `hc'; default the active one).
-A tint is composited over the variant's `editor'."
+A tint is composited over the variant's `editor', an `over' over its BASE token; a symbol is another token's colour."
   (let* ((variant (or variant (drgnx-look-variant)))
          (v (alist-get name (alist-get variant (drgnx-theme--read)))))
-    (cond ((stringp v) v)
-          ((eq (car-safe v) 'tint)
-           (drgnx-color-over (if (stringp (cadr v)) (cadr v) (drgnx-look-token (cadr v) variant))
-                             (drgnx-look-token 'editor variant)
-                             (cddr v)))
-          (t (error "drgnx: no colour token `%s' in the %s variant" name variant)))))
+    (cl-flet ((colour (c) (if (stringp c) c (drgnx-look-token c variant))))
+      (cond ((stringp v) v)
+            ((and v (symbolp v)) (drgnx-look-token v variant))
+            ((eq (car-safe v) 'tint)
+             (drgnx-color-over (colour (cadr v)) (drgnx-look-token 'editor variant) (cddr v)))
+            ((eq (car-safe v) 'over)                ; (over BASE COLOUR . ALPHA)
+             (drgnx-color-over (colour (nth 2 v)) (drgnx-look-token (nth 1 v) variant) (nthcdr 3 v)))
+            (t (error "drgnx: no colour token `%s' in the %s variant" name variant))))))
+
+(defvar drgnx-theme--box-fit :unknown "Whether this Emacs's boxes take `:fit text' (`drgnx-theme--box-fit-p').")
+
+(defun drgnx-theme--box-fit-p ()
+  "Non-nil when this Emacs draws a box `:fit text': as tall as its text, not as its row, which `line-spacing' makes
+taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where the key is unknown."
+  (when (eq drgnx-theme--box-fit :unknown)
+    (setq drgnx-theme--box-fit
+          (and (featurep 'glitnir)
+               (let ((face (make-symbol "drgnx-theme-box-fit")))
+                 (custom-declare-face face nil "Probe.")
+                 (condition-case nil
+                     (progn (set-face-attribute face nil :box '(:line-width 1 :fit text)) t)
+                   (error nil))))))
+  drgnx-theme--box-fit)
 
 (defconst drgnx-theme--ansi
   '((black . gap) (red . error) (green . ok) (yellow . warn) (blue . info) (magenta . kw) (cyan . ty) (white . fg))
@@ -73,6 +90,8 @@ A tint is composited over the variant's `editor'."
          (drgnx-hover :background ,(c 'hover) :box (:line-width (-2 . -2) :style flat-button))
          (drgnx-selected :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))))
          (drgnx-selected-quiet :background ,(c 'sel-quiet))
+         (drgnx-selected-inactive :background ,(c 'sel-inactive))
+         ,@(and hc `((drgnx-selected-secondary :inherit drgnx-text-muted :foreground ,(c 'sel-fg))))
          (drgnx-focus :box (:line-width (-2 . -2) :color ,(c 'focus)))
          (drgnx-status-attention :foreground ,(c 'attention))
          (drgnx-status-ok :foreground ,(c 'ok))
@@ -87,6 +106,9 @@ A tint is composited over the variant's `editor'."
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-error :foreground ,(c 'error) :background ,(c 'error-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          ;; the in-text chips (modules/ui/drgnx-decor.el) carry their own box, the room inside them: high contrast
          ;; makes it the 1 px ring instead (look.css `.t-hc .chip'; the room is the chip's stretches)
          ,@(and hc `((drgnx-chip :inherit (drgnx-ui-caption drgnx-chip-quiet)
@@ -100,12 +122,18 @@ A tint is composited over the variant's `editor'."
          (drgnx-control-primary :foreground ,(c 'on-accent) :background ,(c 'accent-fill)
                                 :box (:line-width (1 . 1) :color ,(c 'accent-fill)
                                                   ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         ;; a keycap is as tall as its text, also on a list row made taller by `line-spacing' (the palette's)
          (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
-                       :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4)))))
+                       :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4))
+                                         ,@(and (drgnx-theme--box-fit-p) '(:fit text)))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))
-         (region :background ,(c 'sel) :extend t ,@(and hc `(:foreground ,(c 'sel-fg))))
+         ;; the selection is a rounded run over the text (window-dark.html `.ln .sel'), stopping at the line's end;
+         ;; its box is drawn inside the glyphs (negative widths), so text never moves; drgnx-decor scales it per frame.
+         ;; `:extend nil' is said: a theme spec inherits `:extend' from the defface, and region's is t
+         (region :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))) :extend nil
+                 :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (secondary-selection :background ,(c 'sel-quiet))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
@@ -180,8 +208,12 @@ A tint is composited over the variant's `editor'."
          (nidhogg-title-bar :foreground ,(c 'fg) :background ,(c 'gap))
          (nidhogg-title-bar-inactive :foreground ,(c 'muted) :background ,(c 'gap)))
        ;; search, matches, completion
-       `((isearch :foreground ,(c 'on-accent) :background ,(c 'accent-fill))
-         (lazy-highlight :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25))
+       ;; matches are the accent's `match' tint over the text, which keeps its colours; the current one is ringed in
+       ;; the accent (design "Matches"), the others edged in `match-edge'; boxes inside the glyphs, as the region's
+       `((isearch :background ,(c 'match) :extend nil
+                  :box (:line-width (-1 . -1) :color ,(c 'accent) ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (lazy-highlight :background ,(c 'match) :extend nil
+                         :box (:line-width (-1 . -1) :color ,(c 'match-edge) ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (match :background ,(c 'accent-tint))
          (show-paren-match :background ,(c 'accent-tint) :weight bold)
          (show-paren-mismatch :foreground ,(c 'error) :background ,(c 'error-tint))
@@ -193,9 +225,16 @@ A tint is composited over the variant's `editor'."
        `((diff-added :foreground ,(c 'add-fg) :background ,(c 'add-bg))
          (diff-removed :foreground ,(c 'del-fg) :background ,(c 'del-bg))
          (diff-changed :background ,(c 'warn-tint))
-         (diff-refine-added :background ,(drgnx-color-over (c 'ok) (c 'editor) 0.25))
-         (diff-refine-removed :background ,(drgnx-color-over (c 'error) (c 'editor) 0.25))
-         (diff-refine-changed :background ,(drgnx-color-over (c 'warn) (c 'editor) 0.25))
+         ;; refined words: rounded in-text runs, as the region (boxes inside the glyphs)
+         (diff-refine-added :background ,(c 'refine-add) :extend nil
+                            :box (:line-width (-1 . -1) :color ,(c 'refine-add-edge)
+                                              ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-removed :background ,(c 'refine-del) :extend nil
+                              :box (:line-width (-1 . -1) :color ,(c 'refine-del-edge)
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (diff-refine-changed :background ,(c 'refine-chg) :extend nil
+                              :box (:line-width (-1 . -1) :color ,(c 'refine-chg-edge)
+                                                ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (diff-header :foreground ,(c 'muted) :background ,(c 'raised))
          (diff-file-header :foreground ,(c 'fg) :weight bold)
          (diff-hunk-header :foreground ,(c 'info))
@@ -210,6 +249,10 @@ A tint is composited over the variant's `editor'."
          (vc-removed-state :foreground ,(c 'error))
          (vc-needs-update-state :foreground ,(c 'info))
          (vc-state-base :foreground ,(c 'muted)))
+       ;; shell scripts: a here-document is a string, a command substitution runs a command (sh-script's own are
+       ;; bold yellow and red)
+       `((sh-heredoc :foreground ,(c 'str) :weight normal)
+         (sh-quoted-exec :foreground ,(c 'fn)))
        ;; diagnostics and the language server
        `((flymake-error :underline (:style wave :color ,(c 'error)))
          (flymake-warning :underline (:style wave :color ,(c 'warn)))
@@ -218,6 +261,14 @@ A tint is composited over the variant's `editor'."
          (flymake-warning-echo :foreground ,(c 'warn))
          (flymake-note-echo :foreground ,(c 'info))
          (flymake-end-of-line-diagnostics-face :foreground ,(c 'subtle))
+         ;; a problem at the line's end is a chip of its kind (window-dark.html `.diag'): text-high, never growing
+         ;; the line; high contrast rings it instead of the tint
+         ,@(cl-loop for (face . kind) in '((flymake-error-echo-at-eol . error) (flymake-warning-echo-at-eol . warn)
+                                           (flymake-note-echo-at-eol . info))
+                    collect `(,face :inherit drgnx-ui-caption :foreground ,(c kind)
+                                    ,@(if hc '(:box (:line-width (-1 . -1)))
+                                        `(:background ,(c (intern (format "%s-tint" kind)))
+                                                      :box (:line-width (7 . -1) :style flat-button)))))
          (eglot-highlight-symbol-face :background ,(c 'hover) :weight bold)
          (eglot-mode-line :foreground ,(c 'accent))
          (eglot-inlay-hint-face :foreground ,(c 'subtle))

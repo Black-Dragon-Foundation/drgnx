@@ -413,7 +413,7 @@ Ratatoskr gives it a connection.
 
 `cargo test -p mimir` runs `server::tests` (both eras over an in-memory pipe: the handshake, the stateless rules,
 every error shape, a bad argument that never reaches the tool, a 1 MiB line that ends the connection, a panicking
-tool) and `tests/interop.rs`: rmcp 3.6's client over a Unix socket pair, with `initialize` at each of the four old
+tool) and `tests/interop.rs`: rmcp 3.9's client over a Unix socket pair, with `initialize` at each of the four old
 versions, `server/discover` at 2026-07-28 and its automatic probe, lists the tools, calls `echo`, and gets a bad
 argument back as a tool error with its path and an unknown tool as a protocol error. `bridge::tests` run the bridge
 against a real `serve` on a paused clock: the replayed `initialize` whose answer is dropped, a call in flight at the
@@ -1043,7 +1043,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v4:
+0600, migrations as data). Schema v5:
 
 | Table | Holds |
 |---|---|
@@ -1052,13 +1052,14 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
 | `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
+| `ref` | the names a pair's content uses: `(path, blob, name)`, how often (`n`) and the first 8 lines it is used on; `ref_name` finds a name's users |
 | `vec` | one quantized vector per `(model, key)` |
 | `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
-**Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
-the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
-a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept (its
-chunks, FTS rows and symbols deleted) when no `file` row names it any more. There is no reference counter; the
+**Shared content.** Chunks, symbols and references belong to a `(path, blob)` pair, not to a tree: every `file` row
+that names the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by
+content: a row is set, the pair is chunked only when nothing stores it yet, and the pair the row named before is swept
+(its chunks, FTS rows, symbols and references deleted) when no `file` row names it any more. There is no reference counter; the
 `file_path_blob` index answers "is it still named". A query sees a row when the view's `file` row of its path names
 its blob (`blob_V(p) = r.blob`); every route applies that before its `limit`, the base view too, and joins `file` on
 `(tree, path)`. Schema 3 migrates a schema-2 store in place: `chunk` gains `blob` (ids kept), `symbol` is rebuilt
@@ -1184,7 +1185,18 @@ before), which is where a hit opens and what `reanchor` compares against. Versio
 version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
 vector's key, embedded again).
 
-`PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed).
+`chunk::chunk_file_refs` also returns the file's references (`chunk::Ref`: a name, how often, its first 8 lines),
+from the same parse, which tier 1 and the overlay write to `ref`. Tree-sitter languages run a tags query and keep the
+`@reference.*` matches' `@name`: the grammar crate's own query for Rust, Python, JavaScript, Go and Java (calls, macros,
+`impl` targets, `new`, types where the query has them), TypeScript's with calls added, and our own for C (calls) and
+shell (commands). Emacs Lisp takes each top-level form's symbol atoms, without the name it defines, keywords, `&`
+markers, `t`, `nil`, definers and the special forms. Org, Markdown and text have none; one-character names are dropped.
+`hrafn::refs::references(store, view, name)` reads a name's users in a view.
+
+`PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only, 6: nested cuts, 7: references). A parse version that moves chunk
+boundaries needs no `CHUNKER_VERSION` bump: the files are chunked again, and only a chunk whose text changed has a new
+key and is embedded again.
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1195,6 +1207,25 @@ a regular expression over the distinct names; `auto` tries them in that order an
 kind, path glob and scope, code before docs before tests. `symbols::outline(store, view, path)` lists a file's
 definitions in order with their nesting depth. Both read the index only, through the view's visibility, so an excluded
 file is never in an answer; a file the view does not hold is `NotIndexed`.
+
+**The reference graph** (`graph.rs`) is Aider's repo map, by name. Its nodes are a view's files; an edge runs from a file
+to each file that defines a name it references (`ref` joined with `symbol` on the name, both through the view), one
+per name, weighted `sqrt(n)` × 10 for a name the request gives, × 10 for a compound name (snake, kebab or camel case)
+of 8 characters or more, × 0.1 for a `_`-private name and × 0.1 for a name defined in more than 5 files; a file's
+references to its own names are dropped. PageRank runs with damping 0.85 until the L1 change is under 1e-6 (at most
+100 iterations); the teleport and the dangling files' mass go by the personalisation vector, uniform or the focus
+files. Scope `code` masks tests and docs out of the walk. The graph and its unpersonalised ranks are kept in the memo
+until the store changes, within 64 MB (by an estimate of each graph's size; the least recently used view's graph goes
+first, and the one just built stays even alone over it); it is built in one pass over `file`, `symbol` and `ref`.
+
+`map::repo_map(store, view, MapAsk)` ranks definitions `(file, name)` by splitting each file's rank over its edges
+(a name the request gives × 10), leaves the focus files out, groups the rest by file in rank order and renders each
+definition's signature with its line (`  12│ fn …`), nested members indented and `⋮` between rows that are not
+neighbours in the file. It keeps the most definitions whose text fits the budget, by binary search on the estimate
+`ceil(chars / 4)`; the last line gives the counts and the estimate. `map::usages(store, view, name, scope, k)` gives the
+name's exact definitions, then the view's `ref` rows for it without the lines inside the name's own definitions in that
+file, each under the innermost definition holding its first line, ranked by the file's rank × `ln(1 + n)`, tests after
+code. It is by name only: same-named things in other scopes show up too.
 
 For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
 workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
@@ -1217,7 +1248,31 @@ pipeline over their top-level items. Definitions are `function_item`, `impl_item
 `trait_item`, `mod_item` and `macro_definition` (and type, const, static and union items) in Rust, with the
 methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
 specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
-(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body; a member that is over
+the budget itself, or that does not begin a line (Go's `statement_list`, a body whose `{` sits on the header's line),
+is cut before the forms nested in it, as deep as it takes, so a 2,000-line function becomes parts within the budget,
+each with the function's header.
+
+Python, JavaScript, TypeScript and TSX (`tree-sitter-python` 0.25, `tree-sitter-javascript` 0.25,
+`tree-sitter-typescript` 0.23 for both TypeScript grammars; MIT) use the same pipeline. Their wrappers are looked
+through: `export` (and `export default`), Python decorators (the symbol spans them) and a TypeScript `namespace`
+statement. Python defines functions and classes, with a class's functions as methods; its docstring is the string its
+body starts with, else the `#` lines above. JavaScript and TypeScript define function declarations, classes (abstract
+ones too) with their methods, a `const`/`let`/`var` whose value is an arrow function or a function expression, and in
+TypeScript interfaces, type aliases, enums and namespaces (whose declarations are members); the doc is a `/** … */`
+comment directly above, else the `//` lines. Files: `.py .pyi`, `.js .mjs .cjs .jsx`, `.ts .mts .cts`, `.tsx`, and
+extensionless files whose `#!` line runs `python…` or `node`. Their tests are known by directory (`test/`, `tests/`)
+only: a `*.test.ts` or `*_test.go` beside the code is code, so search does not demote it. A member without a doc of its own takes its class's, as a Rust method takes its
+`impl`'s. A signature is cut at the body's `{`: the first outside parentheses and brackets, so a destructured
+parameter stays in it. A JavaScript or TypeScript statement over the budget with no body of its own (a test file's
+`describe("…", function () { it(…) … })`) is cut before the statements of its last callback's body.
+
+Go and Java (`tree-sitter-go` 0.25, `tree-sitter-java` 0.23; MIT) too. Go defines functions, methods (the receiver
+is in the signature; a method is top-level, so it has no container), types (`struct`, `interface`, other types and
+aliases) and top-level constants and variables; a declaration of several specs (`var ( … )`) gives each its own span;
+the doc is the `//` lines above. Java defines classes, interfaces (annotation types too), enums and records, with their
+methods, constructors and nested types as members; the doc is the `/** … */` comment above (annotations are inside
+the declaration, so the comment sits above them). Files: `.go`, `.java`.
 
 Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
 heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property
@@ -1287,7 +1342,10 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   list leave the store. Vectors are keyed by content, so a branch switch back embeds nothing. `vec.last_used` is a
   logical clock (one past the store's highest), moved when a vector is written and when tier 1 writes a chunk that
   refers to its key; `collect` keeps unreferenced keys up to twice the live set, the least recently referenced going
-  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8).
+  first. A vector row holds the sign bits and then the int8 values of `urdr`'s `quantize` (`bits` = 8). A refresh writes
+  with a 64 MB page cache and then puts the store's cache size back and lets the pages go: a file's references land
+  all over the name index, and at the default 2 MB that index was most of what references cost tier 1 (6.7 s against
+  5.4 s on a drgnx checkout, on the desktop).
 - **When tier 1 runs (`hrafn::fresh`).** `Settle` is a pure core over the watcher's events: a change under the gitdir is
   due once `index.lock` is gone and the gitdir has been quiet for 2 s; a saved file once it has been quiet for 30 s.
   One watcher instance per project (`hrafn::HostWatch`, feature `host`) feeds it and serves the main checkout and its
@@ -1332,7 +1390,11 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
 - **The query (`hrafn::query`).** Lists from the routes, fused by RRF (k = 60): an exact one-identifier query pins its
   definitions first (non-test before test, then by kind); prefix and trigram name matches from the identifier-like
   tokens of a question add a list that is never pinned; a token that names a file adds a path list; `bm25(chunk_fts, 5,
-  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body`; vectors are scanned by Hamming
+  5, 2, 1)` ranks identifier phrases on `symbols` and words over `doc` and `body` on the FTS index alone
+  (`KEYWORD_RANK_SQL`, the best 400), and the view's predicate (`VISIBLE_SQL`) is applied to that ranking in order
+  until 100 chunks are seen (the ranking is asked again for four times as many when the view hides most of it: still
+  filtered before the limit, but only candidates are probed; joining every match first was 80 of 143 ms at 50,000
+  chunks, where a common word matches 40,000); vectors are scanned by Hamming
   distance over the sign bits and the nearest 200 re-ranked by their int8 values. A test or generated file keeps half
   its score. Hits in files changed since indexing are looked for again by their first line, else their symbol (20 files,
   50 ms). The scope (`code`, which holds tests below it, `tests`, `docs`, `all`) filters by file class. Every answer has
@@ -1365,15 +1427,25 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   (commit subjects without ticket ids, dropping those that name an identifier; the answer is the top-level forms the
   commit changed, found again at HEAD by name) into `runtime/crates/hrafn/eval/<project>/{dev,test}.jsonl`, which are
   frozen once written. `eval run ROOT --model ID --device cpu|gpu:ADAPTER` indexes the project into a scratch store,
-  embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level) and recall@5/@10 (file
-  level) with bootstrap intervals per stratum, and writes the run as JSON. `eval compare A.json B.json` is the gate:
-  the lower bound of the paired MRR@10 difference must be at least -0.01 overall and -0.03 per stratum, the index has no
-  coverage error and exact-symbol recall@1 is 1.0. It needs no hub.
-- **The MCP tool (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
+  embeds it in-process with the model, asks the set and prints MRR@10 and nDCG@10 (chunk level), recall@5/@10 and
+  file MRR@10 (file level: the first hit in a target file, whatever its symbol) with bootstrap intervals per stratum,
+  and writes the run as JSON. `eval compare [--by chunk|file] A.json B.json` is the gate: the lower bound of the paired
+  difference of MRR@10 (or, `--by file`, of file MRR@10, which is fair to a chunker that gives a language no symbols)
+  must be at least -0.01 overall and -0.03 per stratum of 30 rows or more (a smaller stratum is reported, not gated),
+  the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
+  refused by `--by file`. `eval run … --map TOKENS` also measures the repo map's yield at that budget, per question:
+  def-yield (the share of its target definitions shown) and file-yield (the share of its target files), with
+  intervals per stratum, for three contexts of the same token estimate: `map` (the global map, tests and docs
+  included), `map-around-search` (the top 5 hits' chunks, then the map focused on their files in what is left; the
+  focus files themselves are not in a focused map, so the hits stand for them) and `search` (hits packed in rank order,
+  each with its `path:lines` line). It needs no hub.
+- **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
-  session): the `search` tool (`query`, `scope`, `k`), pinned to the session's `cwd`. The agent's `mcpServers` list it
-  as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tool on stdio for an agent outside drgnx, its
-  questions going to the hub; `ratatoskr search index|query` are terminal clients of `search/index` and `search/query`.
+  session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
+  `outline` (`path`, `docs`), pinned to the session's `cwd`; the paths a tool takes are relative and stay inside it.
+  The agent's `mcpServers` list them as `drgnx-search`. `ratatoskr search mcp [ROOT]` serves the same tools on stdio
+  for an agent outside drgnx, their questions going to the hub; `ratatoskr search index|query|symbols|outline` are
+  terminal clients of the `search/*` methods.
 - **Servers as embedders (`embed.rs`, `Gate::embedders`).** The providers of kind `tei` and `ollama` with the `embed`
   capability embed through the hub's own gateway listener (`/p/ID/embed`, `/p/ID/api/embed`), so each request is in
   `spend`. An Ollama provider needs the model the `embed` role names for it, and its model name is

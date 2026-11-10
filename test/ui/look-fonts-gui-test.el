@@ -4,6 +4,7 @@
 ;; new faces.  The role faces are written with no restart; the doctor names a role whose family is not installed.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -19,7 +20,7 @@
 (defvar drgnx-look-font-code)
 (defvar drgnx-look-font-ui)
 
-(ert-deftest drgnx-ui-look-fonts/live-apply-every-frame ()
+(drgnx-look-gui-deftest drgnx-ui-look-fonts/live-apply-every-frame ()
   "Pattern D: a size change of the code role resizes `default' on two frames, with no restart; the old size comes
 back with the old value."
   (skip-unless (display-graphic-p))
@@ -37,10 +38,28 @@ back with the old value."
             (drgnx-look-fonts-apply)
             (drgnx-test-wait-presented)
             (should (equal before (mapcar (lambda (f) (frame-char-height f)) (list first second))))))
-      (drgnx-look-fonts-off)
-      (delete-frame second))))
+      (delete-frame second)
+      (drgnx-look-fonts-off))))
 
-(ert-deftest drgnx-ui-look-fonts/the-code-font-under-each-theme ()
+(drgnx-look-gui-deftest drgnx-ui-look-fonts/off-puts-the-session-font-back ()
+  "Pattern D: on, then off: the frame's `font' and `default''s attributes (for new frames and on the frame) are the
+session's again; off undoes all of on, at once."
+  (skip-unless (display-graphic-p))
+  (let* ((f (selected-frame))
+         (now (lambda () (list (frame-parameter f 'font) (face-attribute 'default :family f)
+                               (mapcar (lambda (a) (face-attribute 'default a t)) '(:family :foundry :height :weight)))))
+         (was (funcall now)))
+    (unwind-protect
+        (progn
+          (drgnx-look-fonts-on)
+          (drgnx-test-wait-presented)
+          (should-not (equal was (funcall now)))          ; on changed the font
+          (drgnx-look-fonts-off)
+          (drgnx-test-wait-presented)
+          (should (equal was (funcall now))))
+      (drgnx-look-fonts-off))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-fonts/the-code-font-under-each-theme ()
   "Pattern D: under each of drgnx's themes (they style `default', so Emacs skips its defface spec) the frame's
 `default' is the code role's, not the frame's own font: with the code role following the desktop and the desktop
 answering a 27 px monospace font (twice the 13.5 px default, so the frame's lines are plainly taller whatever fonts
@@ -72,7 +91,7 @@ and one loaded after alike."
       (mapc #'disable-theme custom-enabled-themes)
       (mapc (lambda (th) (load-theme th t)) (reverse was)))))
 
-(ert-deftest drgnx-ui-look-fonts/fallback-names-the-role ()
+(drgnx-look-gui-deftest drgnx-ui-look-fonts/fallback-names-the-role ()
   "Pattern D: a family that is not installed is reported for the role that asked for it."
   (skip-unless (display-graphic-p))
   (let ((drgnx-look-font-ui '(:family "Drgnx Missing Family Sans" :fallback ("sans-serif"))))

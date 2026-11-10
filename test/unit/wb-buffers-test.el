@@ -47,6 +47,38 @@
           (forward-line 1))
         (nreverse rows)))))
 
+(defun drgnx-buffers-test--window ()
+  (get-buffer-window drgnx-buffers-buffer-name))
+
+(defun drgnx-buffers-test--row-count ()
+  (with-current-buffer drgnx-buffers-buffer-name (count-lines (point-min) (point-max))))
+
+(ert-deftest drgnx-buffers/the-section-fits-its-rows ()
+  "The Open section is as tall as its rows and its header (no empty rows below the last), at most 0.3 of the frame;
+past that it holds whole rows and scrolls.  With no rows it is the header and the one line Emacs keeps."
+  (drgnx-buffers-test--with dir
+    ;; a section below the Open one, as the Explorer is: it takes what Open gives up
+    (drgnx-wb-hide-sidebar)
+    (drgnx-wb-define-section 'below :slot 0 :title "Below" :buffer (lambda () (get-buffer-create " *below*")))
+    (drgnx-wb-show-sidebar)
+    (drgnx-signal--flush)
+    (let ((frame-h (frame-inner-height)))
+      (when (zerop (drgnx-buffers-test--row-count))
+        ;; Emacs keeps one text line in a live window: the header and that line, no more
+        (should (<= (window-body-height (drgnx-buffers-test--window) t) (frame-char-height))))
+      (dolist (n '("a" "b" "c" "d")) (drgnx-buffers-test--open dir (concat n ".txt")))
+      (drgnx-signal--flush)
+      (let ((w (drgnx-buffers-test--window)) (rows (drgnx-buffers-test--row-count)))
+        (should (>= rows 4))
+        (when (<= (+ rows (window-header-line-height w)) (* 0.3 frame-h))
+          (should (= (window-body-height w t) (* rows (frame-char-height))))))
+      (dotimes (i 40) (drgnx-buffers-test--open dir (format "many-%02d.txt" i)))
+      (drgnx-signal--flush)
+      (let ((w (drgnx-buffers-test--window)))
+        (should (<= (window-pixel-height w) (floor (* 0.3 frame-h))))
+        (should (< (window-body-height w t) (* (drgnx-buffers-test--row-count) (frame-char-height))))
+        (should (zerop (mod (window-body-height w t) (frame-char-height))))))))
+
 (ert-deftest drgnx-buffers/rows-keep-their-open-order ()
   (drgnx-buffers-test--with dir
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt"))
@@ -79,7 +111,7 @@
       (let* ((tail (drgnx-buffers-test--tail a)) (i (string-search (drgnx-face-glyph 'dot) tail)))
         (should i)
         (should (get-text-property i 'drgnx-row-control tail))
-        (should (eq 'drgnx-buffers-modified (get-text-property i 'face tail)))
+        (should (memq 'drgnx-buffers-modified (ensure-list (get-text-property i 'face tail))))
         (should-not (string-search (drgnx-face-glyph 'close) tail))))))
 
 (defun drgnx-buffers-test--tail (b)
@@ -226,11 +258,11 @@ conses (a refresh of 500 rows made 20,000 conses interpreted, 4,000 compiled)."
     (let ((a (drgnx-buffers-test--open dir "a.txt")) (b (drgnx-buffers-test--open dir "b.txt")))
       (with-current-buffer drgnx-buffers-buffer-name
         (goto-char (drgnx-buffers--row-pos b))
-        (hl-line-highlight))
+        (drgnx-wb-selection-sync))
       (with-current-buffer a (insert "x"))           ; ● on a: a re-render
       (drgnx-signal--flush)
       (with-current-buffer drgnx-buffers-buffer-name
-        (should (= (overlay-start hl-line-overlay) (drgnx-buffers--row-pos b)))))))
+        (should (= (overlay-start drgnx-wb--selected-overlay) (drgnx-buffers--row-pos b)))))))
 
 (ert-deftest drgnx-buffers/no-re-render-while-a-button-is-held ()
   (drgnx-buffers-test--with dir

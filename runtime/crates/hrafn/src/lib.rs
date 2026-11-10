@@ -10,12 +10,15 @@ pub mod door;
 pub mod eval;
 pub mod files;
 pub mod fresh;
+pub mod graph;
 pub mod grep;
 pub mod index;
+pub mod map;
 mod memo;
 pub mod overlay;
 pub mod query;
 pub mod rank;
+pub mod refs;
 pub mod schema;
 pub mod store;
 pub mod symbols;
@@ -38,5 +41,5 @@ pub use watch::{
 pub use watch::{Adder, HostWatch, Walker};
 
 pub use schema::{MIGRATIONS, encode_symbol};
-pub use store::{ChunkIn, CodeStore, FileRow, StoreError, SymbolIn, VecRow, vec_key};
+pub use store::{ChunkIn, CodeStore, FileRow, RefIn, StoreError, SymbolIn, VecRow, vec_key};
 pub use tree::{TreeId, TreeRow, TreeState, View};

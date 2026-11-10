@@ -110,13 +110,14 @@
   ;; a frame of Nidhogg's Wayland shell counts device pixels: 640 logical at scale 2 are 1280 of them
   ;; `dlet': `features' is not special, so a `let' of it would be lexical here and change nothing
   (dlet ((features (cons 'nidhogg-wayland features)))
-    (should (equal (drgnx-test--palette-placed 3000) '(1280 240)))
-    (should (equal (drgnx-test--palette-placed 1000) '(936 240)))
+    ;; the input row and 10 rows of 20 px, then 6 + 30 logical pixels of gap and footer
+    (should (equal (drgnx-test--palette-placed 3000) '(1280 292)))
+    (should (equal (drgnx-test--palette-placed 1000) '(936 292)))
     (cl-letf (((symbol-function 'frame-scale-factor) (lambda (_) 2.0)))
       (should (= 16 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
   ;; elsewhere a frame counts logical pixels already
   (dlet ((features (remq 'nidhogg-wayland features)))
-    (should (equal (drgnx-test--palette-placed 3000) '(640 240)))
+    (should (equal (drgnx-test--palette-placed 3000) '(640 256)))
     (should (= 8 (alist-get 'internal-border-width (drgnx-palette-frame--params 'parent))))))
 
 (ert-deftest core-palette-float-stays-for-a-minibuffer-on-top ()
@@ -155,3 +156,118 @@
       (should (equal modes '(1)))
       (drgnx-palette-frame-buffer -1)
       (should (equal modes '(-1 1))))))
+
+;;;; Files and Agents (palette.html): a project's files in the Files group, a row that asks an agent in Agents
+
+(defmacro drgnx-test--palette-in-project (&rest body)
+  "BODY in a temp git-less project (a `.project' file marks it) holding test/unit/gateway-test.el and README.md,
+with an empty registry; `dir' is its root."
+  (declare (indent 0))
+  `(let* ((dir (file-name-as-directory (make-temp-file "palette-files" t)))
+          (default-directory dir)
+          (drgnx-commands--table (make-hash-table :test #'eq)) (drgnx-commands--order nil)
+          (project-vc-extra-root-markers '(".project")))
+     (unwind-protect
+         (progn (make-directory (expand-file-name "test/unit" dir) t)
+                (dolist (f '(".project" "README.md" "test/unit/gateway-test.el"))
+                  (write-region "" nil (expand-file-name f dir) nil 'silent))
+                ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest drgnx-palette/the-files-group-lists-the-projects-files ()
+  "Each file of the project is a row of the Files group: the file's name, its folder beside it."
+  (drgnx-test--palette-in-project
+    (let ((files (drgnx-palette-files)))
+      (should (assoc "File: test/unit/gateway-test.el" files))
+      (should (equal (cdr (assoc "File: test/unit/gateway-test.el" files))
+                     (expand-file-name "test/unit/gateway-test.el" dir)))
+      (let ((drgnx-palette--file-rows (drgnx-palette--file-table files)))
+        (should (equal (drgnx-palette-group "File: test/unit/gateway-test.el") "Files"))
+        (should (string-match-p "gateway-test\\.el\\'"
+                                (substring-no-properties (drgnx-palette--shown "File: test/unit/gateway-test.el"))))
+        (should (string-match-p "test/unit"
+                                (substring-no-properties (drgnx-palette--file-annotation "File: test/unit/gateway-test.el"))))))))
+
+(ert-deftest drgnx-palette/choosing-a-file-row-visits-it ()
+  (drgnx-test--palette-in-project
+    (let (visited)
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "File: test/unit/gateway-test.el"))
+                ((symbol-function 'find-file) (lambda (f &rest _) (setq visited f))))
+        (drgnx-palette))
+      (should (equal visited (expand-file-name "test/unit/gateway-test.el" dir))))))
+
+(ert-deftest drgnx-palette/the-agents-row-asks-with-what-is-typed ()
+  "With an `agents-ask' command, the typed text is a row of the Agents group; choosing it, Ctrl+Return, or `@' first
+asks an agent with that text."
+  (drgnx-test--palette-in-project
+    (let (asked)
+      (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents"
+                            :command (lambda (text) (interactive (list "prompted")) (push text asked)))
+      (should (equal (drgnx-palette-ask-label "run te") "Agents: Ask an agent: \"run te\""))
+      (should (equal (drgnx-palette-group (drgnx-palette-ask-label "run te")) "Agents"))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "Agents: Ask an agent: \"run te\"")))
+        (drgnx-palette))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "@ fix the flaky test ")))
+        (drgnx-palette))
+      (should (equal asked '("fix the flaky test" "run te"))))))
+
+(ert-deftest drgnx-palette/no-agents-row-without-the-command ()
+  (drgnx-test--palette-in-project
+    (should-not (drgnx-palette-ask-label "run te"))))
+
+(ert-deftest drgnx-palette/groups-in-the-mockups-order ()
+  "palette.html's groups: Commands, then Files, then Agents.  The ask row is the fallback: last, never first while a
+command or a file matches; recent commands still lead their group."
+  (drgnx-test--palette-in-project
+    (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents" :command #'ignore)
+    (drgnx-command-define 'run-file :title "Run Tests in This File" :category "Tests" :command #'ignore)
+    (drgnx-command-define 'rerun :title "Rerun Last Tests" :category "Tests" :command #'ignore)
+    (let* ((cands (drgnx-palette-candidates))
+           (files (drgnx-palette-files))
+           (drgnx-palette--file-rows (drgnx-palette--file-table files))
+           (drgnx-palette--history (list (list 'rerun (floor (float-time)))))
+           (ask (drgnx-palette-ask-label "run te"))
+           (labels (list ask "File: test/unit/gateway-test.el" "Tests: Run Tests in This File"
+                         "Tests: Rerun Last Tests"))
+           (sorted (drgnx-palette-sort labels cands)))
+      (should (equal (mapcar #'drgnx-palette-group sorted) '("Commands" "Commands" "Files" "Agents")))
+      (should (equal (car sorted) "Tests: Rerun Last Tests"))
+      (should (equal (car (last sorted)) ask)))))
+
+(require 'drgnx-palette-frame)
+
+;; The coordinator's ruling: once the user types, match quality first, recency for near-ties
+(ert-deftest drgnx-palette/typed-text-ranks-by-match-then-recency ()
+  "With text typed, how well a row matches ranks first (word starts, the words in order) and a recent run only
+breaks near-ties, as in VS Code: \"run te\" gives palette.html's order with Rerun run 2 minutes ago.  With nothing
+typed, recent first."
+  (drgnx-test--palette-in-project
+    (pcase-dolist (`(,id ,title ,cat) '((run-file "Run Tests in This File" "Tests") (run-point "Run Test at Point" "Tests")
+                                        (rerun "Rerun Last Tests" "Tests") (run-term "Run in Terminal…" "Terminal")
+                                        (rotate "Rotate Cloud CA" "Runners")))
+      (drgnx-command-define id :title title :category cat :command #'ignore))
+    (let* ((cands (drgnx-palette-candidates))
+           (drgnx-palette--history (list (list 'rerun (- (floor (float-time)) 125))))
+           (labels (list "Runners: Rotate Cloud CA" "Terminal: Run in Terminal…" "Tests: Rerun Last Tests"
+                         "Tests: Run Tests in This File" "Tests: Run Test at Point")))
+      (should (equal (drgnx-palette-sort labels cands nil "run te")
+                     '("Tests: Run Tests in This File" "Tests: Run Test at Point" "Tests: Rerun Last Tests"
+                       "Terminal: Run in Terminal…" "Runners: Rotate Cloud CA")))
+      (should (equal (car (drgnx-palette-sort labels cands nil "")) "Tests: Rerun Last Tests"))
+      ;; a recent row that matches clearly worse stays below the better matches
+      (let ((in (drgnx-palette-sort labels cands nil "run in")))
+        (should (equal (car in) "Terminal: Run in Terminal…"))
+        (should (< (seq-position in "Tests: Run Tests in This File") (seq-position in "Tests: Rerun Last Tests")))))))
+
+(ert-deftest drgnx-palette/the-hint-and-the-footer-name-every-key ()
+  "palette.html's input row ends \"Commands · # code · @ agents\" (the last when an agent can be asked); its footer
+names move, run, preview and close."
+  (drgnx-test--palette-in-project
+    (with-temp-buffer
+      (should-not (string-search "agents" (substring-no-properties (drgnx-palette-frame--hint))))
+      (drgnx-command-define 'agents-ask :title "Ask an Agent…" :category "Agents" :command #'ignore)
+      (let ((hint (substring-no-properties (drgnx-palette-frame--hint))))
+        (should (string-search "code" hint))
+        (should (string-search "agents" hint)))
+      (let ((foot (substring-no-properties (drgnx-palette-frame--footer))))
+        (dolist (w '("move" "run" "preview" "close")) (should (string-search w foot)))))))

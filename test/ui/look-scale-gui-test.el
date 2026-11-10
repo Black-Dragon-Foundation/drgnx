@@ -5,6 +5,7 @@
 ;; fonts at 96 dpi × scale × zoom.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -51,16 +52,19 @@ the status bar's row."
   (should (= (drgnx-statusbar--row-height frame) (floor (+ (* 24 s) 0.5 1e-9)))))
 
 (defmacro drgnx-look-scale-ui-test--with (&rest body)
-  "BODY with the density on at comfortable; the UI scale back to 100 % on every root frame afterwards."
+  "BODY with the density on at comfortable; the UI scale back to 100 % on every root frame afterwards, and the repeat
+map a zoom command left waiting for the next key ended (`set-transient-map': no next command runs here)."
   (declare (indent 0))
-  `(let ((drgnx-look-density 'comfortable))
+  `(let ((drgnx-look-density 'comfortable) (pre-was (default-value 'pre-command-hook)))
      (unwind-protect
          (progn (drgnx-look-density-on) ,@body)
+       (let ((this-command 'ignore))                     ; as a key outside the map would: each clears itself
+         (dolist (fn (default-value 'pre-command-hook)) (unless (memq fn pre-was) (funcall fn))))
        (dolist (f (drgnx-look-scale--roots)) (drgnx-look-scale-apply-frame f 100))
        (drgnx-look-scale--follow)
        (drgnx-look-density-off))))
 
-(ert-deftest drgnx-ui-look-scale/ui-scale-scales-rows-and-fonts ()
+(drgnx-look-gui-deftest drgnx-ui-look-scale/ui-scale-scales-rows-and-fonts ()
   "Pattern D: at 110 % every size is the display scale × 1.1: the pixel rule, the default font (a fresh open at 96 ×
 s × 1.1 dpi), the code line (21 there) and the status bar's row (24); back at 100 % they are the scale's own."
   (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-set-frame-text-zoom)))
@@ -78,7 +82,7 @@ s × 1.1 dpi), the code line (21 there) and the status bar's row (24); back at 1
       (drgnx-look-scale-ui-test--sizes-at f s)
       (should (= (drgnx-look-scale-ui-test--font-px f) px100)))))
 
-(ert-deftest drgnx-ui-look-scale/applies-at-once ()
+(drgnx-look-gui-deftest drgnx-ui-look-scale/applies-at-once ()
   "Pattern D: Zoom In shows the new sizes at the next redisplay, in the same frame (no new frame, no restart); Reset
 Zoom gives the old ones back."
   (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-set-frame-text-zoom)))
@@ -100,7 +104,7 @@ Zoom gives the old ones back."
       (should (= drgnx-look-scale 100))
       (should (= (drgnx-look-scale-ui-test--font-px f) px100)))))
 
-(ert-deftest drgnx-ui-look-scale/monitor-override-wins ()
+(drgnx-look-gui-deftest drgnx-ui-look-scale/monitor-override-wins ()
   "Pattern D: with DRGNX_UI_SCALES=\"1.25 2\", an override of 110 % for the frame's monitor (100 % for the other)
 gives the frame the monitor's scale × 1.1 (1.375 on the first); clearing it gives the global 100 % back, at once."
   (skip-unless (and (display-graphic-p) (fboundp 'nidhogg-set-frame-text-zoom)

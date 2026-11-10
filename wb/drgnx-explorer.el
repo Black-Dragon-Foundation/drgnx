@@ -19,7 +19,6 @@
 (require 'subr-x)
 (require 'drgnx-guard)
 (require 'text-property-search)
-(require 'hl-line)
 (require 'project)
 (require 'filenotify)
 (require 'drgnx-wb)
@@ -311,11 +310,10 @@ of the row removes it.  Add and remove with `drgnx-explorer-add-decorator' and `
   (setq drgnx-explorer-decorators (delq fn (copy-sequence drgnx-explorer-decorators)))
   (drgnx-explorer--repaint))
 
-(defvar drgnx-explorer--fontify-point nil "Point of the Explorer buffer while `drgnx-explorer--fontify' paints.")
-
-(defun drgnx-explorer--git-decorate (bol eol path dirp name-start)
+(defun drgnx-explorer--git-decorate (_bol eol path dirp name-start)
   "Dim an ignored file's name, and put at the right edge the status letter (● for a folder with changes) and the ⋯ control
-\(`drgnx-wb-row-tail-overlay'): the control shows on the row at point, and is hidden on the others until hovered.
+\(`drgnx-wb-row-tail-overlay'): the control is hidden until the row is hovered; the selected row's is drawn in the
+selection's face.
 A row of a repository whose status is not read yet asks for it (`drgnx-explorer--git-unread')."
   (when (and drgnx-explorer-git (drgnx-git-unread-p path)) (drgnx-explorer--git-unread))
   (let* ((status (and drgnx-explorer-git (drgnx-git-status path)))
@@ -324,8 +322,7 @@ A row of a repository whose status is not read yet asks for it (`drgnx-explorer-
     ;; the name keeps the text colour (window-dark.html `.row'): the state is the mark; an ignored file is dimmed
     (when (eq status 'ignored) (add-face-text-property name-start eol (cadr look)))
     ;; a terminal window has no fringe: the overlay's padding keeps the last column free for the truncation `$'
-    (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status))
-                               (and drgnx-explorer--fontify-point (<= bol drgnx-explorer--fontify-point eol)))))
+    (drgnx-wb-row-tail-overlay eol mark (and mark (drgnx-wb-git-mark-face status)))))
 
 (defun drgnx-explorer--icons (bol depth name-start dirp name)
   "Draw the row's chevron and file or folder icon over the two characters of its prefix, and the indent of each
@@ -347,7 +344,6 @@ level as `tree-indent' pixels, when icons are drawn as images (graphical frames)
   "Paint the rows between BEG and END (jit-lock: only what is displayed): guides and chevron, the
 name's face, the hover highlight, the icons, the git status and the ⋯ control."
   (save-excursion
-    (setq drgnx-explorer--fontify-point (point))
     (goto-char beg)
     (forward-line 0)
     (let ((inhibit-read-only t) (end (save-excursion (goto-char end) (pos-eol)))
@@ -471,7 +467,7 @@ tree starts at its entries, the island's header names the project); it stays in 
             (push (list (vector path 0 t nil)) data)
             (push (drgnx-explorer--insert-subtree path 1) data)))
         (setq drgnx-explorer--rows (apply #'vconcat (nreverse data))))
-      (when hl-line-mode (hl-line-highlight))
+      (drgnx-wb-selection-sync)
       (drgnx-explorer--sync-watches)
       (drgnx-explorer--git-refresh))))
 
@@ -629,7 +625,7 @@ split, a plain one may join.  The folder's own row and everything else stay."
       (delete-region bol (save-excursion (goto-char bol) (forward-line (- j i)) (point)))
       (let ((new (save-excursion (goto-char bol) (drgnx-explorer--insert-subtree (aref v 3) (aref v 1) head))))
         (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 i) new (seq-subseq rows j)))))
-    (when hl-line-mode (hl-line-highlight))
+    (drgnx-wb-selection-sync)
     (drgnx-explorer--sync-watches)))
 
 (defun drgnx-explorer--patch-dir (dir)
@@ -672,7 +668,7 @@ With Nidhogg's workers on, a local DIR is read off the main thread instead: its 
             (delete-region next (save-excursion (goto-char next) (forward-line (- j i 1)) (point)))
             (let ((new (save-excursion (goto-char next) (drgnx-explorer--insert-subtree dir (1+ (aref v 1))))))
               (setq drgnx-explorer--rows (vconcat (seq-subseq rows 0 (1+ i)) new (seq-subseq rows j)))))
-          (when hl-line-mode (hl-line-highlight))
+          (drgnx-wb-selection-sync)
           (drgnx-explorer--sync-watches)))))))
 
 (defun drgnx-explorer--row-pos (path)
@@ -770,7 +766,7 @@ selected when its row is there."
                   (set-window-start window (save-excursion (goto-char pos)
                                                            (forward-line (- (/ (window-body-height window) 4)))
                                                            (pos-bol))))
-                (save-excursion (goto-char pos) (when hl-line-mode (hl-line-highlight))))
+                (save-excursion (goto-char pos) (drgnx-wb-selection-sync)))
             (goto-char pos))
           t)))))
 
@@ -1058,7 +1054,7 @@ local folders only: a remote root is left out."
           (setq found i))))
     (when found
       (goto-char (drgnx-explorer--line-pos found))
-      (when hl-line-mode (hl-line-highlight)))))
+      (drgnx-wb-selection-sync))))
 
 (defun drgnx-explorer-type ()
   "Typing in the Explorer jumps to the next row starting with what you typed (as VS Code)."
@@ -1252,7 +1248,7 @@ tree is filtered by them once input pauses."
       (let ((drgnx-explorer--remote-reads t))              ; a command of the user
         (drgnx-explorer--render))
       (drgnx-view-restore-places (plist-get state :views) #'drgnx-explorer--row-pos)
-      (when hl-line-mode (hl-line-highlight)))
+      (drgnx-wb-selection-sync))
     (drgnx-explorer--plain-title)
     (when drgnx-explorer--dirty (drgnx-explorer--apply-file-events))))
 
@@ -1332,7 +1328,7 @@ inside another one selected goes: the folder carries it."
     (when-let* ((pos (drgnx-explorer--row-pos path)))
       (goto-char pos)
       (when-let* ((w (get-buffer-window (current-buffer)))) (set-window-point w pos))
-      (when hl-line-mode (hl-line-highlight)))))
+      (drgnx-wb-selection-sync))))
 
 (defun drgnx-explorer--parent (path) (directory-file-name (file-name-directory (directory-file-name path))))
 
@@ -1642,10 +1638,8 @@ is read.  File events and timers read none."
 (define-derived-mode drgnx-explorer-mode nil "Explorer"
   "The drgnx Explorer (file tree)."
   (setq buffer-read-only t buffer-undo-list t truncate-lines t cursor-type nil mode-line-format nil)
-  (setq-local hl-line-sticky-flag t)
   ;; A press on a partly visible row must not scroll: the row would move under the pointer.
   (setq-local scroll-margin 0 make-cursor-line-fully-visible nil)
-  (hl-line-mode 1)
   (drgnx-wb-rows-setup)
   (jit-lock-register #'drgnx-explorer--fontify)
   (add-hook 'kill-buffer-hook #'drgnx-explorer--unwatch-all nil t)

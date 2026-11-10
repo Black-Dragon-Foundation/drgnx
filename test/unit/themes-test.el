@@ -12,14 +12,15 @@
   '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
 
 (defconst drgnx-themes-test--designs
-  ;; design section 3.4, as the table prints them (after the review's stronger subtle and comment)
+  ;; design section 3.4, as the table prints them (after the review's stronger subtle and comment, and the contrast
+  ;; ruling of 2026-11-10: dark's comment, light's comment, high contrast's selection)
   '((dark (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (sel . "#243150") (fg . "#e4e5ea")
-          (muted . "#a2a5b2") (subtle . "#878b98") (comment . "#858996") (accent . "#7aa5ff") (focus . "#7aa5ff")
+          (muted . "#a2a5b2") (subtle . "#878b98") (comment . "#9599a4") (accent . "#7aa5ff") (focus . "#7aa5ff")
           (attention . "#ff9566"))
     (light (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (sel . "#dbe5fb") (fg . "#1c1e23")
-           (muted . "#545866") (subtle . "#656977") (comment . "#686c7a") (accent . "#2c5fd4") (focus . "#2c5fd4")
+           (muted . "#545866") (subtle . "#656977") (comment . "#595d69") (accent . "#2c5fd4") (focus . "#2c5fd4")
            (attention . "#b8461a"))
-    (hc (gap . "#000000") (editor . "#000000") (panel . "#000000") (sel . "#1f3a7a") (fg . "#ffffff")
+    (hc (gap . "#000000") (editor . "#000000") (panel . "#000000") (sel . "#1a3166") (fg . "#ffffff")
         (muted . "#d6d8de") (subtle . "#bfc2ca") (comment . "#bfc2ca") (accent . "#a8c6ff") (focus . "#ffd36b")
         (attention . "#ffb38a") (sel-fg . "#ffffff"))))
 
@@ -124,10 +125,21 @@ high contrast, where tints are black, they are ringed in their own colour."
     (drgnx-themes-test--with theme
       (should (equal (drgnx-look-token 'gap variant) (drgnx-face-color 'tab-bar :background 'gui)))
       (pcase-dolist (`(,face ,fg ,bg) '((drgnx-chip-quiet muted sel-quiet) (drgnx-chip-attention attention attention-tint)
-                                        (drgnx-chip-accent accent accent-tint)))
+                                        (drgnx-chip-accent accent accent-tint) (drgnx-chip-ok ok ok-tint)
+                                        (drgnx-chip-warn warn warn-tint) (drgnx-chip-error error error-tint)))
         (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
                        (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui))))
         (should (eq (eq variant 'hc) (and (plist-get (drgnx-faces--clause-plist face 'gui) :box) t)))))))
+
+;; The manager's ruling (look step 5b): the inactive selection is clearly visible
+(ert-deftest drgnx-themes/the-inactive-selection-stands-off-the-panel ()
+  "The selected row of a list without the focus (`sel-inactive') is at least 1.25:1 against the panel, and above the
+hover, so the state ladder reads rest < hover < inactive selection in every variant."
+  (dolist (variant '(dark light hc))
+    (let ((panel (drgnx-look-token 'panel variant)))
+      (should (>= (drgnx-color-contrast (drgnx-look-token 'sel-inactive variant) panel) 1.25))
+      (should (> (drgnx-color-contrast (drgnx-look-token 'sel-inactive variant) panel)
+                 (drgnx-color-contrast (drgnx-look-token 'hover variant) panel))))))
 
 ;; Design §3.5: a button is a quiet fill in a 1 px hairline (radius 6), the primary one the accent's fill; a keycap is
 ;; subtle text in a strong hairline (radius 4)
@@ -145,6 +157,37 @@ ringed in the strong border, with no fill of its own."
                                (drgnx-look-token ring variant) '(1 . 1))
                          (list face (drgnx-face-color face :foreground 'gui) (drgnx-face-color face :background 'gui)
                                (plist-get box :color) (plist-get box :line-width)))))))))
+
+;; window-dark.html `.ln .sel' (the selection, radius 3) and design "Matches" (a 25 % accent tint; the current match
+;; gets the accent ring); dark's matches are 18 % and edged in the accent at 72 % (the user's ruling of 2026-11-10)
+(ert-deftest drgnx-themes/overlays-are-tints-in-inside-boxes ()
+  "The region is `sel' in a box of its own colour; `lazy-highlight' is the `match' tint (the accent over the editor)
+in a box of `match-edge'; `isearch' is that tint ringed 1 px in the accent, and keeps the text's own colour.  Every box is drawn
+inside the glyphs (negative widths), so it never moves text or grows a row; under Glitnir it is rounded 3 (logical; the
+decoration faces scale it per frame).  The region stops at the line's end: no square block past it.  A diff's
+refined words are their `refine-*' tint (over the line's tint) in a box of `refine-*-edge': rounded in-text runs."
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (let ((tint (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant)
+                                    (if (eq variant 'dark) 0.18 0.25)))
+            (edge (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant)
+                                    (if (eq variant 'dark) 0.72 0.25))))
+        (pcase-dolist (`(,face ,bg ,style ,ring) `((region ,(drgnx-look-token 'sel variant) flat-button nil)
+                                                   (lazy-highlight ,tint nil ,edge)
+                                                   (isearch ,tint nil ,(drgnx-look-token 'accent variant))
+                                                   (diff-refine-added ,(drgnx-look-token 'refine-add variant)
+                                                                      nil ,(drgnx-look-token 'refine-add-edge variant))
+                                                   (diff-refine-removed ,(drgnx-look-token 'refine-del variant)
+                                                                        nil ,(drgnx-look-token 'refine-del-edge variant))
+                                                   (diff-refine-changed ,(drgnx-look-token 'refine-chg variant)
+                                                                        nil ,(drgnx-look-token 'refine-chg-edge variant))))
+          (let* ((p (drgnx-faces--clause-plist face 'gui)) (box (plist-get p :box)))
+            (should (equal (list face bg '(-1 . -1) style ring (and (featurep 'glitnir) 3))
+                           (list face (drgnx-face-color face :background 'gui) (plist-get box :line-width)
+                                 (plist-get box :style) (plist-get box :color) (plist-get box :corner-radius))))
+            ;; said, not left out: a theme spec inherits `:extend' from the defface (region's is t)
+            (should (equal (list face t nil) (list face (and (plist-member p :extend) t) (plist-get p :extend))))
+            (unless (eq face 'region) (should (equal (list face nil) (list face (plist-get p :foreground)))))))))))
 
 (ert-deftest drgnx-themes/variant-follows-the-theme ()
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
@@ -180,7 +223,9 @@ not loaded, so a module's faces count without its setup."
   '(;; the defface inherits `region' for a theme that is not drgnx's colour; a button ends with its label
     (drgnx-control-primary region :extend)
     ;; how far the selection reaches is the look's highlight step's (drgnx-selected is a row's colour, not the region)
-    (drgnx-selected region :extend))
+    (drgnx-selected region :extend)
+    ;; the region's rounded run is the editor's; a row's selection draws its own inset box (wb/drgnx-wb.el)
+    (drgnx-selected region :box))
   "(FACE PARENT ATTRIBUTE): what drgnx's themes drop from a defface's parent on purpose.")
 
 (ert-deftest drgnx-themes/a-theme-spec-keeps-the-defface-inherit ()
@@ -206,4 +251,42 @@ dropped on purpose (`drgnx-themes-test--dropped-on-purpose')."
     (should (equal nil (nreverse lost)))))
 
 (provide 'themes-test)
+;; Look step 7: the problems at a line's end are chips (window-dark.html `.diag')
+(ert-deftest drgnx-themes/end-of-line-diagnostics-are-chips ()
+  "A diagnostic shown at the line's end is a chip in its kind's colour on its tint, in the caption role."
+  (require 'flymake)
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (pcase-dolist (`(,face ,fg ,bg) '((flymake-error-echo-at-eol error error-tint)
+                                        (flymake-warning-echo-at-eol warn warn-tint)
+                                        (flymake-note-echo-at-eol info info-tint)))
+        (unless (eq variant 'hc)
+          (should (equal (list face (drgnx-look-token fg variant) (drgnx-look-token bg variant))
+                         (list face (drgnx-face-color face :foreground 'gui)
+                               (drgnx-face-color face :background 'gui)))))))))
+
+;; Look step 7: sh-script's here-documents were bold yellow (the audit's "yellow-heavy" G7)
+(ert-deftest drgnx-themes/shell-scripts-in-the-code-colours ()
+  "A here-document is in the string colour, not bold; a command substitution in the function colour."
+  (require 'sh-script)
+  (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
+    (drgnx-themes-test--with theme
+      (should (equal (drgnx-look-token 'str variant) (drgnx-face-color 'sh-heredoc :foreground 'gui)))
+      (should (eq 'normal (plist-get (drgnx-faces--clause-plist 'sh-heredoc 'gui) :weight)))
+      (should (equal (drgnx-look-token 'fn variant) (drgnx-face-color 'sh-quoted-exec :foreground 'gui))))))
+
+;; The coordinator's ruling (look step 7): keycaps are text-height, not row-height boxes
+(ert-deftest drgnx-themes/keycaps-fit-their-text-where-boxes-can ()
+  "Where this Emacs's boxes take `:fit text', a keycap's ring asks for it, so a palette row's line spacing does not
+make it tall; where they cannot, the key is left out (a face with it would be refused).  The specs are read, not
+enabled: this Emacs may refuse the key."
+  (cl-letf (((symbol-function 'featurep) (let ((real (symbol-function 'featurep)))
+                                           (lambda (f &optional sub) (or (eq f 'glitnir) (funcall real f sub))))))
+    (dolist (fit '(t nil))
+      (let ((drgnx-theme--box-fit fit))
+        (dolist (variant '(dark light hc))
+          (let* ((spec (cadr (assq 'drgnx-keycap (drgnx-theme--specs variant))))
+                 (box (plist-get (cdar spec) :box)))
+            (should (eq fit (eq 'text (plist-get box :fit))))))))))
+
 ;;; themes-test.el ends here

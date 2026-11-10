@@ -868,6 +868,13 @@ floods, Replace) profiles from before its first key to the end of its completion
 The setup is never profiled. The report is the last of the repeats, and is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
 the budgets: read the report, then run the workload again without it.
 
+A `frame-parameter` in a report's most-sampled functions is a parameter Emacs does not answer itself: for anything
+but a few (`name`, the scroll bars, the colours, `display-type`, `background-mode`) it copies the frame's whole
+parameter list (about 1.4 kB on a graphical frame) to read one value. Keep such a value where reading it conses
+nothing (the UI scale is a frame-weak table, `drgnx-pixels-set-ui-scale`), or check something cheaper first (the
+save before a client closes looks at its frames only when the client made one), and hold the path to a cons check
+like `drgnx-pixels/the-scale-conses-nothing`.
+
 ## Tests
 
 `test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_WORKLOADS`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing
@@ -894,8 +901,9 @@ desktop's pinned island (`perf-exclusive.sh` as the outer wrapper, `DRGNX_PERF_C
 
 | Row | Where | Budget |
 |---|---|---|
-| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s |
-| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms |
+| tier 1 of a drgnx checkout; one saved file searchable | `drgnx-ratatoskr/tests/timing.rs` (`tier1_of_a_checkout_and_one_saved_file`) | 60 s; 1 s (the references cost about 12 % of a full tier 1, paired on the island; the row prints the store's growth from them) |
+| `search/query` p95, 50,000 and 100,000 synthetic chunks, vectors on | the same file (`query_p95_at_50k_chunks`, `…_100k_…`) | 100 ms; 200 ms |
+| the agent tools at 50,000 synthetic chunks with references (each function calls 4 others, drawn Zipf-like): repo map cold (graph built) and warm p95, usages p95, symbols p95, outline p95, graph cache | the same file (`agent_tools_at_50k_chunks`) | 1,000 ms, 150 ms; 50 ms; 20 ms; 10 ms; 64 MB |
 | built-in embedding tokens/s (GPU), VRAM at 4,096 tokens | `hrafn-embed/tests/timing.rs` (`bench_tokens_per_s`) | 20,000; 800 MB |
 | CPU fallback tokens/s on 4 cores | `bench_cpu` | 680 |
 | one query embedding p95 | `query_p95` and `bench_cpu` | 50 ms |

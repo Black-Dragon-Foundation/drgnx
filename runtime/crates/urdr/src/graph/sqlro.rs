@@ -67,8 +67,8 @@ pub async fn run(
 ) -> Result<Rows, SqlRefusal> {
     let path = pool.path().to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let (conn, denied) = open(&path)?;
-        query(&conn, &denied, &sql, &params, deadline, row_cap)
+        let (mut conn, denied) = open(&path)?;
+        query(&mut conn, &denied, &sql, &params, deadline, row_cap)
     })
     .await
     .unwrap_or_else(|_| Err(SqlRefusal::Sql("the query panicked".into())))
@@ -78,7 +78,7 @@ pub async fn run(
 /// authorizer installed for the connection's life (a statement may be re-prepared during a step).
 fn open(path: &Path) -> Result<(Connection, Denied), SqlRefusal> {
     let sql_err = |e: rusqlite::Error| SqlRefusal::Sql(e.to_string());
-    let conn = crate::open_readonly(path).map_err(|e| SqlRefusal::Sql(e.to_string()))?;
+    let mut conn = crate::open_readonly(path).map_err(|e| SqlRefusal::Sql(e.to_string()))?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
         .map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
@@ -159,7 +159,7 @@ fn action_name(action: AuthAction<'_>) -> String {
 
 /// Prepare and step one statement on a connection made by [`open`], with the deadline and the row cap.
 fn query(
-    conn: &Connection,
+    conn: &mut Connection,
     denied: &Mutex<Option<String>>,
     sql: &str,
     params: &[Value],
@@ -417,13 +417,13 @@ mod tests {
             "load_extension",
         );
         // With the extension API switched on, only the authorizer stands between the SQL and the loader.
-        let (conn, denied) = open(pool.path()).unwrap();
+        let (mut conn, denied) = open(pool.path()).unwrap();
         // SAFETY: the handle is this live connection's; the call only flips its extension-loading switch.
         let rc = unsafe { rusqlite::ffi::sqlite3_enable_load_extension(conn.handle(), 1) };
         assert_eq!(rc, rusqlite::ffi::SQLITE_OK);
         refused(
             query(
-                &conn,
+                &mut conn,
                 &denied,
                 "select load_extension('/nonexistent/libx')",
                 &[],

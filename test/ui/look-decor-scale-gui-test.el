@@ -1,9 +1,10 @@
 ;;; look-decor-scale-gui-test.el --- GUI tests: the decoration boxes at the frame's scale (run by `drgnx test --ui') -*- lexical-binding: t -*-
 ;; test-class: det
 ;; Pattern D: the boxes are read from the frame's faces after each change.  The run's scale is DRGNX_UI_SCALE (1,
-;; 1.25, 4/3, 2); the UI scale (the root frame's `drgnx-ui-scale') takes the frame to 2 within the row.
+;; 1.25, 4/3, 2); the UI scale (`drgnx-pixels-set-ui-scale' on the root frame) takes the frame to 2 within the row.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-uitest)
 
@@ -30,7 +31,7 @@
     (when (featurep 'glitnir)
       (should (equal (plist-get card :corner-radius) (nth 2 want))))))
 
-(ert-deftest drgnx-ui-look-decor/boxes-follow-the-scale ()
+(drgnx-look-gui-deftest drgnx-ui-look-decor/boxes-follow-the-scale ()
   "Pattern D: with the boxes on, the frame's card edge, focus ring and card radius are the run's scale's; a UI scale
 that takes the frame to 2 gives 2's at once (the density's change hook, which the UI scale runs); a scale change
 \(Nidhogg's `nidhogg-frame-scale-change-functions') after the UI scale goes gives the run's values back; off, the
@@ -44,16 +45,16 @@ logical boxes come back."
             (face-spec-set face `((t :inherit secondary-selection :box ,(drgnx-decor-box face)))))
           (drgnx-decor-scale-on)
           (drgnx-look-decor-scale-ui-test--check f)
-          (set-frame-parameter f 'drgnx-ui-scale (/ 2.0 (drgnx-pixels-scale f)))
+          (drgnx-pixels-set-ui-scale f (/ 2.0 (drgnx-pixels-scale f)))
           (run-hooks 'drgnx-look-density-changed-hook)
           (should (< (abs (- (drgnx-pixels-scale f) 2.0)) 0.001))
           (drgnx-look-decor-scale-ui-test--check f)
-          (set-frame-parameter f 'drgnx-ui-scale nil)
+          (drgnx-pixels-set-ui-scale f nil)
           (run-hook-with-args 'nidhogg-frame-scale-change-functions f)
           (drgnx-look-decor-scale-ui-test--check f)
           (drgnx-decor-scale-off)
           (should (equal (plist-get (face-attribute 'drgnx-card-single :box f) :line-width) 1)))
-      (set-frame-parameter f 'drgnx-ui-scale nil)
+      (drgnx-pixels-set-ui-scale f nil)
       (drgnx-decor-scale-off)
       (dolist (face faces) (face-spec-set face (get face 'face-defface-spec))))))
 

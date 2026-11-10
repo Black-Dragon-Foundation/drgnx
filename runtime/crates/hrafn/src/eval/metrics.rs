@@ -17,6 +17,10 @@ pub struct Judged {
     /// The share of the target files found in the top 5, and in the top 10.
     pub file_at5: f64,
     pub file_at10: f64,
+    /// Reciprocal rank of the first hit in any target file in the top 10, whatever its symbol, else 0; none in a
+    /// report made before it was measured.
+    #[serde(default)]
+    pub file_rr: Option<f64>,
 }
 
 fn is_target(t: &(String, String), h: &Hit) -> bool {
@@ -61,11 +65,16 @@ pub fn judge(targets: &[(String, String)], hits: &[Hit]) -> Judged {
             got.len() as f64 / files.len() as f64
         }
     };
+    let file_rr = top
+        .iter()
+        .position(|h| files.contains(h.path.as_str()))
+        .map_or(0.0, |r| 1.0 / (r as f64 + 1.0));
     Judged {
         rr,
         ndcg: if ideal > 0.0 { dcg / ideal } else { 0.0 },
         file_at5: at(5),
         file_at10: at(10),
+        file_rr: Some(file_rr),
     }
 }
 
@@ -124,13 +133,21 @@ pub struct Summary {
     pub ndcg_ci: (f64, f64),
     pub recall5: f64,
     pub recall10: f64,
+    /// File MRR@10 (see [`Judged::file_rr`]); 0 in a report made before it was measured.
+    #[serde(default)]
+    pub file_mrr: f64,
+    #[serde(default)]
+    pub file_mrr_ci: (f64, f64),
 }
 
 pub(crate) fn summarize<'a>(rows: impl Iterator<Item = &'a RowScore>) -> Summary {
     let rows: Vec<&RowScore> = rows.collect();
     let col = |f: &dyn Fn(&RowScore) -> f64| rows.iter().map(|r| f(r)).collect::<Vec<_>>();
     let (rr, ndcg) = (col(&|r| r.judged.rr), col(&|r| r.judged.ndcg));
+    let file_rr = col(&|r| r.judged.file_rr.unwrap_or(0.0));
     Summary {
+        file_mrr: mean(&file_rr),
+        file_mrr_ci: ci(&file_rr),
         n: rows.len(),
         mrr: mean(&rr),
         mrr_ci: ci(&rr),
@@ -162,6 +179,89 @@ pub struct Report {
     /// The share of exact symbol names whose first hit is their definition (the gate needs 1.0).
     #[serde(default)]
     pub exact_symbol_r1: Option<f64>,
+}
+
+/// How much of a question's answer a fixed-budget context holds (the map's yield, after the budget-constrained yield of
+/// Agent Retrieval Bench): the share of its target definitions shown, over the targets that name a symbol (none when no
+/// target does), and the share of its target files shown.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MapYield {
+    pub def: Option<f64>,
+    pub file: f64,
+}
+
+/// The yield of SHOWN (`(path, symbol)` of the definitions a context holds) against TARGETS (`(path, symbol)`; an
+/// empty symbol is any chunk of the file, and counts for files only).
+pub fn map_yield(targets: &[(String, String)], shown: &[(String, String)]) -> MapYield {
+    let defs: BTreeSet<&(String, String)> = targets.iter().filter(|t| !t.1.is_empty()).collect();
+    let shown_defs: BTreeSet<&(String, String)> = shown.iter().collect();
+    let files: BTreeSet<&str> = targets.iter().map(|t| t.0.as_str()).collect();
+    let shown_files: BTreeSet<&str> = shown.iter().map(|s| s.0.as_str()).collect();
+    let share = |got: usize, of: usize| if of == 0 { 0.0 } else { got as f64 / of as f64 };
+    MapYield {
+        def: (!defs.is_empty()).then(|| {
+            share(
+                defs.iter().filter(|d| shown_defs.contains(*d)).count(),
+                defs.len(),
+            )
+        }),
+        file: share(files.intersection(&shown_files).count(), files.len()),
+    }
+}
+
+/// The search baseline's context: HITS in rank order, each as a `path:start-end` line and its chunk (CHARS of it),
+/// until the next would take the estimate (characters ÷ 4, rounded up) past BUDGET tokens. Gives the `(path, symbol)`
+/// of the hits packed.
+pub fn pack(hits: &[Hit], budget: usize, chars: &dyn Fn(&Hit) -> usize) -> Vec<(String, String)> {
+    let mut total = 0usize;
+    let mut out = Vec::new();
+    for h in hits {
+        let head = format!("{}:{}-{}\n", h.path, h.line_start, h.line_end).len();
+        if (total + head + chars(h)).div_ceil(4) > budget {
+            break;
+        }
+        total += head + chars(h);
+        out.push((h.path.clone(), h.symbol.clone().unwrap_or_default()));
+    }
+    out
+}
+
+/// Yields of some questions: means with bootstrap intervals; def-yield over the `def_n` questions that have one (0
+/// when none does).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct YieldSummary {
+    pub n: usize,
+    pub def_n: usize,
+    pub def: f64,
+    pub def_ci: (f64, f64),
+    pub file: f64,
+    pub file_ci: (f64, f64),
+}
+
+/// ROWS (`(stratum, yield)`) summarised overall, under `all`, and per stratum.
+pub fn summarize_yield(rows: &[(String, MapYield)]) -> BTreeMap<String, YieldSummary> {
+    let one = |rows: Vec<&MapYield>| {
+        let defs: Vec<f64> = rows.iter().filter_map(|y| y.def).collect();
+        let files: Vec<f64> = rows.iter().map(|y| y.file).collect();
+        YieldSummary {
+            n: rows.len(),
+            def_n: defs.len(),
+            def: mean(&defs),
+            def_ci: ci(&defs),
+            file: mean(&files),
+            file_ci: ci(&files),
+        }
+    };
+    let mut out = BTreeMap::new();
+    out.insert("all".to_string(), one(rows.iter().map(|r| &r.1).collect()));
+    let strata: BTreeSet<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+    for s in strata {
+        out.insert(
+            s.to_string(),
+            one(rows.iter().filter(|r| r.0 == s).map(|r| &r.1).collect()),
+        );
+    }
+    out
 }
 
 /// A mean difference with its interval.
@@ -196,11 +296,28 @@ pub struct Verdict {
 /// The lower bound of the overall MRR@10 difference must stay above this, and each stratum's above the second.
 pub const OVERALL_FLOOR: f64 = -0.01;
 pub const STRATUM_FLOOR: f64 = -0.03;
+/// A stratum of fewer rows is reported but does not gate: its interval is too wide for the floor to mean anything.
+pub const GATED_STRATUM_ROWS: usize = 30;
 
-/// B against A on the same queries: paired bootstrap of the MRR@10 difference. B passes when the interval's lower
-/// bound is at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum, B's index has no coverage error
-/// and its exact-symbol recall (when measured) is 1.0. Reports over different queries are refused.
+/// What the gate compares: chunk-level MRR@10 (a target's symbol must match), or file MRR@10 (any hit in a target
+/// file), which is fair to a chunker that gives a language no symbols.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gate {
+    Chunk,
+    File,
+}
+
+/// B against A on the same queries, on chunk-level MRR@10: [`compare_on`] with [`Gate::Chunk`].
 pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
+    compare_on(a, b, Gate::Chunk)
+}
+
+/// B against A on the same queries: paired bootstrap of the difference of GATE's metric. B passes when the interval's
+/// lower bound is at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum of at least
+/// [`GATED_STRATUM_ROWS`] rows (smaller ones are reported only), B's index has no coverage
+/// error and its exact-symbol recall (when measured) is 1.0. Reports over different queries are refused, and so is the
+/// file gate over a report that has no file ranks.
+pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String> {
     if a.rows.keys().ne(b.rows.keys()) {
         return Err(format!(
             "the reports are over different queries ({} and {} rows): a paired difference needs the same ones",
@@ -208,12 +325,24 @@ pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
             b.rows.len()
         ));
     }
+    if gate == Gate::File
+        && a.rows
+            .values()
+            .chain(b.rows.values())
+            .any(|r| r.judged.file_rr.is_none())
+    {
+        return Err("a report has no file MRR (made before it was measured): run it again".into());
+    }
+    let (metric, label): (fn(&Judged) -> f64, &str) = match gate {
+        Gate::Chunk => (|j| j.rr, "MRR@10"),
+        Gate::File => (|j| j.file_rr.unwrap_or(0.0), "file MRR@10"),
+    };
     let pair = |filter: &dyn Fn(&RowScore) -> bool| {
         let (mut x, mut y) = (Vec::new(), Vec::new());
         for (id, ra) in &a.rows {
             if filter(ra) {
-                x.push(ra.judged.rr);
-                y.push(b.rows[id].judged.rr);
+                x.push(metric(&ra.judged));
+                y.push(metric(&b.rows[id].judged));
             }
         }
         delta(&x, &y)
@@ -222,16 +351,16 @@ pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
     let mut reasons = Vec::new();
     if overall.lo < OVERALL_FLOOR {
         reasons.push(format!(
-            "overall: the lower bound of the MRR@10 difference is {:.4}, below {OVERALL_FLOOR}",
+            "overall: the lower bound of the {label} difference is {:.4}, below {OVERALL_FLOOR}",
             overall.lo
         ));
     }
     let mut strata = BTreeMap::new();
     for s in a.strata.keys() {
         let d = pair(&|r| &r.stratum == s);
-        if d.lo < STRATUM_FLOOR {
+        if d.n >= GATED_STRATUM_ROWS && d.lo < STRATUM_FLOOR {
             reasons.push(format!(
-                "stratum {s}: the lower bound of the MRR@10 difference is {:.4}, below {STRATUM_FLOOR}",
+                "stratum {s}: the lower bound of the {label} difference is {:.4}, below {STRATUM_FLOOR}",
                 d.lo
             ));
         }

@@ -618,12 +618,15 @@ file order, as a search sends them."
         (drgnx-replace-view-test--visit repo "f.txt" 1)
         (drgnx-replace-in-file)
         (should (get-buffer-window (drgnx-replace-view-test--bar)))
-        (set-frame-parameter nil 'client 'proc)
-        (unwind-protect
-            (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
-                      ((symbol-function 'display-graphic-p) (lambda (&optional f) (and f t))))   ; the selected frame is text, the saved ones not
-              (drgnx-persist--before-client-delete 'proc))
-          (set-frame-parameter nil 'client nil))
+        (let ((proc (make-pipe-process :name "drgnx-test-client" :noquery t)))
+          (process-put proc 'frame (selected-frame))     ; the client made a frame, as server.el records it
+          (set-frame-parameter nil 'client proc)
+          (unwind-protect
+              (cl-letf (((symbol-function 'terminal-name) (lambda (&optional _) "/dev/pts/9"))
+                        ((symbol-function 'display-graphic-p) (lambda (&optional f) (and f t))))   ; the selected frame is text, the saved ones not
+                (drgnx-persist--before-client-delete proc))
+            (set-frame-parameter nil 'client nil)
+            (delete-process proc)))
         (should-not (get-buffer-window (drgnx-replace-view-test--bar)))
         (should (file-exists-p drgnx-persist-file))))))
 

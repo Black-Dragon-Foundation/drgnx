@@ -89,6 +89,10 @@ SPEC's :buffer (a function, a buffer, or a name made if missing), else its :plac
   "Frame → alist KIND → the last buffer the kind showed there.
 Kept out of frame parameters: a buffer object in one would make the saved frame state unreadable.")
 
+(defun drgnx-pane--frame-replaced (old new)
+  "`drgnx-frame-replaced-functions': NEW remembers what OLD's kinds last showed."
+  (when-let* ((last (gethash old drgnx-pane--last))) (puthash new (copy-alist last) drgnx-pane--last)))
+
 (defun drgnx-pane--remember (kind buffer)
   "Remember BUFFER as the last one KIND showed on the selected frame (an editor kind's window is found by it)."
   (setf (alist-get kind (gethash (selected-frame) drgnx-pane--last)) buffer))

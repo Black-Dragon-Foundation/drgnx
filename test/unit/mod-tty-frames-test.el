@@ -529,6 +529,8 @@ the tail's text."
         (let ((s (overlay-get (car (overlays-in (point-min) (point-max))) 'after-string)) cols)
           (dotimes (i (length s))
             (let ((d (get-text-property i 'display s)))
+              ;; what a terminal draws: a spec only a terminal shows, unwrapped
+              (when (equal (take 2 d) '(when (not (display-graphic-p)))) (setq d (cddr d)))
               (when (eq (car-safe d) 'space)
                 (pcase (plist-get (cdr d) :align-to)
                   (`(- right ,(and n (pred numberp))) (push (truncate n) cols))
