@@ -495,6 +495,17 @@ chrome faces, frame metrics, windows, modules."
                   ;; the Emacs the scene ran on, and a box the compositor's keys shape (`:fit', `:corner-radius')
                   :emacs (list emacs-version (bound-and-true-p nidhogg-version) :glitnir (featurep 'glitnir))
                   :keycap-box (face-attribute 'drgnx-keycap :box f)
+                  ;; the floating palette's frame and window, where it is shown: its insets come from these
+                  :palette (let ((pf (bound-and-true-p drgnx-palette-frame--frame)))
+                             (when (and (frame-live-p pf) (frame-visible-p pf))
+                               (let ((w (frame-root-window pf)))
+                                 (list :px (list (frame-pixel-width pf) (frame-pixel-height pf))
+                                       :inner (list (frame-inner-width pf) (frame-text-width pf))
+                                       :params (mapcar (lambda (p) (cons p (frame-parameter pf p)))
+                                                       '(internal-border-width child-frame-border-width
+                                                                               left-fringe right-fringe))
+                                       :window (list :edges (window-pixel-edges w) :body (window-body-pixel-edges w)
+                                                     :margins (window-margins w) :fringes (window-fringes w))))))
                   :fonts (mapcar (lambda (fc) (list fc (ignore-errors (face-font fc f))))
                                  '(default drgnx-ui-text drgnx-ui-heading drgnx-ui-caption tab-bar tab-line
                                            mode-line header-line))
