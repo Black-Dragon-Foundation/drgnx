@@ -148,6 +148,14 @@ which would put every row in twice, so a candidate row and a group title start w
     (should (= (funcall width row 0) (drgnx-px drgnx-completion-row-inset)))
     (should (= (funcall width other 0) (drgnx-px (+ drgnx-completion-row-inset drgnx-palette-row-padding))))))
 
+(ert-deftest drgnx-look-palette/the-input-row-owns-its-inset ()
+  "palette.html `.in': the search icon sits 14 logical pixels in, as a row's text.  The palette's input row starts with
+its own inset (`drgnx-palette-frame--lead') and an empty `line-prefix', so the echo box's prefix on the same minibuffer
+does not put it in twice."
+  (let ((lead (drgnx-palette-frame--lead)))
+    (should (equal "" (get-text-property 0 'line-prefix lead)))
+    (should (equal `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))) (get-text-property 0 'display lead)))))
+
 (ert-deftest drgnx-look-palette/secondary-text-on-the-current-row-is-muted ()
   "Pattern D, the look's contrast rule: on the current candidate, text in the subtle colour (a keycap, an
 annotation) is `drgnx-selected-secondary' (muted: subtle is 3.8:1 on the dark selection, 4.3 on the light); the

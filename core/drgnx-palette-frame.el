@@ -135,8 +135,9 @@ the palette's frame shows it, whichever of the two ran first)."
   "(PROMPT-OVERLAY HINT . FACE-REMAP-COOKIES) of the minibuffer the palette's frame shows, while it shows it.")
 
 (defun drgnx-palette-frame--lead ()
-  "The room before the input row's icon and the footer: a row's inset and padding."
-  (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
+  "The room before the input row's icon and the footer: a row's inset and padding.  With an empty `line-prefix': the
+echo box gives the same minibuffer its input row's inset as a prefix, which would put the input row in twice."
+  (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding)))) 'line-prefix ""))
 
 (defun drgnx-palette-frame--hint ()
   "The input row's hint at the right edge: what the palette searches, `#' for a code question and, when an agent can
