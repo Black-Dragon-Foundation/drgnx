@@ -2352,7 +2352,9 @@ the search itself is `hrafn::grep`).
 - `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
   view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
   runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
-  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match. A class whose
+  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match, `<file>` the
+  path relative to `root` when it is under it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names
+  it the same way): a window move sends thousands of ids, and whole paths in them were most of its bytes. A class whose
   env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
   matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
   an old query never reaches the view (and the editor drops one by `base` as well).
@@ -2366,8 +2368,9 @@ the search itself is `hrafn::grep`).
 - **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
   holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
   by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
-  and `file`, `line`, `col`, `end`, `text`). A search starts with a model of no nodes; each file's batch is a diff;
-  a class's first env sends the model before its rows. Replace reads the matches it writes from these fields. Past
+  and `line`, `col`, `end`, `text`; its file is the parent's `path`, sent once per file, not again per match). A
+  search starts with a model of no nodes; each file's batch is a diff; a class's first env sends the model before its
+  rows. Replace reads the matches it writes from these fields and the parent's `path`. Past
   20,000 entries (files and matches) the model holds 20,000 and `order` is a window `{total, from}`: the first ones,
   or from where `view/window` asked (a window that starts inside a file holds the file's node outside `order`). A new
   search starts at the first again.

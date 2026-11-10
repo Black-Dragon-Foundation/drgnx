@@ -1133,11 +1133,27 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
   "`drgnx-view-nav-paged-functions': Next Match waited for the model's next window and moved to ID: its row is shown."
   (when (stringp id) (drgnx-replace--reach id)))
 
+(defun drgnx-replace--key-path (file)
+  "FILE as the Search view's node ids and row keys name it: relative to the root when under it, else whole (the hub's
+`key_path' in view/grep.rs, the same way)."
+  (let ((root (and drgnx-replace--root (file-name-as-directory drgnx-replace--root))))
+    (if (and root (string-prefix-p root file) (> (length file) (length root))) (substring file (length root)) file)))
+
+(defun drgnx-replace--file-key (file)
+  "FILE's node id and header row key: `f:' and FILE as `drgnx-replace--key-path' names it."
+  (concat "f:" (drgnx-replace--key-path file)))
+
+(defun drgnx-replace--match-key (file line col)
+  "The node id and row key of the match at LINE and COL of FILE."
+  (format "m:%s:%s:%s" (drgnx-replace--key-path file) line col))
+
 (defun drgnx-replace--rows-match (id &optional extra)
-  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended."
-  (let ((f (lambda (name) (drgnx-view-nav-field name id))))
-    (append (list :file (funcall f "file") :line (funcall f "line") :col (funcall f "col") :end (funcall f "end")
-                  :text (funcall f "text"))
+  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended.  Its file is its parent's
+`path' (the hub sends the path once, on the file node)."
+  (let ((f (lambda (name) (drgnx-view-nav-field name id)))
+        (parent (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'parent id)))
+    (append (list :file (drgnx-view-nav-field "path" parent) :line (funcall f "line") :col (funcall f "col")
+                  :end (funcall f "end") :text (funcall f "text"))
             extra)))
 
 (defun drgnx-replace--rows-kind-p (id kind)
@@ -1330,8 +1346,8 @@ then what it skipped, each with why (`search/grep-skipped'), as the old path lea
       (drgnx-replace--hub-call "search/grep-skipped"
                                (list :view drgnx-replace-view
                                      :skipped (vconcat (mapcar (lambda (m)
-                                                                 (list :id (format "m:%s:%s:%s" (plist-get m :file)
-                                                                                   (plist-get m :line) (plist-get m :col))
+                                                                 (list :id (drgnx-replace--match-key (plist-get m :file) (plist-get m :line)
+                                                                                                     (plist-get m :col))
                                                                        :why (plist-get m :reason)))
                                                                skipped))))
       (setq drgnx-replace--hub-counts (cons (length (seq-uniq (mapcar (lambda (m) (plist-get m :file)) skipped)))
@@ -1424,10 +1440,12 @@ text is sent too: the hub empties the rows and stops the search before."
           (drgnx-replace--update-status))))))
 
 (defun drgnx-replace--hub-listed ()
-  "The files the search listed (the `f:FILE' nodes of the model, not only the rows sent), for the watches."
+  "The files the search listed (the `f:' nodes of the model, their `path', not only the rows sent), for the watches."
   (clrhash drgnx-replace--listed)
-  (mapc (lambda (id) (when (and (stringp id) (string-prefix-p "f:" id)) (puthash (substring id 2) t drgnx-replace--listed)))
-        (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order")))
+  (let ((h (drgnx-view-patch-handle drgnx-view-patch)))
+    (mapc (lambda (id) (when (and (stringp id) (string-prefix-p "f:" id))
+                         (puthash (nidhogg-view-get h 'field "path" id) t drgnx-replace--listed)))
+          (nidhogg-view-get h 'list "order"))))
 
 ;; A modified buffer is not what the hub reads (the disk).  After a search, and after a pause when a buffer is edited,
 ;; Emacs rescans every modified file buffer under the root (`drgnx-replace--scan': the buffer's text, unsaved edits
@@ -1453,14 +1471,14 @@ text is sent too: the hub empties the rows and stops the search before."
   "The header row of FILE, as the hub makes it."
   (let* ((name (file-name-nondirectory file))
          (dir (file-relative-name (file-name-directory file) drgnx-replace--root))
-         (text (concat "[x] " name (if (equal dir "./") "" (concat "  " dir)))) (key (concat "f:" file)))
+         (text (concat "[x] " name (if (equal dir "./") "" (concat "  " dir)))) (key (drgnx-replace--file-key file)))
     (list :key key :text text
           :runs (unless (equal dir "./") (list (list (+ 4 (length name)) (length text) "drgnx-replace-dim")))
           :props (list (list 0 (length text) "drgnx-work-id" key)))))
 
 (defun drgnx-replace--local-match-row (m)
   "The row of match M, as the hub makes it: the text around it, M as old and new when a replacement is typed."
-  (let* ((key (format "m:%s:%d:%d" (plist-get m :file) (plist-get m :line) (plist-get m :col)))
+  (let* ((key (drgnx-replace--match-key (plist-get m :file) (plist-get m :line) (plist-get m :col)))
          (before (string-trim-left (plist-get m :before)))
          (before (drgnx-replace--local-flat (if (> (length before) 16) (concat "…" (substring before -15)) before)))
          (new drgnx-replace--new) (txt (drgnx-replace--local-flat (plist-get m :text)))
@@ -1530,20 +1548,22 @@ text is sent too: the hub empties the rows and stops the search before."
 (defun drgnx-replace--model-counts (file)
   "(FILES . MATCHES) the hub found in FILE: from the model (the rows are a window of it); a file the model does not
 hold (past its cap) counts the rows the view has of it."
-  (let ((id (concat "f:" file)))
+  (let ((id (drgnx-replace--file-key file)) (prefix (concat "m:" (drgnx-replace--key-path file) ":")))
     (if (drgnx-replace--rows-kind-p id "file")
         (cons 1 (length (drgnx-replace--rows-file-matches id)))
       (let ((f 0) (m 0))
         (maphash (lambda (k _)
                    (when (stringp k)
                      (cond ((equal k id) (setq f 1))
-                           ((string-prefix-p (concat "m:" file ":") k) (cl-incf m)))))
+                           ((string-prefix-p prefix k) (cl-incf m)))))
                  (drgnx-view-patch-rows drgnx-view-patch))
         (cons f m)))))
 
 (defun drgnx-replace--hub-row-local-p (key files)
   "Whether row KEY is the hub's row of one of FILES (the modified buffers' files, whose rows Emacs makes)."
-  (cl-some (lambda (f) (or (equal key (concat "f:" f)) (string-prefix-p (concat "m:" f ":") key))) files))
+  (cl-some (lambda (f) (or (equal key (drgnx-replace--file-key f))
+                           (string-prefix-p (concat "m:" (drgnx-replace--key-path f) ":") key)))
+           files))
 
 (defun drgnx-replace--local-patched (view keys)
   "`drgnx-view-patch-patched-functions': a hub patch redrew a row of a rescanned file: the buffer's row goes back; a
