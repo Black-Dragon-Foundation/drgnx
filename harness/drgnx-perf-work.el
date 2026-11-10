@@ -666,12 +666,134 @@ step is not reached or Sjá held more than the window."
       t))
   "The `trail-long' workload's session side: a hub whose store holds a 2,000-step session, its trail paged by keys.")
 
+(defconst drgnx-perf-work--board-form
+  (prin1-to-string
+   '(progn
+      (require 'drgnx-view-nav)
+      (unless (featurep 'drgnx-work-board) (load (expand-file-name "modules/tools/drgnx-work-board" drgnx-dir) nil t))
+      (defvar drgnx-perf--wb-buf nil "The Board of 200 cards.")
+      (defvar drgnx-perf--wb-send nil "`drgnx-view-patch-send-function' before the workload (nothing is sent in it).")
+      (defconst drgnx-perf--wb-statuses ["open" "running" "waiting" "needs-input" "in-review" "done"])
+      (defun drgnx-perf--wb-cards ()
+        "200 tasks, card I in column I mod 6, each a plan task with I mod 6 of 5 steps done."
+        (cl-loop for i below 200
+                 collect (list :id (format "task:%03d" i) :title (format "Task %03d: move the loader to the new store" i)
+                               :status (aref drgnx-perf--wb-statuses (% i 6)) :plan "plan:perf"
+                               :progress (list (% i 6) 5))))
+      (defun drgnx-perf--wb-cols ()
+        "The cards' ids by column (`work::trail::board's columns), a vector of 6 vectors."
+        (let ((cols (make-vector 6 nil)))
+          (dolist (c (reverse (drgnx-perf--wb-cards)))
+            (let ((k (seq-position drgnx-perf--wb-statuses (plist-get c :status))))
+              (aset cols k (cons c (aref cols k)))))
+          (vconcat (mapcar #'vconcat cols))))
+      (defun drgnx-perf--wb-model ()
+        "The Board's model as `work::trail::board' makes it: a card node per task, the `board' form's links."
+        (let ((cols (drgnx-perf--wb-cols)) nodes ids)
+          (dotimes (c 6)
+            (let ((col (aref cols c)))
+              (dotimes (i (length col))
+                (let* ((card (aref col i)) (links nil)
+                       (side (lambda (step) (let ((j (+ c step)))
+                                              (and (<= 0 j 5) (let ((o (aref cols j))) (aref o (min i (1- (length o))))))))))
+                  (when (> i 0) (setq links (plist-put links :up (plist-get (aref col (1- i)) :id))))
+                  (when (< (1+ i) (length col)) (setq links (plist-put links :down (plist-get (aref col (1+ i)) :id))))
+                  (when-let* ((l (funcall side -1))) (setq links (plist-put links :left (plist-get l :id))))
+                  (when-let* ((r (funcall side 1))) (setq links (plist-put links :right (plist-get r :id))))
+                  (push (plist-get card :id) ids)
+                  (push (list :id (plist-get card :id) :kind "card" :flags 0 :navs (list :board links)
+                              :fields (vector (vector "label" (plist-get card :title)) (vector "status" (plist-get card :status))))
+                        nodes)))))
+          (json-serialize
+           (list :ops (vector (list :reset
+                                    (list :descriptor (list :scheme "links" :chain_kinds [] :match_fields ["label"]
+                                                            :lists ["cards" "team"] :classes ["selected" "match" "lit" "dim"]
+                                                            :flags [] :forms (vector (list :name "board")) :start "cards")
+                                          :nodes (vconcat (nreverse nodes)) :edges []
+                                          :lists (vector (list :name "cards" :ids (vconcat (nreverse ids)))
+                                                         (list :name "team" :ids [])))))))))
+      (defun drgnx-perf--wb-rows ()
+        "The Board's rows as the hub sends them at 1200 px: the headings, then per card height the titles, the states and
+the progress bars (two spaces each, `spaces' entries)."
+        (let* ((cols (drgnx-perf--wb-cols)) (w 198) (rows nil)
+               (height (apply #'max (mapcar #'length cols))))
+          (push (list :key "head" :text "Queued  Running  Waiting  Needs you  Review  Done") rows)
+          (dotimes (i height)
+            (dotimes (line 3)
+              (let ((text "") stops runs props spaces)
+                (dotimes (c 6)
+                  (when-let* ((card (and (< i (length (aref cols c))) (aref (aref cols c) i))))
+                    (push (list (length text) (* c w)) stops)
+                    (setq text (concat text " "))
+                    (let ((at (length text))
+                          (s (pcase line
+                               (0 (concat "● " (plist-get card :title)))
+                               (1 (format "%s · %d/5" (plist-get card :status) (car (plist-get card :progress))))
+                               (_ "  "))))
+                      (setq text (concat text s))
+                      (if (= line 2)
+                          (let ((fill (round (* 182 (/ (car (plist-get card :progress)) 5.0)))))
+                            (push (list at fill 4) spaces) (push (list (1+ at) (- 182 fill) 4) spaces)
+                            (push (list at (1+ at) "drgnx-work-bar") runs) (push (list (1+ at) (+ 2 at) "drgnx-work-bar-rest") runs))
+                        (push (list at (length text) (if (= line 0) "drgnx-card-top" "drgnx-card-mid")) runs))
+                      (push (list at (length text) "drgnx-work-id" (plist-get card :id)) props))))
+                (push (list :key (format "cards:%d:%d" i line) :text text :runs (nreverse runs) :props (nreverse props)
+                            :stops (nreverse stops) :spaces (nreverse spaces))
+                      rows))))
+          (nreverse rows)))
+      (defun drgnx-perf--wb-up (rows)
+        "The Board of 200 cards in 6 columns, shown and selected: ROWS, on the hub's rows path (its model in Sjá, the
+rows above applied); else on `drgnx-view-old-path', the cards this Emacs draws.  An error when the path is not it."
+        (setq drgnx-perf--wb-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
+              drgnx-view-old-path (not rows)
+              drgnx-perf--wb-buf (get-buffer-create "*drgnx work board: perf*"))
+        (switch-to-buffer drgnx-perf--wb-buf)
+        (delete-other-windows)
+        (drgnx-work-board-mode)
+        (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
+        (if (not rows)
+            (progn (drgnx-view-attach 'work-board)
+                   (setq drgnx-work-board--cards (drgnx-perf--wb-cards))
+                   (drgnx-view-touch drgnx-view)
+                   (drgnx-view-draw-now drgnx-view))
+          (drgnx-view-patch-attach "perf-board" "gui" :epoch 1)
+          (drgnx-view-model-event (list :view "perf-board" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--wb-model)))
+          (drgnx-view-apply-patch (list :view "perf-board" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
+                                        :ops (list (list :reset (drgnx-perf--wb-rows)))))
+          (drgnx-view-draw-now drgnx-view)
+          (drgnx-work-board-rows-attached))
+        (unless (eq (and rows t) (drgnx-work-board--rows-p))
+          (error "Premise: the Board is %s the hub's rows (Sjá: %s)" (if rows "not on" "on")
+                 (if (fboundp 'nidhogg-view--call) "yes" "no")))
+        (unless (> (count-lines (point-min) (point-max)) 100) (error "Premise: the Board drew %d lines" (count-lines (point-min) (point-max))))
+        t)
+      (defun drgnx-perf--wb-each ()
+        "Each repeat starts from the first card."
+        (select-window (or (get-buffer-window drgnx-perf--wb-buf) (error "Premise: the Board is not shown")))
+        (with-current-buffer drgnx-perf--wb-buf
+          (if (drgnx-work-board--rows-p) (drgnx-view-nav 'select "task:000") (drgnx-work-board--select "task:000")))
+        t)
+      (defun drgnx-perf--wb-check ()
+        (with-current-buffer drgnx-perf--wb-buf
+          (let ((sel (if (drgnx-work-board--rows-p) (drgnx-view-nav-selection) drgnx-work-board--card)))
+            (or (and sel (not (equal sel "task:000"))) (error "Premise: the keys moved nothing (selection %S)" sel)))))
+      (defun drgnx-perf--wb-down ()
+        (when (buffer-live-p drgnx-perf--wb-buf) (kill-buffer drgnx-perf--wb-buf))
+        (setq drgnx-perf--wb-buf nil drgnx-view-old-path nil drgnx-view-patch-send-function drgnx-perf--wb-send)
+        t)
+      t))
+  "The `work-board' workloads' session side: no hub, the Board of 200 cards on the rows path or on the old path.")
+
+(defun drgnx-perf-work--board-keys ()
+  "40 moves on the Board: down, down, right, left and down, 8 times."
+  (cl-loop repeat 8 append (mapcar (lambda (k) (list :keys k)) '("<down>" "<down>" "<right>" "<left>" "<down>"))))
+
 (defun drgnx-perf-work-workloads (visit kill-fixture)
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
-`work-live-old', `work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows', `work-trail' and
-`trail-long'.  `work-live'
-puts the map on the hub's rows; the others keep it on `drgnx-view-old-path'."
+`work-live-old', `work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows', `work-trail',
+`trail-long', `work-board' and `work-board-old'.  `work-live' puts the map on the hub's rows, `work-board' the Board;
+the others keep it on `drgnx-view-old-path'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -724,6 +846,15 @@ puts the map on the hub's rows; the others keep it on `drgnx-view-old-path'."
       (trail-long :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-long-form " (drgnx-perf--tl-up))")
                   :measure "(drgnx-perf--tl-measure)"
                   :teardown ,(concat "(progn (drgnx-perf--tl-down) " kill-fixture " t)"))
+      ;; the Board's keys over 200 cards, on the rows path and on the old path (`work-board-old'), the paired row
+      ,@(mapcar (lambda (old)
+                  `(,(if old 'work-board-old 'work-board)
+                    :setup ,(concat "(progn " drgnx-perf-work--board-form " (drgnx-perf--wb-up " (if old "nil" "t") "))")
+                    :each "(drgnx-perf--wb-each)"
+                    :actions ,(drgnx-perf-work--board-keys)
+                    :check "(drgnx-perf--wb-check)"
+                    :teardown "(drgnx-perf--wb-down)"))
+                '(nil t))
       (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
                   :each "(progn (drgnx-perf--trail-premise) t)"
                   :measure "(drgnx-perf--trail-measure)"

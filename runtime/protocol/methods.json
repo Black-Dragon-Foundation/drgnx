@@ -3808,6 +3808,32 @@
                 },
                 "type": "array"
               },
+              "spaces": {
+                "description": "`[pos, width, height]`: the text at POS is a space WIDTH x HEIGHT device px (`(space :width (W) :height (H))`),\nsuch as a card's progress bar; its face is a run's.",
+                "items": {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
               "stops": {
                 "description": "`[pos, px]`: the text at POS is aligned to PX (`(space :align-to (PX))`).",
                 "items": {

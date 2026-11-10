@@ -65,6 +65,12 @@ impl RowBuilder {
         self.push(" ", None)
     }
 
+    /// A space WIDTH x HEIGHT device px in FACE here (one placeholder character in the text).
+    pub fn space(&mut self, width: u32, height: u32, face: &str) -> &mut Self {
+        self.row.spaces.push((self.len, width, height));
+        self.push(" ", Some(face))
+    }
+
     pub fn height(&mut self, lines: u32, unit: u32) -> &mut Self {
         self.row.height = Some(RowHeight { lines, unit });
         self
