@@ -885,7 +885,7 @@ with context labels and 10 without, alternating, after one of each to warm up."
             (push (drgnx-perf--cx-once nil) off))
           (let* ((st (lambda (xs i) (drgnx-perf-stats (mapcar (lambda (x) (nth i x)) xs))))
                  (p50 (lambda (s) (plist-get s :p50)))
-                 (of (st on 0)) (od (st on 1)) (ff (st off 0)) (fd (st off 1)))
+                 (of (funcall st on 0)) (od (funcall st on 1)) (ff (funcall st off 0)) (fd (funcall st off 1)))
             (list :on_first_ms (mapcar #'drgnx-perf--round of) :on_done_ms (mapcar #'drgnx-perf--round od)
                   :off_first_ms (mapcar #'drgnx-perf--round ff) :off_done_ms (mapcar #'drgnx-perf--round fd)
                   :first_ratio (drgnx-perf--round2 (/ (funcall p50 of) (funcall p50 ff)))
