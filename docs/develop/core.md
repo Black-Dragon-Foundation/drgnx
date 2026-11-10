@@ -2063,7 +2063,14 @@ most `drgnx-view-patch-paused-max` (256), and applied in order on resume; past t
 "The native view model"), which Sjá, in Nidhogg (`nidhogg-views.el`, loaded by `require`), holds and answers keys
 from. drgnx never parses it: the hub client routes a line that starts `{"event":"view-model"` before any parse
 (`drgnx-hub--model-line-p`, a compare in place; framed, Nidhogg's reader passes it raw by `:raw-prefix`) to
-`drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`). Without Sjá the line is dropped.
+`drgnx-view-model-line`, which hands it whole to Sjá (`nidhogg-view-push`). Without Sjá the line is dropped. Framed,
+on a Nidhogg whose reader can (`nidhogg-view--pushed`) and with `drgnx-hub-model-lines-to-sja` on (the default), the
+reader pushes the line to Sjá itself (`:raw-to-sja`), so it never becomes a Lisp string (off, or a Nidhogg that
+refuses the keyword: the connection is framed without it, and Lisp pushes the line as before): a Search window move's line is 1.2 MB, 87 % of what a page consed before, and the
+reason the full collection came every ~42 pages. Its batch entry carries Sjá's answer, which goes to
+`drgnx-view-model--pushed` (the same decisions as after `nidhogg-view-push`); Sjá's refusal is reported by the
+connection's guard, as a failed push is. The reader ends a batch before such a line, so it reaches Sjá after every
+message before it, as in the filter's order.
 - **Instances:** every hub-fed buffer opens an instance of its view in Sjá at attach (`drgnx-view-patch-handle`),
   closed with the buffer or at teardown; the view (its queue and stream in Sjá, and `drgnx-view-model--views`, the
   editor's side: an outstanding resync) goes with its last buffer.

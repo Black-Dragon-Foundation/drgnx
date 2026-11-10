@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; VS Code's Search & Replace.  Text: the hub searches (`search/grep') and streams the rows; Sjá holds the model the
+;; VS Code's Search & Replace.  Text: the hub searches (`search/run') and streams the rows; Sjá holds the model the
 ;; keys walk; a search typed before the hub is up waits for it.  Symbol: the language server's rename edits (asked for
 ;; with a placeholder name, never applied by the server), as matches of Emacs's own.  Replacing checks every
 ;; match against the file as it is now (its buffer when visited) and skips the stale ones; each file is one change
@@ -23,6 +23,7 @@
 (require 'filenotify)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-setting)
 (require 'drgnx-timer)
 (require 'drgnx-wb)
 (require 'drgnx-view)
@@ -110,7 +111,7 @@ MATCH's text).  A symbol match: the server's edit with NEW in place of the place
                (replace-match new t nil text)))))
         (t new)))
 
-;;;; Text matches (a modified buffer's rescan: `drgnx-replace--scan')
+;;;; Text matches (the hub finds them: `search/run'; a match's plist, as the writer takes it)
 
 (defun drgnx-replace--match (file line text col end &optional extra)
   "The match in FILE's LINE (1-based), whose text TEXT holds it from character COL to END; EXTRA appended."
@@ -119,28 +120,6 @@ MATCH's text).  A symbol match: the server's edit with NEW in place of the place
                   :before (substring text (max 0 (- col k)) col)
                   :after (substring text end (min (length text) (+ end k))))
             extra)))
-
-(defvar drgnx-replace--last-path nil "(RELATIVE ROOT . ABSOLUTE): the file name the last output line had.")
-
-(defun drgnx-replace--path (rel root)
-  "REL (a searcher's output) expanded in ROOT; a file's lines come in a row, so the last answer is kept."
-  (if (and (equal rel (car drgnx-replace--last-path)) (equal root (cadr drgnx-replace--last-path)))
-      (cddr drgnx-replace--last-path)
-    (cddr (setq drgnx-replace--last-path (cons rel (cons root (expand-file-name rel root)))))))
-
-(defun drgnx-replace--grep-line (line root re case extra)
-  "The matches in LINE of `git grep -z -n' or `grep --null -n' output: each of RE (Emacs syntax) in the line's text."
-  (when (string-match "\\`\\([^\0]+\\)\0\\([0-9]+\\)[\0:]" line)
-    (let ((file (drgnx-replace--path (match-string 1 line) root))
-          (n (string-to-number (match-string 2 line)))
-          (text (string-trim-right (substring line (match-end 0)) "\r"))
-          (case-fold-search (not case))
-          (start 0) (out nil))
-      (with-syntax-table drgnx-replace--syntax
-        (while (and (<= start (length text)) (string-match re text start))
-          (push (drgnx-replace--match file n text (match-beginning 0) (match-end 0) extra) out)
-          (setq start (max (match-end 0) (1+ (match-beginning 0))))))
-      (nreverse out))))
 
 ;;;; Symbol edits
 
@@ -325,7 +304,7 @@ The buffer is saved unless it held unsaved edits before."
                                nil))))))))))))
 
 (defun drgnx-replace-apply (matches new)
-  "Replace MATCHES (from `drgnx-replace--scan' or `drgnx-replace-symbol-edits') by NEW, file by file.
+  "Replace MATCHES (the hub's, read from the view's model, or `drgnx-replace-symbol-edits') by NEW, file by file.
 Each match is checked against its file as it is now (its buffer when visited; an unedited buffer whose file
 changed on disk is reverted first) and skipped when its text is no longer there.  A file's replacements are one
 change group; the file is saved unless its buffer held unsaved edits before (they stay unsaved).
@@ -366,6 +345,12 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defface drgnx-replace-new '((t :inherit diff-added)) "The text a replacement puts in." :group 'drgnx)
 (defface drgnx-replace-dim '((t :inherit shadow)) "Folders, the status line, reasons, toggles that are off." :group 'drgnx)
 (defface drgnx-replace-on '((t :inherit lazy-highlight :weight bold)) "A toggle that is on." :group 'drgnx)
+(defface drgnx-replace-ctx '((t :inherit drgnx-replace-dim))
+  "A context label row: the definition the matches below it are in." :group 'drgnx)
+
+(drgnx-defsetting drgnx-search-context t
+  "Non-nil: the Search view shows a dim label row (the definition's name) above the first match of each definition."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'global :workspace 'never :agents 'never)
 
 (defvar drgnx-replace-delay 0.25 "Seconds after typing stops before the Search view searches (or redraws).")
 (defvar drgnx-replace-bar-limit 5000 "The most matches the find bar highlights.")
@@ -379,17 +364,16 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defvar-local drgnx-replace--origin nil "Marker: the buffer and point the view or the bar works for (a symbol, This file).")
 (defvar-local drgnx-replace--root nil "The directory the view searches.")
 (defvar-local drgnx-replace--matches nil "The view's matches, in order.")
-(defvar-local drgnx-replace--local nil
-  "On the rows path, hash FILE → the matches Emacs scanned in its modified buffer (they replace the hub's rows of FILE).")
-(defvar-local drgnx-replace--local-rows nil "Hash row key → the row shown for a file of `drgnx-replace--local'.")
-(defvar-local drgnx-replace--local-ids nil "Hash row key → the match of that row, for a file of `drgnx-replace--local'.")
-(defvar-local drgnx-replace--local-hub nil "Hash FILE → (HEADERS . MATCHES) the hub had of it before its rows were replaced.")
-(defvar-local drgnx-replace--local-delta nil "(FILES . MATCHES) the local rows add to the hub's counts.")
+(defvar-local drgnx-replace--sent nil
+  "Hash FILE → what the hub was last sent of its modified buffer (`search/buffer'): the buffer's tick, or `large'.")
 (defvar-local drgnx-replace--look-at nil "The number of rows the view had when it last asked the hub for more.")
 (defvar-local drgnx-replace--fill-at nil "The rows' version when the view last asked for the rows before the gap.")
 (defvar-local drgnx-replace--reach-id nil "The match whose row was asked for and has not arrived: point goes there when it does.")
 (defvar-local drgnx-replace--hub-counts nil
-  "On the rows path, (FILES . MATCHES) the hub's last search found, from `search-grep-done'; nil while it runs.")
+  "On the rows path, (FILES . MATCHES) the hub's last search found, from `search-run-done'; nil while it runs.")
+(defvar-local drgnx-replace--carry nil
+  "The match ids the user unticked before a new search, sent with it (`search/run''s `off'): the hub names the same
+matches of the new run in `search-run-done', which are unticked again.")
 (defvar-local drgnx-replace--tail nil "The last cons of `drgnx-replace--matches'.")
 (defvar-local drgnx-replace--seen nil "Hash FILE → how many matches it has.")
 (defvar-local drgnx-replace--off-files nil "Hash FILE → how many of its matches are unticked.")
@@ -415,7 +399,8 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defvar drgnx-replace-refresh-delay 0.5 "Seconds after a listed file changes before its rows are searched again.")
 (defvar drgnx-replace-watch-limit 200
   "The most listed files whose folders are watched for changes on disk (more: searched again when the view shows).")
-(defvar drgnx-replace-refresh-max-bytes (* 4 1024 1024) "A changed file bigger than this keeps its rows.")
+(defvar drgnx-replace-refresh-max-bytes (* 4 1024 1024)
+  "A modified buffer bigger than this is not sent to the hub: its file is searched on disk (`search/buffer' `large').")
 (defvar-local drgnx-replace--listed nil "Hash FILE → t: the files the search listed, watched for changes.")
 (defvar-local drgnx-replace--watches nil "The file-notify watches on the listed files' folders.")
 (defvar-local drgnx-replace--changed nil "Listed files changed since the last refresh.")
@@ -519,11 +504,76 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
       (widget-put w :button-face (drgnx-replace--button-face name))
       (save-excursion (widget-value-set w (widget-value w))))))
 
-(defun drgnx-replace--insert-toggles ()
-  "The ⟨⟩ Symbol, Aa, ab and .* toggles."
-  (pcase-dolist (`(,name ,label ,help) '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")
+(defun drgnx-replace--insert-toggles (&optional symbol)
+  "The Aa, ab and .* toggles; with SYMBOL (the find bar) the ⟨⟩ Symbol toggle before them."
+  (pcase-dolist (`(,name ,label ,help) `(,@(and symbol '((:symbol "⟨⟩ Symbol" "Rename the symbol: the language server's edits")))
                                          (:case "Aa" "Match case") (:word "ab" "Whole word") (:regexp ".*" "Regular expression")))
     (drgnx-replace--insert-button name label help (lambda () (drgnx-replace--toggle name)))))
+
+(defconst drgnx-replace--modes
+  '((text "Text" "text or regex") (symbol "Symbol" "a name: its definitions, then its uses")
+    (meaning "Meaning" "describe what the code does"))
+  "The Search view's modes, in the chip's order: (MODE LABEL HINT); HINT says what to type in Find.")
+
+(defun drgnx-replace--chip-label ()
+  "The mode chip's text: the mode, or Rename while the view shows the language server's edits."
+  (format "%-7s" (if (drgnx-replace--opt :symbol) "Rename"
+                   (nth 1 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)))))
+
+(defun drgnx-replace--hint ()
+  "What to type in Find, for the view's mode."
+  (if (drgnx-replace--opt :symbol) "" (or (nth 2 (assq (drgnx-replace--opt :mode) drgnx-replace--modes)) "")))
+
+(defun drgnx-replace--apply-mode ()
+  "Name the mode on the chip and grey out what it does not use: Symbol and Meaning are read-only (no replace field,
+no globs; Symbol keeps Aa); Rename (the language server's edits) keeps the replace field only."
+  (let ((off (cond ((drgnx-replace--opt :symbol) '(include exclude :case :word :regexp))
+                   ((eq (drgnx-replace--opt :mode) 'symbol) '(replace include exclude :word :regexp))
+                   ((eq (drgnx-replace--opt :mode) 'meaning) '(replace include exclude :case :word :regexp)))))
+    (dolist (name '(replace include exclude :case :word :regexp))
+      (when-let* ((w (drgnx-replace--widget name)))
+        (let ((buffer-undo-list t)) (widget-apply w (if (memq name off) :deactivate :activate)))))
+    (when-let* ((w (drgnx-replace--widget 'mode)))
+      (let ((buffer-undo-list t)) (save-excursion (widget-value-set w (drgnx-replace--chip-label)))))))
+
+(defun drgnx-replace--set-mode (mode)
+  "Search in MODE (`text', `symbol' or `meaning'), out of Rename, and search again."
+  (when (drgnx-replace--opt :symbol) (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol nil)))
+  (setq drgnx-replace--opts (plist-put drgnx-replace--opts :mode mode))
+  (drgnx-replace--apply-mode)
+  (drgnx-replace--search-now))
+
+(defun drgnx-replace--check-writable ()
+  "A user error in a mode that finds without replacing (Symbol, Meaning)."
+  (when (and (not (drgnx-replace--opt :symbol)) (memq (drgnx-replace--opt :mode) '(symbol meaning)))
+    (user-error "%s searches only find: Text mode replaces" (string-trim (drgnx-replace--chip-label)))))
+
+(defun drgnx-replace--mode-command (mode)
+  "Search the Search view in MODE (nil: the next one after its mode)."
+  (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--set-mode
+     (or mode (car (or (cadr (memq (assq (drgnx-replace--opt :mode) drgnx-replace--modes) drgnx-replace--modes))
+                       (car drgnx-replace--modes)))))))
+
+(defun drgnx-replace-search-mode-next ()
+  "The Search view's next mode: Text → Symbol → Meaning → Text; it searches again."
+  (interactive)
+  (drgnx-replace--mode-command nil))
+
+(defun drgnx-replace-search-mode-text ()
+  "Search the Search view's words as text (Replace works here)."
+  (interactive)
+  (drgnx-replace--mode-command 'text))
+
+(defun drgnx-replace-search-mode-symbol ()
+  "Search the Search view's name as a symbol: its definitions, then its uses (read-only)."
+  (interactive)
+  (drgnx-replace--mode-command 'symbol))
+
+(defun drgnx-replace-search-mode-meaning ()
+  "Search by meaning: the code the Search view's words describe (read-only)."
+  (interactive)
+  (drgnx-replace--mode-command 'meaning))
 
 (defun drgnx-replace--toggle (name)
   "Turn the toggle NAME (:symbol :case :word :regexp) on or off, and search again.  A greyed-out toggle stays."
@@ -558,9 +608,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   "Symbol mode ON or off: on, the find field holds the name and what does not apply is greyed out."
   (setq drgnx-replace--opts (plist-put drgnx-replace--opts :symbol on))
   (drgnx-replace--restyle :symbol)
-  (dolist (name '(include exclude :case :word :regexp))
-    (when-let* ((w (drgnx-replace--widget name)))
-      (let ((buffer-undo-list t)) (widget-apply w (if on :deactivate :activate)))))
+  (drgnx-replace--apply-mode)
   (when-let* ((on) (name (drgnx-replace--symbol-at drgnx-replace--origin)))
     (drgnx-replace--fill 'find name)))
 
@@ -609,7 +657,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 
 (defun drgnx-replace--render-view ()
   "Draw the view's fields, toggles and buttons; the results go below."
-  (setq drgnx-replace--opts (list :symbol nil :case nil :word nil :regexp nil :scope 'project)
+  (setq drgnx-replace--opts (list :mode 'text :symbol nil :case nil :word nil :regexp nil :scope 'project)
         drgnx-replace--widgets nil
         drgnx-replace--off (make-hash-table :test #'eq)
         drgnx-replace--seen (make-hash-table :test #'equal)
@@ -617,8 +665,11 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
         drgnx-replace--off-files (make-hash-table :test #'equal)
         drgnx-replace--headers (make-hash-table :test #'equal)
         drgnx-replace--last-row (make-hash-table :test #'equal))
-  (drgnx-replace--insert-field 'find "Find     " nil)
-  (drgnx-replace--insert-field 'replace "Replace  " nil)
+  ;; the mode chip is Find's label: it says what Find means
+  (drgnx-replace--insert-button 'mode (drgnx-replace--chip-label) "Search mode: Text, Symbol or Meaning (the next one)"
+                                #'drgnx-replace-search-mode-next)
+  (drgnx-replace--insert-field 'find "" nil)
+  (drgnx-replace--insert-field 'replace "Replace   " nil)
   (drgnx-replace--insert-toggles)
   (widget-insert "\n")
   (drgnx-replace--insert-button 'project "Project" "Search every file of the project"
@@ -626,8 +677,8 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   (drgnx-replace--insert-button 'file "This file" "Search only the file the view was opened from"
                                 (lambda () (drgnx-replace--set-scope 'file)))
   (widget-insert "\n")
-  (drgnx-replace--insert-field 'include "Include  " nil)
-  (drgnx-replace--insert-field 'exclude "Exclude  " nil)
+  (drgnx-replace--insert-field 'include "Include   " nil)
+  (drgnx-replace--insert-field 'exclude "Exclude   " nil)
   (drgnx-replace--insert-button nil "Replace All" "Replace every ticked match" #'drgnx-replace-all)
   (drgnx-replace--insert-button nil "Undo" "Undo the last replacement, in every file" #'drgnx-replace-view-undo)
   (widget-insert "\n")
@@ -646,17 +697,22 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
 
 (defun drgnx-replace--update-status ()
   "Write the status line: how many results, still searching, the last message."
-  (let* ((n (if drgnx-view-patch (+ (or (cdr drgnx-replace--hub-counts) 0) (or (cdr drgnx-replace--local-delta) 0)) (length drgnx-replace--matches)))
-         (files (if drgnx-view-patch (+ (or (car drgnx-replace--hub-counts) 0) (or (car drgnx-replace--local-delta) 0)) (hash-table-count drgnx-replace--seen)))
+  (let* ((n (if drgnx-view-patch (or (cdr drgnx-replace--hub-counts) 0) (length drgnx-replace--matches)))
+         (files (if drgnx-view-patch (or (car drgnx-replace--hub-counts) 0) (hash-table-count drgnx-replace--seen)))
          (counts (cond ((and (zerop n) drgnx-replace--searching) "Searching…")
-                       ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) "" "No results"))
+                       ((zerop n) (if (string-empty-p (drgnx-replace--text 'find)) (drgnx-replace--hint) "No results"))
                        (t (format "%s%d result%s in %d file%s" (if drgnx-replace--searching "Searching… " "")
                                   n (if (= n 1) "" "s") files (if (= files 1) "" "s")))))
          (line (string-join (seq-remove #'string-empty-p (list counts drgnx-replace--status)) " · ")))
     (drgnx-replace--drawing
      (delete-region drgnx-replace--status-beg drgnx-replace--status-end)
      (goto-char drgnx-replace--status-beg)
-     (insert (propertize line 'face 'drgnx-replace-dim)))))
+     (insert (propertize line 'face 'drgnx-replace-dim))
+     ;; no automatic mode: a text search that found nothing offers the same words by meaning
+     (when (and (equal counts "No results") (eq (drgnx-replace--opt :mode) 'text) (not (drgnx-replace--opt :symbol)))
+       (insert (propertize " · " 'face 'drgnx-replace-dim))
+       (insert-text-button "Try Meaning" 'face 'link 'follow-link t 'help-echo "Search these words by meaning"
+                           'action (lambda (_) (drgnx-replace-search-mode-meaning)))))))
 
 (defun drgnx-replace--message (fmt &rest args)
   "Show FMT with ARGS on the status line."
@@ -669,8 +725,7 @@ this once evil is loaded).  The undo puts each mode's earlier state back, only w
   (unless drgnx-view-patch (drgnx-view-reset drgnx-view nil))   ; hub-fed: the hub's reset takes the rows out
   (setq drgnx-replace--matches nil drgnx-replace--tail nil drgnx-replace--status "" drgnx-replace--end-file nil
         drgnx-replace--look-at nil drgnx-replace--fill-at nil drgnx-replace--reach-id nil
-        drgnx-replace--hub-counts nil drgnx-replace--local nil drgnx-replace--local-rows nil drgnx-replace--local-ids nil
-        drgnx-replace--local-hub nil drgnx-replace--local-delta nil
+        drgnx-replace--hub-counts nil
         drgnx-replace--new (drgnx-replace--text 'replace))
   (dolist (h (list drgnx-replace--seen drgnx-replace--off drgnx-replace--off-files drgnx-replace--listed
                    drgnx-replace--headers drgnx-replace--last-row))
@@ -714,8 +769,7 @@ whose rows end the list, at the end (a new file after its header)."
   "The replace text changed: every match row shows its new preview, patched in place (the headers stay)."
   (setq drgnx-replace--new (drgnx-replace--text 'replace))
   (if drgnx-view-patch
-      (progn (drgnx-replace--hub-call "search/grep-replace" (list :view drgnx-replace-view :replace drgnx-replace--new))
-             (drgnx-replace--local-refresh))
+      (drgnx-replace--hub-call "search/grep-replace" (list :view drgnx-replace-view :replace drgnx-replace--new))
     (drgnx-view-dirty drgnx-view drgnx-replace--matches))
   (drgnx-replace--update-status))
 
@@ -874,6 +928,8 @@ echo area says why."
   (drgnx-timer-cancel (cons 'replace-pause (current-buffer)))
   (setq drgnx-replace--want nil)
   (setq drgnx-replace--searching nil)
+  ;; the unticked matches go with the search, before the new search empties the ticks
+  (setq drgnx-replace--carry (append (drgnx-replace--rows-carry) drgnx-replace--carry))
   (drgnx-replace--clear)
   (drgnx-replace--ensure-origin)
   (when (drgnx-replace--opt :symbol) (drgnx-replace--hub-detach))   ; the server's edits are rows of Emacs's own
@@ -1004,12 +1060,12 @@ ORIGIN: the marker the view works for (default: point in the editor)."
 (defun drgnx-replace--buffer-changed (&rest _)
   "After a change in any buffer: when it visits a listed file, that file's rows are searched again.  Not on the rows
 path: the hub reads the disk, which an unsaved edit has not changed (the save is a file event), so the modified
-buffers' rows are rescanned by Emacs after a pause (`drgnx-replace--local-refresh')."
+buffers' text goes to the hub after a pause (`drgnx-replace--send-buffers'), which searches it in place of the file."
   (when (and buffer-file-name (not drgnx-replace--applying))
     (condition-case e
         (when-let* ((view (get-buffer drgnx-replace-buffer-name)) (file buffer-file-name))
           (with-current-buffer view
-            (cond (drgnx-view-patch (drgnx-replace--local-later))
+            (cond (drgnx-view-patch (drgnx-replace--buffers-later))
                   ((and drgnx-replace--listed (gethash file drgnx-replace--listed)) (drgnx-replace--file-changed file)))))
       (error (message "drgnx search: %s" (error-message-string e))))))
 
@@ -1038,36 +1094,6 @@ buffers' rows are rescanned by Emacs after a pause (`drgnx-replace--local-refres
                  (setq drgnx-replace--changed nil)
                  (drgnx-replace--search-now)))
         (error (drgnx-replace--message "%s" (error-message-string e)))))))
-
-(defun drgnx-replace--scan (file)
-  "FILE's matches for the fields' text, read from its buffer when visited (unsaved edits too), else from disk.
-Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-bytes'."
-  (let* ((text (drgnx-replace--text 'find)) (case (drgnx-replace--opt :case)) (regexp (drgnx-replace--opt :regexp))
-         (re (drgnx-replace--line-regexp (list :text text :regexp regexp :word (drgnx-replace--opt :word))))
-         (extra (when regexp (list :pattern (drgnx-replace--emacs-regexp text) :case case)))
-         (buf (find-buffer-visiting file)) (root drgnx-replace--root)
-         (size (if buf (buffer-size buf) (file-attribute-size (file-attributes file)))))
-    (cond
-     ((null size) nil)
-     ((> size drgnx-replace-refresh-max-bytes) 'big)
-     (t (with-temp-buffer
-          (cond (buf
-                 (insert (with-current-buffer buf
-                           (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max))))))
-                (t (insert-file-contents file)))
-          (let ((case-fold-search (not case)) (line 1) (last (point-min)) (lines nil) (done nil))
-            (with-syntax-table drgnx-replace--syntax
-              (goto-char (point-min))
-              (while (and (not done) (re-search-forward re nil t))
-                (let ((bol (line-beginning-position)) (eol (line-end-position)))
-                  (setq line (+ line (count-lines last bol)) last bol)
-                  ;; the line as grep prints it, read by the same parser as a search's
-                  (push (drgnx-replace--grep-line
-                         (concat file "\0" (number-to-string line) ":" (buffer-substring-no-properties bol eol))
-                         root re case extra)
-                        lines)
-                  (if (>= eol (point-max)) (setq done t) (goto-char (1+ eol))))))
-            (apply #'nconc (nreverse lines))))))))
 
 (defun drgnx-replace--drop-header (file)
   "FILE has no row left: its header goes."
@@ -1109,11 +1135,12 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
     new))
 
 ;;;;; On the rows path: the keys, the ticks and Replace All through the native view model (Sjá)
-;; Fed by the hub's `search/grep', the Search view's results are a `tree' model: a node per file (`f:FILE'), its
-;; matches as children (`m:FILE:LINE:COL'), the rows' keys and their `drgnx-work-id'.  The match keys walk it
-;; in-process.  The ticks are user state: Sjá's ticked set of the view's instance holds the matches the user unticked
-;; (a file's box ticks or unticks all of its matches), shown over the hub's "[x]" boxes.  Replace All writes the
-;; matches not in it, read from the model's fields.
+;; Fed by the hub's `search/run', the Search view's results are a `tree' model: a node per file (`f:FILE'), its
+;; matches as children (`m:RUN:N', opaque: the run's number and the match's), the rows' keys and their
+;; `drgnx-work-id'.  The match keys walk it in-process.  The ticks are user state: Sjá's ticked set of the view's
+;; instance holds the matches the user unticked (a file's box ticks or unticks all of its matches), shown over the
+;; hub's "[x]" boxes; a new search sends them (`drgnx-replace--carry') and unticks the same matches of its run when it
+;; ends.  Replace All writes the matches not in it, read from the model's fields.
 
 (defvar-local drgnx-replace--box-overlays nil "Hash ROW-KEY → the overlay showing its tick box as the ticks say.")
 
@@ -1124,7 +1151,6 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
 (defun drgnx-replace-rows-attached ()
   "The Search view is now hub-fed (the rows path): its tick boxes follow the ticks after every draw."
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--rows-boxes nil t)
-  (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--local-patched nil t)
   (add-hook 'drgnx-view-patch-patched-functions #'drgnx-replace--reached nil t)
   (add-hook 'drgnx-view-nav-paged-functions #'drgnx-replace--paged nil t)
   (add-hook 'window-scroll-functions #'drgnx-replace--scrolled nil t))
@@ -1133,11 +1159,23 @@ Nil when it is gone; `big' when it is bigger than `drgnx-replace-refresh-max-byt
   "`drgnx-view-nav-paged-functions': Next Match waited for the model's next window and moved to ID: its row is shown."
   (when (stringp id) (drgnx-replace--reach id)))
 
+(defun drgnx-replace--key-path (file)
+  "FILE as the Search view's file ids and row keys name it: relative to the root when under it, else whole (the hub's
+`key_path' in view/search/rows.rs, the same way)."
+  (let ((root (and drgnx-replace--root (file-name-as-directory drgnx-replace--root))))
+    (if (and root (string-prefix-p root file) (> (length file) (length root))) (substring file (length root)) file)))
+
+(defun drgnx-replace--file-key (file)
+  "FILE's node id and header row key: `f:' and FILE as `drgnx-replace--key-path' names it."
+  (concat "f:" (drgnx-replace--key-path file)))
+
 (defun drgnx-replace--rows-match (id &optional extra)
-  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended."
-  (let ((f (lambda (name) (drgnx-view-nav-field name id))))
-    (append (list :file (funcall f "file") :line (funcall f "line") :col (funcall f "col") :end (funcall f "end")
-                  :text (funcall f "text"))
+  "Match node ID of the model as `drgnx-replace-apply' takes a match, EXTRA appended.  Its file is its parent's
+`path' (the hub sends the path once, on the file node)."
+  (let ((f (lambda (name) (drgnx-view-nav-field name id)))
+        (parent (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'parent id)))
+    (append (list :file (drgnx-view-nav-field "path" parent) :line (funcall f "line") :col (funcall f "col")
+                  :end (funcall f "end") :text (funcall f "text"))
             extra)))
 
 (defun drgnx-replace--rows-kind-p (id kind)
@@ -1209,33 +1247,13 @@ every one was unticked, else unticked)."
       (nidhogg-view-set h 'tick id))
     (drgnx-replace--rows-boxes drgnx-view (cons file ms))))
 
-(defvar-local drgnx-replace--local-at nil "(KEY . SELECTION): the rescanned row Next Match is on, and the model's selection then.")
 
 (defun drgnx-replace--rows-step (dir)
   "Select the next (DIR 1) or previous (DIR -1) match, wrapping, and make sure its row is shown (the hub sends a window
 of the rows, the model holds every match): its id, or nil when there is none."
-  (let ((id (drgnx-replace--rows-step-1 dir)))
+  (let ((id (drgnx-replace--rows-step-model dir)))
     (when (stringp id) (drgnx-replace--reach id))
     id))
-
-(defun drgnx-replace--rows-step-1 (dir)
-  "Select the next (DIR 1) or previous (DIR -1) shown match, wrapping: its id, or nil when there is none.  The model's
-matches come first, then the rows Emacs scanned in modified buffers (`drgnx-replace--local-ids'), which the model
-does not hold; Next Match walks both."
-  (if (zerop (hash-table-count (or drgnx-replace--local-ids (make-hash-table))))
-      (drgnx-replace--rows-step-model dir)
-    (let* ((h (drgnx-view-patch-handle drgnx-view-patch)) (sel (drgnx-view-nav-selection))
-           (cur (and drgnx-replace--local-at (equal (cdr drgnx-replace--local-at) sel) (car drgnx-replace--local-at)))
-           (local (let (ks) (maphash (lambda (k _) (push k ks)) drgnx-replace--local-ids) (nreverse ks)))
-           (all (append (cl-remove-if-not (lambda (i) (drgnx-replace--rows-kind-p i "match"))
-                                          (append (nidhogg-view-get h 'list "visible") nil))
-                        local))
-           (pos (seq-position all (or cur sel)))
-           (next (nth (mod (+ (or pos (if (> dir 0) -1 0)) dir) (length all)) all)))
-      (if (gethash next drgnx-replace--local-ids)
-          (progn (setq drgnx-replace--local-at (cons next sel)) next)
-        (setq drgnx-replace--local-at nil)
-        (drgnx-view-nav 'select next)))))
 
 ;; The hub sends the first rows of a search (a window) and the editor asks for the rest as it needs them: when its
 ;; window nears the end of the rows (`more'), and when Next or Previous Match goes to a match beyond them (`upto'; the
@@ -1250,8 +1268,7 @@ does not hold; Next Match walks both."
 
 (defun drgnx-replace--reach (id)
   "Ask the hub for the row of match ID when the view does not have it, and put point on it when it comes."
-  (unless (or (gethash id (drgnx-view-patch-rows drgnx-view-patch))
-              (and drgnx-replace--local-ids (gethash id drgnx-replace--local-ids)))
+  (unless (gethash id (drgnx-view-patch-rows drgnx-view-patch))
     (setq drgnx-replace--reach-id id)
     (drgnx-replace--look (list :upto id))))
 
@@ -1304,15 +1321,12 @@ when it shows the gap row of a far jump, ask for the rows before the gap (once p
         (when ms (drgnx-view-nav 'select (if (> dir 0) (car ms) (car (last ms)))))))))
 
 (defun drgnx-replace--rows-ticked (extra)
-  "The model's ticked matches in order, as `drgnx-replace-apply' takes them, EXTRA appended to each."
+  "The model's ticked matches in order, as `drgnx-replace-apply' takes them, EXTRA and `:id' (the node) appended to
+each."
   (let ((off (drgnx-replace--rows-off)) ms)
     (mapc (lambda (id) (when (and (not (gethash id off)) (drgnx-replace--rows-kind-p id "match"))
-                         (let ((m (drgnx-replace--rows-match id extra)))
-                           (unless (and drgnx-replace--local (gethash (plist-get m :file) drgnx-replace--local))
-                             (push m ms)))))   ; a modified buffer's file: the buffer's matches, below
+                         (push (drgnx-replace--rows-match id (append extra (list :id id))) ms)))
           (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order"))
-    (when drgnx-replace--local
-      (maphash (lambda (_ lms) (dolist (m lms) (push m ms))) drgnx-replace--local))
     (nreverse ms)))
 
 (defun drgnx-replace--rows-replace-all (new)
@@ -1326,27 +1340,26 @@ then what it skipped, each with why (`search/grep-skipped'), as the old path lea
     (let* ((res (let ((drgnx-replace--applying t)) (drgnx-replace-apply ms new)))
            (skipped (plist-get res :skipped)))
       (drgnx-replace--clear)
-      ;; what is left: the skipped, with their reasons (the hub lists them alone and stops the search)
+      ;; what is left: the skipped, with their reasons (the hub lists them alone, by node id, and stops the search)
       (drgnx-replace--hub-call "search/grep-skipped"
                                (list :view drgnx-replace-view
-                                     :skipped (vconcat (mapcar (lambda (m)
-                                                                 (list :id (format "m:%s:%s:%s" (plist-get m :file)
-                                                                                   (plist-get m :line) (plist-get m :col))
-                                                                       :why (plist-get m :reason)))
-                                                               skipped))))
+                                     :skipped (vconcat (delq nil (mapcar (lambda (m)
+                                                                           (when-let* ((id (plist-get m :id)))
+                                                                             (list :id id :why (plist-get m :reason))))
+                                                                         skipped)))))
       (setq drgnx-replace--hub-counts (cons (length (seq-uniq (mapcar (lambda (m) (plist-get m :file)) skipped)))
                                             (length skipped)))
       (drgnx-replace--message "%s" (drgnx-replace--apply-report res)))))
 
-;;;;; On the rows path: the hub searches and streams the results (`search/grep')
+;;;;; On the rows path: the hub searches and streams the results (`search/run')
 ;; A text search goes to the hub (this Emacs has Sjá; a search typed before the hub is up waits for it): the view is
-;; attached as the hub-fed view `drgnx-replace-view', `search/grep' starts the search, and the hub's rows (a reset,
+;; attached as the hub-fed view `drgnx-replace-view', `search/run' starts the search, and the hub's rows (a reset,
 ;; then each file's header and matches) are inserted by `drgnx-view-apply-patch'.  A new query makes the hub send a
-;; reset and drop the old query's late rows, and the editor drops one that still comes by its base.  `search-grep-done'
-;; ends the search.  A replace text typed meanwhile is `search/grep-replace' (the hub patches the previews).  Symbol mode
-;; (the server's edits) keeps rows of Emacs's own (the `replace-results' view type).  What the hub does not see stays
-;; Lisp: file-notify watches on the listed files (a change on disk searches again through the hub) and the rescan of
-;; a file from its buffer, unsaved edits included (`drgnx-replace--scan').
+;; reset and drop the old query's late rows, and the editor drops one that still comes by its base.  `search-run-done'
+;; ends the search and names the matches the user had unticked before it, found again.  A replace text typed meanwhile is `search/grep-replace' (the hub patches the previews).  Symbol mode
+;; (the server's edits) keeps rows of Emacs's own (the `replace-results' view type).  What the hub does not see, Lisp
+;; tells it: the modified buffers' text (`search/buffer', `drgnx-replace--send-buffers': the hub searches it in place
+;; of the file) and, through file-notify watches on the listed files, a change on disk (searched again).
 
 (defun drgnx-replace--hub-ready-p ()
   "Non-nil when a text search can go to the hub: Sjá in this Emacs, the hub connected."
@@ -1392,201 +1405,138 @@ then what it skipped, each with why (`search/grep-skipped'), as the old path lea
              (drgnx-replace--message "%s" (error-message-string err))))))
 
 (defun drgnx-replace--hub-search (text file)
-  "Search TEXT (in FILE when given) through the hub: the view is hub-fed, `search/grep' sends the rows.  An empty
-text is sent too: the hub empties the rows and stops the search before."
+  "Search TEXT (in FILE when given) through the hub: the view is hub-fed, `search/run' sends the rows.  An empty
+text is sent too: the hub empties the rows and stops the search before.  The matches unticked before the search
+\(`drgnx-replace--carry') go with it."
   (drgnx-replace--hub-attach)
   (when (and (eq (drgnx-replace--opt :scope) 'file) (not file))
     (setq text "" drgnx-replace--status "This file: the view was not opened from a file"))
-  (let ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
-        (on (lambda (name) (if (drgnx-replace--opt name) t :false))))
+  (let* ((globs (lambda (name) (drgnx-replace--globs (drgnx-replace--text name))))
+         (on (lambda (name) (if (drgnx-replace--opt name) t :false)))
+         (off (prog1 drgnx-replace--carry (setq drgnx-replace--carry nil)))
+         (mode (drgnx-replace--opt :mode))
+         (text-p (not (memq mode '(symbol meaning)))))   ; Symbol and Meaning: no replacement, no globs
     (setq drgnx-replace--searching t)
+    (drgnx-replace--send-buffers)
     (drgnx-replace--hub-call
-     "search/grep"
-     (append (list :view drgnx-replace-view :root drgnx-replace--root :text text
-                   :case (funcall on :case) :word (funcall on :word) :regexp (funcall on :regexp)
-                   :replace (drgnx-replace--text 'replace))
-             (and file (list :file file))
-             (when-let* ((g (funcall globs 'include))) (list :include (vconcat g)))
-             (when-let* ((g (funcall globs 'exclude))) (list :exclude (vconcat g)))))))
+     "search/run"
+     (append (list :view drgnx-replace-view :root drgnx-replace--root
+                   :search (append (list :query (pcase mode
+                                                  ('symbol (list :mode "symbol" :name text :case (funcall on :case)))
+                                                  ('meaning (list :mode "meaning" :question text))
+                                                  (_ (list :mode "text" :text text :case (funcall on :case)
+                                                           :word (funcall on :word) :regexp (funcall on :regexp)))))
+                                   (and text-p (list :replace (drgnx-replace--text 'replace)))
+                                   (list :scope (if file
+                                                    (list :kind "file" :files (vector file))
+                                                  (list :kind "project")))
+                                   (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
+                                   (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g)))))
+             (and off (list :off (vconcat off)))
+             (and (not drgnx-search-context) (list :context :false))))))
+
+(defun drgnx-replace--rows-carry ()
+  "The hub's match ids the user unticked (Sjá's ticked set), for the next search to keep: see `drgnx-replace--carry'."
+  (when-let* (((drgnx-replace--rows-p)) (h (drgnx-view-patch-handle drgnx-view-patch)))
+    ;; by id alone: a match outside the model's window has no node here
+    (seq-filter (lambda (id) (and (stringp id) (string-prefix-p "m:" id))) (nidhogg-view-get h 'ticked))))
+
+(defun drgnx-replace--rows-untick (ids)
+  "Untick the matches IDS (a search's `off': the ones the user had unticked before it) and show their boxes so."
+  (when-let* (((and ids (drgnx-replace--rows-p))) (h (drgnx-view-patch-handle drgnx-view-patch)))
+    (let ((off (drgnx-replace--rows-off)) shown)
+      (dolist (id ids)
+        (unless (gethash id off) (nidhogg-view-set h 'tick id))
+        (push id shown)
+        (when-let* ((file (nidhogg-view-get h 'parent id))) (push file shown)))
+      (drgnx-replace--rows-boxes drgnx-view (delete-dups shown)))))
 
 (defun drgnx-replace--hub-event (event data)
-  "`drgnx-hub-event-functions': `search-grep-done' ends the Search view's search and counts what it found."
-  (when (and (equal event "search-grep-done") (equal (plist-get data :view) drgnx-replace-view))
+  "`drgnx-hub-event-functions': `search-run-done' ends the Search view's search, counts what it found and unticks
+the matches the user had unticked before it (`:off')."
+  (when (and (equal event "search-run-done") (equal (plist-get data :view) drgnx-replace-view))
     (when-let* ((buf (get-buffer drgnx-replace-buffer-name)))
       (with-current-buffer buf
         (when drgnx-view-patch
+          (drgnx-replace--rows-untick (plist-get data :off))
           (setq drgnx-replace--searching nil
                 drgnx-replace--hub-counts (cons (or (plist-get data :files) 0) (or (plist-get data :matches) 0)))
           (when-let* ((err (plist-get data :error))) (setq drgnx-replace--status (format "%s" err)))
           (drgnx-replace--hub-listed)
-          (drgnx-replace--local-refresh)
           (drgnx-replace--watch)
           (drgnx-replace--update-status))))))
 
 (defun drgnx-replace--hub-listed ()
-  "The files the search listed (the `f:FILE' nodes of the model, not only the rows sent), for the watches."
+  "The files the search listed (the `f:' nodes of the model, their `path', not only the rows sent), for the watches."
   (clrhash drgnx-replace--listed)
-  (mapc (lambda (id) (when (and (stringp id) (string-prefix-p "f:" id)) (puthash (substring id 2) t drgnx-replace--listed)))
-        (nidhogg-view-get (drgnx-view-patch-handle drgnx-view-patch) 'list "order")))
+  (let ((h (drgnx-view-patch-handle drgnx-view-patch)))
+    (mapc (lambda (id) (when (and (stringp id) (string-prefix-p "f:" id))
+                         (puthash (nidhogg-view-get h 'field "path" id) t drgnx-replace--listed)))
+          (nidhogg-view-get h 'list "order"))))
 
-;; A modified buffer is not what the hub reads (the disk).  After a search, and after a pause when a buffer is edited,
-;; Emacs rescans every modified file buffer under the root (`drgnx-replace--scan': the buffer's text, unsaved edits
-;; included, through `--grep-line' and `--match') and its matches take the place of the hub's rows of that file,
-;; also for a buffer whose file the hub found nothing in.  The rows are built here in the hub's row format and put
-;; in the view's row table; Replace All and Replace This write them; the counts follow.  Not in Sjá's model: Next Match
-;; and the tick boxes skip them.  A new search forgets them.
+;; A modified buffer is not what the hub reads (the disk).  Before each search, and after a pause when a buffer is
+;; edited, the view sends the hub every modified file buffer under the root it has not had as it is now
+;; (`search/buffer'): the hub searches the buffer's text in place of the file (the search running, or done, takes it
+;; at once), so its matches are rows, model nodes and tick boxes like any other.  A buffer too large to send (over
+;; `drgnx-replace-refresh-max-bytes', or open as a large file) goes as `large': its file is searched on disk and its
+;; header says so.  A buffer saved or killed since is forgotten: the hub reads its file again.
 
-(defun drgnx-replace--local-files ()
-  "The files of the modified file buffers a search of the fields would list: under the root, in the scope."
-  (let ((find (drgnx-replace--text 'find)) (root (file-name-as-directory (expand-file-name drgnx-replace--root)))
-        (only (and (eq (drgnx-replace--opt :scope) 'file) (or (drgnx-replace--origin-file) t))) out)
-    (unless (or (string-empty-p find) (drgnx-replace--opt :symbol))
-      (dolist (b (buffer-list))
-        (when-let* ((f (buffer-file-name b)) ((buffer-modified-p b)) ((not (file-remote-p f)))
-                    ((string-prefix-p root f)) ((or (not only) (equal only f))))
-          (push f out))))
+(defun drgnx-replace--dirty-buffers ()
+  "The modified file buffers under the root, as (FILE . BUFFER)."
+  (let ((root (file-name-as-directory (expand-file-name drgnx-replace--root))) out)
+    (dolist (b (buffer-list))
+      (when-let* ((f (buffer-file-name b)) ((buffer-modified-p b)) ((not (file-remote-p f))) ((string-prefix-p root f)))
+        (push (cons f b) out)))
     out))
 
-(defun drgnx-replace--local-flat (s) (string-replace "\n" "⏎" s))
+(defun drgnx-replace--send-buffers ()
+  "Send the hub the modified buffers it has not had as they are now, and forget the ones saved or killed (see above)."
+  (unless (or (drgnx-replace--opt :symbol) (not drgnx-view-patch))
+    (unless drgnx-replace--sent (setq drgnx-replace--sent (make-hash-table :test #'equal)))
+    (let ((dirty (drgnx-replace--dirty-buffers)) gone)
+      (dolist (fb dirty)
+        (let* ((b (cdr fb)) (tick (buffer-chars-modified-tick b))
+               (large (or (drgnx-large-file-p b) (> (buffer-size b) drgnx-replace-refresh-max-bytes)))
+               (now (if large 'large tick)))
+          (unless (equal now (gethash (car fb) drgnx-replace--sent))
+            (puthash (car fb) now drgnx-replace--sent)
+            (drgnx-replace--hub-call
+             "search/buffer"
+             (append (list :view drgnx-replace-view :path (car fb) :tick tick)
+                     (if large
+                         (list :large t)
+                       (list :text (with-current-buffer b
+                                     (save-restriction (widen) (buffer-substring-no-properties (point-min) (point-max)))))))))))
+      (maphash (lambda (f _) (unless (assoc f dirty) (push f gone))) drgnx-replace--sent)
+      (dolist (f gone)
+        (remhash f drgnx-replace--sent)
+        (drgnx-replace--hub-call "search/buffer" (list :view drgnx-replace-view :path f))))))
 
-(defun drgnx-replace--local-header (file)
-  "The header row of FILE, as the hub makes it."
-  (let* ((name (file-name-nondirectory file))
-         (dir (file-relative-name (file-name-directory file) drgnx-replace--root))
-         (text (concat "[x] " name (if (equal dir "./") "" (concat "  " dir)))) (key (concat "f:" file)))
-    (list :key key :text text
-          :runs (unless (equal dir "./") (list (list (+ 4 (length name)) (length text) "drgnx-replace-dim")))
-          :props (list (list 0 (length text) "drgnx-work-id" key)))))
+(defun drgnx-replace--buffers-later ()
+  "A buffer was edited: send the modified buffers after a pause."
+  (drgnx-timer-debounce (cons 'replace-buffers (current-buffer)) drgnx-replace-refresh-delay
+                        #'drgnx-replace--buffers-timer :args (list (current-buffer)) :owner (current-buffer)))
 
-(defun drgnx-replace--local-match-row (m)
-  "The row of match M, as the hub makes it: the text around it, M as old and new when a replacement is typed."
-  (let* ((key (format "m:%s:%d:%d" (plist-get m :file) (plist-get m :line) (plist-get m :col)))
-         (before (string-trim-left (plist-get m :before)))
-         (before (drgnx-replace--local-flat (if (> (length before) 16) (concat "…" (substring before -15)) before)))
-         (new drgnx-replace--new) (txt (drgnx-replace--local-flat (plist-get m :text)))
-         (rep (and (or (plist-get m :placeholder) (not (string-empty-p new)))
-                   (ignore-errors (drgnx-replace-new-text m new))))
-         (head (concat "  [x] " before)) (b (length head))
-         (mid (if rep (concat txt (drgnx-replace--local-flat rep)) txt))
-         (runs (if rep (list (list b (+ b (length txt)) "drgnx-replace-old")
-                             (list (+ b (length txt)) (+ b (length mid)) "drgnx-replace-new"))
-                 (list (list b (+ b (length txt)) "drgnx-replace-match"))))
-         (text (concat head mid (drgnx-replace--local-flat (plist-get m :after))
-                       (if-let* ((why (plist-get m :reason))) (concat "  — " why) ""))))
-    (list :key key :text text :runs runs :props (list (list 0 (length text) "drgnx-work-id" key)))))
-
-(defun drgnx-replace--local-refresh ()
-  "Rescan the modified buffers and show their matches in place of the hub's rows of those files (see above)."
-  (when drgnx-view-patch
-    (let* ((table (drgnx-view-patch-rows drgnx-view-patch)) (view drgnx-view)
-           (scans (delq nil (mapcar (lambda (f) (let ((r (drgnx-replace--scan f))) (and (listp r) (cons f r))))
-                                    (drgnx-replace--local-files))))
-           (files (mapcar #'car scans)) old new hub)
-      (unless drgnx-replace--local-hub (setq drgnx-replace--local-hub (make-hash-table :test #'equal)))
-      (unless drgnx-replace--local-rows (setq drgnx-replace--local-rows (make-hash-table :test #'equal)))
-      (setq drgnx-replace--local (make-hash-table :test #'equal)
-            drgnx-replace--local-ids (make-hash-table :test #'equal))
-      (maphash (lambda (k _) (push k old)) drgnx-replace--local-rows)
-      ;; what the hub found in these files, counted once (from the model: the rows are a window of it), and its rows
-      ;; shown are taken out
-      (dolist (f files)
-        (unless (gethash f drgnx-replace--local-hub)
-          (puthash f (drgnx-replace--model-counts f) drgnx-replace--local-hub)))
-      (maphash (lambda (k _)
-                 (when (and (stringp k) (not (gethash k drgnx-replace--local-rows)) (drgnx-replace--hub-row-local-p k files))
-                   (push k hub)))
-               table)
-      (dolist (s scans)
-        (puthash (car s) (cdr s) drgnx-replace--local)
-        (when (cdr s)
-          (let ((h (drgnx-replace--local-header (car s))))
-            (push h new)
-            (dolist (m (cdr s))
-              (let ((r (drgnx-replace--local-match-row m)))
-                (puthash (plist-get r :key) m drgnx-replace--local-ids)
-                (push r new))))))
-      (setq new (nreverse new))
-      (let ((new-keys (mapcar (lambda (r) (plist-get r :key)) new)) (shown nil))
-        (dolist (k hub) (remhash k table))
-        (dolist (k old) (unless (member k new-keys) (remhash k drgnx-replace--local-rows) (remhash k table)))
-        (dolist (r new)
-          (puthash (plist-get r :key) r drgnx-replace--local-rows)
-          (puthash (plist-get r :key) r table))
-        (dolist (k new-keys) (when (member k old) (push k shown)))
-        (let ((gone (append hub (seq-remove (lambda (k) (member k new-keys)) old)))
-              (fresh (seq-remove (lambda (k) (member k old)) new-keys)))
-          (when gone (drgnx-view-remove view gone))
-          (when fresh (drgnx-view-insert view fresh))
-          (when shown (drgnx-view-dirty view shown))))
-      ;; what the rows add to the hub's counts
-      (let ((df 0) (dm 0))
-        (dolist (s scans)
-          (let ((h (gethash (car s) drgnx-replace--local-hub)))
-            (cl-incf df (- (if (cdr s) 1 0) (or (car h) 0)))
-            (cl-incf dm (- (length (cdr s)) (or (cdr h) 0)))))
-        (setq drgnx-replace--local-delta (cons df dm)))
-      (drgnx-replace--update-status))))
-
-(defun drgnx-replace--model-counts (file)
-  "(FILES . MATCHES) the hub found in FILE: from the model (the rows are a window of it); a file the model does not
-hold (past its cap) counts the rows the view has of it."
-  (let ((id (concat "f:" file)))
-    (if (drgnx-replace--rows-kind-p id "file")
-        (cons 1 (length (drgnx-replace--rows-file-matches id)))
-      (let ((f 0) (m 0))
-        (maphash (lambda (k _)
-                   (when (stringp k)
-                     (cond ((equal k id) (setq f 1))
-                           ((string-prefix-p (concat "m:" file ":") k) (cl-incf m)))))
-                 (drgnx-view-patch-rows drgnx-view-patch))
-        (cons f m)))))
-
-(defun drgnx-replace--hub-row-local-p (key files)
-  "Whether row KEY is the hub's row of one of FILES (the modified buffers' files, whose rows Emacs makes)."
-  (cl-some (lambda (f) (or (equal key (concat "f:" f)) (string-prefix-p (concat "m:" f ":") key))) files))
-
-(defun drgnx-replace--local-patched (view keys)
-  "`drgnx-view-patch-patched-functions': a hub patch redrew a row of a rescanned file: the buffer's row goes back; a
-row of such a file the hub sent now (the window went on) is taken out."
-  (when drgnx-replace--local-rows
-    (let ((table (drgnx-view-patch-rows drgnx-view-patch)) (files nil) back gone)
-      (maphash (lambda (f _) (push f files)) drgnx-replace--local)
-      (dolist (k keys)
-        (if-let* ((mine (gethash k drgnx-replace--local-rows)))
-            (unless (eq mine (gethash k table))
-              (puthash k mine table)
-              (push k back))
-          (when (and (stringp k) (drgnx-replace--hub-row-local-p k files))
-            (remhash k table)
-            (push k gone))))
-      (when gone (drgnx-view-remove view gone))
-      (when back (drgnx-view-dirty view back)))))
-
-(defun drgnx-replace--local-later ()
-  "A buffer was edited: after a pause (and when no search runs, whose end rescans) rescan the modified buffers."
-  (unless drgnx-replace--searching
-    (drgnx-timer-debounce (cons 'replace-local (current-buffer)) drgnx-replace-refresh-delay
-                          #'drgnx-replace--local-timer :args (list (current-buffer)) :owner (current-buffer))))
-
-(defun drgnx-replace--local-timer (buf)
+(defun drgnx-replace--buffers-timer (buf)
   "The pause after an edit is over in BUF's Search view.  A timer: never signals."
   (when (buffer-live-p buf)
     (with-current-buffer buf
-      (condition-case e (drgnx-replace--local-refresh)
+      (condition-case e (drgnx-replace--send-buffers)
         (error (drgnx-replace--message "%s" (error-message-string e)))))))
 
 (defun drgnx-replace--hub-resubscribe (_view)
-  "The hub is up again (`drgnx-view-env-register'): search again, as the fields say; its searches were lost."
+  "The hub is up again (`drgnx-view-env-register'): search again, as the fields say; its searches and the buffers it
+was sent were lost."
   (when-let* ((buf (get-buffer drgnx-replace-buffer-name)))
     (with-current-buffer buf
+      (when drgnx-replace--sent (clrhash drgnx-replace--sent))
       (when (and drgnx-view-patch (not (string-empty-p (drgnx-replace--text 'find))))
         (drgnx-replace--search-now)))))
 
 (defun drgnx-replace--rows-this (new)
   "Replace the match on the row at point (else the selected one) by NEW, ticked or not, then search again."
   (let* ((id (or (get-text-property (point) 'drgnx-work-id) (drgnx-view-nav-selection)))
-         (m (or (and drgnx-replace--local-ids (gethash id drgnx-replace--local-ids))
-                (and id (drgnx-replace--rows-kind-p id "match")
+         (m (or (and id (drgnx-replace--rows-kind-p id "match")
                      (drgnx-replace--rows-match id (when (drgnx-replace--opt :regexp)
                                                      (list :pattern (drgnx-replace--emacs-regexp (drgnx-replace--text 'find))
                                                            :case (drgnx-replace--opt :case)))))
@@ -1604,6 +1554,7 @@ row of such a file the hub sent now (the window went on) is taken out."
   (if (drgnx-replace--bar-context-p)
       (with-current-buffer drgnx-replace-bar-buffer-name (drgnx-replace--bar-replace-all))
     (with-current-buffer (drgnx-replace--live-view)
+      (drgnx-replace--check-writable)
       (if (drgnx-replace--rows-p)
           (drgnx-replace--rows-replace-all (drgnx-replace--new-name))
         (drgnx-replace--replace-all-symbol)))))
@@ -1624,6 +1575,7 @@ row of such a file the hub sent now (the window went on) is taken out."
   "Replace the match on this row of the Search view, ticked or not."
   (interactive)
   (with-current-buffer (drgnx-replace--live-view)
+    (drgnx-replace--check-writable)
     (if (drgnx-replace--rows-p) (drgnx-replace--rows-this (drgnx-replace--new-name)) (drgnx-replace--this-symbol))))
 
 (defun drgnx-replace--this-symbol ()
@@ -1699,9 +1651,7 @@ row of such a file the hub sent now (the window went on) is taken out."
     (with-current-buffer (drgnx-replace--live-view)
       (if (drgnx-replace--rows-p)
           (let ((id (or (drgnx-replace--rows-step dir) (user-error "No matches"))))
-            (drgnx-replace--show-match (or (and drgnx-replace--local-ids (gethash id drgnx-replace--local-ids))
-                                           (drgnx-replace--rows-match id))
-                                       nil))
+            (drgnx-replace--show-match (drgnx-replace--rows-match id) nil))
         (let* ((win (get-buffer-window (current-buffer)))
                (pos (drgnx-replace--next-row (if win (window-point win) (point)) dir)))
           (unless pos (user-error "No matches"))
@@ -1741,7 +1691,7 @@ row of such a file the hub sent now (the window went on) is taken out."
               drgnx-replace--widgets nil)
         (drgnx-replace--insert-field 'find "Find    " 24)
         (widget-insert " ")
-        (drgnx-replace--insert-toggles)
+        (drgnx-replace--insert-toggles t)
         (setq drgnx-replace--status-beg (point-marker))
         (widget-insert " ")
         (setq drgnx-replace--status-end (copy-marker (1- (point)) t))
@@ -1993,7 +1943,15 @@ The find bar's button; not a command of its own (it needs the bar)."
                    (replace-next-file "Next File" drgnx-replace-next-file "The next file of the Search view's results")
                    (replace-prev-file "Previous File" drgnx-replace-prev-file
                                       "The previous file of the Search view's results")
-                   (replace-bar-close "Close Find Bar" drgnx-replace-bar-close "Close the find bar and its highlights")))
+                   (replace-bar-close "Close Find Bar" drgnx-replace-bar-close "Close the find bar and its highlights")
+                   (search-mode-next "Next Mode (Text → Symbol → Meaning)" drgnx-replace-search-mode-next
+                                     "The Search view's next mode; it searches again")
+                   (search-mode-text "Text Mode" drgnx-replace-search-mode-text
+                                     "The Search view finds text (and replaces it)")
+                   (search-mode-symbol "Symbol Mode" drgnx-replace-search-mode-symbol
+                                       "The Search view finds a name's definitions, then its uses (read-only)")
+                   (search-mode-meaning "Meaning Mode" drgnx-replace-search-mode-meaning
+                                        "The Search view finds the code its words describe (read-only)")))
     (drgnx-command-define id :category "Search" :title title :command fn :doc doc :scope scope))
   (drgnx-command-define 'replace-this :category "Search" :title "Replace This Match" :command #'drgnx-replace-this
                         :doc "Replace the match on this row of the Search view"

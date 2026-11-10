@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 238, "{names:?}");
+        assert_eq!(names.len(), 245, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -396,6 +396,12 @@ mod tests {
         want.extend(CORE_WRITES);
         // Hrafn's: the index and the consented download change what the hub holds
         want.extend(["search/index", "search/model-download"]);
+        // the Search view's saved searches: the hub's state, and the project's file on a click
+        want.extend([
+            "search/saved/delete",
+            "search/saved/put",
+            "search/saved/share",
+        ]);
         // the runners': the registry's changes
         want.extend([
             "runners/add",
@@ -678,7 +684,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 188);
+        assert_eq!(with, 195);
     }
 
     #[test]
