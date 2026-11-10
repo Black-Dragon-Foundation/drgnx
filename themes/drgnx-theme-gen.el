@@ -106,7 +106,11 @@ A tint is composited over the variant's `editor'."
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))
-         (region :background ,(c 'sel) :extend t ,@(and hc `(:foreground ,(c 'sel-fg))))
+         ;; the selection is a rounded run over the text (window-dark.html `.ln .sel'), stopping at the line's end;
+         ;; its box is drawn inside the glyphs (negative widths), so text never moves; drgnx-decor scales it per frame.
+         ;; `:extend nil' is said: a theme spec inherits `:extend' from the defface, and region's is t
+         (region :background ,(c 'sel) ,@(and hc `(:foreground ,(c 'sel-fg))) :extend nil
+                 :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (secondary-selection :background ,(c 'sel-quiet))
          (highlight :background ,(c 'hover))
          (hl-line :background ,(c 'current-line) :extend t)
@@ -181,8 +185,12 @@ A tint is composited over the variant's `editor'."
          (nidhogg-title-bar :foreground ,(c 'fg) :background ,(c 'gap))
          (nidhogg-title-bar-inactive :foreground ,(c 'muted) :background ,(c 'gap)))
        ;; search, matches, completion
-       `((isearch :foreground ,(c 'on-accent) :background ,(c 'accent-fill))
-         (lazy-highlight :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25))
+       ;; matches are the accent at 25 % over the text, which keeps its colours; the current one is ringed in the
+       ;; accent (design "Matches"); boxes inside the glyphs, as the region's
+       `((isearch :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25) :extend nil
+                  :box (:line-width (-1 . -1) :color ,(c 'accent) ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (lazy-highlight :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25) :extend nil
+                         :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (match :background ,(c 'accent-tint))
          (show-paren-match :background ,(c 'accent-tint) :weight bold)
          (show-paren-mismatch :foreground ,(c 'error) :background ,(c 'error-tint))
