@@ -852,6 +852,13 @@ floods, Replace) profiles from before its first key to the end of its completion
 The setup is never profiled. The report is the last of the repeats, and is written when the measure fails too. The profilers cost time, so a profiled run's numbers are not judged against
 the budgets: read the report, then run the workload again without it.
 
+A `frame-parameter` in a report's most-sampled functions is a parameter Emacs does not answer itself: for anything
+but a few (`name`, the scroll bars, the colours, `display-type`, `background-mode`) it copies the frame's whole
+parameter list (about 1.4 kB on a graphical frame) to read one value. Keep such a value where reading it conses
+nothing (the UI scale is a frame-weak table, `drgnx-pixels-set-ui-scale`), or check something cheaper first (the
+save before a client closes looks at its frames only when the client made one), and hold the path to a cons check
+like `drgnx-pixels/the-scale-conses-nothing`.
+
 ## Tests
 
 `test/unit/perf-modal-test.el` (the evil workloads, their budget rows, the 1 ms rule, `DRGNX_PERF_WORKLOADS`), `test/unit/perf-test.el` (statistics, the probes, the audit — including that it never stops a function from removing

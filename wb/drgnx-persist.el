@@ -454,8 +454,11 @@ none, leaves that group as it is."
 
 (defun drgnx-persist--before-client-delete (proc &optional noframe)
   "Before `server-delete-client' deletes PROC's frames one by one: if they are all the graphical
-windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now."
-  (unless noframe
+windows left (\[save-buffers-kill-terminal] in the last client), save every one of them now.
+A client that made no frame (`emacsclient -e', a file shown in a window already there; server.el records
+a client's frame as its `frame' property) closes none: it is passed over at once, consing nothing, as every
+request ends here and `frame-parameter' of `client' copies each frame's whole parameter list."
+  (unless (or noframe (not (process-get proc 'frame)))
     (let ((gui (seq-filter #'drgnx-persist--gui-p (frame-list))))
       (when (and gui (seq-every-p (lambda (f) (eq (frame-parameter f 'client) proc)) gui))
         (drgnx-persist--save-quietly #'drgnx-persist--frames)   ; a terminal window may be the selected one
