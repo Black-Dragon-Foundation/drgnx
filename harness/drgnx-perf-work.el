@@ -741,48 +741,41 @@ the progress bars (two spaces each, `spaces' entries)."
                             :stops (nreverse stops) :spaces (nreverse spaces))
                       rows))))
           (nreverse rows)))
-      (defun drgnx-perf--wb-up (rows)
-        "The Board of 200 cards in 6 columns, shown and selected: ROWS, on the hub's rows path (its model in Sjá, the
-rows above applied); else on `drgnx-view-old-path', the cards this Emacs draws.  An error when the path is not it."
+      (defun drgnx-perf--wb-up ()
+        "The Board of 200 cards in 6 columns on the hub's rows path, shown and selected: its model in Sjá, the rows
+above applied.  An error when it is not on the rows path."
         (setq drgnx-perf--wb-send drgnx-view-patch-send-function drgnx-view-patch-send-function #'ignore
-              drgnx-view-old-path (not rows)
               drgnx-perf--wb-buf (get-buffer-create "*drgnx work board: perf*"))
         (switch-to-buffer drgnx-perf--wb-buf)
         (delete-other-windows)
         (drgnx-work-board-mode)
         (setq drgnx-work-lens-nav #'drgnx-work-board--nav)
-        (if (not rows)
-            (progn (drgnx-view-attach 'work-board)
-                   (setq drgnx-work-board--cards (drgnx-perf--wb-cards))
-                   (drgnx-view-touch drgnx-view)
-                   (drgnx-view-draw-now drgnx-view))
-          (drgnx-view-patch-attach "perf-board" "gui" :epoch 1)
-          (drgnx-view-model-event (list :view "perf-board" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--wb-model)))
-          (drgnx-view-apply-patch (list :view "perf-board" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
-                                        :ops (list (list :reset (drgnx-perf--wb-rows)))))
-          (drgnx-view-draw-now drgnx-view)
-          (drgnx-work-board-rows-attached))
-        (unless (eq (and rows t) (drgnx-work-board--rows-p))
-          (error "Premise: the Board is %s the hub's rows (Sjá: %s)" (if rows "not on" "on")
-                 (if (fboundp 'nidhogg-view--call) "yes" "no")))
+        (drgnx-view-patch-attach "perf-board" "gui" :epoch 1)
+        (drgnx-view-model-event (list :view "perf-board" :hub 7 :base 0 :version 1 :reset t :model (drgnx-perf--wb-model)))
+        (drgnx-view-apply-patch (list :view "perf-board" :class "gui" :hub 7 :base 0 :version 1 :env_epoch 1 :model 1
+                                      :ops (list (list :reset (drgnx-perf--wb-rows)))))
+        (drgnx-view-draw-now drgnx-view)
+        (drgnx-work-board-rows-attached)
+        (unless (drgnx-work-board--rows-p)
+          (error "Premise: the Board is not on the hub's rows (Sjá: %s)" (if (fboundp 'nidhogg-view--call) "yes" "no")))
         (unless (> (count-lines (point-min) (point-max)) 100) (error "Premise: the Board drew %d lines" (count-lines (point-min) (point-max))))
         t)
       (defun drgnx-perf--wb-each ()
         "Each repeat starts from the first card."
         (select-window (or (get-buffer-window drgnx-perf--wb-buf) (error "Premise: the Board is not shown")))
         (with-current-buffer drgnx-perf--wb-buf
-          (if (drgnx-work-board--rows-p) (drgnx-view-nav 'select "task:000") (drgnx-work-board--select "task:000")))
+          (drgnx-view-nav 'select "task:000"))
         t)
       (defun drgnx-perf--wb-check ()
         (with-current-buffer drgnx-perf--wb-buf
-          (let ((sel (if (drgnx-work-board--rows-p) (drgnx-view-nav-selection) drgnx-work-board--card)))
+          (let ((sel (drgnx-view-nav-selection)))
             (or (and sel (not (equal sel "task:000"))) (error "Premise: the keys moved nothing (selection %S)" sel)))))
       (defun drgnx-perf--wb-down ()
         (when (buffer-live-p drgnx-perf--wb-buf) (kill-buffer drgnx-perf--wb-buf))
-        (setq drgnx-perf--wb-buf nil drgnx-view-old-path nil drgnx-view-patch-send-function drgnx-perf--wb-send)
+        (setq drgnx-perf--wb-buf nil drgnx-view-patch-send-function drgnx-perf--wb-send)
         t)
       t))
-  "The `work-board' workloads' session side: no hub, the Board of 200 cards on the rows path or on the old path.")
+  "The `work-board' workload's session side: no hub, the Board of 200 cards on the hub's rows path.")
 
 (defun drgnx-perf-work--board-keys ()
   "40 moves on the Board: down, down, right, left and down, 8 times."
@@ -792,8 +785,8 @@ rows above applied); else on `drgnx-view-old-path', the cards this Emacs draws. 
   "The Work space's workloads (specs like `drgnx-perf-run--workloads'): VISIT is the form that visits the typing
 fixture, KILL-FIXTURE the form that kills its buffer.  `work-nav', `work-raster', `work-relayout', `work-live',
 `work-live-old', `work-typing-shown', `work-typing-hidden', `view-patch', `work-nav-rows', `work-trail',
-`trail-long', `work-board' and `work-board-old'.  `work-live' puts the map on the hub's rows, `work-board' the Board;
-the others keep it on `drgnx-view-old-path'."
+`trail-long' and `work-board'.  `work-live' puts the map on the hub's rows, `work-board' the Board (on the rows path
+only); the others keep the map on `drgnx-view-old-path'."
   (let* ((lib (drgnx-perf-work--lib-form))
          (type (lambda (s) (list :type s)))
          (typing (make-list 6 (funcall type "(let ((x 1)) (message \"%s\" x)) ")))
@@ -846,15 +839,12 @@ the others keep it on `drgnx-view-old-path'."
       (trail-long :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-long-form " (drgnx-perf--tl-up))")
                   :measure "(drgnx-perf--tl-measure)"
                   :teardown ,(concat "(progn (drgnx-perf--tl-down) " kill-fixture " t)"))
-      ;; the Board's keys over 200 cards, on the rows path and on the old path (`work-board-old'), the paired row
-      ,@(mapcar (lambda (old)
-                  `(,(if old 'work-board-old 'work-board)
-                    :setup ,(concat "(progn " drgnx-perf-work--board-form " (drgnx-perf--wb-up " (if old "nil" "t") "))")
-                    :each "(drgnx-perf--wb-each)"
-                    :actions ,(drgnx-perf-work--board-keys)
-                    :check "(drgnx-perf--wb-check)"
-                    :teardown "(drgnx-perf--wb-down)"))
-                '(nil t))
+      ;; the Board's keys over 200 cards on the rows path (its old path, work-board-old, went in plan sja-complete B2)
+      (work-board :setup ,(concat "(progn " drgnx-perf-work--board-form " (drgnx-perf--wb-up))")
+                  :each "(drgnx-perf--wb-each)"
+                  :actions ,(drgnx-perf-work--board-keys)
+                  :check "(drgnx-perf--wb-check)"
+                  :teardown "(drgnx-perf--wb-down)")
       (work-trail :setup ,(concat "(progn " (drgnx-perf-run--hub-form) " " drgnx-perf-work--trail-form " (drgnx-perf--trail-up) t)")
                   :each "(progn (drgnx-perf--trail-premise) t)"
                   :measure "(drgnx-perf--trail-measure)"

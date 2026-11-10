@@ -122,6 +122,26 @@ asks `work/board/subscribe' for it (the map view whose agents go on the cards) a
       (drgnx-work-board-refresh board)
       (should (= 2 (length calls))))))
 
+(ert-deftest drgnx-work-board/off-the-rows-path-it-says-so ()
+  "Pattern D: the Board is drawn only from the hub's rows.  Beside a map that is not on the rows path (no Sjá, or
+`drgnx-view-old-path') it says so instead of drawing, asks the hub for nothing, and its keys move nothing."
+  (let ((calls nil)
+        (map (generate-new-buffer "*drgnx work: wbr-off*"))
+        (board nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'drgnx-hub-call) (lambda (method &rest _) (push method calls))))
+          (with-current-buffer map (drgnx-work-map-mode))
+          (setq board (drgnx-work-board-open map))
+          (with-current-buffer board
+            (should (string-match-p "needs Sjá" (buffer-string)))
+            (should-not drgnx-view)
+            (should-not drgnx-view-patch)
+            (drgnx-work-board--nav 'down)
+            (drgnx-work-board-refresh board))
+          (should-not calls))
+      (dolist (b (list board map))
+        (when (buffer-live-p b) (let ((kill-buffer-query-functions nil)) (kill-buffer b)))))))
+
 (ert-deftest drgnx-work-board/a-cards-bar-is-two-sized-spaces ()
   "Pattern D: a card's progress bar comes as a row of `spaces' (`work::trail::board'): each is shown as a space of
 its width and height in device px, `(space :width (W) :height (H))', in its run's face, the done part
