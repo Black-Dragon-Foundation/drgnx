@@ -413,7 +413,7 @@ Ratatoskr gives it a connection.
 
 `cargo test -p mimir` runs `server::tests` (both eras over an in-memory pipe: the handshake, the stateless rules,
 every error shape, a bad argument that never reaches the tool, a 1 MiB line that ends the connection, a panicking
-tool) and `tests/interop.rs`: rmcp 3.6's client over a Unix socket pair, with `initialize` at each of the four old
+tool) and `tests/interop.rs`: rmcp 3.9's client over a Unix socket pair, with `initialize` at each of the four old
 versions, `server/discover` at 2026-07-28 and its automatic probe, lists the tools, calls `echo`, and gets a bad
 argument back as a tool error with its path and an unknown tool as a protocol error. `bridge::tests` run the bridge
 against a real `serve` on a paused clock: the replayed `initialize` whose answer is dropped, a call in flight at the
