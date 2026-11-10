@@ -1484,7 +1484,6 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `say/start` | user | `{profile?: string, project?: Id, repo: AbsPath, text: Text}` | `{id: string}` | yes |
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
-| `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
 | `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
 | `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
@@ -1494,6 +1493,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
+| `search/run` | user | `{ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -2258,7 +2258,7 @@ All of it is in memory only.
   a reset drops every held patch. A patch whose `base` is older than the editor's version is dropped silently. Only a
   `base` newer than the version, an unknown `base` or an image the editor lacks sends `view/resync`, at most one
   outstanding per (view, class).
-- **A stream is a row stream.** A stream method (`search/grep`, `search/files`, `explorer/subscribe`) is a (view,
+- **A stream is a row stream.** A stream method (`search/run`, `search/files`, `explorer/subscribe`) is a (view,
   class) row stream like any other: a reset per new query, then inserts. A cancelled query's late patches carry an old `version` and are dropped.
 - **Images:** a reset carries every image its rows name; any other patch only those the editor was not sent.
 - **View options** (`view::ViewOpts`, set by the view's builder; the test hook `__test_view_rows` takes `ack` and
@@ -2354,20 +2354,33 @@ with `…` to the width minus a slack of 10 px (`fit::SLACK`). The sum is an est
 - **The terminal** counts columns with Unicode's widths, overridden by the editor's `char-width-table` ranges
   (`tty_widths`).
 
-### Text search as rows (`search/grep`)
+### Text search as rows (`search/run`)
 
-The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/grep.rs`;
-the search itself is `hrafn::grep`).
+The Search view's results are a row stream under the rules above (`runtime/crates/drgnx-ratatoskr/src/view/search/`:
+`mod.rs` the runs, `rows.rs` the rows and the model, `run.rs` the match ids, the carried unticks and the files'
+snapshots; the search itself is `hrafn::grep`).
 
-- `search/grep {view, root, text, file?, case?, word?, regexp?, include?, exclude?, ignore?, replace?}` stops the
-  view's earlier search, sends every class of `view` a `reset` of no rows at once, and answers `{query}`. A thread then
-  runs ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
-  after the last row: the file's header row `f:<file>` and one row `m:<file>:<line>:<col>` per match, `<file>` the
-  path relative to `root` when it is under it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names
-  it the same way): a window move sends thousands of ids, and whole paths in them were most of its bytes. A class whose
-  env changed meanwhile gets a `reset` of every row so far instead. The event `search-grep-done {view, query, files,
-  matches, error?}` ends the search; a search a newer one stopped sends neither rows nor the event, so a late row of
-  an old query never reaches the view (and the editor drops one by `base` as well).
+- `search/run {view, root, search, ignore?, off?}` takes a `SearchSpec` (as the saved searches below): a Text query
+  (`{mode: "text", text, case?, word?, regexp?}`; Symbol and Meaning are refused, at `search.query.mode`), `replace?`,
+  `scope?` (none or `project`, or `file` with one file in `files`; another kind is refused, at `search.scope.kind`),
+  `include?`, `exclude?`; `root` must be a folder. It stops the view's earlier search, records the search as recent,
+  sends every class of `view` a `reset` of no rows at once, and answers `{run}`, the run's number. A thread then runs
+  ripgrep (else `git grep` in a repository, else `grep`) and sends, as each file's lines are complete, one `insert`
+  after the last row: the file's header row `f:<file>` and one row `m:<run>:<n>` per match (`n` from 0 in the run's
+  order; the id is opaque, the row's props name the match). `<file>` is the path relative to `root` when it is under
+  it, else whole (`key_path`; the editor's `drgnx-replace--key-path` names it the same way): a window move sends
+  thousands of ids, and whole paths in them were most of its bytes. A class whose env changed meanwhile gets a
+  `reset` of every row so far instead. The event `search-run-done {view, run, files, matches, error?, off?}` ends the
+  search; a search a newer one stopped sends neither rows nor the event, so a late row of an old query never reaches
+  the view (and the editor drops one by `base` as well).
+- **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
+  turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
+  and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and
+  both come back ticked. At the end `search-run-done`'s `off` is the new run's ids with those keys (absent when
+  none), and the editor unticks them. A run stopped before its end hands what it carried to the next run; the
+  skipped list of Replace All (`search/grep-skipped`) ends the carry.
+- **Snapshots:** the run records each file's size, modified time, inode and, up to 16 MiB, an xxh3 of its bytes, read
+  in the search's thread outside every lock.
 - **Row text:** a header is `[x] name` and, below the root, the folder in `drgnx-replace-dim`; a match is `  [x] ` and
   the text around it, with the match in `drgnx-replace-match`, or, when `replace` is not empty, struck out
   (`drgnx-replace-old`) with the replacement after it (`drgnx-replace-new`); after a regexp search `\1`, `\&` and
@@ -2377,7 +2390,7 @@ the search itself is `hrafn::grep`).
   over each row. The tick state is the editor's.
 - **The model** (`view-model`, before the rows that name it; "The native view model"): a `tree` whose list `order`
   holds each file node `f:<file>` (kind `file`, open: flag `expanded`; fields `label`, the name, and `path`) followed
-  by its match nodes `m:<file>:<line>:<col>` (kind `match`, `parent` the file; fields `label`, the text around it,
+  by its match nodes `m:<run>:<n>` (kind `match`, `parent` the file; fields `label`, the text around it,
   and `line`, `col`, `end`, `text`; its file is the parent's `path`, sent once per file, not again per match). A
   search starts with a model of no nodes; each file's batch is a diff; a class's first env sends the model before its
   rows. Replace reads the matches it writes from these fields and the parent's `path`. Past
@@ -2387,7 +2400,7 @@ the search itself is `hrafn::grep`).
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
   the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  asks; the totals (files, matches) come with `search-run-done`. `search/grep-look {view, more?, fill?, upto?}` goes
   on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
   Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
   rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
@@ -2401,7 +2414,7 @@ the search itself is `hrafn::grep`).
   while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
   editor's throttle `drgnx-view-delay`: it applies a model no row names one frame after it comes when it was quiet,
   else one throttle after the last, and every line it
-  reads costs it a redisplay pass), and before `search-grep-done` when anything waits. A send is what waited appended to
+  reads costs it a redisplay pass), and before `search-run-done` when anything waits. A send is what waited appended to
   what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
   would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
   sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
@@ -2491,7 +2504,7 @@ and the ranking are `hrafn::rank`).
   applies every `.gitignore` it meets (a deeper file decides first, the last matching line of a file wins, `!` keeps,
   a trailing `/` names folders, a leading or inner `/` anchors to the file's folder). No file is read: binary, large
   and linked files are names like any other. The exclude globs of `.drgnx/search.eld` and `drgnx-search-exclude`
-  apply, and `ignore` as for `search/grep` (dot paths and secret-looking names out under `index`, listed under `real`).
+  apply, and `ignore` as for `search/run` (dot paths and secret-looking names out under `index`, listed under `real`).
 - **The ranking.** Every word of `query` (case-insensitive) is in the path; a basename that starts with the first
   word and holds them all first, then a basename that holds them all, then a path that does; shorter, then by path,
   among equals. A query checks its cancel flag every 4096 names.

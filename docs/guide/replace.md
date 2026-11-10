@@ -97,16 +97,19 @@ marker per file); `test/ui/editor-m11c1-test.el` walks the Search view with resu
 character at a time over 10k matches (each key a search, timed to its first rows and to its end), and `search-window`
 walks Next Match across the model's window of a 30k-match search ([perf.md](../develop/perf.md)).
 
-When the hub builds the results (`search/grep`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
+When the hub builds the results (`search/run`, [hub.md](../develop/hub.md)), they also arrive as a model of files and
 their matches, and the keys answer from it in Emacs (`drgnx-replace-rows-attached`): Next Match and Previous Match walk
 the matches over the file rows, wrapping, and Next and Previous File the files (`down:file`, `up:file`); a tick box (a
 button: `RET` or a click) unticks a match (its file's box: all of them) and stays as it is when the hub redraws the
-row; a new search empties Sjá's ticked set. Replace All writes the ticked matches from the model's fields, then tells
+row.  A new search empties Sjá's ticked set but keeps what you unticked: the view sends the unticked matches with it,
+and when it ends the hub names the same matches of the new search (by file, the text around the match and its column,
+not its line, so lines added above a match keep it), which are unticked again; two matches the hub cannot tell apart
+come back ticked.  Replace All writes the ticked matches from the model's fields, then tells
 the hub what it skipped (`search/grep-skipped`): the hub lists those alone, each with why, and stops the search.
 `test/unit/replace-rows-nav-test.el` covers these with no hub.
 
 The hub keeps every match but sends the view a window of the rows, the first 200 (the agent panel's shape), and the
-totals with `search-grep-done`; the view asks for the next window when its window nears the end of the rows
+totals with `search-run-done`; the view asks for the next window when its window nears the end of the rows
 (`search/grep-look` with `more`), and for the rows up to a match when Next Match or Previous Match goes beyond them
 (`upto`; point goes to the row when it arrives).  A match more than 400 rows past the rows sent comes in a block
 of rows around it after a gap row ("⋯ N more"), not with every row before it (one patch of 19,000 rows was over the
@@ -114,11 +117,12 @@ hub's 16 MiB per client, and it dropped the editor); when the gap row is in sigh
 (`fill`), and the gap row goes when they meet the block.  Replace All and the tick boxes read the model, so they act on every
 match, not only the rows sent; the file watches follow the model's files too.
 
-A text search is the hub's `search/grep` (the view `search`, the fields' text and
-toggles, the folder or file, the include and exclude globs, the replacement), and the results are the hub's rows, a
+A text search is the hub's `search/run` (the view `search`, the fields' text and
+toggles, the folder, or the file as the File scope, the include and exclude globs, the replacement, and the matches
+unticked before it), and the results are the hub's rows, a
 reset and then each file's header and matches, inserted below the fields by `drgnx-view-apply-patch`.  A new search
 makes the hub send a reset and drop the old search's late rows, and the editor drops one that still arrives by its
-base.  `search-grep-done` ends the search and gives the count the status line shows; the status line shows
+base.  `search-run-done` ends the search and gives the count the status line shows; the status line shows
 "Searching…" until then.  Typing in the Replace field is `search/grep-replace`: the hub patches the previews and
 nothing is searched again.  Symbol mode (the language server's edits) keeps rows of Emacs's own (the `replace-results`
 view type), and the view changes between the two with each search; `drgnx-view-old-path` has no Search path of its

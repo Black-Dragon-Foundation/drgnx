@@ -1,0 +1,21 @@
+{"scenario": "search/run-streams-rows", "requires": ["v1", "test-hooks"], "doc": "search/run sends a view a reset of no rows at once, then each file's header and matches as rows (match ids m:RUN:N); search/grep-replace patches the rows' preview of a replacement without a new search; search-run-done names the run, the files and the matches; a run again with a match unticked names that match's new id in off; Symbol mode is refused here."}
+{"do": "start", "hub": "h"}
+{"do": "connect", "conn": "e", "hub": "h"}
+{"do": "send", "conn": "e", "json": {"id": 1, "method": "subscribe"}}
+{"do": "expect", "conn": "e", "json": {"id": 1, "result": true}}
+{"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "s", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 7, 4]], "cell": [8, 17], "width_px": 400, "palette": [], "epoch": 1}}}
+{"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "one needle\nneedle two\nnothing\n"}
+{"do": "send", "conn": "e", "json": {"id": 3, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}, "scope": {"kind": "project"}}}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "s", "class": "gui-1", "hub": "$capture:hub", "base": 0, "version": 1, "env_epoch": 1, "ops": [{"reset": []}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$hub", "base": 1, "version": 2, "ops": [{"insert": {"after": null, "rows": [{"key": "f:a.txt", "text": "[x] a.txt"}, {"key": "m:1:0", "text": "  [x] one needle", "runs": [[10, 16, "drgnx-replace-match"]]}, {"key": "m:1:1", "text": "  [x] needle two"}]}}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 1, "files": 1, "matches": 2, "off": "$absent"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 3, "result": {"run": 1}}}
+{"do": "send", "conn": "e", "json": {"id": 4, "method": "search/grep-replace", "params": {"view": "s", "replace": "pin"}}}
+{"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"hub": "$hub", "base": 2, "version": 3, "ops": [{"replace": [{"key": "m:1:0", "text": "  [x] one needlepin", "runs": [[10, 16, "drgnx-replace-old"], [16, 19, "drgnx-replace-new"]]}, {"key": "m:1:1", "text": "  [x] needlepin two", "runs": [[6, 12, "drgnx-replace-old"], [12, 15, "drgnx-replace-new"]]}]}]}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"id": 4, "result": true}}
+{"do": "write_file", "path": "$ROOT/proj/a.txt", "text": "added\none needle\nneedle two\nnothing\n"}
+{"do": "send", "conn": "e", "json": {"id": 5, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "text", "text": "needle"}}, "off": ["m:1:1"]}}}
+{"do": "expect", "conn": "e", "json": {"event": "search-run-done", "data": {"view": "s", "run": 2, "files": 1, "matches": 2, "off": ["m:2:1"]}}, "within_ms": 10000}
+{"do": "send", "conn": "e", "json": {"id": 6, "method": "search/run", "params": {"view": "s", "root": "$ROOT/proj", "search": {"query": {"mode": "symbol", "name": "needle"}}}}}
+{"do": "expect", "conn": "e", "json": {"id": 6, "error": {"code": "invalid-params", "path": "search.query.mode"}}}

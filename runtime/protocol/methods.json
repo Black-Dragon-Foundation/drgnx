@@ -3062,7 +3062,7 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun. A search a newer one stopped says nothing.",
+        "description": "`search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not\nrun; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.",
         "properties": {
           "error": {
             "type": [
@@ -3080,7 +3080,13 @@
             "minimum": 0,
             "type": "integer"
           },
-          "query": {
+          "off": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "run": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -3091,15 +3097,15 @@
         },
         "required": [
           "view",
-          "query",
+          "run",
           "files",
           "matches"
         ],
-        "title": "GrepDone",
+        "title": "RunDone",
         "type": "object"
       },
-      "doc": "a text search (search/grep) ended: its query number, the files and matches it found, or why it could not run; to the searching connection only; a search a newer one stopped says nothing",
-      "name": "search-grep-done"
+      "doc": "a Search view's search (search/run) ended: its run number, the files and matches it found, or why it could not run, and the matches that come back unticked; to the searching connection only; a search a newer one stopped says nothing",
+      "name": "search-run-done"
     },
     {
       "data": {
@@ -27249,153 +27255,12 @@
       "classes": [
         "user"
       ],
-      "doc": "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
-      "name": "search/grep",
-      "params": {
-        "$defs": {
-          "AbsPath": {
-            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
-            "maxLength": 4096,
-            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
-            "type": "string"
-          },
-          "GrepIgnore": {
-            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
-            "oneOf": [
-              {
-                "const": "index",
-                "description": "The index's filters: no dot paths, no secret-looking names.",
-                "type": "string"
-              },
-              {
-                "const": "real",
-                "description": "Only what `.gitignore` files and the globs name.",
-                "type": "string"
-              }
-            ]
-          }
-        },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "`search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset\nat once, then each file's header and matches as it is complete. A newer search of the same view stops this one.",
-        "properties": {
-          "case": {
-            "description": "Match case; default off.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "exclude": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "file": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/AbsPath"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Search this one file only (globs then do not apply)."
-          },
-          "ignore": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/GrepIgnore"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Default: the setting `drgnx-search-ignore-rules`."
-          },
-          "include": {
-            "description": "Globs; each string may hold several, comma-separated.",
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "regexp": {
-            "description": "TEXT is a regular expression.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "replace": {
-            "description": "The replacement the rows preview (old struck out, new beside it); a regexp search's `\\1` are the groups.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "root": {
-            "$ref": "#/$defs/AbsPath"
-          },
-          "text": {
-            "type": "string"
-          },
-          "view": {
-            "description": "The hub-fed view that shows the rows (`view/env`).",
-            "type": "string"
-          },
-          "word": {
-            "description": "Whole words only.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "view",
-          "root",
-          "text"
-        ],
-        "title": "GrepParams",
-        "type": "object"
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "additionalProperties": false,
-        "description": "`search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).",
-        "properties": {
-          "query": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "title": "GrepStarted",
-        "type": "object"
-      },
-      "writes": false
-    },
-    {
-      "classes": [
-        "user"
-      ],
       "doc": "a view's grep rows go on: one more window of rows (more), or the rows up to a match beyond them and a margin (upto); false when the view has no search; a search sends only its first 200 rows until asked",
       "name": "search/grep-look",
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with\nthe 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before\nit, and the gap row goes when they meet the rows after it.",
+        "description": "`search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and\nits matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.\nThe editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them\n(`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with\nthe 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before\nit, and the gap row goes when they meet the rows after it.",
         "properties": {
           "fill": {
             "description": "The rows before the gap row, one window more.",
@@ -27412,7 +27277,7 @@
             ]
           },
           "upto": {
-            "description": "The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.",
+            "description": "The key of a row to reach (`f:FILE`, `m:RUN:N`); over `more`.",
             "type": [
               "string",
               "null"
@@ -27477,7 +27342,7 @@
         "$defs": {
           "GrepSkip": {
             "additionalProperties": false,
-            "description": "One skipped match: its node id (`m:FILE:LINE:COL`) and why.",
+            "description": "One skipped match: its node id (`m:RUN:N`) and why.",
             "properties": {
               "id": {
                 "type": "string"
@@ -28562,6 +28427,299 @@
           "recent"
         ],
         "title": "RecentAnswer",
+        "type": "object"
+      },
+      "writes": false
+    },
+    {
+      "classes": [
+        "user"
+      ],
+      "doc": "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
+      "name": "search/run",
+      "params": {
+        "$defs": {
+          "AbsPath": {
+            "description": "an absolute local path: no NUL, at most 4096, never a remote (TRAMP) name",
+            "maxLength": 4096,
+            "pattern": "^/[^/:\\u0000]*(/[^\\u0000]*)?$",
+            "type": "string"
+          },
+          "FindQuery": {
+            "description": "What the Search view's Find means: the mode and what was typed, with the mode's toggles.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "description": "Text or a regular expression (`hrafn::grep`).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "text",
+                    "type": "string"
+                  },
+                  "regexp": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "word": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode",
+                  "text"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "Definitions and uses of a name, from the index (by name only).",
+                "properties": {
+                  "case": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "mode": {
+                    "const": "symbol",
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "name"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "description": "A question about what the code does (Hrafn's hybrid query).",
+                "properties": {
+                  "mode": {
+                    "const": "meaning",
+                    "type": "string"
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "question"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "GrepIgnore": {
+            "description": "Which files a text search and the ranked file query look in (the setting `drgnx-search-ignore-rules`).",
+            "oneOf": [
+              {
+                "const": "index",
+                "description": "The index's filters: no dot paths, no secret-looking names.",
+                "type": "string"
+              },
+              {
+                "const": "real",
+                "description": "Only what `.gitignore` files and the globs name.",
+                "type": "string"
+              }
+            ]
+          },
+          "ScopeKind": {
+            "description": "Which files a search looks in.",
+            "oneOf": [
+              {
+                "const": "project",
+                "description": "The root, the ignore rules as set.",
+                "type": "string"
+              },
+              {
+                "const": "file",
+                "description": "One file: the view's origin buffer.",
+                "type": "string"
+              },
+              {
+                "const": "open",
+                "description": "The files normal buffers visit under the root.",
+                "type": "string"
+              },
+              {
+                "const": "changed",
+                "description": "The working tree's modified, added and untracked files.",
+                "type": "string"
+              },
+              {
+                "const": "staged",
+                "description": "The files whose index entry differs from HEAD (their working-tree text is searched).",
+                "type": "string"
+              },
+              {
+                "const": "branch",
+                "description": "The files changed since the merge base of HEAD and BASE, and the working tree's changes.",
+                "type": "string"
+              }
+            ]
+          },
+          "SearchScope": {
+            "additionalProperties": false,
+            "description": "A search's scope: its kind, Branch's base (none: the upstream, else `main`, else `master`), whether only matches\nin changed lines count (Changed, Staged, Branch), and the files of File and Open (the editor's state, never saved).",
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "changed_lines": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "files": {
+                "items": {
+                  "$ref": "#/$defs/AbsPath"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ScopeKind"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "SearchSpec": {
+            "additionalProperties": false,
+            "description": "A search as the user made it: what recent and saved searches keep, and what a click runs again.",
+            "properties": {
+              "exclude": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "include": {
+                "description": "Globs; each string may hold several, comma-separated.",
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "query": {
+                "$ref": "#/$defs/FindQuery"
+              },
+              "replace": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SearchScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,\nthen each file's header and matches as it is complete. A newer search of the same view stops this one. The rows\npreview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\\1` are the groups). Text mode, and\nthe scopes Project and File (`scope.files`, the one file), so far.",
+        "properties": {
+          "ignore": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GrepIgnore"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Default: the setting `drgnx-search-ignore-rules`."
+          },
+          "off": {
+            "description": "The match ids of the view's last run the user unticked: a match of this run that is the same match (its file,\ncolumns and the text around it) comes back unticked, named in `search-run-done`'s `off`, when exactly one match\nhas it.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "root": {
+            "$ref": "#/$defs/AbsPath"
+          },
+          "search": {
+            "$ref": "#/$defs/SearchSpec"
+          },
+          "view": {
+            "description": "The hub-fed view that shows the rows (`view/env`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "view",
+          "root",
+          "search"
+        ],
+        "title": "RunParams",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "`search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).",
+        "properties": {
+          "run": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "RunStarted",
         "type": "object"
       },
       "writes": false

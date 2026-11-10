@@ -3,7 +3,7 @@
 ;; test-pattern: pure
 ;; Needs Sjá (a Nidhogg with `nidhogg-view--call') for the hub-fed view; those tests are skipped elsewhere.  No hub:
 ;; the hub's calls are recorded and its patches and events are handed in by hand (the real stream is the row
-;; `search/grep-streams-rows').  Each test names its pattern (D: pure; A: every order, unsaved-buffer rescan).
+;; `search/run-streams-rows').  Each test names its pattern (D: pure; A: every order, unsaved-buffer rescan).
 (require 'ert)
 (require 'cl-lib)
 (require 'drgnx-paths)
@@ -18,8 +18,22 @@
 (defvar drgnx-replace-rows-test--n 0 "Each run's view gets a name of its own in Sjá.")
 (defvar drgnx-replace-rows-test--calls nil "The hub calls the Search view made, newest first: (METHOD . PARAMS).")
 
-(defun drgnx-replace-rows-test--row (id text)
-  (list :key id :text text :props (list (list 0 (length text) "drgnx-work-id" id))))
+(defun drgnx-replace-rows-test--row (id text &optional file)
+  "The hub's row ID: TEXT, with FILE as the hub names it (a header's `drgnx-replace-file', a match's
+`drgnx-replace-match' `:file') when given."
+  (list :key id :text text
+        :props (append (and file (list (list 0 (length text)
+                                             (if (string-prefix-p "f:" id) "drgnx-replace-file" "drgnx-replace-match")
+                                             (if (string-prefix-p "f:" id) file (list :file file)))))
+                       (list (list 0 (length text) "drgnx-work-id" id)))))
+
+(defun drgnx-replace-rows-test--search (params key)
+  "KEY of `search/run''s PARAMS' search (`:query' for its query's)."
+  (plist-get (plist-get params :search) key))
+
+(defun drgnx-replace-rows-test--query (params key)
+  "KEY of `search/run''s PARAMS' query."
+  (plist-get (drgnx-replace-rows-test--search params :query) key))
 
 (defun drgnx-replace-rows-test--patch (view base version ops)
   (list :view view :class "unshown" :hub 7 :base base :version version :env_epoch 1 :ops ops))
@@ -61,31 +75,34 @@
              (let ((kill-buffer-query-functions nil)) (kill-buffer buf))))))))
 
 (ert-deftest drgnx-replace-rows/inserts-streamed-rows ()
-  "Pattern D: a text search is a `search/grep' call naming the view; the hub's reset and its per-file inserts are
-drawn through `drgnx-view-apply-patch' below the fields, `search-grep-done' ends the search and counts it."
+  "Pattern D: a text search is a `search/run' call naming the view; the hub's reset and its per-file inserts are
+drawn through `drgnx-view-apply-patch' below the fields, `search-run-done' ends the search and counts it."
   (drgnx-replace-rows-test--with
     (drgnx-replace--fill 'find "needle")
     (drgnx-replace--fill 'replace "pin")
     (drgnx-replace--search-now)
     (should drgnx-view-patch)
     (let ((call (car drgnx-replace-rows-test--calls)))
-      (should (equal "search/grep" (car call)))
+      (should (equal "search/run" (car call)))
       (should (equal view (plist-get (cdr call) :view)))
       (should (equal "/r/" (plist-get (cdr call) :root)))
-      (should (equal "needle" (plist-get (cdr call) :text)))
-      (should (equal "pin" (plist-get (cdr call) :replace)))
-      (should (eq :false (plist-get (cdr call) :regexp))))
+      (should (equal "text" (drgnx-replace-rows-test--query (cdr call) :mode)))
+      (should (equal "needle" (drgnx-replace-rows-test--query (cdr call) :text)))
+      (should (equal "pin" (drgnx-replace-rows-test--search (cdr call) :replace)))
+      (should (eq :false (drgnx-replace-rows-test--query (cdr call) :regexp)))
+      (should (equal '(:kind "project") (drgnx-replace-rows-test--search (cdr call) :scope)))
+      (should-not (plist-member (cdr call) :off)))
     (should drgnx-replace--searching)
     (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
     (drgnx-view-apply-patch
      (drgnx-replace-rows-test--patch
       view 1 2 (list (list :insert (list :after nil
                                          :rows (list (drgnx-replace-rows-test--row "f:a.txt" "[x] a.txt")
-                                                     (drgnx-replace-rows-test--row "m:a.txt:1:4" "  [x] one needle")))))))
+                                                     (drgnx-replace-rows-test--row "m:1:0" "  [x] one needle")))))))
     (drgnx-view-draw-now drgnx-view)
     (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))
       (should (equal "[x] a.txt\n  [x] one needle\n" text)))
-    (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 1 :matches 1))
+    (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 1 :matches 1))
     (should-not drgnx-replace--searching)
     (should (string-match-p "1 result in 1 file" (buffer-substring-no-properties
                                                   drgnx-replace--status-beg drgnx-replace--status-end)))))
@@ -102,7 +119,7 @@ the old version), is dropped by the editor and never drawn."
       view 1 2 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:old.txt" "[x] old.txt")))))))
     (drgnx-replace--fill 'find "other")
     (drgnx-replace--search-now)
-    (should (equal "other" (plist-get (cdr (car drgnx-replace-rows-test--calls)) :text)))
+    (should (equal "other" (drgnx-replace-rows-test--query (cdr (car drgnx-replace-rows-test--calls)) :text)))
     (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 2 3 (list (list :reset nil))))
     ;; the old query's next file, built before the hub stopped it: base 2, the version the new reset has passed
     (drgnx-view-apply-patch
@@ -139,7 +156,7 @@ the old version), is dropped by the editor and never drawn."
 (ert-deftest drgnx-replace-rows/unsaved-buffer-rescan-still-marks-on-the-hub-path ()
   "Pattern A: on the hub path a modified buffer's matches are the Lisp rescan's, not the disk's.  a.txt: the buffer
 has a match the file lacks, and the hub found none; b.txt: the hub found a match on disk that the buffer no longer
-has.  After `search-grep-done' the view shows a.txt's match and no row of b.txt, the status counts what is shown, and
+has.  After `search-run-done' the view shows a.txt's match and no row of b.txt, the status counts what is shown, and
 Replace All writes the buffer's match."
   (drgnx-replace-rows-test--with
     (let* ((dir (file-name-as-directory (make-temp-file "replace-rows-hub" t)))
@@ -161,11 +178,12 @@ Replace All writes the buffer's match."
             (drgnx-view-apply-patch
              (drgnx-replace-rows-test--patch
               view 1 2 (list (list :insert (list :after nil
-                                                 :rows (list (drgnx-replace-rows-test--row "f:b.txt" "[x] b.txt")
-                                                             (drgnx-replace-rows-test--row "m:b.txt:1:4" "  [x] old needle")
-                                                             (drgnx-replace-rows-test--row "f:c.txt" "[x] c.txt")
-                                                             (drgnx-replace-rows-test--row "m:c.txt:1:5" "  [x] disk needle")))))))
-            (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 2 :matches 2))
+                                                 :rows (list (drgnx-replace-rows-test--row "f:b.txt" "[x] b.txt" b)
+                                                             (drgnx-replace-rows-test--row "m:1:0" "  [x] old needle" b)
+                                                             (drgnx-replace-rows-test--row "f:c.txt" "[x] c.txt" c)
+                                                             (drgnx-replace-rows-test--row
+                                                              "m:1:1" "  [x] disk needle" c)))))))
+            (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 2 :matches 2))
             (drgnx-view-draw-now drgnx-view)
             (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))
               (should (string-match-p "a\\.txt" text))
@@ -195,7 +213,7 @@ hub's model), wrapping, and show each match from the buffer's scan."
             (drgnx-replace--fill 'find "needle")
             (drgnx-replace--search-now)
             (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
-            (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 0 :matches 0))
+            (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 0 :matches 0))
             (cl-letf (((symbol-function 'drgnx-replace--show-match) (lambda (m _select) (push (plist-get m :line) shown))))
               (drgnx-replace-next)
               (drgnx-replace-next)
@@ -207,7 +225,7 @@ hub's model), wrapping, and show each match from the buffer's scan."
 
 (ert-deftest drgnx-replace-rows/a-search-before-the-hub-waits-for-it ()
   "Pattern D: with the hub not up a text search makes no call and says it waits; when the hub comes
-\(`drgnx-hub-connected-functions') the search goes as `search/grep'.  There is no Lisp engine."
+\(`drgnx-hub-connected-functions') the search goes as `search/run'.  There is no Lisp engine."
   (drgnx-replace-rows-test--with
     (let ((up nil))
       (cl-letf (((symbol-function 'drgnx-replace--hub-ready-p) (lambda () up)))
@@ -221,30 +239,32 @@ hub's model), wrapping, and show each match from the buffer's scan."
         (setq up t)
         (drgnx-replace--hub-up)
         (should-not drgnx-replace--waiting)
-        (should (equal "search/grep" (car (car drgnx-replace-rows-test--calls))))
-        (should (equal "needle" (plist-get (cdr (car drgnx-replace-rows-test--calls)) :text)))
+        (should (equal "search/run" (car (car drgnx-replace-rows-test--calls))))
+        (should (equal "needle" (drgnx-replace-rows-test--query (cdr (car drgnx-replace-rows-test--calls)) :text)))
         ;; a later connect searches nothing again (nothing waits)
         (setq drgnx-replace-rows-test--calls nil)
         (drgnx-replace--hub-up)
         (should-not drgnx-replace-rows-test--calls)))))
 
 (ert-deftest drgnx-replace-rows/the-fields-make-the-search ()
-  "Pattern D: the fields and toggles are the `search/grep' call's: globs as arrays (a comma-separated field split),
-the toggles as booleans, and This file names the file the view was opened from."
+  "Pattern D: the fields and toggles are the `search/run' call's search: globs as arrays (a comma-separated field
+split), the toggles as booleans, and This file is the File scope naming the file the view was opened from."
   (drgnx-replace-rows-test--with
-    (let ((call (lambda () (cdr (car drgnx-replace-rows-test--calls)))))
+    (let* ((call (lambda () (cdr (car drgnx-replace-rows-test--calls))))
+           (search (lambda (key) (drgnx-replace-rows-test--search (funcall call) key)))
+           (query (lambda (key) (drgnx-replace-rows-test--query (funcall call) key))))
       (drgnx-replace--fill 'find "need(le)?")
       (drgnx-replace--fill 'include "src/**, test/**")
       (drgnx-replace--fill 'exclude "*.md")
       (drgnx-replace--toggle :case)
       (drgnx-replace--toggle :regexp)
       (drgnx-replace--search-now)
-      (should (equal ["src/**" "test/**"] (plist-get (funcall call) :include)))
-      (should (equal ["*.md"] (plist-get (funcall call) :exclude)))
-      (should (eq t (plist-get (funcall call) :case)))
-      (should (eq t (plist-get (funcall call) :regexp)))
-      (should (eq :false (plist-get (funcall call) :word)))
-      (should-not (plist-member (funcall call) :file))
+      (should (equal ["src/**" "test/**"] (funcall search :include)))
+      (should (equal ["*.md"] (funcall search :exclude)))
+      (should (eq t (funcall query :case)))
+      (should (eq t (funcall query :regexp)))
+      (should (eq :false (funcall query :word)))
+      (should (equal '(:kind "project") (funcall search :scope)))
       (let ((file (make-temp-file "replace-rows-scope" nil ".txt")) buf)
         (unwind-protect
             (progn
@@ -252,7 +272,7 @@ the toggles as booleans, and This file names the file the view was opened from."
               (setq drgnx-replace--origin (with-current-buffer buf (point-min-marker)))
               (drgnx-replace--set-scope 'file)
               (drgnx-replace--search-now)
-              (should (equal file (plist-get (funcall call) :file))))
+              (should (equal (list :kind "file" :files (vector file)) (funcall search :scope))))
           (when buf (kill-buffer buf))
           (delete-file file))))))
 
@@ -264,7 +284,7 @@ the hub after the pause; a file it did not list changes nothing."
     (drgnx-replace--search-now)
     (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
     (cl-letf (((symbol-function 'drgnx-replace--watch) #'ignore))   ; no folder is watched here: the events come by hand
-      (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 1 :matches 1)))
+      (drgnx-replace--hub-event "search-run-done" (list :view view :run 1 :files 1 :matches 1)))
     (setq drgnx-replace-rows-test--calls nil)
     (puthash "/r/a.txt" t drgnx-replace--listed)
     (drgnx-replace--file-event (current-buffer) (list 1 'changed "/r/other.txt"))
@@ -272,6 +292,51 @@ the hub after the pause; a file it did not list changes nothing."
     (drgnx-replace--file-event (current-buffer) (list 1 'changed "/r/a.txt"))
     (should (drgnx-timer-active-p (cons 'replace-refresh (current-buffer))))
     (drgnx-replace--refresh (current-buffer))
-    (should (equal "search/grep" (car (car drgnx-replace-rows-test--calls))))))
+    (should (equal "search/run" (car (car drgnx-replace-rows-test--calls))))))
+
+(defun drgnx-replace-rows-test--model (run lines)
+  "The hub's model line of run RUN over a.txt, one match per line of LINES (ids `m:RUN:N'), as a reset."
+  (let ((hits (cl-loop for line in lines for n from 0
+                       collect (list :id (format "m:%d:%d" run n) :kind "match" :flags 0 :parent "f:a.txt"
+                                     :fields (vector (vector "label" "a needle") (vector "line" line)
+                                                     (vector "col" 2) (vector "end" 8) (vector "text" "needle"))))))
+    (json-serialize
+     (list :ops
+           (vector
+            (list :reset
+                  (list :descriptor (list :scheme "tree" :chain_kinds [] :match_fields ["label"] :lists ["order"]
+                                          :classes ["selected" "match" "dim"] :flags ["expanded"] :forms []
+                                          :start "order")
+                        :nodes (vconcat (list (list :id "f:a.txt" :kind "file" :flags 1
+                                                    :fields (vector (vector "label" "a.txt")
+                                                                    (vector "path" "/r/a.txt"))))
+                                        hits)
+                        :edges []
+                        :lists (vector (list :name "order"
+                                             :ids (vconcat (list "f:a.txt")
+                                                           (mapcar (lambda (h) (plist-get h :id)) hits)))))))))))
+
+(ert-deftest drgnx-replace-rows/an-untick-survives-a-new-search ()
+  "Pattern D: the matches the user unticked go with the next search (`search/run''s `off', by the old run's ids); the
+ticks start over, and when the hub's `search-run-done' names the same matches of the new run (`off', new ids) they are
+unticked again; a search with nothing unticked sends no `off'."
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (drgnx-replace--search-now)
+    (should-not (plist-member (cdr (car drgnx-replace-rows-test--calls)) :off))
+    (drgnx-view-model-event (list :view view :hub 7 :base 0 :version 1 :reset t
+                                  :model (drgnx-replace-rows-test--model 1 '(1 2))))
+    (let ((h (drgnx-view-patch-handle drgnx-view-patch)))
+      (drgnx-replace--rows-tick "m:1:1")
+      (should (equal '("m:1:1") (nidhogg-view-get h 'ticked)))
+      ;; the same search again (a file changed on disk): two lines were added above the matches
+      (drgnx-replace--search-now)
+      (should (equal ["m:1:1"] (plist-get (cdr (car drgnx-replace-rows-test--calls)) :off)))
+      (should-not (nidhogg-view-get h 'ticked))
+      (drgnx-view-model-event (list :view view :hub 7 :base 1 :version 2 :reset t
+                                    :model (drgnx-replace-rows-test--model 2 '(3 4))))
+      (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 1 :matches 2 :off '("m:2:1")))
+      (should (equal '("m:2:1") (nidhogg-view-get h 'ticked)))
+      (should-not drgnx-replace--carry))))
 
 ;;; replace-rows-test.el ends here

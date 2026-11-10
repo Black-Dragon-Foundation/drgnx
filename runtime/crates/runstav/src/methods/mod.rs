@@ -298,7 +298,7 @@ params! {
     SearchModelDownload(search::DownloadParams),
     SearchTyping(Empty),
     GitLetters(git::LettersParams),
-    SearchGrep(search::GrepParams),
+    SearchRun(search::RunParams),
     SearchFiles(search::FilesParams),
     SearchSymbolAt(search::SymbolAtParams),
     SearchSymbols(search::SymbolsParams),

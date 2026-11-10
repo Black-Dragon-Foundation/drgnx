@@ -337,6 +337,14 @@ impl Hub {
         }
     }
 
+    /// The Search view ran SPEC in ROOT (`search/run`): a recent search once it stands for the typing pause. Nothing
+    /// before the hub has its folders.
+    pub fn offer_recent(&self, root: &std::path::Path, view: &str, spec: w::SearchSpec) {
+        if let Some(s) = self.saved.get() {
+            s.offer(root, view, spec, std::time::Instant::now());
+        }
+    }
+
     fn saved(&self) -> Result<&Saved, Error> {
         self.saved
             .get()

@@ -11,7 +11,7 @@
 
 (defun drgnx-replace-test--run (query)
   "QUERY's matches in the files under its root, made as the rescan of a modified buffer makes them (each matching line
-through `drgnx-replace--grep-line'): (MATCHES . (:done)).  The hub searches the text (search/grep); here only the
+through `drgnx-replace--grep-line'): (MATCHES . (:done)).  The hub searches the text (search/run); here only the
 writing is tested."
   (let* ((root (plist-get query :root)) (case (plist-get query :case)) (regexp (plist-get query :regexp))
          (text (plist-get query :text))

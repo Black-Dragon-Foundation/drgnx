@@ -347,45 +347,32 @@ pub enum GrepIgnore {
     Real,
 }
 
-/// `search/grep`: search ROOT's files for TEXT and send the matches to VIEW as rows (the event `view-patch`): a reset
-/// at once, then each file's header and matches as it is complete. A newer search of the same view stops this one.
+/// `search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,
+/// then each file's header and matches as it is complete. A newer search of the same view stops this one. The rows
+/// preview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\1` are the groups). Text mode, and
+/// the scopes Project and File (`scope.files`, the one file), so far.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepParams {
+pub struct RunParams {
     /// The hub-fed view that shows the rows (`view/env`).
     pub view: String,
     pub root: AbsPath,
-    pub text: String,
-    /// Search this one file only (globs then do not apply).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<AbsPath>,
-    /// Match case; default off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub case: Option<bool>,
-    /// Whole words only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub word: Option<bool>,
-    /// TEXT is a regular expression.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regexp: Option<bool>,
-    /// Globs; each string may hold several, comma-separated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exclude: Option<Vec<String>>,
+    pub search: SearchSpec,
     /// Default: the setting `drgnx-search-ignore-rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ignore: Option<GrepIgnore>,
-    /// The replacement the rows preview (old struck out, new beside it); a regexp search's `\1` are the groups.
+    /// The match ids of the view's last run the user unticked: a match of this run that is the same match (its file,
+    /// columns and the text around it) comes back unticked, named in `search-run-done`'s `off`, when exactly one match
+    /// has it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replace: Option<String>,
+    pub off: Option<Vec<String>>,
 }
 
-/// `search/grep`'s answer: QUERY numbers the search (the event `search-grep-done` names it).
+/// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepStarted {
-    pub query: u64,
+pub struct RunStarted {
+    pub run: u64,
 }
 
 /// `search/grep-replace`: VIEW's rows preview REPLACE now (no new search).
@@ -405,7 +392,7 @@ pub struct GrepSkippedParams {
     pub skipped: Vec<GrepSkip>,
 }
 
-/// One skipped match: its node id (`m:FILE:LINE:COL`) and why.
+/// One skipped match: its node id (`m:RUN:N`) and why.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GrepSkip {
@@ -414,7 +401,7 @@ pub struct GrepSkip {
 }
 
 /// `search/grep-look`: VIEW's rows of its search go on. A search sends a view its first 200 rows (a file's header and
-/// its matches, in order), and the totals in `search-grep-done`; the hub keeps every match, and Sjá's model holds them.
+/// its matches, in order), and the totals in `search-run-done`; the hub keeps every match, and Sjá's model holds them.
 /// The editor asks for more when its window nears the end of the rows (`more`), or when it goes to a match beyond them
 /// (`upto`: the row's key, and 100 rows after it come too). A match more than 400 rows past the rows sent comes with
 /// the 100 rows before it too, after a gap row (key `gap`); `fill` (the gap row in sight) sends the 200 rows before
@@ -426,7 +413,7 @@ pub struct GrepLookParams {
     /// One more window (200 rows).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub more: Option<bool>,
-    /// The key of a row to reach (`f:FILE`, `m:FILE:LINE:COL`); over `more`.
+    /// The key of a row to reach (`f:FILE`, `m:RUN:N`); over `more`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upto: Option<String>,
     /// The rows before the gap row, one window more.
@@ -434,17 +421,19 @@ pub struct GrepLookParams {
     pub fill: Option<bool>,
 }
 
-/// `search-grep-done`: search QUERY of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
-/// run. A search a newer one stopped says nothing.
+/// `search-run-done`: search RUN of VIEW ended with FILES files holding MATCHES matches; ERROR is why it could not
+/// run; OFF the matches that come back unticked (`search/run`'s `off`). A search a newer one stopped says nothing.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GrepDone {
+pub struct RunDone {
     pub view: String,
-    pub query: u64,
+    pub run: u64,
     pub files: u64,
     pub matches: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub off: Vec<String>,
 }
 
 /// `search/files`: rank ROOT's file names for QUERY and send VIEW the N best as rows (the event `view-patch`), one row
@@ -920,9 +909,9 @@ pub(crate) fn methods() -> Vec<Method> {
             doc: "download the built-in model after the user agreed to its size; nothing downloads without this consent",
         ),
         method!(
-            "search/grep", SearchGrep(GrepParams) -> GrepStarted,
+            "search/run", SearchRun(RunParams) -> RunStarted,
             classes: [User], writes: false,
-            doc: "search a folder's files for text and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches), ending with search-grep-done; a newer search of the view stops the old one",
+            doc: "run the Search view's search over a folder and stream the matches to a hub-fed view as rows (view-patch: a reset, then each file's header and matches; ids m:RUN:N), ending with search-run-done; a newer search of the view stops the old one, and the matches the user unticked in it stay unticked when found again",
         ),
         method!(
             "search/files", SearchFiles(FilesParams) -> FilesStarted,

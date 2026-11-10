@@ -279,7 +279,7 @@ bar's keymaps), one editor window, no view or bar left over."
         (should (equal (widget-value (drgnx-replace--widget 'replace)) "bar"))
         (should (drgnx-replace--opt :word))
         (should (eq (drgnx-replace--opt :scope) 'file)))
-      ;; the view searches (the hub's search/grep: replace-rows-test.el); the hub is not up here
+      ;; the view searches (the hub's search/run: replace-rows-test.el); the hub is not up here
       (with-current-buffer (drgnx-replace-view-test--view)
         (should (or drgnx-replace--waiting (not (fboundp 'nidhogg-view--call))))))))
 

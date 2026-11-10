@@ -43,7 +43,7 @@ pub fn ignore_of(asked: Option<GrepIgnore>, setting: Option<&Value>) -> Ignore {
     }
 }
 
-/// The setting's rule for a call that does not say (`search/files`, `search/grep`).
+/// The setting's rule for a call that does not say (`search/files`, `search/run`).
 pub fn ignore_for(f: &Front, asked: Option<GrepIgnore>) -> Ignore {
     let setting = f
         .settings

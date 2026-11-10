@@ -174,7 +174,7 @@
   "say/start": ["user"],
   "search/embedders": ["user"],
   "search/files": ["user"],
-  "search/grep": ["user"],
+  "search/run": ["user"],
   "search/grep-look": ["user"],
   "search/grep-skipped": ["user"],
   "search/grep-replace": ["user"],

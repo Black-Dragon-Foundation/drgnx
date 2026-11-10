@@ -713,17 +713,17 @@ impl Front {
                 crate::view::panel::look(self, &caller, p).map(|b| json!(b))
             }
             Params::GitLetters(p) => crate::view::git::letters(self, &caller, p).map(|b| json!(b)),
-            // a text search streaming rows to a view (`search/grep*`)
-            Params::SearchGrep(p) => crate::view::grep::start(self, &caller, p).map(|r| json!(r)),
+            // the Search view's search streaming rows to it (`search/run`, `search/grep-*`)
+            Params::SearchRun(p) => crate::view::search::run(self, &caller, p).map(|r| json!(r)),
             Params::SearchFiles(p) => crate::view::files::start(self, &caller, p).map(|r| json!(r)),
             Params::SearchGrepReplace(p) => {
-                crate::view::grep::replace(self, &caller, p).map(|b| json!(b))
+                crate::view::search::replace(self, &caller, p).map(|b| json!(b))
             }
             Params::SearchGrepLook(p) => {
-                crate::view::grep::look(self, &caller, p).map(|b| json!(b))
+                crate::view::search::look(self, &caller, p).map(|b| json!(b))
             }
             Params::SearchGrepSkipped(p) => {
-                crate::view::grep::skipped(self, &caller, p).map(|b| json!(b))
+                crate::view::search::skipped(self, &caller, p).map(|b| json!(b))
             }
             // the Explorer's listing as a tree model and rows (`explorer/subscribe`)
             Params::ExplorerSubscribe(p) => {
