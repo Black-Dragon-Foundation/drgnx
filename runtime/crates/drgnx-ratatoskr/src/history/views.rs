@@ -101,7 +101,10 @@ impl BlameCache {
     const KEPT: usize = 16;
 
     fn get(&self, key: &[u8]) -> Option<w::GitBlamed> {
-        self.0.iter().find(|(k, _)| k == key).map(|(_, b)| b.clone())
+        self.0
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, b)| b.clone())
     }
 
     fn put(&mut self, key: Vec<u8>, b: w::GitBlamed) {
@@ -211,27 +214,30 @@ impl Hub {
             return Ok(b);
         }
         let bytes = mirror.as_ref().map(|t| t.as_bytes().to_vec());
-        let blamed = match super::blob::blame_porcelain(&tree.git_dir, &tree.root, rel, bytes.as_deref()) {
-            Ok(out) => parse_blame(&out)
-                .ok_or_else(|| verdandi::Error::Refused("git blame gave output it could not read".into()))?,
-            // git holds no such file (new, untracked): every line is the user's, not committed
-            Err(e) if e.contains("no such path") || e.contains("does not exist") => {
-                let n = match &mirror {
-                    Some(t) => line_count(t),
-                    None => std::fs::read_to_string(tree.root.join(rel)).map_or(0, |t| line_count(&t)),
-                };
-                (
-                    vec![w::BlameCommit {
-                        sha: UNCOMMITTED.into(),
-                        author: "You".into(),
-                        time: None,
-                        summary: "Uncommitted changes".into(),
-                    }],
-                    vec![0; n],
-                )
-            }
-            Err(e) => return Err(verdandi::Error::Refused(format!("git blame: {e}"))),
-        };
+        let blamed =
+            match super::blob::blame_porcelain(&tree.git_dir, &tree.root, rel, bytes.as_deref()) {
+                Ok(out) => parse_blame(&out).ok_or_else(|| {
+                    verdandi::Error::Refused("git blame gave output it could not read".into())
+                })?,
+                // git holds no such file (new, untracked): every line is the user's, not committed
+                Err(e) if e.contains("no such path") || e.contains("does not exist") => {
+                    let n = match &mirror {
+                        Some(t) => line_count(t),
+                        None => std::fs::read_to_string(tree.root.join(rel))
+                            .map_or(0, |t| line_count(&t)),
+                    };
+                    (
+                        vec![w::BlameCommit {
+                            sha: UNCOMMITTED.into(),
+                            author: "You".into(),
+                            time: None,
+                            summary: "Uncommitted changes".into(),
+                        }],
+                        vec![0; n],
+                    )
+                }
+                Err(e) => return Err(verdandi::Error::Refused(format!("git blame: {e}"))),
+            };
         let agents = match &mirror {
             Some(t) => self.agent_lines(tree, rel, t)?,
             None => Vec::new(),
@@ -249,7 +255,12 @@ impl Hub {
     }
 
     /// The lines of TEXT (REL's document of TREE) that agents wrote, from the history's blame.
-    fn agent_lines(&self, tree: &Tree, rel: &str, text: &str) -> verdandi::Result<Vec<w::AgentLines>> {
+    fn agent_lines(
+        &self,
+        tree: &Tree,
+        rel: &str,
+        text: &str,
+    ) -> verdandi::Result<Vec<w::AgentLines>> {
         let total = text.chars().count();
         let spans = self.blame(tree, rel, 0..total)?;
         // the char offset each line starts at
@@ -271,7 +282,10 @@ impl Hub {
             if !is_agent || s.end <= s.start {
                 continue;
             }
-            let (from, to) = (line_of(usize::try_from(s.start).unwrap_or(0)), line_of(usize::try_from(s.end - 1).unwrap_or(0)));
+            let (from, to) = (
+                line_of(usize::try_from(s.start).unwrap_or(0)),
+                line_of(usize::try_from(s.end - 1).unwrap_or(0)),
+            );
             out.push(w::AgentLines {
                 from: n(from),
                 to: n(to),
@@ -770,7 +784,11 @@ mod tests {
         let f = fx("a\nb\nc\nd\n");
         let now = "a\nB\nc\nd\ne\n";
         tracked(&f, "a.txt", now, "user");
-        let got = f.hub.hunks_head(&f.tree, "a.txt").unwrap().expect("tracked");
+        let got = f
+            .hub
+            .hunks_head(&f.tree, "a.txt")
+            .unwrap()
+            .expect("tracked");
         let got: Vec<_> = got
             .iter()
             .map(|h| (h.old_start, h.old_count, h.new_start, h.new_count))
@@ -787,10 +805,19 @@ mod tests {
         let f = fx("one\n");
         std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
         tracked(&f, "new.txt", "x\ny\nz\n", "user");
-        let got = f.hub.hunks_head(&f.tree, "new.txt").unwrap().expect("tracked");
+        let got = f
+            .hub
+            .hunks_head(&f.tree, "new.txt")
+            .unwrap()
+            .expect("tracked");
         assert_eq!(got.len(), 1);
         assert_eq!(
-            (got[0].old_start, got[0].old_count, got[0].new_start, got[0].new_count),
+            (
+                got[0].old_start,
+                got[0].old_count,
+                got[0].new_start,
+                got[0].new_count
+            ),
             (0, 0, 1, 3)
         );
     }
@@ -811,13 +838,19 @@ mod tests {
                 let at = (c * 797 + k * 13) % lines;
                 text[at] = format!("line {at} changed in {c}");
             }
-            commit_file(&f, "a.txt", &(text.join("\n") + "\n"), &format!("change {c}"));
+            commit_file(
+                &f,
+                "a.txt",
+                &(text.join("\n") + "\n"),
+                &format!("change {c}"),
+            );
         }
         let t0 = Instant::now();
         let n = 8;
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
-            let out = super::super::blob::blame_porcelain(&f.tree.git_dir, &f.tree.root, "a.txt", None);
+            let out =
+                super::super::blob::blame_porcelain(&f.tree.git_dir, &f.tree.root, "a.txt", None);
             let _ = (out, line);
         }
         let whole_git = t0.elapsed() / n as u32;
@@ -825,8 +858,15 @@ mod tests {
         for k in 0..n {
             let line = 1 + (k * 6151) % lines;
             let mut c = std::process::Command::new("git");
-            c.args(["blame", "--porcelain", "-L", &format!("{line},{line}"), "--", "a.txt"])
-                .current_dir(&f.tree.root);
+            c.args([
+                "blame",
+                "--porcelain",
+                "-L",
+                &format!("{line},{line}"),
+                "--",
+                "a.txt",
+            ])
+            .current_dir(&f.tree.root);
             assert!(c.output().unwrap().status.success());
         }
         let per_line = t1.elapsed() / n as u32;
