@@ -93,6 +93,218 @@ impl Hub {
     }
 }
 
+/// The whole-file blames kept, oldest dropped first.
+#[derive(Default)]
+pub struct BlameCache(std::collections::VecDeque<(Vec<u8>, w::GitBlamed)>);
+
+impl BlameCache {
+    const KEPT: usize = 16;
+
+    fn get(&self, key: &[u8]) -> Option<w::GitBlamed> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, b)| b.clone())
+    }
+
+    fn put(&mut self, key: Vec<u8>, b: w::GitBlamed) {
+        self.0.retain(|(k, _)| *k != key);
+        if self.0.len() == Self::KEPT {
+            self.0.pop_front();
+        }
+        self.0.push_back((key, b));
+    }
+}
+
+const UNCOMMITTED: &str = "0000000000000000000000000000000000000000";
+
+/// `git blame --porcelain`'s answer as the commits it names and, per line, the index of its commit.  Lines git calls
+/// not committed yet are one commit of zeros authored by `You`, as the editor words them.
+fn parse_blame(out: &[u8]) -> Option<(Vec<w::BlameCommit>, Vec<u32>)> {
+    let text = String::from_utf8_lossy(out);
+    let mut commits: Vec<w::BlameCommit> = Vec::new();
+    let mut index: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut lines: Vec<u32> = Vec::new();
+    let mut current: Option<u32> = None;
+    for l in text.split('\n') {
+        if l.starts_with('\t') {
+            continue;
+        }
+        let mut f = l.split(' ');
+        let (Some(sha), Some(_orig), Some(fin)) = (f.next(), f.next(), f.next()) else {
+            // a key line of the commit just named
+            if let (Some(i), Some((k, v))) = (current, l.split_once(' ')) {
+                let c = &mut commits[i as usize];
+                match k {
+                    "author" if c.sha != UNCOMMITTED => c.author = v.to_owned(),
+                    "author-time" if c.sha != UNCOMMITTED => c.time = v.parse().ok(),
+                    "summary" if c.sha != UNCOMMITTED => c.summary = v.to_owned(),
+                    _ => {}
+                }
+            }
+            continue;
+        };
+        if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let fin: usize = fin.parse().ok()?;
+            let i = *index.entry(sha.to_owned()).or_insert_with(|| {
+                let none = sha == UNCOMMITTED;
+                commits.push(w::BlameCommit {
+                    sha: sha.to_owned(),
+                    author: if none { "You".into() } else { String::new() },
+                    time: None,
+                    summary: if none {
+                        "Uncommitted changes".into()
+                    } else {
+                        String::new()
+                    },
+                });
+                u32::try_from(commits.len() - 1).unwrap_or(u32::MAX)
+            });
+            current = Some(i);
+            if lines.len() < fin {
+                lines.resize(fin, i);
+            }
+            lines[fin - 1] = i;
+        } else if let (Some(i), Some((k, v))) = (current, l.split_once(' ')) {
+            let c = &mut commits[i as usize];
+            match k {
+                "author" if c.sha != UNCOMMITTED => c.author = v.to_owned(),
+                "author-time" if c.sha != UNCOMMITTED => c.time = v.parse().ok(),
+                "summary" if c.sha != UNCOMMITTED => c.summary = v.to_owned(),
+                _ => {}
+            }
+        }
+    }
+    Some((commits, lines))
+}
+
+/// How many lines TEXT has (a last line without its newline counts).
+fn line_count(text: &str) -> usize {
+    text.lines().count()
+}
+
+impl Hub {
+    /// Git's blame of REL of TREE, whole file, for the text the editor's tracked buffer of it holds (unsaved typing
+    /// included; else the file as it is).  One `git blame` child per distinct (path, HEAD, text): the answer is kept.
+    /// A file git does not hold is all uncommitted.  Lines an agent wrote, from the edit history, ride along.
+    pub fn git_blame(&self, tree: &Tree, rel: &str) -> verdandi::Result<w::GitBlamed> {
+        let mirror = self.mirror_text(tree, rel)?;
+        let key = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(tree.root.as_os_str().as_encoded_bytes());
+            h.update([0]);
+            h.update(rel.as_bytes());
+            h.update([0]);
+            h.update(tree.base.as_deref().unwrap_or("").as_bytes());
+            h.update([0]);
+            match &mirror {
+                Some(t) => h.update(t.as_bytes()),
+                None => {
+                    // the file as it is: its size and time stand for its text
+                    let m = std::fs::metadata(tree.root.join(rel)).ok();
+                    let t = m.as_ref().and_then(|m| m.modified().ok());
+                    h.update(format!("{:?}{:?}", m.map(|m| m.len()), t));
+                }
+            }
+            h.finalize().to_vec()
+        };
+        let cached = self.blame_cache.lock().ok().and_then(|c| c.get(&key));
+        if let Some(b) = cached {
+            return Ok(b);
+        }
+        let bytes = mirror.as_ref().map(|t| t.as_bytes().to_vec());
+        let blamed = match super::blob::blame_porcelain(&tree.git_dir, &tree.root, rel, bytes.as_deref()) {
+            Ok(out) => parse_blame(&out)
+                .ok_or_else(|| verdandi::Error::Refused("git blame gave output it could not read".into()))?,
+            // git holds no such file (new, untracked): every line is the user's, not committed
+            Err(e) if e.contains("no such path") || e.contains("does not exist") => {
+                let n = match &mirror {
+                    Some(t) => line_count(t),
+                    None => std::fs::read_to_string(tree.root.join(rel)).map_or(0, |t| line_count(&t)),
+                };
+                (
+                    vec![w::BlameCommit {
+                        sha: UNCOMMITTED.into(),
+                        author: "You".into(),
+                        time: None,
+                        summary: "Uncommitted changes".into(),
+                    }],
+                    vec![0; n],
+                )
+            }
+            Err(e) => return Err(verdandi::Error::Refused(format!("git blame: {e}"))),
+        };
+        let agents = match &mirror {
+            Some(t) => self.agent_lines(tree, rel, t)?,
+            None => Vec::new(),
+        };
+        let out = w::GitBlamed {
+            head: tree.base.clone(),
+            commits: blamed.0,
+            lines: blamed.1,
+            agents,
+        };
+        if let Ok(mut c) = self.blame_cache.lock() {
+            c.put(key, out.clone());
+        }
+        Ok(out)
+    }
+
+    /// The lines of TEXT (REL's document of TREE) that agents wrote, from the history's blame.
+    fn agent_lines(&self, tree: &Tree, rel: &str, text: &str) -> verdandi::Result<Vec<w::AgentLines>> {
+        let total = text.chars().count();
+        let spans = self.blame(tree, rel, 0..total)?;
+        // the char offset each line starts at
+        let mut starts = vec![0usize];
+        for (i, ch) in text.chars().enumerate() {
+            if ch == '\n' {
+                starts.push(i + 1);
+            }
+        }
+        let line_of = |off: usize| starts.partition_point(|s| *s <= off);
+        let mut out: Vec<w::AgentLines> = Vec::new();
+        for s in spans {
+            let is_agent = s
+                .author
+                .as_ref()
+                .and_then(|a| a.get("kind"))
+                .and_then(|k| k.as_str())
+                == Some("agent");
+            if !is_agent || s.end <= s.start {
+                continue;
+            }
+            let (from, to) = (line_of(usize::try_from(s.start).unwrap_or(0)), line_of(usize::try_from(s.end - 1).unwrap_or(0)));
+            out.push(w::AgentLines {
+                from: n(from),
+                to: n(to),
+                session: s.session,
+                step: s.step,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The hunks of the editor's tracked buffer of REL of TREE against HEAD's text of it (a file HEAD does not hold is
+    /// all added); none when no buffer of it is tracked.
+    pub fn hunks_head(&self, tree: &Tree, rel: &str) -> verdandi::Result<Option<Vec<w::LineHunk>>> {
+        let Some(now) = self.mirror_text(tree, rel)? else {
+            return Ok(None);
+        };
+        let old = super::blob::text_at(&tree.git_dir, &tree.root, "HEAD", rel)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
+        Ok(Some(
+            verdandi::threeway::diff_hunks(&old, &now)?
+                .into_iter()
+                .map(|(os, oc, ns, nc)| w::LineHunk {
+                    old_start: n(os),
+                    old_count: n(oc),
+                    new_start: n(ns),
+                    new_count: n(nc),
+                })
+                .collect(),
+        ))
+    }
+}
+
 /// One file an agent's worktree changed against its branch's base, with the lines added and removed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditCount {
@@ -259,6 +471,46 @@ pub async fn hunks(
     ))
 }
 
+/// `git/blame`.
+pub async fn git_blame(f: &Front, c: &Caller, p: w::GitBlameParams) -> Result<w::GitBlamed, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    crate::clock::blocking(move || hub.git_blame(&tree, &p.path))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)
+}
+
+/// `history/hunks/head`.
+pub async fn hunks_head(
+    f: &Front,
+    c: &Caller,
+    p: w::HeadHunksParams,
+) -> Result<w::HeadHunks, Error> {
+    super::revert::user_only(c)?;
+    let (hub, tree) = f
+        .core
+        .history
+        .of_tree(&hub_dir(f)?, Path::new(&p.worktree_root))?;
+    let found = crate::clock::blocking(move || hub.hunks_head(&tree, &p.path))
+        .await
+        .map_err(|e| internal(e.to_string()))?
+        .map_err(store)?;
+    Ok(match found {
+        Some(hunks) => w::HeadHunks {
+            tracked: true,
+            hunks,
+        },
+        None => w::HeadHunks {
+            tracked: false,
+            hunks: Vec::new(),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::history::{Hub, Tree};
@@ -417,5 +669,129 @@ mod tests {
         assert_eq!(got, [(3, 0, 4, 1)]);
         // a branch this project's history does not hold
         assert!(f.hub.hunks_since("wt/none", first[0].op).unwrap().is_none());
+    }
+
+    /// A tracked buffer of REL holding TEXT as the editor sent it (a batch against the file's committed text).
+    fn tracked(f: &Fx, rel: &str, now: &str, origin: &str) {
+        let home = tempfile::tempdir().unwrap();
+        let deny = norn::deny::DenyList::load(home.path(), home.path());
+        f.hub.register(&f.tree, rel, "b1", &deny).unwrap();
+        let old = std::fs::read_to_string(f.tree.root.join(rel)).unwrap_or_default();
+        let (start, old_len) = (0, old.chars().count());
+        let hash = crate::history::methods::hash(now);
+        let change = crate::history::methods::BatchChange {
+            start,
+            old_len,
+            inserted: now.into(),
+            origin: origin.into(),
+        };
+        let r = f.hub.batch("b1", &[change], &hash, 1, 5.0).unwrap();
+        assert_eq!(r, crate::history::methods::BatchReply::Ok);
+    }
+
+    fn commit_file(f: &Fx, rel: &str, text: &str, msg: &str) {
+        std::fs::write(f.tree.root.join(rel), text).unwrap();
+        git(&f.tree.root, &["add", "."]);
+        git(&f.tree.root, &["commit", "-q", "-m", msg]);
+    }
+
+    // pattern: D
+    #[test]
+    fn git_blame_names_the_commit_of_each_line_in_one_answer() {
+        let f = fx("one\ntwo\nthree\n");
+        commit_file(&f, "a.txt", "one\nTWO\nthree\n", "second");
+        let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        assert_eq!(b.lines.len(), 3);
+        let say = |i: usize| b.commits[b.lines[i] as usize].summary.as_str();
+        assert_eq!((say(0), say(1), say(2)), ("base", "second", "base"));
+        let c = &b.commits[b.lines[1] as usize];
+        assert_eq!(c.author, "t");
+        assert!(c.time.is_some());
+        assert_eq!(c.sha.len(), 40);
+        // the commits are listed once each
+        assert_eq!(b.commits.len(), 2);
+        assert!(b.agents.is_empty());
+    }
+
+    // pattern: D
+    #[test]
+    fn git_blame_of_a_tracked_buffer_has_its_unsaved_lines_uncommitted() {
+        let f = fx("one\ntwo\n");
+        tracked(&f, "a.txt", "one\ntyped\ntwo\n", "user");
+        let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        assert_eq!(b.lines.len(), 3, "the buffer's lines, not the file's");
+        let c = |i: usize| &b.commits[b.lines[i] as usize];
+        assert_eq!(c(0).summary, "base");
+        assert_eq!(c(1).summary, "Uncommitted changes");
+        assert_eq!((c(1).author.as_str(), c(1).time), ("You", None));
+        assert!(c(1).sha.chars().all(|x| x == '0'));
+        assert_eq!(c(2).summary, "base");
+        // the same text again is answered from the cache: one entry, the same answer
+        assert_eq!(f.hub.git_blame(&f.tree, "a.txt").unwrap(), b);
+    }
+
+    // pattern: D
+    #[test]
+    fn git_blame_of_a_file_git_does_not_hold_is_all_uncommitted() {
+        let f = fx("one\n");
+        std::fs::write(f.tree.root.join("new.txt"), "x\ny\n").unwrap();
+        let b = f.hub.git_blame(&f.tree, "new.txt").unwrap();
+        assert_eq!(b.lines, vec![0, 0]);
+        assert_eq!(b.commits[0].summary, "Uncommitted changes");
+    }
+
+    // pattern: D
+    #[test]
+    fn git_blame_lines_an_agent_wrote_ride_along() {
+        let f = fx("one\ntwo\n");
+        tracked(&f, "a.txt", "one\ntwo\n", "user");
+        let h = crate::history::methods::hash("one\ntwo\nthree\nfour\n");
+        let change = crate::history::methods::BatchChange {
+            start: 8,
+            old_len: 0,
+            inserted: "three\nfour\n".into(),
+            origin: "agent:s1#7".into(),
+        };
+        f.hub.batch("b1", &[change], &h, 2, 6.0).unwrap();
+        // typing no record holds yet is left out of the history's blame: let the agent's change settle
+        f.hub.settle_due(1_000.0).unwrap();
+        let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        assert_eq!(b.lines.len(), 4);
+        assert_eq!(b.agents.len(), 1, "{:?}", b.agents);
+        let a = &b.agents[0];
+        assert_eq!((a.from, a.to), (3, 4));
+        assert_eq!(a.session.as_deref(), Some("s1"));
+        assert_eq!(a.step.as_deref(), Some("7"));
+    }
+
+    // pattern: D
+    #[test]
+    fn hunks_against_head_equal_git_diff() {
+        let f = fx("a\nb\nc\nd\n");
+        let now = "a\nB\nc\nd\ne\n";
+        tracked(&f, "a.txt", now, "user");
+        let got = f.hub.hunks_head(&f.tree, "a.txt").unwrap().expect("tracked");
+        let got: Vec<_> = got
+            .iter()
+            .map(|h| (h.old_start, h.old_count, h.new_start, h.new_count))
+            .collect();
+        assert_eq!(got, git_hunks("a\nb\nc\nd\n", now));
+        assert_eq!(got, [(2, 1, 2, 1), (4, 0, 5, 1)]);
+        // no buffer of a file: nothing computed
+        assert!(f.hub.hunks_head(&f.tree, "other.txt").unwrap().is_none());
+    }
+
+    // pattern: D
+    #[test]
+    fn hunks_against_head_of_a_new_file_are_all_its_lines() {
+        let f = fx("one\n");
+        std::fs::write(f.tree.root.join("new.txt"), "").unwrap();
+        tracked(&f, "new.txt", "x\ny\nz\n", "user");
+        let got = f.hub.hunks_head(&f.tree, "new.txt").unwrap().expect("tracked");
+        assert_eq!(got.len(), 1);
+        assert_eq!(
+            (got[0].old_start, got[0].old_count, got[0].new_start, got[0].new_count),
+            (0, 0, 1, 3)
+        );
     }
 }

@@ -1390,6 +1390,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `gateway/register` | user | `{agent?: AgentName, budget?: Usd, chain: [[string \| null]], job?: Id, keys?: ProviderKeys, openrouter?: {data-collection?: "deny" \| "allow", ignore?: [string], only?: [string], zdr?: boolean}, owner?: natnum, sid?: SessionId, task?: TaskRef}` | `{openrouter?: any, socket?: string, token: string, url?: string}` | no |
 | `gateway/set-budget` | user | `{budget: Usd, job: Id}` | `boolean` | no |
 | `gateway/unregister` | user | `{token: string}` | `boolean` | no |
+| `git/blame` | user | `{path: string, worktree_root: string}` | `{agents: [AgentLines], commits: [BlameCommit], head?: string, lines: [natnum]}` | no |
 | `git/letters` | user | `{root: AbsPath, shown?: [string], view: string}` | `boolean` | no |
 | `graph/backup` | user | `{}` | `BackupAnswer` | no |
 | `graph/compact` | user | `{dry_run?: boolean}` | `{dry_run: boolean, link_stats: natnum, versions: natnum}` | yes |
@@ -1416,6 +1417,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `history/fork` | user | `{message: string, profile?: string, seq: integer, session: string}` | `{branch: string, id: string, level: "message" \| "turn" \| "summary", path: string, source_branch: string}` | yes |
 | `history/fork/drop` | user | `{id: string}` | `{ok: boolean}` | yes |
 | `history/hunks` | user | `{branch: string, since: integer}` | `{files: [FileHunks]}` | no |
+| `history/hunks/head` | user | `{path: string, worktree_root: string}` | `{hunks: [LineHunk], tracked: boolean}` | no |
 | `history/op/hunks` | user | `{op?: integer, session?: string, worktree: string}` | `{hunks: [OpHunk]}` | no |
 | `history/redo` | user | `{op: integer, session: string}` | `{commit?: string, op: integer, skipped: [RevertSkipped], written: [string]}` | yes |
 | `history/register` | user | `{buffer_id: string, path: string, worktree_root: string}` | `{doc: integer, reason?: string, tracked: boolean}` | yes |

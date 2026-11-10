@@ -369,7 +369,7 @@ mod tests {
         sorted.sort();
         sorted.dedup();
         assert_eq!(names, sorted);
-        assert_eq!(names.len(), 235, "{names:?}");
+        assert_eq!(names.len(), 237, "{names:?}");
         assert!(find("job/start-task").is_some_and(|m| m.writes));
         assert!(find("job/status").is_some_and(|m| !m.writes));
         assert!(find("sandbox/global").is_none());
@@ -676,7 +676,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(with, 185);
+        assert_eq!(with, 187);
     }
 
     #[test]

@@ -201,6 +201,8 @@ pub async fn serve(
         Params::HistoryCompare(p) => answer(crate::history::branches::compare(f, c, p).await),
         Params::HistoryBlame(p) => answer(crate::history::views::blame(f, c, p).await),
         Params::HistoryHunks(p) => answer(crate::history::views::hunks(f, c, p).await),
+        Params::GitBlame(p) => answer(crate::history::views::git_blame(f, c, p).await),
+        Params::HistoryHunksHead(p) => answer(crate::history::views::hunks_head(f, c, p).await),
         Params::HistoryTake(p) => answer(crate::history::branches::take(f, c, p).await),
         Params::HistoryRedo(p) => answer(crate::history::branches::redo(f, c, p).await),
         Params::HistoryOpHunks(p) => answer(crate::history::hunk::op_hunks(f, c, p).await),

@@ -70,6 +70,23 @@ pub fn text_at(git_dir: &Path, work_tree: &Path, commit: &str, rel: &str) -> Opt
     run(c, None).ok()
 }
 
+/// `git blame --porcelain` of REL, of CONTENTS when given (the text of an editor's buffer, read from stdin) in place
+/// of the file's.  An error is git's own message.
+pub fn blame_porcelain(
+    git_dir: &Path,
+    work_tree: &Path,
+    rel: &str,
+    contents: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    let mut c = base(git_dir, work_tree);
+    c.args(["blame", "--porcelain"]);
+    if contents.is_some() {
+        c.args(["--contents", "-"]);
+    }
+    c.args(["--", rel]);
+    run(c, contents)
+}
+
 /// The paths that differ between the commits OLD and NEW.
 pub fn changed_paths(
     git_dir: &Path,

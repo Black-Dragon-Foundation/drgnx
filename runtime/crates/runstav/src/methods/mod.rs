@@ -329,6 +329,8 @@ params! {
     HistoryCompare(history::CompareParams),
     HistoryBlame(history::BlameParams),
     HistoryHunks(history::BranchHunksParams),
+    GitBlame(history::GitBlameParams),
+    HistoryHunksHead(history::HeadHunksParams),
     HistoryTake(history::TakeParams),
     HistoryRedo(history::RedoParams),
     HistoryOpHunks(history::OpHunksParams),

@@ -824,6 +824,8 @@ impl Front {
             | Params::HistoryCompare(_)
             | Params::HistoryBlame(_)
             | Params::HistoryHunks(_)
+            | Params::GitBlame(_)
+            | Params::HistoryHunksHead(_)
             | Params::HistoryTake(_)
             | Params::HistoryRedo(_)
             | Params::HistoryOpHunks(_)
