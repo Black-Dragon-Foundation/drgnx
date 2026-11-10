@@ -746,23 +746,25 @@ the model's `order' is a window of the first 20,000."
           (unless p (error "Premise: the selection %S is not in the window %S (counts %S, searching %S)"
                            id w drgnx-replace--hub-counts drgnx-replace--searching))
           (+ (if w (car w) 0) p)))
+      (defun drgnx-perf--sw-first-window ()
+        "Move `order' back to the first 20,000 entries (a round before paged past them)."
+        (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
+                                                                    :list "order" :from 0))
+        (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get (drgnx-perf--sw-h) 'window "order") '(0 20000 30300))))
+          (error "Premise: the window did not go back to the first 20,000 (%S)"
+                 (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
       (defun drgnx-perf--sw-measure ()
-        "(:key_ms STATS :page_ms STATS :pages N :list_max N :from N :to N): from the match 50 entries before the window's
-end, Next Match 200 times: each key's time, and for a key that stopped at the window's edge the time until it ran
-again in the next window; the entries the selection went from and to.  An error when a key went back (a wrap), or Sjá
-held more than the window."
+        "(:key_ms STATS :page_ms STATS :pages N :page_each \"MS ...\" :line_each \"MS ...\" :gc_each \"GCS:MS ...\" :list_max N :from N :to N): 12 rounds, each from the first window and the
+match 50 entries before its end, Next Match until a key stopped at the window's edge and ran again in the next window
+(at most 200 keys): each key's time and each page's, the time from that key until it ran; the entries the last round
+went from and to.  An error when a key went back (a wrap), a round paged no window, or Sjá held more than the window."
         (with-current-buffer (drgnx-perf--sw-view)
           (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--sw-line)
           ;; a new env between runs may search again (`drgnx-replace--hub-resubscribe'): its end first
           (unless (drgnx-perf--wait 120 (lambda () (and (eql 30000 (cdr drgnx-replace--hub-counts)) (not (drgnx-replace--busy-p))
                                                         (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
             (error "Premise: the search is not listed whole (counts %S)" drgnx-replace--hub-counts))
-          ;; each run starts from the first window (the run before paged past it)
-          (funcall drgnx-view-patch-send-function "view/window" (list :view (drgnx-view-patch-view drgnx-view-patch)
-                                                                      :list "order" :from 0))
-          (unless (drgnx-perf--wait 20 (lambda () (equal (nidhogg-view-get (drgnx-perf--sw-h) 'window "order") '(0 20000 30300))))
-            (error "Premise: the window did not go back to the first 20,000 (%S)"
-                   (nidhogg-view-get (drgnx-perf--sw-h) 'window "order")))
+          (drgnx-perf--sw-first-window)
           ;; the rows grow from the first as the view scrolls (`search/grep-look'), 300 at a time, to the window's end:
           ;; every row before the start held, as before S1 (an `upto' more than 400 rows on is a block after a gap row)
           (let ((ids (nidhogg-view-get (drgnx-perf--sw-h) 'list "order")))
@@ -771,44 +773,51 @@ held more than the window."
                      unless (drgnx-perf--wait 30 (lambda () (> (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)) k)))
                      do (error "Premise: the rows did not grow past %d (%d rows)" k
                                (hash-table-count (drgnx-view-patch-rows drgnx-view-patch)))))
-          (let* ((h (drgnx-perf--sw-h)) keys pages lines handled (most 0) trace
-                 (start (cl-find-if (lambda (id) (string-prefix-p "m:" id)) (nthcdr 19950 (nidhogg-view-get h 'list "order"))))
-                 (from (progn
-                         (unless (and start (equal start (drgnx-view-nav 'select start)))
-                           (error "Premise: no match at entry 19,950 to start from (start %S, list %d, window %S, selection %S, h %S, view %S)"
-                                  start (length (nidhogg-view-get h 'list "order")) (nidhogg-view-get h 'window "order")
-                                  (drgnx-view-nav-selection) h (drgnx-view-patch-view drgnx-view-patch)))
-                         (drgnx-perf--sw-index h start)))
-                 (at from))
-            (dotimes (_ 200)
-              (let ((t0 (float-time)))
-                (setq drgnx-perf--sw-arrived nil drgnx-perf--sw-handled 0.0)
-                (drgnx-replace--rows-step 1)
-                (push (* 1000 (- (float-time) t0)) keys)
-                (when (drgnx-view-nav-paging-p)
-                  (let ((lines drgnx-perf--sw-lines))
-                    (push (* 1000 (- (or (drgnx-perf--wait 20 (lambda () (not (drgnx-view-nav-paging-p))))
-                                         (error "Premise: the window asked at %s did not come (pending %S, window %S, model lines since %d)"
-                                                (drgnx-view-nav-selection) (car drgnx-view-nav--pending)
-                                                (nidhogg-view-get h 'window "order") (- drgnx-perf--sw-lines lines)))
-                                     t0))
-                          pages))
-                  (push (* 1000 (- drgnx-perf--sw-arrived t0)) lines)
-                  (push (* 1000 drgnx-perf--sw-handled) handled))
-                (let ((i (drgnx-perf--sw-index h (drgnx-view-nav-selection))))
-                  (push i trace)
-                  (unless (> i at) (error "Premise: Next Match went from entry %d to %d (from %d; entries, newest first: %S)"
-                                          at i from (seq-take trace 30)))
-                  (setq at i))
-                (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
+          (let ((h (drgnx-perf--sw-h)) keys pages lines handled gcs (most 0) from at)
+            (dotimes (round 12)
+              (unless (zerop round) (drgnx-perf--sw-first-window))
+              (let ((start (cl-find-if (lambda (id) (string-prefix-p "m:" id)) (nthcdr 19950 (nidhogg-view-get h 'list "order"))))
+                    (paged nil) trace)
+                (unless (and start (equal start (drgnx-view-nav 'select start)))
+                  (error "Premise: no match at entry 19,950 to start from (start %S, list %d, window %S, selection %S)"
+                         start (length (nidhogg-view-get h 'list "order")) (nidhogg-view-get h 'window "order")
+                         (drgnx-view-nav-selection)))
+                (setq from (drgnx-perf--sw-index h start) at from)
+                (cl-loop repeat 200 until paged
+                         do (let ((t0 (float-time)) (gc0 gcs-done) (gce0 gc-elapsed))
+                              (setq drgnx-perf--sw-arrived nil drgnx-perf--sw-handled 0.0)
+                              (drgnx-replace--rows-step 1)
+                              (push (* 1000 (- (float-time) t0)) keys)
+                              (when (drgnx-view-nav-paging-p)
+                                (let ((lines0 drgnx-perf--sw-lines))
+                                  (push (* 1000 (- (or (drgnx-perf--wait 20 (lambda () (not (drgnx-view-nav-paging-p))))
+                                                       (error "Premise: the window asked at %s did not come (pending %S, window %S, model lines since %d)"
+                                                              (drgnx-view-nav-selection) (car drgnx-view-nav--pending)
+                                                              (nidhogg-view-get h 'window "order") (- drgnx-perf--sw-lines lines0)))
+                                                   t0))
+                                        pages))
+                                (push (* 1000 (- drgnx-perf--sw-arrived t0)) lines)
+                                (push (format "%d:%.0f" (- gcs-done gc0) (* 1000 (- gc-elapsed gce0))) gcs)
+                                (push (* 1000 drgnx-perf--sw-handled) handled)
+                                (setq paged t))
+                              (let ((i (drgnx-perf--sw-index h (drgnx-view-nav-selection))))
+                                (push i trace)
+                                (unless (> i at) (error "Premise: Next Match went from entry %d to %d (from %d; entries, newest first: %S)"
+                                                        at i from (seq-take trace 30)))
+                                (setq at i))
+                              (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
+                (unless paged (error "Premise: round %d's 200 Next Match keys from %d paged no window (at %d)" round from at))))
             (advice-remove 'drgnx-hub--model-line #'drgnx-perf--sw-line)
             (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
-            (unless (> at 20000) (error "Premise: 200 Next Match keys from %d stopped at %d, inside the first window" from at))
             (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))
                   :page_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats pages))
                   :line_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats lines))
                   :handled_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats handled))
-                  :pages (length pages) :list_max most :from from :to at))))
+                  :pages (length pages)
+                  :page_each (mapconcat (lambda (x) (format "%.1f" x)) (reverse pages) " ")
+                  :line_each (mapconcat (lambda (x) (format "%.1f" x)) (reverse lines) " ")
+                  :gc_each (string-join (reverse gcs) " ")
+                  :list_max most :from from :to at))))
       t))
   "The `search-window' workload's session side (with the replace workloads' and the hub's).")
 

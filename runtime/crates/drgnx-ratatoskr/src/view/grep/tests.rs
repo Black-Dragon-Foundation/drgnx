@@ -725,6 +725,41 @@ fn a_window_move_is_the_diff_of_the_whole() {
     }
 }
 
+/// [D] Moves one after another (a page each, the parents the last move left known, not scanned for) are each the ops the
+/// whole model's diff would send from the model before, over every pair of starts in a row.
+#[test]
+fn successive_window_moves_are_the_diff_of_the_whole() {
+    let files: Vec<(String, Vec<Match>)> = (0..4)
+        .map(|f| {
+            let name = format!("/r/f{f}.txt");
+            let ms = (1..=4).map(|l| m(&name, l, "", "needle", "")).collect();
+            (name, ms)
+        })
+        .collect();
+    for a in 0..14 {
+        let mut sent = crate::view::model::Sent::default();
+        let mut prev = grep_doc_in(&files, 6, Some(a));
+        sent.publish(prev.clone()).unwrap();
+        for b in (0..14).chain((0..14).rev()).chain([a, 13, 0, 7]) {
+            let new = grep_doc_in(&files, 6, Some(b));
+            let w = window_of(&files, 6, Some(b));
+            let m = crate::view::model::WindowMove {
+                name: "order",
+                window: (w.total, w.from),
+                held: &w.held,
+                order: w.order.clone(),
+            };
+            let out = sent.move_window(m, |i| w.node(i));
+            let diff = new.diff(&prev);
+            match out {
+                Some(o) => assert_eq!(o.model, json!({ "ops": diff }), "from {a}, to {b}"),
+                None => assert!(diff.is_empty(), "from {a}, to {b}: no move but {diff:?}"),
+            }
+            prev = new;
+        }
+    }
+}
+
 /// [D] Replace All's leftovers (`search/grep-skipped`, SJA-SEARCH-1 (3)): the search lists only the skipped matches,
 /// each with its reason after the text, under their files; the model holds them alone, and the search stops.
 #[test]
