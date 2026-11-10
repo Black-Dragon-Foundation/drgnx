@@ -243,9 +243,26 @@ Emacs connects again)."
   (process-put conn :pending nil)
   (delete-process conn))
 
-(defun drgnx-hub--lines (conn chunk fn &optional bad limit)
+(defconst drgnx-hub--model-prefix "{\"event\":\"view-model\""
+  "How a hub's `view-model' line starts (the hub writes `event' first): such a line goes to Sjá whole, never parsed
+here (`drgnx-hub--model-line-p', `:raw-prefix' on the framed path).")
+
+(defsubst drgnx-hub--model-line-p (line)
+  "Non-nil when LINE starts with `drgnx-hub--model-prefix' (a compare in place: nothing is allocated)."
+  (and (>= (length line) (length drgnx-hub--model-prefix))
+       (eq t (compare-strings line 0 (length drgnx-hub--model-prefix) drgnx-hub--model-prefix nil nil))))
+
+(declare-function drgnx-view-model-line "drgnx-view" (line))
+
+(defun drgnx-hub--model-line (line)
+  "A hub's `view-model' LINE, whole and unparsed, to its view's model (`drgnx-view-model-line'); dropped when the
+views are not loaded."
+  (when (fboundp 'drgnx-view-model-line) (drgnx-view-model-line line)))
+
+(defun drgnx-hub--lines (conn chunk fn &optional bad limit raw)
   "Split CONN's input into lines; FN gets each parsed JSON object, BAD (when given) each line that is not JSON.
 With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read, nor after FN or BAD closed CONN.
+With RAW, a line that starts with `drgnx-hub--model-prefix' goes to RAW whole, never parsed.
 Only CHUNK is searched for a newline: the start of a line still open waits in CONN's list of pieces (`:pending'),
 joined once when its newline comes, so a long line in many chunks costs its length (HUB-LINES-1)."
   (let ((start 0) (n (length chunk)) (live (process-live-p conn)) nl)
@@ -256,13 +273,16 @@ joined once when its newline comes, so a long line in many chunks costs its leng
         (process-put conn :pending nil)
         (process-put conn :pending-length 0)
         (setq start (1+ nl))
-        (if (and limit (> (length line) limit))
-            (progn (setq start n) (drgnx-hub--line-too-long conn limit))
+        (cond
+         ((and limit (> (length line) limit))
+          (setq start n) (drgnx-hub--line-too-long conn limit))
+         ((and raw (drgnx-hub--model-line-p line)) (funcall raw line))
+         (t
           (let ((json (condition-case nil
                           (json-parse-string line :object-type 'plist :array-type 'list :null-object nil :false-object nil)
                         (error :bad))))
             (cond ((eq json :bad) (when bad (funcall bad line)))
-                  (json (funcall fn json)))))))
+                  (json (funcall fn json))))))))
     (when (and (< start n) (or (not live) (process-live-p conn)))
       (let ((length (+ (or (process-get conn :pending-length) 0) (- n start))))
         (if (and limit (> length limit))
@@ -416,8 +436,8 @@ path: a filter, a timer) never waits: the cached value, or nil while the read it
 
 (defun drgnx-hub--client-filter (conn chunk)
   "A client connection's filter: the challenge starts the hello, an answer settles its call, an event (on the
-subscribed connection) goes to `drgnx-hub-event-functions'."
-  (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json))))
+subscribed connection) goes to `drgnx-hub-event-functions', a `view-model' line whole to its view's model."
+  (drgnx-hub--lines conn chunk (lambda (json) (drgnx-hub--client-line conn json)) nil nil #'drgnx-hub--model-line))
 
 (defvar nidhogg-workers-framing)
 (declare-function nidhogg-set-process-framing "nidhogg-io.c")
@@ -426,12 +446,12 @@ subscribed connection) goes to `drgnx-hub-event-functions'."
   "Have Nidhogg's reader thread split CONN's input into lines and parse them, when `nidhogg-workers-framing' is on:
 the main thread then gets batches (`drgnx-hub--client-batch') where it gets chunks (`drgnx-hub--client-filter').
 Without the feature or the switch, or on an error from the framing, the filter reads, as it always did.  No
-`:max-message': the client has no line limit.  A connection whose filter is replaced (the delivery gate's, in tests)
-is unframed again by the reader itself."
+`:max-message': the client has no line limit.  A `view-model' line is passed whole (`:raw-prefix').  A connection
+whose filter is replaced (the delivery gate's, in tests) is unframed again by the reader itself."
   (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
     (condition-case nil
         (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
-                                     :null-object nil :false-object nil
+                                     :null-object nil :false-object nil :raw-prefix drgnx-hub--model-prefix
                                      :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection"))
       (error nil))))
 
@@ -441,13 +461,15 @@ from CONN's reader, in the order the hub wrote them.  One whose line is not JSON
 `false' (no MESSAGE), is skipped as `drgnx-hub--lines' skips it.  Nothing is read once CONN, live when the batch
 began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
 the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
-drops it."
-  (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection")))
+drops it.  A `view-model' line comes unparsed, (LINE LINE nil) (`:raw-prefix'): it goes whole to its view's model."
+  (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection"))
+        (model (drgnx-guard-wrap #'drgnx-hub--model-line "hub connection")))
     (dolist (entry batch)
       (when (or (not live) (process-live-p conn))
         (let ((message (nth 0 entry)))
-          (when (and message (null (nth 2 entry)))
-            (funcall one conn message)))))))
+          (cond ((nth 2 entry))
+                ((and (stringp message) (eq message (nth 1 entry))) (funcall model message))
+                (message (funcall one conn message))))))))
 
 (defconst drgnx-hub--conn-props
   '((:state . :drgnx-state) (:queue . :drgnx-queue) (:proven . :drgnx-proven) (:asked . :drgnx-asked)

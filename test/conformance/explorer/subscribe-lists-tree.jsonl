@@ -8,11 +8,11 @@
 {"do": "run", "bin": "/bin/sh", "args": ["-c", "mkdir -p $ROOT/ex/src/app $ROOT/ex/.git $ROOT/ex/lib && echo x > $ROOT/ex/file10 && echo x > $ROOT/ex/file2 && echo x > $ROOT/ex/src/app/main.rs"], "expect_code": 0}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"]}}}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"listing": "$number"}}}
-{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": {"ops": "$any"}}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "model": 1, "ops": [{"reset": [{"key": "$ROOT/ex", "text": "▾ EX"}, {"key": "$ROOT/ex/lib", "text": "▸ lib"}, {"key": "$ROOT/ex/src", "text": "▸ src"}, {"key": "$ROOT/ex/file2", "text": "  file2"}, {"key": "$ROOT/ex/file10", "text": "  file10"}]}]}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "explorer/subscribe", "params": {"view": "x", "roots": ["$ROOT/ex"], "expanded": ["$ROOT/ex/src"]}}}
 {"do": "expect", "conn": "e", "json": {"id": 4, "result": {"listing": "$number"}}}
-{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "x", "hub": "$hub", "base": 1, "version": 2, "model": {"ops": "$any"}}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "hub": "$hub", "base": 1, "version": 2, "env_epoch": 1, "model": 2}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 5, "method": "view/resync", "params": {"view": "x", "class": "gui-1"}}}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "x", "class": "gui-1", "ops": [{"reset": [{"key": "$ROOT/ex"}, {"key": "$ROOT/ex/lib"}, {"key": "$ROOT/ex/src/app", "text": "▸ src/app"}, {"key": "$ROOT/ex/file2"}, {"key": "$ROOT/ex/file10"}]}]}}, "within_ms": 10000}

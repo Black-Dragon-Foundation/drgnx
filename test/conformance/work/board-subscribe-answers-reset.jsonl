@@ -6,7 +6,7 @@
 {"do": "send", "conn": "e", "json": {"id": 2, "method": "view/env", "params": {"view": "m/board", "class": "gui-1", "display": "gui", "scale": 1, "fonts": [["ui", null, 0, 13, 12, 3, 8, 8]], "cell": [8, 17], "width_px": 1000, "tz": "+0000", "epoch": 1}}}
 {"do": "expect", "conn": "e", "json": {"id": 2, "result": true}}
 {"do": "send", "conn": "e", "json": {"id": 3, "method": "work/board/subscribe", "params": {"view": "m/board", "map": "m"}}}
-{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m/board", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": "$string"}}, "within_ms": 10000}
+{"do": "expect", "conn": "e", "json": {"event": "view-model", "data": {"view": "m/board", "hub": "$capture:hub", "base": 0, "version": 1, "reset": true, "model": {"ops": "$any"}}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"event": "view-patch", "data": {"view": "m/board", "class": "gui-1", "hub": "$hub", "base": 0, "version": 1, "env_epoch": 1, "model": 1, "ops": [{"reset": {"$contains": [{"key": "head"}, {"key": "none"}]}}]}}, "within_ms": 10000}
 {"do": "expect", "conn": "e", "json": {"id": 3, "result": {"hub": "$hub"}}, "within_ms": 10000}
 {"do": "send", "conn": "e", "json": {"id": 4, "method": "work/board/subscribe", "params": {"view": "m/board"}}}

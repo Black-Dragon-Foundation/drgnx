@@ -148,6 +148,28 @@ impl Store {
         }
     }
 
+    /// M as a `view-model` event's data, its model moved in (`json!(m)` would copy the whole model).
+    pub fn model_data(m: ViewModel) -> serde_json::Value {
+        let ViewModel {
+            view,
+            hub,
+            base,
+            version,
+            reset,
+            model,
+        } = m;
+        let mut d = serde_json::Map::new();
+        d.insert("view".into(), view.into());
+        d.insert("hub".into(), hub.into());
+        d.insert("base".into(), base.into());
+        d.insert("version".into(), version.into());
+        if reset {
+            d.insert("reset".into(), true.into());
+        }
+        d.insert("model".into(), model);
+        d.into()
+    }
+
     fn model_event(hub: u64, view: &str, out: model::Out) -> ViewModel {
         ViewModel {
             view: view.to_owned(),
@@ -520,7 +542,7 @@ impl Views {
     /// its version. Returns whether one went.
     pub fn publish_model(&self, f: &Front, conn: u64, view: &str, doc: model::Doc) -> bool {
         let out = lock(&self.store).publish_model(conn, view, doc);
-        out.is_some_and(|m| f.send_to(conn, "view-model", json!(m)))
+        out.is_some_and(|m| f.send_to(conn, "view-model", Store::model_data(m)))
     }
 
     /// CONN's VIEW's model gains NODES ([`Store::extend_model`]); false when there is no model to extend, and the
@@ -536,7 +558,7 @@ impl Views {
             return false;
         };
         if let Some(m) = out {
-            f.send_to(conn, "view-model", json!(m));
+            f.send_to(conn, "view-model", Store::model_data(m));
         }
         true
     }
@@ -682,7 +704,7 @@ pub fn resync(f: &Front, c: &Caller, p: ViewResync) -> Result<bool, Error> {
     let views = &f.core.views;
     if p.model {
         let m = lock(&views.store).resync_model(c.conn_id, &p.view);
-        return Ok(m.is_some_and(|m| f.send_to(c.conn_id, "view-model", json!(m))));
+        return Ok(m.is_some_and(|m| f.send_to(c.conn_id, "view-model", Store::model_data(m))));
     }
     let key = (c.conn_id, p.view, p.class);
     let images = views.images_of(&key);

@@ -121,7 +121,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
     let model = model.expect("the first batch's model");
     assert!(model.reset);
     assert_eq!(p[0].model, Some(model.version), "the rows name the model");
-    let v: Value = serde_json::from_str(&model.model).unwrap();
+    let v: &Value = &model.model;
     let reset = &v["ops"][0]["reset"];
     assert_eq!(reset["descriptor"]["scheme"], "tree");
     assert_eq!(reset["descriptor"]["flags"], json!(["expanded"]));
@@ -470,7 +470,7 @@ fn the_model_grows_by_doubling_and_costs_about_one_whole_model() {
             .unwrap();
         if let Some(model) = model {
             sends += 1;
-            bytes += json!(model)["model"].as_str().unwrap().len();
+            bytes += model.model.to_string().len();
         }
     }
     assert!((3..=20).contains(&sends), "{sends} models for 100 files");
@@ -536,7 +536,7 @@ fn the_model_stream_is_the_fixture_sja_loads() {
     );
     // the second and third sends carry the appended ids as a splice at the end of the list, not the list
     for step in &steps[1..] {
-        let ops: Value = serde_json::from_str(step["model"].as_str().unwrap()).unwrap();
+        let ops = &step["model"];
         let list_ops: Vec<&Value> = ops["ops"]
             .as_array()
             .unwrap()

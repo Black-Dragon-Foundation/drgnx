@@ -146,14 +146,14 @@ pub struct Sent {
     reset_due: bool,
 }
 
-/// One `view-model`: base, version and the model string.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One `view-model`: base, version and the model, `{"ops": [...]}`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Out {
     pub base: u64,
     pub version: u64,
     /// The model's first op is a reset.
     pub reset: bool,
-    pub model: String,
+    pub model: Value,
 }
 
 impl Sent {
@@ -213,7 +213,7 @@ impl Sent {
             base,
             version: self.version,
             reset: ops.first().is_some_and(|op| op.get("reset").is_some()),
-            model: json!({ "ops": ops }).to_string(),
+            model: json!({ "ops": ops }),
         }
     }
 }

@@ -81,10 +81,12 @@ pub struct ViewResync {
 }
 
 /// `view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md "The native view
-/// model"), from version BASE to VERSION. MODEL is one JSON string, `{"ops": [...]}`, that the editor hands to its
-/// replica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with
-/// `model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+/// model"), from version BASE to VERSION. MODEL is a JSON object, `{"ops": [...]}`; the editor hands the whole line,
+/// unparsed, to its replica (Sjá), which reads the envelope and the model (the line starts `{"event":"view-model"`:
+/// [`crate::wire::Event`] writes `event` first). Its first op after a subscribe, a hidden view shown again, a hub
+/// restart or a `view/resync` with `model` is a `reset`. The view's rows built from it follow it, each `view-patch`
+/// naming it (`model`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewModel {
     pub view: String,
@@ -93,10 +95,11 @@ pub struct ViewModel {
     /// The version this patch applies to: 0 for the first model of a subscription.
     pub base: u64,
     pub version: u64,
-    /// MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.
+    /// MODEL starts with a `reset`: the replica decides by the envelope.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reset: bool,
-    pub model: String,
+    /// `{"ops": [...]}`.
+    pub model: serde_json::Value,
 }
 
 /// `view/ack`: the editor applied (VIEW, CLASS)'s patch VERSION. For a view whose patches are acknowledged (a
@@ -207,7 +210,29 @@ pub(crate) fn methods() -> Vec<Method> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{Value, json};
+
+    /// A `view-model` line starts with `{"event":"view-model"` (the editor routes it to Sjá by that prefix, unparsed)
+    /// and carries its model as a JSON object, not a string.
+    #[test]
+    fn a_view_model_line_starts_with_its_event_and_carries_an_object() {
+        let m = super::ViewModel {
+            view: "v".into(),
+            hub: 1,
+            base: 0,
+            version: 1,
+            reset: true,
+            model: json!({"ops": []}),
+        };
+        let line = serde_json::to_string(&crate::wire::Event {
+            event: "view-model".into(),
+            data: json!(m),
+        })
+        .unwrap();
+        assert!(line.starts_with(r#"{"event":"view-model""#), "{line}");
+        let v: Value = serde_json::from_str(&line).unwrap();
+        assert!(v["data"]["model"].is_object(), "{line}");
+    }
 
     /// A schema that is a map: an object whose keys are data (ids), not field names.
     fn maps(v: &Value, at: &str, out: &mut Vec<String>) {

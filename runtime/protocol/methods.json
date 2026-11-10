@@ -3538,7 +3538,7 @@
       "data": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "description": "`view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md \"The native view\nmodel\"), from version BASE to VERSION. MODEL is one JSON string, `{\"ops\": [...]}`, that the editor hands to its\nreplica whole; its first op after a subscribe, a hidden view shown again, a hub restart or a `view/resync` with\n`model` is a `reset`. The view's rows built from it follow it, each `view-patch` naming it (`model`).",
+        "description": "`view-model`: what changed in one view's model (the editor's replica, docs/develop/hub.md \"The native view\nmodel\"), from version BASE to VERSION. MODEL is a JSON object, `{\"ops\": [...]}`; the editor hands the whole line,\nunparsed, to its replica (Sjá), which reads the envelope and the model (the line starts `{\"event\":\"view-model\"`:\n[`crate::wire::Event`] writes `event` first). Its first op after a subscribe, a hidden view shown again, a hub\nrestart or a `view/resync` with `model` is a `reset`. The view's rows built from it follow it, each `view-patch`\nnaming it (`model`).",
         "properties": {
           "base": {
             "description": "The version this patch applies to: 0 for the first model of a subscription.",
@@ -3553,10 +3553,10 @@
             "type": "integer"
           },
           "model": {
-            "type": "string"
+            "description": "`{\"ops\": [...]}`."
           },
           "reset": {
-            "description": "MODEL starts with a `reset`: the editor routes it by the envelope, never parsing MODEL.",
+            "description": "MODEL starts with a `reset`: the replica decides by the envelope.",
             "type": "boolean"
           },
           "version": {
@@ -3578,7 +3578,7 @@
         "title": "ViewModel",
         "type": "object"
       },
-      "doc": "what changed in one hub-fed view's model, to its connection only: one JSON string the editor's replica takes whole (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version",
+      "doc": "what changed in one hub-fed view's model, to its connection only: the model as an object, {\"ops\": [...]}, in a line that starts {\"event\":\"view-model\" so the editor hands it whole and unparsed to its replica (a reset first, after a hidden view is shown again and on view/resync with model), written before the rows built from it, which name its version",
       "name": "view-model"
     },
     {
