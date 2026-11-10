@@ -171,7 +171,7 @@ fn header(root: &Path, file: &str) -> Row {
         .and_then(|d| d.strip_prefix(root).ok())
         .map(|d| d.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut b = RowBuilder::new(file_id(file));
+    let mut b = RowBuilder::new(file_id(root, file));
     b.push("[x]", None)
         .prop(0, 3, "drgnx-replace-box", json!(file));
     b.push(" ", None).push(&name, None);
@@ -180,18 +180,30 @@ fn header(root: &Path, file: &str) -> Row {
     }
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-file", json!(file));
-    b.prop(0, end, "drgnx-work-id", json!(file_id(file)));
+    b.prop(0, end, "drgnx-work-id", json!(file_id(root, file)));
     b.finish()
 }
 
-/// FILE's node id (and its header row's key).
-fn file_id(file: &str) -> String {
-    format!("f:{file}")
+/// FILE as the ids name it: relative to the search's ROOT when under it, else whole, as the editor's
+/// `drgnx-replace--key-path` makes it.  A window move sends thousands of ids (removed, added, spliced, parents):
+/// with the whole path in each, the paths were 44 % of the line.
+fn key_path<'a>(root: &Path, file: &'a str) -> &'a str {
+    let root = root.to_string_lossy();
+    let root = root.strip_suffix('/').unwrap_or(&root);
+    file.strip_prefix(root)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(file)
 }
 
-/// M's node id (and its row's key).
-fn match_id(m: &Match) -> String {
-    format!("m:{}:{}:{}", m.file, m.line, m.col)
+/// FILE's node id (and its header row's key), in a search of ROOT.
+fn file_id(root: &Path, file: &str) -> String {
+    format!("f:{}", key_path(root, file))
+}
+
+/// M's node id (and its row's key), in a search of ROOT.
+fn match_id(root: &Path, m: &Match) -> String {
+    format!("m:{}:{}:{}", key_path(root, &m.file), m.line, m.col)
 }
 
 /// The entries (files and matches) a search's model holds; past them its list `order` is a window of the first ones
@@ -203,9 +215,9 @@ fn entries_of(files: &[(String, Vec<Match>)]) -> usize {
     files.iter().map(|(_, ms)| 1 + ms.len()).sum()
 }
 
-/// FILE's node in the model: its id and wire object.
-fn file_node(file: &str) -> (String, Value) {
-    let fid = file_id(file);
+/// FILE's node in the model of a search of ROOT: its id and wire object (the whole path in `path`).
+fn file_node(root: &Path, file: &str) -> (String, Value) {
+    let fid = file_id(root, file);
     let name = Path::new(file)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -215,35 +227,36 @@ fn file_node(file: &str) -> (String, Value) {
     (fid, node)
 }
 
-/// M's node in the model, a child of the file node FID: its id and wire object.
-fn match_node(fid: &str, m: &Match) -> (String, Value) {
-    let id = match_id(m);
+/// M's node in the model, a child of the file node FID: its id and wire object.  Its file is its parent's `path`, not
+/// a field of its own: a window move sends thousands of match nodes, and the path again in each was 15 % of the line.
+fn match_node(root: &Path, fid: &str, m: &Match) -> (String, Value) {
+    let id = match_id(root, m);
     let node = json!({"id": id, "kind": "match", "flags": 0, "parent": fid,
                       "fields": [["label", format!("{}{}{}", m.before.trim_start(), m.text, m.after)],
-                                 ["file", m.file], ["line", m.line], ["col", m.col], ["end", m.end],
-                                 ["text", m.text]]});
+                                 ["line", m.line], ["col", m.col], ["end", m.end], ["text", m.text]]});
     (id, node)
 }
 
 /// FILE's batch MS as the model's nodes and the ids it adds to `order`.
-fn batch_nodes(file: &str, ms: &[Match]) -> (Vec<(String, Value)>, Vec<String>) {
-    let (fid, node) = file_node(file);
+fn batch_nodes(root: &Path, file: &str, ms: &[Match]) -> (Vec<(String, Value)>, Vec<String>) {
+    let (fid, node) = file_node(root, file);
     let mut nodes = vec![(fid.clone(), node)];
-    nodes.extend(ms.iter().map(|m| match_node(&fid, m)));
+    nodes.extend(ms.iter().map(|m| match_node(root, &fid, m)));
     let ids = nodes.iter().map(|(id, _)| id.clone()).collect();
     (nodes, ids)
 }
 
 /// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children; past
 /// [`MODEL_WINDOW`] entries `order` is a window of them, from FROM (`view/window`; none: the first).
-fn grep_doc(files: &[(String, Vec<Match>)], from: Option<usize>) -> Doc {
-    grep_doc_in(files, MODEL_WINDOW, from)
+fn grep_doc(root: &Path, files: &[(String, Vec<Match>)], from: Option<usize>) -> Doc {
+    grep_doc_in(root, files, MODEL_WINDOW, from)
 }
 
 /// The entries of a search's model window: every node id it holds (`held`: the parent of a window that starts inside a
 /// file first, outside `order`, then `order`'s ids), where each comes from (a file, and the match or none for the
 /// file's own entry), and the window: its total and first entry.
 struct Window<'a> {
+    root: &'a Path,
     total: usize,
     from: usize,
     held: Vec<String>,
@@ -255,18 +268,24 @@ impl Window<'_> {
     /// `held[i]`'s wire object.
     fn node(&self, i: usize) -> Value {
         match self.from_files[i] {
-            (file, None) => file_node(file).1,
-            (file, Some(m)) => match_node(&file_id(file), m).1,
+            (file, None) => file_node(self.root, file).1,
+            (file, Some(m)) => match_node(self.root, &file_id(self.root, file), m).1,
         }
     }
 }
 
 /// FILES' window of at most WINDOW entries from entry FROM (clamped so the window is full): its ids only, no node built.
-fn window_of(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>) -> Window<'_> {
+fn window_of<'a>(
+    root: &'a Path,
+    files: &'a [(String, Vec<Match>)],
+    window: usize,
+    from: Option<usize>,
+) -> Window<'a> {
     let total = entries_of(files);
     let from = from.unwrap_or(0).min(total.saturating_sub(window));
     let end = from + window;
     let mut w = Window {
+        root,
         total,
         from,
         held: Vec::new(),
@@ -285,13 +304,13 @@ fn window_of(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>)
             continue;
         }
         parent |= at < from;
-        w.held.push(file_id(file));
+        w.held.push(file_id(root, file));
         w.from_files.push((file, None));
         at += 1;
         let skip = from.saturating_sub(at);
         at += skip;
         for m in ms.iter().skip(skip).take(end.saturating_sub(at)) {
-            w.held.push(match_id(m));
+            w.held.push(match_id(root, m));
             w.from_files.push((file, Some(m)));
             at += 1;
         }
@@ -302,8 +321,13 @@ fn window_of(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>)
 
 /// [`grep_doc`] holding at most WINDOW entries, from entry FROM (clamped so the window is full). A window that starts
 /// inside a file holds the file's node too, outside `order`: Sjá shows a match under its file.
-fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>) -> Doc {
-    let w = window_of(files, window, from);
+fn grep_doc_in(
+    root: &Path,
+    files: &[(String, Vec<Match>)],
+    window: usize,
+    from: Option<usize>,
+) -> Doc {
+    let w = window_of(root, files, window, from);
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -348,7 +372,7 @@ fn match_row(q: &Query, replace: &str, m: &Match, why: Option<&str>) -> Row {
     } else {
         grep::new_text(q, &m.text, replace)
     };
-    let mut b = RowBuilder::new(match_id(m));
+    let mut b = RowBuilder::new(match_id(&q.root, m));
     b.push("  ", None);
     let at = b.pos();
     b.push("[x]", None)
@@ -369,7 +393,7 @@ fn match_row(q: &Query, replace: &str, m: &Match, why: Option<&str>) -> Row {
     }
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-match", match_json(m));
-    b.prop(0, end, "drgnx-work-id", json!(match_id(m)));
+    b.prop(0, end, "drgnx-work-id", json!(match_id(&q.root, m)));
     b.finish()
 }
 
@@ -378,7 +402,9 @@ fn why<'a>(run: &'a Run, m: &Match) -> Option<&'a str> {
     if run.reasons.is_empty() {
         return None;
     }
-    run.reasons.get(&match_id(m)).map(String::as_str)
+    run.reasons
+        .get(&match_id(&run.query.root, m))
+        .map(String::as_str)
 }
 
 /// M's row in RUN.
@@ -464,13 +490,13 @@ fn window_rows(run: &mut Run) -> Vec<Row> {
 fn row_index(run: &Run, key: &str) -> Option<usize> {
     let mut at = 0;
     for (file, ms) in &run.files {
-        if key == file_id(file) {
+        if key == file_id(&run.query.root, file) {
             return Some(at);
         }
-        if key.starts_with(&format!("m:{file}:")) {
+        if key.starts_with(&format!("m:{}:", key_path(&run.query.root, file))) {
             return ms
                 .iter()
-                .position(|m| match_id(m) == key)
+                .position(|m| match_id(&run.query.root, m) == key)
                 .map(|i| at + 1 + i);
         }
         at += 1 + ms.len();
@@ -543,7 +569,7 @@ fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Optio
         .flatten()
         .or_else(|| {
             let from = store.window_from(conn, view, "order");
-            store.publish_model(conn, view, grep_doc(&run.files, from))
+            store.publish_model(conn, view, grep_doc(&run.query.root, &run.files, from))
         })
 }
 
@@ -559,7 +585,7 @@ fn batch_patches(
     ms: Vec<Match>,
 ) -> (Option<ViewModel>, Vec<Patch>) {
     let mut rows = file_rows(run, &file, &ms);
-    let (nodes, ids) = batch_nodes(&file, &ms);
+    let (nodes, ids) = batch_nodes(&run.query.root, &file, &ms);
     run.files.push((file, ms));
     // only what the window still has room for
     rows.truncate(run.limit.saturating_sub(run.sent));
@@ -580,7 +606,7 @@ fn batch_patches(
         run.waiting = (Vec::new(), Vec::new());
         run.model_sent = entries;
         let from = store.window_from(conn, view, "order");
-        store.publish_model(conn, view, grep_doc(&run.files, from))
+        store.publish_model(conn, view, grep_doc(&run.query.root, &run.files, from))
     } else {
         None
     };
@@ -681,7 +707,7 @@ fn skip_patches(
         .filter_map(|(file, ms)| {
             let ms: Vec<Match> = ms
                 .into_iter()
-                .filter(|m| why.contains_key(&match_id(m)))
+                .filter(|m| why.contains_key(&match_id(&run.query.root, m)))
                 .collect();
             (!ms.is_empty()).then_some((file, ms))
         })
@@ -692,7 +718,7 @@ fn skip_patches(
     run.limit = WINDOW;
     run.block = None;
     store.forget_windows(conn, view);
-    let model = store.publish_model(conn, view, grep_doc(&run.files, None));
+    let model = store.publish_model(conn, view, grep_doc(&run.query.root, &run.files, None));
     let rows = view_rows(run);
     let patches = keys(store, conn, view)
         .iter()
@@ -716,7 +742,12 @@ impl Views {
         self.greps
             .current(key.0, &key.1, |run| {
                 let from = self.window_from(key.0, &key.1, "order");
-                self.publish_model(f, key.0, &key.1, grep_doc(&run.files, from));
+                self.publish_model(
+                    f,
+                    key.0,
+                    &key.1,
+                    grep_doc(&run.query.root, &run.files, from),
+                );
                 let rows = window_rows(run);
                 if let Some(p) = lock(&self.store).publish(key, rows, &[]) {
                     f.send_to(key.0, "view-patch", json!(p));
@@ -733,7 +764,7 @@ impl Views {
             .current(conn, view, |run| {
                 let from = self.window_from(conn, view, "order");
                 // the same entries in another window: the move alone (the nodes held stay as they are)
-                let w = window_of(&run.files, MODEL_WINDOW, from);
+                let w = window_of(&run.query.root, &run.files, MODEL_WINDOW, from);
                 let m = super::model::WindowMove {
                     name: "order",
                     window: (w.total, w.from),
@@ -746,7 +777,12 @@ impl Views {
                         f.send_to(conn, "view-model", super::Store::model_data(m));
                     }
                     None => {
-                        self.publish_model(f, conn, view, grep_doc(&run.files, from));
+                        self.publish_model(
+                            f,
+                            conn,
+                            view,
+                            grep_doc(&run.query.root, &run.files, from),
+                        );
                     }
                 }
             })
@@ -830,7 +866,7 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
         .start(conn, &view, query.clone(), p.replace.unwrap_or_default());
     // a new search's model: no files yet, and its window from the start
     lock(&views.store).forget_windows(conn, &view);
-    views.publish_model(f, conn, &view, grep_doc(&[], None));
+    views.publish_model(f, conn, &view, grep_doc(Path::new("/"), &[], None));
     for patch in start_patches(&mut lock(&views.store), conn, &view) {
         f.send_to(conn, "view-patch", json!(patch));
     }

@@ -79,12 +79,12 @@ fn streams_rows_per_file() {
     assert_eq!(after, &None);
     assert_eq!(
         rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
-        ["f:/r/a.txt", "m:/r/a.txt:1:2", "m:/r/a.txt:2:2"]
+        ["f:a.txt", "m:a.txt:1:2", "m:a.txt:2:2"]
     );
     let Op::Insert { after, rows } = &seen[1].ops[0] else {
         panic!("{:?}", seen[1].ops)
     };
-    assert_eq!(after.as_deref(), Some("m:/r/a.txt:2:2"));
+    assert_eq!(after.as_deref(), Some("m:a.txt:2:2"));
     assert_eq!(rows.len(), 2);
     assert_eq!(
         (seen[0].base, seen[0].version, seen[1].base, seen[1].version),
@@ -127,18 +127,17 @@ fn grep_model_is_a_tree_of_files_and_matches() {
     assert_eq!(reset["descriptor"]["flags"], json!(["expanded"]));
     assert_eq!(
         reset["lists"],
-        json!([{"name": "order", "ids": ["f:/r/a.txt", "m:/r/a.txt:3:4"]}])
+        json!([{"name": "order", "ids": ["f:a.txt", "m:a.txt:3:4"]}])
     );
     let nodes = reset["nodes"].as_array().unwrap();
-    let file = nodes.iter().find(|n| n["id"] == "f:/r/a.txt").unwrap();
+    let file = nodes.iter().find(|n| n["id"] == "f:a.txt").unwrap();
     assert_eq!((&file["kind"], &file["flags"]), (&json!("file"), &json!(1)));
-    let hit = nodes.iter().find(|n| n["id"] == "m:/r/a.txt:3:4").unwrap();
-    assert_eq!(hit["parent"], "f:/r/a.txt");
+    let hit = nodes.iter().find(|n| n["id"] == "m:a.txt:3:4").unwrap();
+    assert_eq!(hit["parent"], "f:a.txt");
     assert_eq!(
         hit["fields"],
         json!([
             ["label", "let needle;"],
-            ["file", "/r/a.txt"],
             ["line", 3],
             ["col", 4],
             ["end", 10],
@@ -152,7 +151,7 @@ fn grep_model_is_a_tree_of_files_and_matches() {
         .iter()
         .map(|r| &r.props.iter().find(|p| p.2 == "drgnx-work-id").unwrap().3)
         .collect();
-    assert_eq!(ids, [&json!("f:/r/a.txt"), &json!("m:/r/a.txt:3:4")]);
+    assert_eq!(ids, [&json!("f:a.txt"), &json!("m:a.txt:3:4")]);
     // the next file: a diff, not a reset
     let (model, _) = greps
         .with(CONN, "s", id, |run| {
@@ -185,30 +184,29 @@ fn grep_model_windows_a_long_search() {
             vec![m("/r/b.txt", 1, "", "needle", "")],
         ),
     ];
-    let d = grep_doc_in(&files, 3, None);
-    assert_eq!(
-        d.lists["order"],
-        ["f:/r/a.txt", "m:/r/a.txt:1:0", "m:/r/a.txt:2:0"]
-    );
+    let d = grep_doc_in(Path::new("/r"), &files, 3, None);
+    assert_eq!(d.lists["order"], ["f:a.txt", "m:a.txt:1:0", "m:a.txt:2:0"]);
     assert_eq!(d.nodes.len(), 3);
     assert_eq!(d.windows.get("order"), Some(&(6, 0)));
-    let all = grep_doc_in(&files, 6, None);
+    let all = grep_doc_in(Path::new("/r"), &files, 6, None);
     assert_eq!(all.lists["order"].len(), 6);
     assert!(all.windows.is_empty(), "no window when everything fits");
     // a window from the third entry: a's last two matches and b; a's node is there (their parent), not in `order`
-    let mid = grep_doc_in(&files, 3, Some(2));
+    let mid = grep_doc_in(Path::new("/r"), &files, 3, Some(2));
     assert_eq!(
         mid.lists["order"],
-        ["m:/r/a.txt:2:0", "m:/r/a.txt:3:0", "f:/r/b.txt"]
+        ["m:a.txt:2:0", "m:a.txt:3:0", "f:b.txt"]
     );
-    assert!(mid.nodes.contains_key("f:/r/a.txt"));
+    assert!(mid.nodes.contains_key("f:a.txt"));
     assert_eq!(mid.windows.get("order"), Some(&(6, 2)));
     // past the end: the last window
-    let end = grep_doc_in(&files, 3, Some(99));
+    let end = grep_doc_in(Path::new("/r"), &files, 3, Some(99));
     assert_eq!(end.windows.get("order"), Some(&(6, 3)));
-    assert_eq!(end.lists["order"][2], "m:/r/b.txt:1:0");
+    assert_eq!(end.lists["order"][2], "m:b.txt:1:0");
     assert_eq!(
-        grep_doc_in(&files, 6, Some(4)).windows.len(),
+        grep_doc_in(Path::new("/r"), &files, 6, Some(4))
+            .windows
+            .len(),
         0,
         "all fits: no window, whatever the from"
     );
@@ -373,7 +371,7 @@ fn ten_thousand_matches_send_only_the_window_until_asked() {
                 10_000
             );
             // the model holds the matches beyond the window
-            let d = grep_doc(&run.files, None);
+            let d = grep_doc(&run.query.root, &run.files, None);
             assert_eq!(d.lists["order"].len(), 10_100);
         })
         .unwrap();
@@ -419,7 +417,7 @@ fn look_sends_the_next_rows_and_the_row_asked_for() {
     assert_eq!(ins[0].0.as_deref(), Some(last.as_str()));
     assert_eq!(ins[0].1.len(), WINDOW);
     // a match 5,000 rows down: the window reaches it and a margin, nothing before is sent twice
-    let key = "m:/r/f050.txt:10:2".to_owned();
+    let key = "m:f050.txt:10:2".to_owned();
     let upto = greps
         .current(CONN, "s", |run| {
             look_patches(&mut s, CONN, "s", run, Look::Upto(&key))
@@ -493,7 +491,10 @@ fn every_file_sends_a_model_and_all_of_them_cost_about_one_whole_model() {
     assert_eq!(sends, 100, "{sends} models for 100 files");
     let whole = greps
         .current(CONN, "s", |run| {
-            grep_doc(&run.files, None).reset().to_string().len()
+            grep_doc(&run.query.root, &run.files, None)
+                .reset()
+                .to_string()
+                .len()
         })
         .unwrap();
     assert!(
@@ -530,11 +531,11 @@ fn the_model_stream_is_the_fixture_sja_loads() {
     for (file, ms) in files {
         held.push((file.to_owned(), ms));
         let out = sent
-            .publish(grep_doc(&held, None))
+            .publish(grep_doc(Path::new("/r"), &held, None))
             .expect("a model per batch");
         steps.push(json!({"base": out.base, "version": out.version, "reset": out.reset, "model": out.model}));
     }
-    let ids = grep_doc(&held, None).lists["order"].clone();
+    let ids = grep_doc(Path::new("/r"), &held, None).lists["order"].clone();
     let now = json!({"list": "order", "ids": ids, "steps": steps});
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -591,6 +592,7 @@ fn every_batch_sends_its_own_nodes_and_a_splice() {
             })
             .unwrap();
         let data = Store::model_data(model.expect("a model per batch"));
+        let rel = format!("f{f:03}.txt");
         if f > 0 {
             let ops = data["model"]["ops"].as_array().unwrap();
             assert_eq!(ops.len(), 2, "{ops:?}");
@@ -598,12 +600,13 @@ fn every_batch_sends_its_own_nodes_and_a_splice() {
             assert_eq!(
                 ops[1]["splice"],
                 json!({"name": "order", "at": 4 * f, "remove": 0,
-                       "ids": [format!("f:{file}"), format!("m:{file}:4:2"), format!("m:{file}:8:2"), format!("m:{file}:12:2")]})
+                       "ids": [format!("f:{rel}"), format!("m:{rel}:4:2"), format!("m:{rel}:8:2"), format!("m:{rel}:12:2")]})
             );
         }
     }
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
+        s.publish_model(CONN, "s", grep_doc(Path::new("/r"), &held, None))
+            .is_none(),
         "the editor holds the model whole"
     );
 }
@@ -670,7 +673,8 @@ fn appends_within_a_throttle_window_go_in_one_send() {
         "nothing waits"
     );
     assert!(
-        s.publish_model(CONN, "s", grep_doc(&held, None)).is_none(),
+        s.publish_model(CONN, "s", grep_doc(Path::new("/r"), &held, None))
+            .is_none(),
         "the editor holds the model whole"
     );
 }
@@ -688,11 +692,11 @@ fn a_window_move_is_the_diff_of_the_whole() {
         .collect();
     for a in 0..14 {
         for b in 0..14 {
-            let old = grep_doc_in(&files, 6, Some(a));
+            let old = grep_doc_in(Path::new("/r"), &files, 6, Some(a));
             let mut sent = crate::view::model::Sent::default();
             sent.publish(old.clone()).unwrap();
-            let new = grep_doc_in(&files, 6, Some(b));
-            let w = window_of(&files, 6, Some(b));
+            let new = grep_doc_in(Path::new("/r"), &files, 6, Some(b));
+            let w = window_of(Path::new("/r"), &files, 6, Some(b));
             let mut built = 0;
             let m = crate::view::model::WindowMove {
                 name: "order",
@@ -738,11 +742,11 @@ fn successive_window_moves_are_the_diff_of_the_whole() {
         .collect();
     for a in 0..14 {
         let mut sent = crate::view::model::Sent::default();
-        let mut prev = grep_doc_in(&files, 6, Some(a));
+        let mut prev = grep_doc_in(Path::new("/r"), &files, 6, Some(a));
         sent.publish(prev.clone()).unwrap();
         for b in (0..14).chain((0..14).rev()).chain([a, 13, 0, 7]) {
-            let new = grep_doc_in(&files, 6, Some(b));
-            let w = window_of(&files, 6, Some(b));
+            let new = grep_doc_in(Path::new("/r"), &files, 6, Some(b));
+            let w = window_of(Path::new("/r"), &files, 6, Some(b));
             let m = crate::view::model::WindowMove {
                 name: "order",
                 window: (w.total, w.from),
@@ -777,7 +781,7 @@ fn skipped_leaves_the_skipped_matches_with_their_reasons() {
             .unwrap();
     }
     let why = BTreeMap::from([(
-        "m:/r/b.txt:2:2".to_string(),
+        "m:b.txt:2:2".to_string(),
         "changed since the search".to_string(),
     )]);
     let (model, patches) = greps
@@ -790,11 +794,16 @@ fn skipped_leaves_the_skipped_matches_with_their_reasons() {
         let left: Vec<(&str, Vec<String>)> = run
             .files
             .iter()
-            .map(|(f, ms)| (f.as_str(), ms.iter().map(match_id).collect()))
+            .map(|(f, ms)| {
+                (
+                    f.as_str(),
+                    ms.iter().map(|m| match_id(Path::new("/r"), m)).collect(),
+                )
+            })
             .collect();
-        assert_eq!(left, [("/r/b.txt", vec!["m:/r/b.txt:2:2".to_string()])]);
-        let doc = grep_doc(&run.files, None);
-        assert_eq!(doc.lists["order"], ["f:/r/b.txt", "m:/r/b.txt:2:2"]);
+        assert_eq!(left, [("/r/b.txt", vec!["m:b.txt:2:2".to_string()])]);
+        let doc = grep_doc(&run.query.root, &run.files, None);
+        assert_eq!(doc.lists["order"], ["f:b.txt", "m:b.txt:2:2"]);
     });
     let rows = &s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())].rows;
     assert_eq!(
@@ -840,7 +849,7 @@ fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
     };
     let size = |ps: &[Patch]| serde_json::to_string(ps).unwrap().len();
     // f287.txt:30 is row 287 * 101 + 30 = 29,017
-    let key = "m:/r/f287.txt:30:2".to_owned();
+    let key = "m:f287.txt:30:2".to_owned();
     let jump = look(&mut s, Look::Upto(&key));
     assert!(size(&jump) < 1 << 20, "{} bytes", size(&jump));
     let rows = held(&s);
@@ -888,4 +897,55 @@ fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
         })
         .unwrap();
     assert_eq!(rows, all);
+}
+
+/// [D] A window move of one step (2,000 entries) over the search-window workload's search names each file's path once,
+/// in its file node's `path`: ids are relative to the root and a match node has no `file` (they were 44 % of the line,
+/// 684 kB then). `--nocapture` prints the line's bytes.
+#[test]
+fn a_window_move_names_each_path_once() {
+    let dir = "/tmp/drgnx-perf-needlesAb12Cd";
+    let files: Vec<(String, Vec<Match>)> = (0..300)
+        .map(|f| {
+            let name = format!("{dir}/f{f:03}.txt");
+            let ms = (1..=100)
+                .map(|l| {
+                    m(
+                        &name,
+                        l,
+                        "a ",
+                        "needle",
+                        " in the haystack, line after line",
+                    )
+                })
+                .collect();
+            (name, ms)
+        })
+        .collect();
+    let root = Path::new(dir);
+    let mut sent = crate::view::model::Sent::default();
+    sent.publish(grep_doc(root, &files, Some(0))).unwrap();
+    let w = window_of(root, &files, MODEL_WINDOW, Some(2000));
+    let mv = crate::view::model::WindowMove {
+        name: "order",
+        window: (w.total, w.from),
+        held: &w.held,
+        order: w.order.clone(),
+    };
+    let out = sent.move_window(mv, |i| w.node(i)).unwrap();
+    let line = serde_json::to_string(&out.model).unwrap();
+    let ops = out.model["ops"].as_array().unwrap();
+    let added_files = ops
+        .iter()
+        .filter_map(|op| op.get("nodes"))
+        .flat_map(|n| n.as_array().unwrap())
+        .filter(|n| n["kind"] == "file")
+        .count();
+    eprintln!("a window move of 2,000 entries: {} bytes", line.len());
+    assert!(added_files > 0);
+    assert_eq!(
+        line.matches(dir).count(),
+        added_files,
+        "a path only in a file node's `path`"
+    );
 }

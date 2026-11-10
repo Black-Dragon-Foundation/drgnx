@@ -80,8 +80,8 @@ drawn through `drgnx-view-apply-patch' below the fields, `search-grep-done' ends
     (drgnx-view-apply-patch
      (drgnx-replace-rows-test--patch
       view 1 2 (list (list :insert (list :after nil
-                                         :rows (list (drgnx-replace-rows-test--row "f:/r/a.txt" "[x] a.txt")
-                                                     (drgnx-replace-rows-test--row "m:/r/a.txt:1:4" "  [x] one needle")))))))
+                                         :rows (list (drgnx-replace-rows-test--row "f:a.txt" "[x] a.txt")
+                                                     (drgnx-replace-rows-test--row "m:a.txt:1:4" "  [x] one needle")))))))
     (drgnx-view-draw-now drgnx-view)
     (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))
       (should (equal "[x] a.txt\n  [x] one needle\n" text)))
@@ -99,7 +99,7 @@ the old version), is dropped by the editor and never drawn."
     (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
     (drgnx-view-apply-patch
      (drgnx-replace-rows-test--patch
-      view 1 2 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:/r/old.txt" "[x] old.txt")))))))
+      view 1 2 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:old.txt" "[x] old.txt")))))))
     (drgnx-replace--fill 'find "other")
     (drgnx-replace--search-now)
     (should (equal "other" (plist-get (cdr (car drgnx-replace-rows-test--calls)) :text)))
@@ -107,10 +107,10 @@ the old version), is dropped by the editor and never drawn."
     ;; the old query's next file, built before the hub stopped it: base 2, the version the new reset has passed
     (drgnx-view-apply-patch
      (drgnx-replace-rows-test--patch
-      view 2 3 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:/r/late.txt" "[x] late.txt")))))))
+      view 2 3 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:late.txt" "[x] late.txt")))))))
     (drgnx-view-apply-patch
      (drgnx-replace-rows-test--patch
-      view 3 4 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:/r/new.txt" "[x] new.txt")))))))
+      view 3 4 (list (list :insert (list :after nil :rows (list (drgnx-replace-rows-test--row "f:new.txt" "[x] new.txt")))))))
     (drgnx-view-draw-now drgnx-view)
     (should (equal "[x] new.txt\n" (buffer-substring-no-properties drgnx-replace--results (point-max))))))
 
@@ -161,10 +161,10 @@ Replace All writes the buffer's match."
             (drgnx-view-apply-patch
              (drgnx-replace-rows-test--patch
               view 1 2 (list (list :insert (list :after nil
-                                                 :rows (list (drgnx-replace-rows-test--row (concat "f:" b) "[x] b.txt")
-                                                             (drgnx-replace-rows-test--row (concat "m:" b ":1:4") "  [x] old needle")
-                                                             (drgnx-replace-rows-test--row (concat "f:" c) "[x] c.txt")
-                                                             (drgnx-replace-rows-test--row (concat "m:" c ":1:5") "  [x] disk needle")))))))
+                                                 :rows (list (drgnx-replace-rows-test--row "f:b.txt" "[x] b.txt")
+                                                             (drgnx-replace-rows-test--row "m:b.txt:1:4" "  [x] old needle")
+                                                             (drgnx-replace-rows-test--row "f:c.txt" "[x] c.txt")
+                                                             (drgnx-replace-rows-test--row "m:c.txt:1:5" "  [x] disk needle")))))))
             (drgnx-replace--hub-event "search-grep-done" (list :view view :query 1 :files 2 :matches 2))
             (drgnx-view-draw-now drgnx-view)
             (let ((text (buffer-substring-no-properties drgnx-replace--results (point-max))))

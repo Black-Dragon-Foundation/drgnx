@@ -259,6 +259,12 @@ here (`drgnx-hub--model-line-p', `:raw-prefix' on the framed path).")
 views are not loaded."
   (when (fboundp 'drgnx-view-model-line) (drgnx-view-model-line line)))
 
+(defun drgnx-hub--model-pushed (answer error)
+  "A `view-model' line the framed reader pushed to Sjá itself: Sjá's ANSWER to its view's model
+\(`drgnx-view-model--pushed'); ERROR, Sjá's refusal, is signalled (the guard reports it, as a failed push)."
+  (when error (signal (car error) (cdr error)))
+  (when (fboundp 'drgnx-view-model--pushed) (drgnx-view-model--pushed (nidhogg-view--pushed answer))))
+
 (defun drgnx-hub--lines (conn chunk fn &optional bad limit raw)
   "Split CONN's input into lines; FN gets each parsed JSON object, BAD (when given) each line that is not JSON.
 With LIMIT, a line longer than LIMIT closes CONN: nothing after it is read, nor after FN or BAD closed CONN.
@@ -444,19 +450,37 @@ subscribed connection) goes to `drgnx-hub-event-functions', a `view-model' line 
 
 (defvar nidhogg-workers-framing)
 (declare-function nidhogg-set-process-framing "nidhogg-io.c")
+(declare-function nidhogg-view--pushed "nidhogg-views" (r))
+(declare-function drgnx-view-model--pushed "drgnx-view" (r))
+
+(defcustom drgnx-hub-model-lines-to-sja t
+  "Whether Nidhogg's reader pushes a hub `view-model' line to Sjá itself, when it can (`:raw-to-sja').
+The line, up to megabytes a window move, then never becomes a Lisp string.  Nil, or a Nidhogg without it: the line
+comes to Lisp whole and Lisp pushes it (`nidhogg-view-push'), as before.  Read when a connection is made."
+  :type 'boolean :group 'drgnx)
+
+(defun drgnx-hub--frame-with (conn extra)
+  "Frame CONN as `drgnx-hub--frame' does, with the keywords EXTRA too; nil when Nidhogg refused them."
+  (condition-case nil
+      (progn (apply #'nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
+                    :null-object nil :false-object nil :raw-prefix drgnx-hub--model-prefix
+                    :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection")
+                    extra)
+             t)
+    (error nil)))
 
 (defun drgnx-hub--frame (conn)
   "Have Nidhogg's reader thread split CONN's input into lines and parse them, when `nidhogg-workers-framing' is on:
 the main thread then gets batches (`drgnx-hub--client-batch') where it gets chunks (`drgnx-hub--client-filter').
 Without the feature or the switch, or on an error from the framing, the filter reads, as it always did.  No
-`:max-message': the client has no line limit.  A `view-model' line is passed whole (`:raw-prefix').  A connection
-whose filter is replaced (the delivery gate's, in tests) is unframed again by the reader itself."
+`:max-message': the client has no line limit.  A `view-model' line is passed whole (`:raw-prefix'); with
+`drgnx-hub-model-lines-to-sja', a Nidhogg whose reader can push it to Sjá itself does (`:raw-to-sja'), and one that
+refuses the keyword frames without it.  A connection whose filter is replaced (the delivery gate's, in tests) is
+unframed again by the reader itself."
   (when (and (fboundp 'nidhogg-set-process-framing) (bound-and-true-p nidhogg-workers-framing))
-    (condition-case nil
-        (nidhogg-set-process-framing conn 'lines :parse 'string :object-type 'plist :array-type 'list
-                                     :null-object nil :false-object nil :raw-prefix drgnx-hub--model-prefix
-                                     :batch-function (drgnx-guard-wrap #'drgnx-hub--client-batch "hub connection"))
-      (error nil))))
+    (or (and drgnx-hub-model-lines-to-sja (fboundp 'nidhogg-view--pushed)
+             (drgnx-hub--frame-with conn '(:raw-to-sja t)))
+        (drgnx-hub--frame-with conn nil))))
 
 (defun drgnx-hub--client-batch (conn batch)
   "The framed counterpart of `drgnx-hub--lines' with `drgnx-hub--client-line': BATCH is a list of (MESSAGE RAW ERROR)
@@ -464,13 +488,17 @@ from CONN's reader, in the order the hub wrote them.  One whose line is not JSON
 `false' (no MESSAGE), is skipped as `drgnx-hub--lines' skips it.  Nothing is read once CONN, live when the batch
 began, is not any more (nothing after `closed').  Each message runs in a guard of its own: one that fails never drops
 the rest of the batch.  A last line with no newline before the end of the stream is a message here, where the filter
-drops it.  A `view-model' line comes unparsed, (LINE LINE nil) (`:raw-prefix'): it goes whole to its view's model."
+drops it.  A `view-model' line comes unparsed, (LINE LINE nil) (`:raw-prefix'): it goes whole to its view's model;
+or the reader pushed it to Sjá (`:raw-to-sja'), (ANSWER sja ERROR): Sjá's answer goes to its view's model, and an
+ERROR (Sjá refused the line) is reported as a failed push is."
   (let ((live (process-live-p conn)) (one (drgnx-guard-wrap #'drgnx-hub--client-line "hub connection"))
-        (model (drgnx-guard-wrap #'drgnx-hub--model-line "hub connection")))
+        (model (drgnx-guard-wrap #'drgnx-hub--model-line "hub connection"))
+        (pushed (drgnx-guard-wrap #'drgnx-hub--model-pushed "hub connection")))
     (dolist (entry batch)
       (when (or (not live) (process-live-p conn))
         (let ((message (nth 0 entry)))
-          (cond ((nth 2 entry))
+          (cond ((eq (nth 1 entry) 'sja) (funcall pushed message (nth 2 entry)))
+                ((nth 2 entry))
                 ((and (stringp message) (eq message (nth 1 entry))) (funcall model message))
                 (message (funcall one conn message))))))))
 

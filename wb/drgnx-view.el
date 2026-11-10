@@ -1730,7 +1730,14 @@ Fails one `render' condition a session (the doctor's `views' row shows it), neve
 its model for the draw.  A gap or a full queue asks the hub for a reset; a queued model arms the view's timer and runs
 `drgnx-view-model-functions'; one a key waits for (another window) applies at once.  Returns Sjá's decision
 \(`queue', `reset', `drop', `resync', `none'), or nil without Sjá's queue (`drgnx-view-model--missing' says so once)."
-  (when-let* (((or (drgnx-view-model--sja-p) (ignore (drgnx-view-model--missing)))) (r (nidhogg-view-push line)))
+  (when (or (drgnx-view-model--sja-p) (ignore (drgnx-view-model--missing)))
+    (drgnx-view-model--pushed (nidhogg-view-push line))))
+
+(defun drgnx-view-model--pushed (r)
+  "R, Sjá's answer to a pushed `view-model' line (`nidhogg-view-push', or the framed reader's own push): a gap or a
+full queue asks the hub for a reset; a queued model arms the view's timer and runs `drgnx-view-model-functions'.
+Returns the decision, or nil (no answer: not a `view-model' line)."
+  (when-let* ((r))
     (let ((view (nth 0 r)) (what (nth 2 r)))
       (when-let* ((state (gethash view drgnx-view-model--views)))
         (pcase what
