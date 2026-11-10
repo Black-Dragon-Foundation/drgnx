@@ -144,6 +144,25 @@ and the probe runs from that minibuffer's `post-command-hook' once the last of t
            (with-current-buffer (window-buffer (frame-root-window f))
              (should (= vertico-count (default-value 'vertico-count))))))))))
 
+(ert-deftest palette-float-floats-over-the-workbench-rules ()
+  "With the workbench's placement rules on (every drgnx session), the palette still floats: the rules' entry in
+`display-buffer-alist' leaves the palette's frame to it, and no editor window shows the minibuffer's buffer."
+  (require 'drgnx-rules)
+  (drgnx-palette-float-test--with-palette
+    (let ((was (bound-and-true-p drgnx-rules-mode)))
+      (drgnx-rules-mode 1)
+      (unwind-protect
+          (drgnx-palette-float-test--reading
+           "Test"
+           (lambda ()
+             (let ((mb (window-buffer (active-minibuffer-window))))
+               (should-not (seq-find (lambda (w) (eq (window-buffer w) mb))
+                                     (window-list (drgnx-uitest-root-frame) 'nomini)))
+               (let ((f (drgnx-test-wait (lambda () (drgnx-palette-float-test--palette-frame))
+                                         :what "the palette's frame")))
+                 (drgnx-palette-float-test--wait-shown f)))))
+        (unless was (drgnx-rules-mode -1))))))
+
 (ert-deftest palette-float-typing-and-ret-runs-command ()
   (drgnx-palette-float-test--with-palette
     (drgnx-palette-float-test--reading

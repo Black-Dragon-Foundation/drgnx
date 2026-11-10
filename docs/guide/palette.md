@@ -18,6 +18,8 @@ open: when you have answered, the palette is there as you left it.
   editor frame, so input methods and the keys you type go where they always went.
 - **One frame, reused.** The box is made the first time and hidden afterwards, which lets it animate. Turning
   `extra/completion` off deletes it.
+- **The workbench leaves it alone.** The palette's display action is marked `(drgnx-explicit . t)`, so the
+  workbench's placement rules (`docs/guide/workbench.md`) do not put the list in an editor window.
 - **The list's length follows the box.** The box is `vertico-count` lines of candidates high (10 by default).
 
 ## Look

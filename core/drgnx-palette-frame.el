@@ -34,8 +34,9 @@
   "The plain buffer the palette's window shows between uses.")
 
 (defconst drgnx-palette-frame-multiform
-  '(drgnx-palette-frame-buffer (vertico-buffer-display-action drgnx-palette-frame--display))
-  "The settings `vertico-multiform-categories' holds for the palette's category, `drgnx-command'.")
+  '(drgnx-palette-frame-buffer (vertico-buffer-display-action drgnx-palette-frame--display (drgnx-explicit . t)))
+  "The settings `vertico-multiform-categories' holds for the palette's category, `drgnx-command'.  The action is
+marked explicit, so the workbench's placement rules leave it to the palette's frame.")
 
 (defun drgnx-palette-frame-wanted-p ()
   "Non-nil when the palette floats: Glitnir is active on a graphical frame."
