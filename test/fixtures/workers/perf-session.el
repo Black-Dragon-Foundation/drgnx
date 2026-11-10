@@ -620,7 +620,7 @@ compared, and a round's own list starts wherever the flood is)."
 (defvar drgnx-perf-w--watch-round 0 "The iteration whose files the fire writes.")
 (defvar drgnx-perf-w--watch-last nil "When the fire's last write ended (`float-time').")
 
-(defun drgnx-perf-w--watch-root () (expand-file-name "watched" drgnx-perf-w--tmp))
+(defun drgnx-perf-w--watch-root () (expand-file-name "watched" (drgnx-perf-w--tmpdir)))
 (defun drgnx-perf-w--watch-name (round i) (format "w%03d-%02d.txt" round i))
 
 (defun drgnx-perf-w-explorer-watch-setup ()
@@ -653,10 +653,15 @@ patch %S, hub %s): %S"
     t))
 
 (defun drgnx-perf-w--watch-fire ()
-  (dotimes (i 50)
-    (write-region "" nil (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i) (drgnx-perf-w--watch-root))
-                  nil 'silent))
-  (setq drgnx-perf-w--watch-last (float-time)))
+  (drgnx-perf-w--stat :fire_started t)
+  (condition-case err
+      (progn
+        (dotimes (i 50)
+          (write-region "" nil (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i)
+                                                 (drgnx-perf-w--watch-root))
+                        nil 'silent))
+        (setq drgnx-perf-w--watch-last (float-time)))
+    (error (drgnx-perf-w--stat :fire_error (error-message-string err)))))
 
 (defun drgnx-perf-w-explorer-watch-each ()
   "Remove the files the last iteration made, then make 50 new ones after the first key."
@@ -687,13 +692,17 @@ patch %S, hub %s): %S"
   "Done, on the rows path, with no Lisp `file-notify' watch: the hub watched the folder."
   (or (and (drgnx-perf-w-explorer-watch-done) (drgnx-explorer--rows-p) (= 0 (hash-table-count drgnx-explorer--watches)))
       (with-current-buffer drgnx-explorer-buffer-name
-        (error "Premise: round %d: %d of its 50 files shown (%d lines), rows path %s, %d Lisp watches, fired %s"
+        (error "Premise: round %d: %d of its 50 files on disk, %d shown (%d lines), rows path %s, %d Lisp watches, \
+key seen %s, written %s, stats %S"
                drgnx-perf-w--watch-round
+               (cl-loop for i below 50
+                        count (file-exists-p (expand-file-name (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i)
+                                                               (drgnx-perf-w--watch-root))))
                (cl-loop for i below 50
                         count (save-excursion (goto-char (point-min))
                                               (search-forward (drgnx-perf-w--watch-name drgnx-perf-w--watch-round i) nil t)))
                (count-lines (point-min) (point-max)) (drgnx-explorer--rows-p)
-               (hash-table-count drgnx-explorer--watches) (and drgnx-perf-w--watch-last t)))))
+               (hash-table-count drgnx-explorer--watches) drgnx-perf-w--fired (and drgnx-perf-w--watch-last t) drgnx-perf-w--stats))))
 
 (defun drgnx-perf-w-explorer-watch-teardown ()
   (drgnx-perf-w--disarm)
