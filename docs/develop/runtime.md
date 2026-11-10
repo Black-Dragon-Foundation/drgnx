@@ -1185,7 +1185,7 @@ version 1 is chunked again at the next refresh, whether or not a file changed (a
 vector's key, embedded again).
 
 `PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
-1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX).
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java).
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1232,6 +1232,14 @@ extensionless files whose `#!` line runs `python…` or `node`. Tests also by na
 `*.test.*`/`*.spec.*` scripts. A member without a doc of its own takes its class's, as a Rust method takes its
 `impl`'s. A signature is cut at the body's `{`: the first outside parentheses and brackets, so a destructured
 parameter stays in it.
+
+Go and Java (`tree-sitter-go` 0.25, `tree-sitter-java` 0.23; MIT) too. Go defines functions, methods (the receiver
+is in the signature; a method is top-level, so it has no container), types (`struct`, `interface`, other types and
+aliases) and top-level constants and variables; a declaration of several specs (`var ( … )`) gives each its own span;
+the doc is the `//` lines above. Java defines classes, interfaces (annotation types too), enums and records, with their
+methods, constructors and nested types as members; the doc is the `/** … */` comment above (annotations are inside
+the declaration, so the comment sits above them). Files: `.go`, `.java`; tests also `*_test.go`, `*Test.java`,
+`*Tests.java`.
 
 Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
 heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property

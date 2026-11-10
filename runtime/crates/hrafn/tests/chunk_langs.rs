@@ -149,6 +149,57 @@ fn javascript_functions_function_values_and_classes() {
     assert_eq!(doc1(&syms, "add", 24), Some("Adds a route."));
 }
 
+#[test]
+fn go_functions_methods_types_and_package_names() {
+    let (_, _, syms) = run("store.go", BUDGET);
+    assert_eq!(
+        shapes(&syms),
+        want(&[
+            ("MaxItems", "constant", 6, 6),
+            ("defaultStore", "variable", 9, 9),
+            ("hits", "variable", 10, 10),
+            ("Store", "struct", 15, 18),
+            ("Getter", "interface", 20, 22),
+            ("Key", "type", 24, 24),
+            ("New", "function", 27, 29),
+            ("Get", "method", 32, 37),
+        ])
+    );
+    assert_eq!(
+        doc1(&syms, "MaxItems", 6),
+        Some("MaxItems is how many items a store holds.")
+    );
+    assert_eq!(doc1(&syms, "Store", 15), Some("Store keeps items by key."));
+    assert_eq!(
+        doc1(&syms, "Get", 32),
+        Some("Get returns the item under KEY.")
+    );
+    let get = syms.iter().find(|s| s.name == "Get").unwrap();
+    assert_eq!(get.sig, "func (s *Store) Get(key string) (string, bool)");
+}
+
+#[test]
+fn java_types_members_and_javadoc() {
+    let (_, _, syms) = run("Queue.java", BUDGET);
+    assert_eq!(
+        shapes(&syms),
+        want(&[
+            ("Queue", "class", 8, 29),
+            ("Queue", "constructor", 12, 12),
+            ("push", "method", 17, 20),
+            ("pop", "method", 22, 24),
+            ("Node", "class", 26, 28),
+            ("Sized", "interface", 31, 33),
+            ("size", "method", 32, 32),
+            ("Color", "enum", 35, 38),
+            ("Point", "record", 40, 40),
+        ])
+    );
+    assert_eq!(doc1(&syms, "Queue", 8), Some("A bounded queue."));
+    assert_eq!(doc1(&syms, "Queue", 12), Some("Makes an empty queue."));
+    assert_eq!(doc1(&syms, "push", 17), Some("Adds ITEM at the end."));
+}
+
 /// An exported class over the budget is cut before its members, never inside one.
 #[test]
 fn an_oversized_class_is_cut_before_its_members() {
@@ -193,6 +244,8 @@ fn files_are_classified_by_extension_and_shebang() {
         ("a.mts", "", Lang::TypeScript),
         ("a.cts", "", Lang::TypeScript),
         ("a.tsx", "", Lang::Tsx),
+        ("a.go", "", Lang::Go),
+        ("A.java", "", Lang::Java),
         ("a.h", "", Lang::C),
     ] {
         assert_eq!(classify(path, head.as_bytes()).0, lang, "{path}");
@@ -202,6 +255,8 @@ fn files_are_classified_by_extension_and_shebang() {
         (Lang::JavaScript, "javascript"),
         (Lang::TypeScript, "typescript"),
         (Lang::Tsx, "tsx"),
+        (Lang::Go, "go"),
+        (Lang::Java, "java"),
     ] {
         assert_eq!(lang.as_str(), name);
     }
@@ -211,10 +266,18 @@ fn files_are_classified_by_extension_and_shebang() {
         "src/a.test.ts",
         "src/a.spec.tsx",
         "src/a.test.js",
+        "pkg/store_test.go",
+        "src/main/QueueTest.java",
     ] {
         assert_eq!(classify(path, b"").1, Class::Test, "{path}");
     }
-    for path in ["src/contest.py", "src/latest.ts", "src/inspect.js"] {
+    for path in [
+        "src/contest.py",
+        "src/latest.ts",
+        "src/inspect.js",
+        "pkg/latest.go",
+        "src/main/Testing.java",
+    ] {
         assert_eq!(classify(path, b"").1, Class::Code, "{path}");
     }
 }

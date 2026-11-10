@@ -34,6 +34,8 @@ pub enum Lang {
     JavaScript,
     TypeScript,
     Tsx,
+    Go,
+    Java,
     Org,
     Markdown,
     Text,
@@ -60,6 +62,8 @@ impl Lang {
             Lang::JavaScript => "javascript",
             Lang::TypeScript => "typescript",
             Lang::Tsx => "tsx",
+            Lang::Go => "go",
+            Lang::Java => "java",
             Lang::Org => "org",
             Lang::Markdown => "markdown",
             Lang::Text => "text",
@@ -68,7 +72,7 @@ impl Lang {
 
     /// The language a stored name (`as_str`) names; anything else is text.
     pub fn parse(name: &str) -> Lang {
-        const ALL: [Lang; 11] = [
+        const ALL: [Lang; 13] = [
             Lang::Elisp,
             Lang::Rust,
             Lang::C,
@@ -77,6 +81,8 @@ impl Lang {
             Lang::JavaScript,
             Lang::TypeScript,
             Lang::Tsx,
+            Lang::Go,
+            Lang::Java,
             Lang::Org,
             Lang::Markdown,
             Lang::Text,
@@ -579,6 +585,9 @@ fn is_test(path: &str) -> bool {
     comps.iter().any(|c| *c == "test" || *c == "tests")
         || name.ends_with("-test.el")
         || name.ends_with("_test.rs")
+        || name.ends_with("_test.go")
+        || name.ends_with("Test.java")
+        || name.ends_with("Tests.java")
         || (name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py")))
         || [".test.", ".spec."].iter().any(|m| {
             name.find(m).is_some_and(|i| {
@@ -601,6 +610,8 @@ fn lang_of(path: &str, head: &[u8]) -> Lang {
         Some("js" | "mjs" | "cjs" | "jsx") => Lang::JavaScript,
         Some("ts" | "mts" | "cts") => Lang::TypeScript,
         Some("tsx") => Lang::Tsx,
+        Some("go") => Lang::Go,
+        Some("java") => Lang::Java,
         Some("org") => Lang::Org,
         Some("md" | "markdown") => Lang::Markdown,
         Some(_) => Lang::Text,

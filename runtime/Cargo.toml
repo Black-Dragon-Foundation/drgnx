@@ -40,6 +40,8 @@ tree-sitter-bash = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
 notify = "8"
 # Hrafn's read-only door of agent-touched trees: pinned exactly, read-only features only; no filter,
 # hook or fsmonitor is ever run, and submodules are never opened. MIT OR Apache-2.0, MSRV 1.88

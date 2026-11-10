@@ -1,5 +1,5 @@
-//! Rust, C, shell, Python, JavaScript, TypeScript and TSX: top-level items from the tree-sitter grammars, merged and
-//! split like Lisp forms.
+//! Rust, C, shell, Python, JavaScript, TypeScript, TSX, Go and Java: top-level items from the tree-sitter grammars,
+//! merged and split like Lisp forms.
 
 use super::definers::Def;
 use super::merge::{self, Form};
@@ -15,6 +15,8 @@ pub(super) enum Kind {
     JavaScript,
     TypeScript,
     Tsx,
+    Go,
+    Java,
 }
 
 impl Kind {
@@ -27,6 +29,8 @@ impl Kind {
             Kind::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
             Kind::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             Kind::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Kind::Go => tree_sitter_go::LANGUAGE.into(),
+            Kind::Java => tree_sitter_java::LANGUAGE.into(),
         }
     }
 
@@ -34,13 +38,120 @@ impl Kind {
     fn doc_marker(self) -> &'static str {
         match self {
             Kind::Rust => "///",
-            Kind::C | Kind::JavaScript | Kind::TypeScript | Kind::Tsx => "//",
+            Kind::C | Kind::JavaScript | Kind::TypeScript | Kind::Tsx | Kind::Go | Kind::Java => {
+                "//"
+            }
             Kind::Shell | Kind::Python => "#",
         }
     }
 
-    fn is_js(self) -> bool {
-        matches!(self, Kind::JavaScript | Kind::TypeScript | Kind::Tsx)
+    /// Whether its docs are `/** … */` comments.
+    fn block_docs(self) -> bool {
+        matches!(
+            self,
+            Kind::JavaScript | Kind::TypeScript | Kind::Tsx | Kind::Java
+        )
+    }
+}
+
+/// What a Go top-level declaration defines. A declaration of several specs (`var ( … )`) gives each its own span.
+fn go_defs(n: Node, text: &str, out: &mut Vec<Def>) {
+    let mut add = |name: Node, kind: &'static str, span: Option<Node>| {
+        out.push(Def {
+            name: text_of(name, text).to_string(),
+            kind,
+            span: span.map(|s| (s.start_byte(), s.end_byte())),
+            doc1: None,
+        })
+    };
+    match n.kind() {
+        "function_declaration" | "method_declaration" => {
+            if let Some(name) = n.child_by_field_name("name") {
+                let kind = if n.kind() == "method_declaration" {
+                    "method"
+                } else {
+                    "function"
+                };
+                add(name, kind, None);
+            }
+        }
+        "type_declaration" | "const_declaration" | "var_declaration" => {
+            // the specs, also inside a `var_spec_list`
+            let mut specs = Vec::new();
+            let mut stack = vec![n];
+            while let Some(m) = stack.pop() {
+                let mut cursor = m.walk();
+                for c in m.named_children(&mut cursor) {
+                    match c.kind() {
+                        "type_spec" | "type_alias" | "const_spec" | "var_spec" => specs.push(c),
+                        "var_spec_list" | "const_spec_list" => stack.push(c),
+                        _ => {}
+                    }
+                }
+            }
+            specs.sort_by_key(|s| s.start_byte());
+            let own = specs.len() > 1;
+            for s in specs {
+                let span = own.then_some(s);
+                let kind = match s.kind() {
+                    "type_spec" => match s.child_by_field_name("type").map(|t| t.kind()) {
+                        Some("struct_type") => "struct",
+                        Some("interface_type") => "interface",
+                        _ => "type",
+                    },
+                    "type_alias" => "type",
+                    "const_spec" => "constant",
+                    _ => "variable",
+                };
+                let mut cursor = s.walk();
+                for name in s.children_by_field_name("name", &mut cursor) {
+                    add(name, kind, span);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// What a Java declaration defines; a type's methods, constructors and nested types are members.
+fn java_defs(n: Node, text: &str, out: &mut Vec<Def>, depth: usize) {
+    let kind = match n.kind() {
+        "class_declaration" => "class",
+        "interface_declaration" | "annotation_type_declaration" => "interface",
+        "enum_declaration" => "enum",
+        "record_declaration" => "record",
+        "method_declaration" => "method",
+        "constructor_declaration" => "constructor",
+        _ => return,
+    };
+    let member = depth > 0;
+    if let Some(name) = n.child_by_field_name("name") {
+        out.push(Def {
+            name: text_of(name, text).to_string(),
+            kind,
+            span: member.then(|| (n.start_byte(), n.end_byte())),
+            doc1: if member {
+                block_doc_before(text, n.start_byte()).map(|d| d.0)
+            } else {
+                None
+            },
+        });
+    }
+    if matches!(kind, "class" | "interface" | "enum" | "record")
+        && depth < 4
+        && let Some(body) = n.child_by_field_name("body")
+    {
+        let mut cursor = body.walk();
+        for child in body.named_children(&mut cursor) {
+            if child.kind() == "enum_body_declarations" {
+                let mut c2 = child.walk();
+                for m in child.named_children(&mut c2) {
+                    java_defs(m, text, out, depth + 1);
+                }
+            } else {
+                java_defs(child, text, out, depth + 1);
+            }
+        }
     }
 }
 
@@ -357,11 +468,13 @@ fn analyse(kind: Kind, n: Node, text: &str) -> Form {
             js_defs(n, text, &mut defs, 0);
             form.defs = defs;
         }
+        Kind::Go => go_defs(n, text, &mut form.defs),
+        Kind::Java => java_defs(n, text, &mut form.defs, 0),
     }
     if !form.defs.is_empty() {
         form.doc = match kind {
             Kind::Python => py_docstring(inner(n), text),
-            k if k.is_js() => block_doc_before(text, n.start_byte()),
+            k if k.block_docs() => block_doc_before(text, n.start_byte()),
             _ => None,
         }
         .or_else(|| doc_before(text, n.start_byte(), kind.doc_marker()));
