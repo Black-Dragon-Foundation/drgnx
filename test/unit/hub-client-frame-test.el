@@ -31,6 +31,13 @@
   "(:raw BYTES): LINE as Sjá reads it, its UTF-8 bytes (a unibyte line is already that)."
   (list :raw (if (multibyte-string-p line) (encode-coding-string line 'utf-8 t) line)))
 
+(defun drgnx-hub-client-frame-test--require-raw-prefix ()
+  "Skip without Nidhogg's reader; on one older than `:raw-prefix' (it came with Sjá's queue, `nidhogg-view-push': an
+older nh-io refuses the keyword, and the client then stays unframed), skip by name, or fail on the line (strict)."
+  (unless (fboundp 'nidhogg-workers--test-frame) (ert-skip "no Nidhogg reader (nidhogg-workers--test-frame)"))
+  (require 'nidhogg-views nil t)
+  (drgnx-test-require-nidhogg (fboundp 'nidhogg-view-push) ":raw-prefix framing (with nidhogg-view-push)"))
+
 (defun drgnx-hub-client-frame-test--framed (chunks eof)
   "The events `drgnx-hub--client-batch' passes on for CHUNKS framed by Nidhogg's reader, as `drgnx-hub--frame' frames
 them; a `view-model' line as (:raw LINE)."
@@ -69,7 +76,7 @@ them; a `view-model' line as (:raw LINE)."
 (ert-deftest drgnx-hub-client-frame/a-view-model-line-goes-whole-and-unparsed-both-ways ()
   "A `view-model' line between other events, cut anywhere (split over many chunks on the unframed path): both paths
 hand it whole to the model, in its place among the events, and neither parses it."
-  (skip-unless (fboundp 'nidhogg-workers--test-frame))
+  (drgnx-hub-client-frame-test--require-raw-prefix)
   (let ((stream (concat "{\"event\":\"notice\",\"data\":{\"a\":1}}\n" drgnx-hub-client-frame-test--model-line "\n"
                         "{\"id\":3,\"result\":true}\n"))
         (drgnx-hub-client-frame-test--parsed 0))
@@ -93,6 +100,7 @@ hand it whole to the model, in its place among the events, and neither parses it
     (should (equal drgnx-hub--model-prefix (plist-get (cddr args) :raw-prefix)))))
 
 (ert-deftest drgnx-hub-client-frame/same-events-both-ways ()
+  (drgnx-hub-client-frame-test--require-raw-prefix)
   (dolist (seed '(1 7 42 1000 31337))
     (let ((chunks (drgnx-hub-client-frame-test--chunks drgnx-hub-client-frame-test--stream seed)))
       (let ((framed (drgnx-hub-client-frame-test--framed chunks t))
@@ -104,6 +112,7 @@ hand it whole to the model, in its place among the events, and neither parses it
 (ert-deftest drgnx-hub-client-frame/eof-without-newline ()
   "A last line with no newline when the stream ends: framed, it is a message (the reader flushes it at the end);
 the filter drops it, as it always did.  Pinned so a change of either side shows."
+  (drgnx-hub-client-frame-test--require-raw-prefix)
   (let ((chunks (list "{\"id\":2,\"result\":{}}")))
     (should (equal (drgnx-hub-client-frame-test--framed chunks t) '((:id 2 :result nil))))
     (should (null (drgnx-hub-client-frame-test--framed chunks nil)))

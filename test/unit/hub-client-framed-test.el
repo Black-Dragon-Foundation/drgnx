@@ -59,6 +59,10 @@
 
 (ert-deftest drgnx-hub-client-framed/subscribe-and-a-burst-with-framing-on ()
   (skip-unless (drgnx-test-ratatoskr-bin))
+  ;; the client frames with `:raw-prefix', which came with Sjá's queue: an older nh-io refuses it and stays unframed
+  (require 'nidhogg-views nil t)
+  (drgnx-test-require-nidhogg (and (fboundp 'nidhogg-set-process-framing) (fboundp 'nidhogg-view-push))
+                              ":raw-prefix framing (with nidhogg-view-push)")
   (drgnx-hub-client-framed-test--check t))
 
 (ert-deftest drgnx-hub-client-framed/subscribe-and-a-burst-with-framing-off ()
