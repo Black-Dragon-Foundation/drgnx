@@ -16,6 +16,7 @@
 (defvar drgnx-look-palette)
 (declare-function vertico-buffer-mode "vertico-buffer")
 (declare-function glitnir-active-p "glitnir")
+(declare-function face-remap-remove-relative "face-remap")
 
 (defcustom drgnx-palette-frame-width 640
   "The floating palette's width, in logical pixels (less when the editor frame is narrower)."
