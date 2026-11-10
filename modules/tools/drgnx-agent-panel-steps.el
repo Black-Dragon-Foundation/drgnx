@@ -27,6 +27,8 @@
 (defvar drgnx-agent-panel--open)
 (defvar drgnx-agent-panel-slow-seconds)
 (defvar drgnx-agent-panel-expensive-cost)
+(defvar drgnx-agent-panel--disclosure)      ; below: the header's lens reads them first
+(defvar drgnx-agent-panel-presets)
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--rows-p "drgnx-agent-panel")
 (declare-function drgnx-agent-panel--send-look "drgnx-agent-panel")
