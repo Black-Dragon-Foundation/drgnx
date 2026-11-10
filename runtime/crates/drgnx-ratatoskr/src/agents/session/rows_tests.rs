@@ -321,3 +321,30 @@ fn thoughts_fold_under_the_tool_before_them() {
     let tail: Vec<(usize, &Entry)> = es.iter().enumerate().collect();
     assert_eq!(groups(&tail), [(0, vec![1, 2]), (3, vec![]), (4, vec![])]);
 }
+
+/// agent-panel.html `.step .what`: a shell step reads "Shell" and then its command in the code font (an adapter's
+/// title quotes it in backticks: they go).
+#[test]
+fn a_shell_step_shows_its_command_in_code() {
+    let e = tool(
+        json!({"title": "`bin/drgnx test gateway`", "kind": "execute", "status": "completed"}),
+    );
+    let rows = rows_of(&e, &Look::default(), &BTreeMap::new(), false);
+    let r = rows
+        .iter()
+        .find(|r| r.key == "e:3")
+        .expect("the step's row");
+    assert!(
+        r.text.contains("Shell bin/drgnx test gateway"),
+        "{:?}",
+        r.text
+    );
+    let chars: Vec<char> = r.text.chars().collect();
+    let code: Vec<String> = r
+        .runs
+        .iter()
+        .filter(|(_, _, f)| f == "drgnx-agent-panel-code")
+        .map(|(s, e, _)| chars[*s as usize..*e as usize].iter().collect())
+        .collect();
+    assert_eq!(code, ["bin/drgnx test gateway"], "{:?}", r.runs);
+}

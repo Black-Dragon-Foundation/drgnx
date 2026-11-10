@@ -2484,7 +2484,8 @@ the rows themselves are `agents/session/rows.rs`, pure).
   A change of the transcript (each `emit`, the same moment `agent-entries` is sent) builds again only the groups that
   hold a changed entry; per (connection, view, class) a cache keeps the others' rows, so the store's diff sends only
   the changed rows. A new env (its epoch or width), a new look or new step facts build every group again.
-- **Rows.** `e:I` is entry I's row (a step on one line: its state, title, the first line of its result, `↶ undone`,
+- **Rows.** `e:I` is entry I's row (a step on one line: its state, title (an `execute` call: `Shell` and the title, its backticks dropped, in
+  `drgnx-agent-panel-code`), the first line of its result, `↶ undone`,
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
@@ -2511,7 +2512,9 @@ the rows themselves are `agents/session/rows.rs`, pure).
   reset at base 0). The panel's next/previous keys look through the drawn rows from point for the next step whose
   kind (or `diff`) in Sjá matches, wrapping, and select it there; a fold stays the panel's own state, told to the hub
   after with `agents/panel/look`.
-- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`: they
+- **The facts** of a step (time, cost, checkpoint, undone, subagent, hooks) are keyed by the entry's `step`, the
+  `step` table's seq a tool entry is given when its step begins (a resumed session counts on from its last step in
+  the table): they
   come from the step bus as steps close, from the `step` table when a panel first shows the session, and again after
   every `history/applied`. Grants changing (an Always given or revoked) build the session's panels again.
 - `agents/panel/look {view, open?, rows?, older?}` answers whether VIEW is a panel: the step types open

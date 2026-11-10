@@ -367,7 +367,13 @@ fn tool_rows(idx: usize, e: &Entry, thoughts: &[&Entry], cx: &Cx) -> Vec<Row> {
     };
     l.push(dot, Some(face)).push(" ", None);
     let child = parent.map(child_face);
-    l.push(&title, child.as_deref());
+    if str_of(e, "kind") == Some("execute") {
+        // agent-panel.html `.step .what`: "Shell" and the command in the code font
+        l.push("Shell ", child.as_deref())
+            .push(title.trim_matches('`'), Some("drgnx-agent-panel-code"));
+    } else {
+        l.push(&title, child.as_deref());
+    }
     if !result.is_empty() {
         l.push(&format!("  · {result}"), Some("drgnx-agent-panel-subtle"));
     }
