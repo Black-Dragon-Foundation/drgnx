@@ -24,7 +24,7 @@ setup.
   inherits standard faces looks right with no work of its own.
 - **Controls.** Buttons (`drgnx-control`: the quiet selection's fill in a 1 px ring of the border colour, radius 6;
   `drgnx-control-primary`: the accent's fill) and keycaps (`drgnx-keycap`: subtle text in a 1 px ring of the strong
-  border, radius 4). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
+  border, radius 4, as tall as its text even on a taller list row where Nidhogg's compositor draws boxes `:fit text`). A ring's colour cannot be inherited, so the theme gives it; chips need none (a tint with room
   inside it), except in high contrast, which has no tints: there a chip is ringed in its own text colour, with the
   same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
   dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
@@ -36,6 +36,27 @@ setup.
   inside the characters, so selecting or searching never moves text or changes a line's height. Rounding needs
   Nidhogg's compositor; elsewhere the runs are square.
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.
+- **Shell scripts.** A here-document is in the string colour (sh-script's own is bold yellow), a command substitution
+  in the function colour.
+- **Problems at a line's end.** A diagnostic flymake shows after the line (`drgnx-face-inline-problems`) is a chip of
+  its kind: the error, warning or note colour on its tint, in the caption size, as tall as the text. High contrast
+  rings it instead. The chips of the look come in six kinds: `drgnx-chip-quiet`, `-accent`, `-attention`, `-ok`,
+  `-warn` and `-error`.
+
+### Packages
+
+Packages whose faces do not inherit standard ones are given the look by ui/look (the theme bridge): only their faces'
+default specs change, so a theme that styles the package itself still wins, and turning ui/look off gives the package
+its own back. A package that loads later gets them when it loads.
+
+- **Magit.** Section headings in the UI heading role (not gold), the current section in the hover colour, hunk
+  headers muted on the quiet selection, diff lines on the diff tints, hashes and dates subtle. Branches and tags are
+  chips as tall as the text: a local branch in the accent, a remote one in ok, a tag in warn.
+- **diff-hl.** The change gutter in the status colours: added ok, changed info, deleted error.
+- **Org** (module `org/org`). Headings in the UI font, 17 px at level 1 and 14.5 px at level 2 (over the editor's
+  13.5), weight 600, on Org's own `org-level-*` faces, so the headings of `outline-minor-mode` in code keep the text's
+  height. TODO is an attention chip, DONE an ok chip; source blocks are flat panels with their begin and end lines
+  subtle; tables are muted; links are in the accent.
 
 ### The three variants
 

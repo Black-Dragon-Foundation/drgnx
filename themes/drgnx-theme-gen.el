@@ -51,6 +51,21 @@ A tint is composited over the variant's `editor', an `over' over its BASE token;
              (drgnx-color-over (colour (nth 2 v)) (drgnx-look-token (nth 1 v) variant) (nthcdr 3 v)))
             (t (error "drgnx: no colour token `%s' in the %s variant" name variant))))))
 
+(defvar drgnx-theme--box-fit :unknown "Whether this Emacs's boxes take `:fit text' (`drgnx-theme--box-fit-p').")
+
+(defun drgnx-theme--box-fit-p ()
+  "Non-nil when this Emacs draws a box `:fit text': as tall as its text, not as its row, which `line-spacing' makes
+taller (Nidhogg's compositor).  Asked once: a face that sets it is refused where the key is unknown."
+  (when (eq drgnx-theme--box-fit :unknown)
+    (setq drgnx-theme--box-fit
+          (and (featurep 'glitnir)
+               (let ((face (make-symbol "drgnx-theme-box-fit")))
+                 (custom-declare-face face nil "Probe.")
+                 (condition-case nil
+                     (progn (set-face-attribute face nil :box '(:line-width 1 :fit text)) t)
+                   (error nil))))))
+  drgnx-theme--box-fit)
+
 (defconst drgnx-theme--ansi
   '((black . gap) (red . error) (green . ok) (yellow . warn) (blue . info) (magenta . kw) (cyan . ty) (white . fg))
   "Terminal colour → token.")
@@ -91,6 +106,9 @@ A tint is composited over the variant's `editor', an `over' over its BASE token;
          (drgnx-chip-attention :foreground ,(c 'attention) :background ,(c 'attention-tint)
                                ,@(and hc '(:box (:line-width (-1 . -1)))))
          (drgnx-chip-accent :foreground ,(c 'accent) :background ,(c 'accent-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-ok :foreground ,(c 'ok) :background ,(c 'ok-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-warn :foreground ,(c 'warn) :background ,(c 'warn-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
+         (drgnx-chip-error :foreground ,(c 'error) :background ,(c 'error-tint) ,@(and hc '(:box (:line-width (-1 . -1)))))
          ;; the in-text chips (modules/ui/drgnx-decor.el) carry their own box, the room inside them: high contrast
          ;; makes it the 1 px ring instead (look.css `.t-hc .chip'; the room is the chip's stretches)
          ,@(and hc `((drgnx-chip :inherit (drgnx-ui-caption drgnx-chip-quiet)
@@ -104,8 +122,10 @@ A tint is composited over the variant's `editor', an `over' over its BASE token;
          (drgnx-control-primary :foreground ,(c 'on-accent) :background ,(c 'accent-fill)
                                 :box (:line-width (1 . 1) :color ,(c 'accent-fill)
                                                   ,@(and (featurep 'glitnir) '(:corner-radius 6))))
+         ;; a keycap is as tall as its text, also on a list row made taller by `line-spacing' (the palette's)
          (drgnx-keycap :inherit drgnx-ui-caption :foreground ,(c 'subtle)
-                       :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4)))))
+                       :box (:line-width (1 . 1) :color ,(c 'border-strong) ,@(and (featurep 'glitnir) '(:corner-radius 4))
+                                         ,@(and (drgnx-theme--box-fit-p) '(:fit text)))))
        ;; the editor and the standard faces
        `((default :foreground ,(c 'fg) :background ,(c 'editor))
          (cursor :background ,(c 'accent))
@@ -229,6 +249,10 @@ A tint is composited over the variant's `editor', an `over' over its BASE token;
          (vc-removed-state :foreground ,(c 'error))
          (vc-needs-update-state :foreground ,(c 'info))
          (vc-state-base :foreground ,(c 'muted)))
+       ;; shell scripts: a here-document is a string, a command substitution runs a command (sh-script's own are
+       ;; bold yellow and red)
+       `((sh-heredoc :foreground ,(c 'str) :weight normal)
+         (sh-quoted-exec :foreground ,(c 'fn)))
        ;; diagnostics and the language server
        `((flymake-error :underline (:style wave :color ,(c 'error)))
          (flymake-warning :underline (:style wave :color ,(c 'warn)))
@@ -237,6 +261,14 @@ A tint is composited over the variant's `editor', an `over' over its BASE token;
          (flymake-warning-echo :foreground ,(c 'warn))
          (flymake-note-echo :foreground ,(c 'info))
          (flymake-end-of-line-diagnostics-face :foreground ,(c 'subtle))
+         ;; a problem at the line's end is a chip of its kind (window-dark.html `.diag'): text-high, never growing
+         ;; the line; high contrast rings it instead of the tint
+         ,@(cl-loop for (face . kind) in '((flymake-error-echo-at-eol . error) (flymake-warning-echo-at-eol . warn)
+                                           (flymake-note-echo-at-eol . info))
+                    collect `(,face :inherit drgnx-ui-caption :foreground ,(c kind)
+                                    ,@(if hc '(:box (:line-width (-1 . -1)))
+                                        `(:background ,(c (intern (format "%s-tint" kind)))
+                                                      :box (:line-width (7 . -1) :style flat-button)))))
          (eglot-highlight-symbol-face :background ,(c 'hover) :weight bold)
          (eglot-mode-line :foreground ,(c 'accent))
          (eglot-inlay-hint-face :foreground ,(c 'subtle))
