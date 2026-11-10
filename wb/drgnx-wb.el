@@ -462,6 +462,12 @@ frame that shows it (else the selected frame).  On `drgnx-look-density-changed-h
       (when (or w (null frame))
         (with-current-buffer b (drgnx-wb--rows-fit (if w (window-frame w) (selected-frame))))))))
 
+(defun drgnx-wb--row-px (frame)
+  "The height of one dock row on FRAME in pixels: the tree row at FRAME's scale on a graphical frame, else a line."
+  (if (and (display-graphic-p frame) (fboundp 'drgnx-look-density-value))
+      (round (* (drgnx-pixels-scale frame) (drgnx-look-density-value 'tree-row)))
+    (frame-char-height frame)))
+
 (defun drgnx-wb--rows-whole (frame)
   "Make each dock section on graphical FRAME that has another below it show whole rows: its bottom edge moves up by
 what is left over below its last whole row (the section below takes it), so no part of a row is drawn at a section's
@@ -473,18 +479,46 @@ foot.  Only UI-row buffers (`drgnx-wb-rows-setup'); a second call changes nothin
                     ((memq (window-buffer w) drgnx-wb--rows-buffers))
                     (below (window-in-direction 'below w t))   ; T: the sections are `no-other-window'
                     ((eq (window-parameter below 'drgnx-role) 'dock))
-                    (row (round (* (drgnx-pixels-scale frame) (drgnx-look-density-value 'tree-row))))   ; the rows' height
+                    (row (drgnx-wb--row-px frame))   ; the rows' height
                     ((> row 0))
                     (over (mod (window-body-height w t) row))
                     ((> over 0)))
           (ignore-errors (adjust-window-trailing-edge w (- over) nil t)))))))
 
+(defun drgnx-wb--fit-window (w)
+  "Make dock section window W as tall as its buffer's rows and its header (VS Code's Open Editors), at most its
+section's `:fit' fraction of the frame, where it holds whole rows and scrolls; no rows: the header and the one text
+line Emacs keeps in a live window.  Its bottom
+edge moves (the section below takes the rest).  A second call changes nothing."
+  (when-let* (((window-live-p w))
+              (frame (window-frame w))
+              (cap (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :fit))
+              (row (drgnx-wb--row-px frame))
+              ((> row 0))
+              ((window-in-direction 'below w t)))
+    (let* ((rows (with-current-buffer (window-buffer w) (count-lines (point-min) (point-max))))
+           (chrome (- (window-pixel-height w) (window-body-height w t)))
+           (most (* row (max 0 (/ (- (floor (* cap (frame-inner-height frame))) chrome) row))))
+           (delta (- (min most (* rows row)) (window-body-height w t)))
+           (window-resize-pixelwise t)
+           (window-min-height 1))                       ; no rows: the header and one line, not four
+      (unless (zerop delta)
+        (ignore-errors (adjust-window-trailing-edge w delta nil t))))))
+
+(defun drgnx-wb-fit-sections (&optional buffer)
+  "Fit the dock sections that fit their rows (`:fit', `drgnx-wb--fit-window'): those showing BUFFER, or every one.
+From the section's render when its rows change and on the store's window and frame-size changes; never in redisplay."
+  (dolist (frame (frame-list))
+    (dolist (w (drgnx-wb--dock-windows frame))
+      (when (or (null buffer) (eq (window-buffer w) buffer)) (drgnx-wb--fit-window w)))))
+
 (defun drgnx-wb--rows-frame-changed (data)
   "The store's `windows-changed' and `frame-resized' (idle): the dock buffers FRAME shows fit its scale (a dock
 buffer made before any graphical frame, in a daemon, gets its rows when one first shows it), and its sections show
-whole rows (`drgnx-wb--rows-whole')."
+whole rows (`drgnx-wb--rows-whole') after the sections that fit their rows are fitted (`drgnx-wb--fit-window')."
   (when-let* ((frame (plist-get data :frame)) ((frame-live-p frame)))
     (drgnx-wb-rows-refresh frame)
+    (dolist (w (drgnx-wb--dock-windows frame)) (drgnx-wb--fit-window w))
     (drgnx-wb--rows-whole frame)))
 
 (defun drgnx-wb-rows-follow ()
@@ -518,7 +552,8 @@ them sets the line)."
 
 (defun drgnx-wb-define-section (name &rest spec)
   "Define dock section NAME: SPEC is (:slot N :title STRING-OR-FUNCTION-RETURNING-ONE
-:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :on-show FUNCTION-OF-THE-WINDOW
+:buffer FUNCTION-RETURNING-A-BUFFER :height FRACTION-OF-THE-DOCK :fit FRACTION: as tall as the buffer's
+lines, at most that fraction of the frame (`drgnx-wb-fit-sections') :on-show FUNCTION-OF-THE-WINDOW
 :on-focus FUNCTION-OF-THE-WINDOW, run when `drgnx-wb-focus-section' focuses it,
 :view SYMBOL, the sidebar view the section belongs to, default `explorer').
 A function title is asked each time the dock shows (a panel's filter stays in its title).
@@ -601,6 +636,11 @@ It is `explorer' unless another view with sections was chosen (a stale choice fa
         (set-window-scroll-bars w nil nil nil nil t)        ; a clean sidebar, like VS Code's
         ;; After the scroll bars: Emacs keeps the width only while it equals the body width it recorded (I11)
         (window-preserve-size w t t))
+      (dolist (w (drgnx-wb--dock-windows))                     ; Open: as tall as its rows
+        (when (plist-get (alist-get (window-parameter w 'drgnx-section) drgnx-wb--sections) :fit)
+          ;; again when its body changes size: the header line's height is known after the first redisplay
+          (with-current-buffer (window-buffer w) (add-hook 'window-size-change-functions #'drgnx-wb--fit-window nil t))
+          (drgnx-wb--fit-window w)))
       (drgnx-wb-island-refresh)
       (unless (eq (selected-window) selected) (select-window selected 'norecord))
       (pcase-dolist (`(,name . ,spec) drgnx-wb--sections)

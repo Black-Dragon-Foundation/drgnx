@@ -11,7 +11,9 @@ restart.
 island header: the Explorer's first folder's name, then **+** (New File), a magnifier (Find in Explorer) and **⋯**, a
 menu with Close Sidebar, Save All, Close Saved Editors and Close All Editors (`drgnx-wb-island-menu`). The three sections
 below it are headed **Open** (the Buffers panel), **Files** (the Explorer) and **Outline**: a chevron and the title in
-`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. Their rows are drawn in the UI font at the density's
+`drgnx-wb-section` (small, semibold, muted), in sentence case, with nothing else on the row. **Open** is as tall as
+its rows (no empty rows under the last open buffer; with none open, the title and one blank line), at most 30% of the window, past
+which it scrolls; Files takes the rest, so its title stays put when the window is resized. Their rows are drawn in the UI font at the density's
 row height (26 px comfortable; `drgnx-look-density`), with a line icon for each folder and file kind and the density's
 indent for each level; on a terminal the plain `▾ ▸` stay. A git mark sits at the right edge, in a position that
 is the same on every row (worked out in pixels, kept in columns, so a terminal showing the same Explorer keeps it and the

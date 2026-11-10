@@ -47,9 +47,29 @@ row.  A terminal shows the text as it was."
              (box (list :box (drgnx-wb-row-box)))
              (end (propertize " " 'display `(when (display-graphic-p) space :align-to (- right (,px))) 'invisible t)))
         (add-face-text-property 0 (length end) 'vertico-current t end)
+        (drgnx-completion--secondary body)
         (add-face-text-property 0 (length body) box t body)
         (add-face-text-property 0 (length end) box t end)
         (concat lead body end "\n")))))
+
+(defun drgnx-completion--foreground (face)
+  "The foreground FACE gives (a face, a face plist or a list of them, as a `face' property holds), or nil."
+  (cond ((null face) nil)
+        ((symbolp face) (and (facep face) (face-foreground face nil t)))
+        ((keywordp (car-safe face)) (or (plist-get face :foreground) (drgnx-completion--foreground (plist-get face :inherit))))
+        ((consp face) (or (drgnx-completion--foreground (car face)) (drgnx-completion--foreground (cdr face))))))
+
+(defun drgnx-completion--secondary (s)
+  "Put `drgnx-selected-secondary' over the runs of S drawn in the subtle colour (keycaps, annotations), for the
+current row: subtle is under 4.5:1 on the selection.  Runs on the current row only, once per redisplay of the list."
+  (let ((subtle (face-foreground 'drgnx-text-subtle nil t)) (i 0) (n (length s)))
+    (when subtle
+      (while (< i n)
+        (let ((j (next-single-property-change i 'face s n)))
+          (when (equal subtle (drgnx-completion--foreground (get-text-property i 'face s)))
+            (add-face-text-property i j 'drgnx-selected-secondary nil s))
+          (setq i j))))
+    s))
 
 (defun drgnx-completion--format-candidate (orig cand prefix suffix index start)
   "`vertico--format-candidate' (ORIG with CAND PREFIX SUFFIX INDEX START) drawn as a row (`drgnx-completion--row')."
