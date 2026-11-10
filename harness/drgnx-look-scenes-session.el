@@ -11,6 +11,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'subr-x)
+(require 'drgnx-palette)                ; the palette scene's commands and history
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -291,10 +292,30 @@ from 201."
       (drgnx-look-scene--show drgnx-look-scene--panel)))
   (drgnx-look-scene--answer))
 
+(defun drgnx-look-scene--palette-commands ()
+  "palette.html's commands for \"run te\": the test runner's three and the terminal's, with the mockup's keys, first in
+the registry as the mockup lists them; Rerun Last Tests was run 2 minutes ago.  drgnx has no test runner commands of
+its own yet, so the scene registers stand-ins that do nothing."
+  (drgnx-look-scene--try "palette commands"
+    (pcase-dolist (`(,id ,title ,category ,key)
+                   '((look-scene-run-file "Run Tests in This File" "Tests" "C-; f")
+                     (look-scene-run-at-point "Run Test at Point" "Tests" "C-; t")
+                     (look-scene-rerun "Rerun Last Tests" "Tests" "C-; r")
+                     (look-scene-run-in-terminal "Run in Terminal…" "Terminal" nil)))
+      (drgnx-command-define id :title title :category category :command #'ignore)
+      (when key (setf (drgnx-cmd-bound (drgnx-commands-get id)) (list (cons key nil)))))
+    (let ((ids '(look-scene-run-file look-scene-run-at-point look-scene-rerun look-scene-run-in-terminal)))
+      (setq drgnx-commands--order (append ids (seq-difference drgnx-commands--order ids))))
+    (drgnx-palette--history)
+    (setq drgnx-palette--history (cons (list 'look-scene-rerun (- (floor (float-time)) 125))
+                                       (assq-delete-all 'look-scene-rerun drgnx-palette--history)))))
+
 (defun drgnx-look-scene-palette ()
-  "The editor focused; the session's own keys open the palette (`drgnx ui look-scenes' types them)."
+  "The editor focused, the mockup's commands registered; the session's own keys open the palette (`drgnx ui
+look-scenes' types them)."
   (drgnx-look-scene--theme 'drgnx-dark)
   (drgnx-look-scene--editor)
+  (drgnx-look-scene--palette-commands)
   (drgnx-look-scene--answer))
 
 (defun drgnx-look-scene-window-light ()

@@ -228,7 +228,7 @@ Every module must turn off cleanly: its setup changes global state only through 
 | `tools/jobs` | startup | Jobs as a source of what needs you: the open cards and messages of jobs in the one needs-you count and as desktop notifications, and the status bar's `jobs` segment; no commands (a job shows in the Work space) |
 | `tools/work-space` | startup | Open the Work Space: the map of every live piece of agent work in a project's repositories, in six layers, kept current by the hub and drawn only while a window shows it; an empty map outside a project; says "reconnecting" and subscribes again when the hub restarts. Turned off, it closes its views and kills its map buffers ([work-space.md](work-space.md)) |
 | `tools/ai` | startup | ghost-text completion in code buffers (the `complete` role), one Tab for suggestion / popup / snippet / heading / indent, Accept Suggestion (word, line), Toggle AI Completion, Edit with AI… (reviewed hunk by hunk), Ask the Codebase…, Choose AI Provider/Model… ([ai.md](ai.md)) |
-| `org/org` | startup | Capture `C-c c`, Agenda `C-c a` |
+| `org/org` | startup | Capture `C-c c`, Agenda `C-c a`; Org in the look ([look.md](look.md#packages)) |
 | `extra/jump` | idle | Jump to Text (needs avy) |
 | `extra/mc` | idle | Add Next Occurrence, Select All Occurrences — a cursor on each match (needs multiple-cursors) |
 | `extra/undo` | idle | Undo Tree (needs vundo) |

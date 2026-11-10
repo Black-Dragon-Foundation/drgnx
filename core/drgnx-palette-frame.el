@@ -13,6 +13,7 @@
 (require 'cl-lib)
 
 (defvar vertico-count)
+(defvar vertico-buffer-hide-prompt)
 (defvar drgnx-look-palette)
 (declare-function vertico-buffer-mode "vertico-buffer")
 (declare-function glitnir-active-p "glitnir")
@@ -27,6 +28,8 @@
   :type 'number :group 'drgnx-face)
 
 (defconst drgnx-palette-frame-row-px 32 "A palette row's height in logical pixels (the minibuffer's own rows are 24).")
+(defconst drgnx-palette-frame-footer-px 30 "The footer's height in logical pixels, its keys in the middle (palette.html).")
+(defconst drgnx-palette-frame-footer-gap-px 6 "The gap above the footer, in logical pixels (palette.html).")
 (defconst drgnx-palette-frame-minibuffer-row-px 24 "A candidate row's height in the echo area, in logical pixels.")
 
 (defvar drgnx-palette-frame--frame nil "The palette's child frame, once made; reused until the module goes off.")
@@ -89,12 +92,12 @@ new table leaves out is cleared; the border width is in the parent's pixels."
 
 (defun drgnx-palette-frame--place (frame parent lh)
   "Size FRAME for the candidates and put it top-centre in PARENT.
-The window is `vertico-count' + 2 lines of LH pixels high: `vertico-buffer' takes the mode line and the input line off."
+The window holds the input line and `vertico-count' lines of LH pixels, then the footer (`drgnx-palette-frame--height')."
   (let* ((width (min (drgnx-palette-frame--px parent drgnx-palette-frame-width)
                      (max (drgnx-palette-frame--px parent 100)
                           (- (frame-pixel-width parent) (drgnx-palette-frame--px parent 32)))))
          (count (default-value 'vertico-count)))
-    (set-frame-size frame width (* lh (+ count 2)) t)
+    (set-frame-size frame width (drgnx-palette-frame--height parent count lh) t)
     (set-frame-position frame (max 0 (/ (- (frame-pixel-width parent) (frame-pixel-width frame)) 2))
                         (round (* drgnx-palette-frame-top (frame-pixel-height parent))))))
 
@@ -136,19 +139,24 @@ the palette's frame shows it, whichever of the two ran first)."
   (propertize " " 'display `(space :width (,(drgnx-px (+ 6 drgnx-palette-row-padding))))))
 
 (defun drgnx-palette-frame--hint ()
-  "The input row's hint at the right edge: what the palette searches, and `#' for a code question."
+  "The input row's hint at the right edge: what the palette searches, `#' for a code question and, when an agent can
+be asked, `@' for one."
   (let ((s (concat (propertize "Commands · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "#")
-                   (propertize " code" 'face 'drgnx-text-subtle))))
+                   (propertize " code" 'face 'drgnx-text-subtle)
+                   (when (and (fboundp 'drgnx-palette--ask-command) (drgnx-palette--ask-command))
+                     (concat (propertize " · " 'face 'drgnx-text-subtle) (drgnx-palette-keycap "@")
+                             (propertize " agents" 'face 'drgnx-text-subtle))))))
     (concat (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width s (current-buffer))
                                                                      (drgnx-px (+ 6 drgnx-palette-row-padding)))))))
             s)))
 
 (defun drgnx-palette-frame--footer ()
-  "The footer's keys (palette.html `.foot'): move, run, close."
+  "The footer's keys (palette.html `.foot'): move, run, preview, close."
   (let ((gap (propertize "   " 'face 'drgnx-text-subtle)))
     (concat (drgnx-palette-frame--lead)
             (drgnx-palette-keycap "↑") " " (drgnx-palette-keycap "↓") (propertize " move" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "↵") (propertize " run" 'face 'drgnx-text-subtle) gap
+            (drgnx-palette-keycap "Tab") (propertize " preview" 'face 'drgnx-text-subtle) gap
             (drgnx-palette-keycap "Esc") (propertize " close" 'face 'drgnx-text-subtle))))
 
 (defun drgnx-palette-frame--dress (win)
@@ -164,10 +172,29 @@ echo area keeps the minibuffer as it is."
                  (concat (drgnx-palette-frame--lead) (drgnx-look-icon 'search 'drgnx-text-subtle) " "))
     (set-window-parameter win 'mode-line-format (drgnx-palette-frame--footer))
     (add-hook 'pre-redisplay-functions #'drgnx-palette-frame--keep-count 90 t)
-    (setq drgnx-palette-frame--dressing
-          (cons prompt (cons (drgnx-palette-frame--hint)
-                             (list (face-remap-add-relative 'mode-line 'drgnx-palette-footer)
-                                   (face-remap-add-relative 'mode-line-inactive 'drgnx-palette-footer)))))))
+    (let* ((cookies (list (face-remap-add-relative 'mode-line 'drgnx-palette-footer)
+                          (face-remap-add-relative 'mode-line-inactive 'drgnx-palette-footer)))
+           ;; the footer is `drgnx-palette-frame-footer-px' high, its keys in the middle (palette.html `.foot'): its
+           ;; font's height and a pad above and below (measured from the face: the window's mode line height is the
+           ;; last redisplay's)
+           (text (window-font-height win 'drgnx-palette-footer))
+           (pad (max 0 (/ (- (drgnx-px drgnx-palette-frame-footer-px) text) 2)))
+           (box `(:box (:line-width (0 . ,pad) :style flat-button))))
+      (setq-local drgnx-palette-frame--footer-height (+ text pad pad))
+      (setq drgnx-palette-frame--dressing
+            (cons prompt (cons (drgnx-palette-frame--hint)
+                               (append (list (face-remap-add-relative 'mode-line box)
+                                             (face-remap-add-relative 'mode-line-inactive box))
+                                       cookies)))))))
+
+(defun drgnx-palette-frame--height (parent rows lh &optional footer)
+  "The palette's text height, in PARENT's frame pixels, for ROWS rows of LH pixels below the input row: the rows, the
+gap above the footer and the footer (FOOTER pixels, its measured height; else `drgnx-palette-frame-footer-px')."
+  (+ (* lh (1+ rows)) (drgnx-palette-frame--px parent drgnx-palette-frame-footer-gap-px)
+     (or footer (drgnx-palette-frame--px parent drgnx-palette-frame-footer-px))))
+
+(defvar-local drgnx-palette-frame--footer-height nil
+  "In the dressed minibuffer: the footer's height in pixels, its font and its pads.")
 
 (defvar vertico--candidates-ov)
 
@@ -183,7 +210,9 @@ the palette's frame shows."
               ((> (length s) 0)))
     (overlay-put ov 'before-string (concat (substring s 0 1) (cadr d) (substring s 1)))
     (when (frame-live-p drgnx-palette-frame--frame)
-      (let ((h (* (default-line-height) (+ (min (length lines) (default-value 'vertico-count)) 2))))
+      (let ((h (drgnx-palette-frame--height (or (frame-parent drgnx-palette-frame--frame) drgnx-palette-frame--frame)
+                                            (min (length lines) (default-value 'vertico-count)) (default-line-height)
+                                            drgnx-palette-frame--footer-height)))
         (unless (= h (frame-text-height drgnx-palette-frame--frame))
           (set-frame-size drgnx-palette-frame--frame (frame-text-width drgnx-palette-frame--frame) h t))))))
 
@@ -212,6 +241,10 @@ counts in it (`default-line-height'), so the list is `vertico-count' long."
   (let* ((mb (window-buffer (active-minibuffer-window)))
          (lh (with-current-buffer mb
                (setq-local drgnx-palette-frame--floats t)
+               ;; In the echo box the minibuffer window is its frame's root, which cannot shrink: `vertico-buffer'
+               ;; would signal at every redisplay.  The box is hidden while the palette floats (below).
+               (when (frame-root-window-p (active-minibuffer-window))
+                 (setq-local vertico-buffer-hide-prompt nil))
                (drgnx-palette-frame--rows drgnx-palette-frame-row-px)
                (default-line-height)))
          (parent (window-frame (minibuffer-selected-window)))
@@ -219,6 +252,10 @@ counts in it (`default-line-height'), so the list is `vertico-count' long."
     (drgnx-palette-frame--place frame parent lh)
     (with-current-buffer mb (drgnx-palette-frame--dress (frame-root-window frame)))
     (make-frame-visible frame)
+    ;; a minibuffer in a box of its own (a child frame whose root it is): the palette is the prompt now
+    (let ((box (window-frame (active-minibuffer-window))))
+      (when (and (frame-parent box) (frame-visible-p box) (frame-root-window-p (active-minibuffer-window)))
+        (make-frame-invisible box)))
     (frame-root-window frame)))
 
 (defun drgnx-palette-frame-hide ()
