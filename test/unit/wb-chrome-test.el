@@ -329,6 +329,23 @@ row colour (light's tab row had dark's lift above the shown tab): the row's colo
         (drgnx-chrome--tab-line w)
         (should (= made 1))))))
 
+(ert-deftest drgnx-chrome/a-theme-switch-makes-the-tab-lines-again ()
+  "Nothing else moves an editor's inputs when only the theme changes, so its tab line, painted with the old row colour
+\(light and high contrast had dark's lift above the shown tab), is made again when a theme is enabled or disabled."
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (drgnx-chrome-apply nil t)
+    (let ((made 0) (bg "#f6f6f8") (orig (symbol-function 'drgnx-chrome--tab))
+          (face-bg (symbol-function 'face-background)))
+      (cl-letf (((symbol-function 'drgnx-chrome--tab) (lambda (&rest args) (setq made (1+ made)) (apply orig args)))
+                ((symbol-function 'face-background)
+                 (lambda (face &rest r) (if (eq face 'drgnx-chrome-tab) bg (apply face-bg face r)))))
+        (run-hook-with-args 'enable-theme-functions 'drgnx-light)
+        (should (= made 1))
+        (setq bg "#000000")
+        (run-hook-with-args 'disable-theme-functions 'drgnx-light)
+        (should (= made 2))))))
+
 (ert-deftest drgnx-chrome/tab-line-memo-hits ()
   "The tab line is made once for 20 self-inserts and 20 applies, and again when a tab's name or modified flag changes."
   (drgnx-chrome-test--with dir

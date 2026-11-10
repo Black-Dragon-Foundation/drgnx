@@ -523,7 +523,10 @@ runs in redisplay.")
         (when (and (stringp s) (not (string-empty-p s))) (push s out))))
     (apply #'concat (nreverse out))))
 
-(defun drgnx-chrome--reapply ()
+(defun drgnx-chrome--reapply (&rest _)
+  "Every frame's chrome set again (`drgnx-chrome-apply').  Also on `enable-theme-functions' and
+`disable-theme-functions': a theme switch moves none of an editor's inputs, and its tab line is painted with the row's
+colour (`drgnx-chrome--tab-paint')."
   (when (bound-and-true-p drgnx-chrome-mode)
     (dolist (f (frame-list)) (drgnx-chrome-apply f))))
 
@@ -669,6 +672,8 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
         (drgnx-state-subscribe 'editor-changed #'drgnx-chrome--editor-changed :lane 'now)
         (drgnx-state-subscribe 'frame-resized #'drgnx-chrome--frame-resized)
         (add-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
+        (add-hook 'enable-theme-functions #'drgnx-chrome--reapply)
+        (add-hook 'disable-theme-functions #'drgnx-chrome--reapply)
         (add-hook 'kill-buffer-hook #'drgnx-chrome--killed)
         (add-hook 'post-command-hook #'drgnx-chrome--symbol-schedule)
         (dolist (e '(buffer-set-changed modified-changed))
@@ -678,6 +683,8 @@ or buffer changed (no new tabs while the minibuffer is active: those are preview
     (drgnx-state-unsubscribe 'editor-changed #'drgnx-chrome--editor-changed)
     (drgnx-state-unsubscribe 'frame-resized #'drgnx-chrome--frame-resized)
     (remove-hook 'drgnx-look-density-changed-hook #'drgnx-chrome--rows-changed)
+    (remove-hook 'enable-theme-functions #'drgnx-chrome--reapply)
+    (remove-hook 'disable-theme-functions #'drgnx-chrome--reapply)
     (clrhash drgnx-chrome--memo)
     (clrhash drgnx-chrome--tab-lines)
     (remove-hook 'kill-buffer-hook #'drgnx-chrome--killed)
