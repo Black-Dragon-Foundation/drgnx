@@ -19,6 +19,7 @@
 (require 'drgnx-wb)
 (require 'drgnx-view)                   ; `drgnx-view-with-kept-windows'
 (require 'drgnx-git)
+(declare-function drgnx-wb-fit-sections "drgnx-wb")
 
 (defface drgnx-buffers-close '((t :inherit shadow)) "The × of each row." :group 'drgnx)
 (defface drgnx-buffers-modified '((t :inherit warning)) "The ● of a modified buffer." :group 'drgnx)
@@ -165,7 +166,8 @@ While a button is held in the panel, wait for the release: rows never move under
             (insert (mapconcat #'drgnx-buffers--row shown ""))
             (setq drgnx-buffers--rows (vconcat shown)))
           (drgnx-wb-selection-sync)
-          (drgnx-buffers--mark-active))))))
+          (drgnx-buffers--mark-active)
+          (drgnx-wb-fit-sections (current-buffer)))))))
 
 (defun drgnx-buffers--mark-active (&rest _)
   "Mark the row of the buffer in the active editor (an overlay; no re-render)."
@@ -299,7 +301,7 @@ in the editor."
 
 (defun drgnx-buffers-setup ()
   "Put the Buffers panel in the dock (above the Explorer) and keep it current."
-  (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3
+  (drgnx-wb-define-section 'buffers :slot -1 :title #'drgnx-buffers--current-title :height 0.3 :fit 0.3
                            :buffer #'drgnx-buffers--buffer)
   (drgnx-state-subscribe 'selected-changed #'drgnx-wb--selected-changed)
   (drgnx-wb-rows-follow)
