@@ -56,8 +56,9 @@ no listener the drain does nothing more.")
 (cl-defstruct (drgnx-history--st (:constructor drgnx-history--st-make))
   "A tracked buffer: ID (the hub's name for it), REGISTERED (the hub answered tracked), LAST (the hub's last answer
 to a batch: `ok', `resync', or `resynced' once the text went), RESYNCING (a `history/resync' is out), DRAINS (the
-drains that sent changes), HASHING (a large buffer's text is being hashed on a worker: its ring waits)."
-  id registered last resyncing (drains 0) hashing)
+drains that sent changes), HASHING (a large buffer's text is being hashed on a worker: its ring waits), ROOT and
+PATH (the project's folder and the file in it, as `history/register' got them)."
+  id registered last resyncing (drains 0) hashing root path)
 
 (defvar drgnx-history--buffers (make-hash-table :test 'eq :weakness 'key)
   "Buffer → `drgnx-history--st'.  Weak on the buffer; entries go with `kill-buffer-hook' and the mode's teardown.")
@@ -135,6 +136,18 @@ inserts more is split (`drgnx-history--pieces')."
   (let* ((b (or buffer (current-buffer))) (st (gethash (or (buffer-base-buffer b) b) drgnx-history--buffers)))
     (and st (drgnx-history--st-registered st) t)))
 
+(defun drgnx-history-ask (buffer method callback)
+  "Ask the hub METHOD about BUFFER's file (`:path' and `:worktree_root' are the params), BUFFER's text first handed to
+the hub when it is small enough to drain at once, so the hub reads what BUFFER holds.  CALLBACK gets (RESULT ERROR).
+Non-nil when the question went; nil when the history does not track BUFFER or no hub is connected.  Never prompts or
+waits."
+  (let ((st (gethash buffer drgnx-history--buffers)))
+    (when (and st (drgnx-history--st-registered st) (drgnx-history--st-root st) (drgnx-history--connected-p))
+      (when (< (buffer-size buffer) drgnx-history-large-size)
+        (drgnx-history-drain-now buffer))
+      (drgnx-history--send method (list :path (drgnx-history--st-path st) :worktree_root (drgnx-history--st-root st))
+                           callback))))
+
 (defun drgnx-history-last-result (&optional buffer)
   "The hub's last answer about BUFFER's batches: `ok', `resync', or `resynced'; nil before any."
   (let ((st (gethash (or buffer (current-buffer)) drgnx-history--buffers)))
@@ -187,7 +200,7 @@ file inside a git project; else nil.  ROOT is the project's folder, PATH relativ
     (when (drgnx-history--send "history/register" params
                                (lambda (result err) (drgnx-history--registered buffer id result err)))
       (when (nidhogg-history-track buffer t)
-        (puthash buffer (drgnx-history--st-make :id id) drgnx-history--buffers)
+        (puthash buffer (drgnx-history--st-make :id id :root root :path path) drgnx-history--buffers)
         (drgnx-history--ensure-timer)))))
 
 (defun drgnx-history--maybe-register (&optional buffer)

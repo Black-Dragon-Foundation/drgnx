@@ -794,4 +794,51 @@ mod tests {
             (0, 0, 1, 3)
         );
     }
+
+    /// Measured, not asserted (`cargo test -p drgnx-ratatoskr --lib -- --ignored --nocapture large_file_blame`): a 50 000
+    /// line file with 60 commits, the old way (one `git blame -L N,N` child per line asked) and the whole file in one
+    /// answer, cold and from the cache.
+    #[test]
+    #[ignore = "a measurement"]
+    fn large_file_blame_times() {
+        use std::time::Instant;
+        let f = fx("x\n");
+        let lines = 50_000;
+        let mut text: Vec<String> = (0..lines).map(|i| format!("line {i}")).collect();
+        commit_file(&f, "a.txt", &(text.join("\n") + "\n"), "big");
+        for c in 0..60 {
+            for k in 0..50 {
+                let at = (c * 797 + k * 13) % lines;
+                text[at] = format!("line {at} changed in {c}");
+            }
+            commit_file(&f, "a.txt", &(text.join("\n") + "\n"), &format!("change {c}"));
+        }
+        let t0 = Instant::now();
+        let n = 8;
+        for k in 0..n {
+            let line = 1 + (k * 6151) % lines;
+            let out = super::super::blob::blame_porcelain(&f.tree.git_dir, &f.tree.root, "a.txt", None);
+            let _ = (out, line);
+        }
+        let whole_git = t0.elapsed() / n as u32;
+        let t1 = Instant::now();
+        for k in 0..n {
+            let line = 1 + (k * 6151) % lines;
+            let mut c = std::process::Command::new("git");
+            c.args(["blame", "--porcelain", "-L", &format!("{line},{line}"), "--", "a.txt"])
+                .current_dir(&f.tree.root);
+            assert!(c.output().unwrap().status.success());
+        }
+        let per_line = t1.elapsed() / n as u32;
+        let t2 = Instant::now();
+        let b = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        let cold = t2.elapsed();
+        let t3 = Instant::now();
+        let _ = f.hub.git_blame(&f.tree, "a.txt").unwrap();
+        let cached = t3.elapsed();
+        assert_eq!(b.lines.len(), lines);
+        println!(
+            "BLAME-TIMES per-line child (old, each uncached line): {per_line:?}; whole file raw git: {whole_git:?}; hub cold: {cold:?}; hub cached: {cached:?}"
+        );
+    }
 }
