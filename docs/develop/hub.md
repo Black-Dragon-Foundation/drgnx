@@ -2288,7 +2288,10 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
   list) and the view's builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with
   it, a diff that says the list whole (and, for a trail, its rows). A search that has not grown since its last model
   sends the move alone (`Sent::move_window`): the ids the new window drops, the nodes it adds (only those are built;
-  no node is compared) and the list, so a move costs what it changes. Its answer is false for a view no such builder
+  no node is compared) and the list, so a move costs what it changes. When the two windows share entries, the
+  entries both hold are not looked at either: the ids dropped are the old list's ends and the parents outside it (as
+  the last move left them; found by one scan after any other change), the nodes added the new list's ends and parents,
+  and the list is spliced in place (a 2,000-entry step of a 20,000 window: 5–6 ms, was 11–12). Its answer is false for a view no such builder
   holds. A view's from goes when its model starts again (a subscribe), when it closes and with its connection; the
   editor moves the window a step past the key that stopped at its edge (half the window, at most 2,000), or centres
   it on a `walk-to`'s entry (core.md, "Keys through the model").
