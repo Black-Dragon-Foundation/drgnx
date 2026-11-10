@@ -2,7 +2,7 @@
 //! and symbols (shared by Lisp and the tree-sitter languages).
 
 use super::definers::Def;
-use super::{Chunk, Header, Lines, Nws, Symbol, build_chunk};
+use super::{Chunk, Header, Lines, Nws, Symbol, build_chunk, signature};
 use std::ops::Range;
 
 /// A stretch of the file that is not split further unless it is over the budget on its own.
@@ -266,6 +266,9 @@ pub(crate) fn assemble(input: Input) -> (Vec<Chunk>, Vec<Symbol>) {
                         .doc1
                         .clone()
                         .or_else(|| f.doc.as_ref().map(|d| d.0.clone())),
+                    line_start: lines.line_of(s),
+                    line_end: lines.line_of(e.saturating_sub(1).max(s)),
+                    sig: signature(text, s, e, &d.name),
                 });
             }
         }

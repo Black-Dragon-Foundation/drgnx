@@ -73,7 +73,7 @@ impl Scope {
         }
     }
 
-    fn admits(self, class: &str) -> bool {
+    pub(crate) fn admits(self, class: &str) -> bool {
         match self {
             Scope::Code => class == "code" || class == "test",
             Scope::Tests => class == "test",
@@ -169,7 +169,7 @@ fn identifier_like(t: &str, whole: bool) -> bool {
 }
 
 /// `"w"`, an FTS5 string.
-fn quoted(w: &str) -> String {
+pub(crate) fn quoted(w: &str) -> String {
     format!("\"{}\"", w.replace('"', "\"\""))
 }
 
@@ -207,7 +207,7 @@ fn fts_match(tokens: &[String], whole: bool) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
-fn kind_rank(kind: &str) -> u8 {
+pub(crate) fn kind_rank(kind: &str) -> u8 {
     match kind {
         "function" | "defun" | "fn" => 0,
         "macro" => 1,
@@ -247,6 +247,7 @@ macro_rules! seen_through {
         )
     };
 }
+pub(crate) use seen_through;
 
 /// An exact name's definitions in the view (?1 the name).
 pub const PINNED_SQL: &str = concat!(
@@ -753,6 +754,7 @@ mod tests {
                 chunk: i,
                 definer: "defun".into(),
                 doc1: None,
+                ..SymbolIn::default()
             })
             .collect();
         (chunks, symbols)

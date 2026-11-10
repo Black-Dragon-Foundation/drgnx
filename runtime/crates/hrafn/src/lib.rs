@@ -18,6 +18,7 @@ pub mod query;
 pub mod rank;
 pub mod schema;
 pub mod store;
+pub mod symbols;
 pub mod tree;
 pub mod watch;
 

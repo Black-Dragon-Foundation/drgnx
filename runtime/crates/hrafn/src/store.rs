@@ -77,7 +77,7 @@ pub struct ChunkIn {
 }
 
 /// A symbol to write; `chunk` is an index into the chunks of the same `replace_file` call.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SymbolIn {
     pub name: String,
     pub kind: String,
@@ -86,6 +86,9 @@ pub struct SymbolIn {
     pub chunk: usize,
     pub definer: String,
     pub doc1: Option<String>,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub sig: String,
 }
 
 /// One row of `vec`: a quantized vector of one model for one content key.
@@ -237,11 +240,22 @@ pub(crate) fn write_chunks(
     for s in symbols {
         let chunk = ids.get(s.chunk).copied().ok_or(urdr::Error::Aborted)?;
         c.prepare(
-            "insert into symbol(name, kind, path, blob, start, end, chunk, definer, doc1)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "insert into symbol(name, kind, path, blob, start, end, chunk, definer, doc1, line_start, line_end, sig)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )?
         .execute(params![
-            s.name, s.kind, path, blob, s.start, s.end, chunk, s.definer, s.doc1
+            s.name,
+            s.kind,
+            path,
+            blob,
+            s.start,
+            s.end,
+            chunk,
+            s.definer,
+            s.doc1,
+            s.line_start,
+            s.line_end,
+            s.sig
         ])?;
     }
     Ok(ids)

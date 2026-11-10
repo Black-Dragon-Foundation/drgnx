@@ -79,11 +79,32 @@ drgnx search query ROOT QUESTION… [-k N] [--scope code|tests|docs|all] [--json
 first, and ends with what lags. `--json` prints the answer as data. Tests rank below code; `--scope tests` or `all`
 looks in them. `ROOT` is the project or any directory inside it.
 
-**The MCP tool**
+```
+drgnx search symbols ROOT NAME [--match auto|exact|prefix|contains|regex] [--kind KIND]… [--path GLOB] [--scope S] [-k N] [--json]
+drgnx search outline ROOT FILE [--no-docs] [--json]
+```
 
-`drgnx search mcp [ROOT]` serves one MCP tool over stdio (ROOT defaults to the current directory): `search` with the
-arguments `query` (required, in words), `scope` and `k` (1 to 100, default 10); its questions go to the hub. The agents
-drgnx starts get the same tool on a socket of their own, pinned to their job's project, when `settings.el` says
+`symbols` lists where names are defined: each definition's file and lines, its kind, the definition around it (a
+method's impl or class), its first doc line and its signature (its lines up to the one that names it). `--match auto`,
+the default, tries the exact name, then names that start with it, then names that hold it (both ignoring case), and
+says which one matched; `regex` takes a regular expression. Code comes before docs and tests; `--kind` and `--path`
+narrow it. `outline` lists one file's definitions in order, with their lines, nested under what holds them. Both
+answer from the index, so a file search leaves out (see [What is never indexed](#what-is-never-indexed)) is never in
+them, and both end with how current the index is ("index: current", or how many files are waiting).
+
+**The MCP tools**
+
+`drgnx search mcp [ROOT]` serves the search tools over stdio (ROOT defaults to the current directory); their questions
+go to the hub.
+
+| Tool | Arguments | Answers |
+|---|---|---|
+| `search` | `query` (required, in words or a name), `scope`, `k` (1 to 50, default 10) | the best chunks, as `search query` prints them |
+| `symbols` | `name` (required), `match`, `kind` (a list), `path` (a glob), `scope` (default `all`), `k` (1 to 100, default 20) | where names are defined, as `search symbols` prints them |
+| `outline` | `path` (required, relative to the project), `docs` (default true) | one file's definitions, as `search outline` prints them |
+
+Paths an agent names are relative to the project and stay inside it. The agents
+drgnx starts get the same tools on a socket of their own, pinned to their job's project, when `settings.el` says
 `(drgnx-agents-mcp (… search))` (Onboarding's Agents step asks; [agents.md](agents.md#what-agents-get)); it is listed
 to them as `drgnx-search`. To give an agent outside drgnx the tool, add the server to its own MCP configuration, for
 example for Claude Code:

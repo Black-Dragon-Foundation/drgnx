@@ -241,7 +241,7 @@ async fn mcp_search_answers_with_lag_line() {
     let tools = client.list_all_tools().await.unwrap();
     assert_eq!(
         tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>(),
-        ["search"]
+        ["outline", "search", "symbols"]
     );
     let r = client
         .call_tool(
@@ -284,7 +284,8 @@ async fn mcp_search_is_pinned_to_the_jobs_root() {
     let (_sid, sock) = session(&mut c, 1, &mine);
     let client = mcp!(&sock.with_file_name("search.sock"));
     let tools = client.list_all_tools().await.unwrap();
-    let schema = serde_json::to_value(&tools[0].input_schema).unwrap();
+    let search = tools.iter().find(|t| t.name == "search").unwrap();
+    let schema = serde_json::to_value(&search.input_schema).unwrap();
     let keys: Vec<&str> = schema["properties"]
         .as_object()
         .unwrap()

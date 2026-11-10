@@ -85,7 +85,15 @@ create index vec_used on vec(model, last_used);
 ";
 
 /// The migrations for `urdr::StoreSpec`.
-pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(1, V1), (2, V2), (3, V3), (4, V4)];
+
+/// Schema v4: a symbol's lines and signature, for the `symbols` and `outline` answers. Rows written before it have
+/// zeros and an empty signature until tier 1 parses them again (`chunk::PARSE_VERSION`).
+const V4: &str = "
+alter table symbol add column line_start integer not null default 0;
+alter table symbol add column line_end integer not null default 0;
+alter table symbol add column sig text not null default '';
+";
 
 /// The indexes of a query's own passes: the lag's counts run on the first (the chunk rows hold their text, so counting
 /// them through the table reads the whole store on every query); the second serves the symbol-name prefix, which `like`

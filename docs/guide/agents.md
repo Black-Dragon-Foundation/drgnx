@@ -336,8 +336,8 @@ A durable session's messages and Stop work like this:
 ## What agents get
 
 Every agent drgnx starts gets MCP servers in its ACP `session/new`: the **coordination tools** (see below) by default,
-and, when you ask for it, the **search tool** (`drgnx search mcp`, [search.md](search.md#the-mcp-tool)) for the project
-the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profiles`:
+and, when you ask for it, the **search tools** (`drgnx search mcp`, [search.md](search.md#for-agents): `search`,
+`symbols` and `outline`) for the project the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profiles`:
 
 ```elisp
 (drgnx-agents-default "claude")                   ; what New Agent Session… offers on Return
@@ -345,8 +345,8 @@ the agent works in. `settings.el` holds the choice, next to `drgnx-agents-profil
 ```
 
 Onboarding's Agents step asks for both and writes them without touching the rest of the file (comments stay); you can
-edit them by hand too. The search tool lets an agent read the indexed code of any of your projects, so it is off until
-you say yes.
+edit them by hand too. The search tools let an agent read the indexed code of any of your projects, so they are off
+until you say yes.
 
 ### The plugin tier of the network list
 

@@ -1043,7 +1043,7 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 ### The code store
 
 `CodeStore::open(<state>/code/<project-id>.db)` opens one SQLite file through `urdr` (one owning thread, WAL, mode
-0600, migrations as data). Schema v3:
+0600, migrations as data). Schema v4:
 
 | Table | Holds |
 |---|---|
@@ -1051,9 +1051,9 @@ paths. Its git and file-watcher doors sit behind the traits `Git` and `Watch` un
 | `file` | one row per `(tree, path)`: git blob, class, language, generated flag, size, indexed time. `tree = 0` is the base checkout; a worktree has rows only where its blob differs from the base's, a NULL blob marking a path it does not have. The only per-tree table |
 | `chunk` | path and `blob` (the content it was cut from), byte and line span, symbol, content `key`, `embed` flag, and `embed_text` (the only copy of a chunk's text, because `chunk_fts` is contentless) |
 | `chunk_fts` | FTS5 over `path, symbols, doc, body`, contentless with `contentless_delete=1`; rowid = `chunk.id`; a trigger removes the row, and the chunk's symbols, with the chunk |
-| `symbol`, `symbol_fts` | defined names with kind, span, `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
+| `symbol`, `symbol_fts` | defined names with kind, span and lines, signature (`sig`: the definition's lines up to the one that names it, cut before a `{`), `(path, blob)`, chunk and definer (`id` an explicit rowid, so it survives `VACUUM`); a trigram FTS over the names |
 | `vec` | one quantized vector per `(model, key)` |
-| `meta` | `urdr`'s table: the schema version, `chunker_version`, `built_from` and the like |
+| `meta` | `urdr`'s table: the schema version, `chunker_version`, `parse_version`, `built_from` and the like |
 
 **Shared content.** Chunks and symbols belong to a `(path, blob)` pair, not to a tree: every `file` row that names
 the pair shares one copy, so sibling worktrees on one line cost one copy of each changed file. A write is by content:
@@ -1183,6 +1183,18 @@ non-blank character (chunks are cut on the previous chunk's last newline, so the
 before), which is where a hit opens and what `reanchor` compares against. Version 2 is that rule: an index made by
 version 1 is chunked again at the next refresh, whether or not a file changed (and, the version being in every
 vector's key, embedded again).
+
+`PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed).
+When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
+chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
+chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
+would re-embed every project.
+
+`symbols::find(store, view, Find)` answers where names are defined (exact; prefix and contains ignoring case;
+a regular expression over the distinct names; `auto` tries them in that order and says which matched), filtered by
+kind, path glob and scope, code before docs before tests. `symbols::outline(store, view, path)` lists a file's
+definitions in order with their nesting depth. Both read the index only, through the view's visibility, so an excluded
+file is never in an answer; a file the view does not hold is `NotIndexed`.
 
 For Emacs Lisp (`tree-sitter` 0.25, ABI 15, with `tree-sitter-elisp` 1.7; 0.26 and later needed Rust 1.90, above the
 workspace's MSRV of the time, 1.88) the units are the top-level forms, each with the comments right above it, and the stretches between
