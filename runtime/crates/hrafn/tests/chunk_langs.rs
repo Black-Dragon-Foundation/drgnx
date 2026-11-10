@@ -286,3 +286,57 @@ fn files_are_classified_by_extension_and_shebang() {
         assert_eq!(classify(path, b"").1, Class::Code, "{path}");
     }
 }
+
+/// Non-whitespace characters, as the budget counts them.
+fn nws(s: &str) -> usize {
+    s.chars().filter(|c| !c.is_whitespace()).count()
+}
+
+/// An oversized definition is cut at the statements nested in it, however deep (a Go body sits in a
+/// `statement_list`; a loop holds a `select`; a class holds a method that is over the budget on its own): every part
+/// is within the budget, the text is covered and the first part keeps the definition's symbol.
+/// (Red before the nested cuts: loop.go came out as 3 chunks, its function one part over the budget.)
+#[test]
+fn oversized_definitions_are_cut_at_nested_statements() {
+    let budget = 400;
+    let mut go = String::from(
+        "package p\n\n// Loop runs the loop.\nfunc Loop(ch chan int) {\n\tfor {\n\t\tselect {\n",
+    );
+    for i in 0..60 {
+        go.push_str(&format!(
+            "\t\tcase v := <-ch:\n\t\t\tif v == {i} {{\n\t\t\t\tprintln(\"value {i}\", v)\n\t\t\t}}\n"
+        ));
+    }
+    go.push_str("\t\t}\n\t}\n}\n");
+    let mut java = String::from(
+        "package p;\n\n/** A queue. */\nclass Queue {\n  /** Runs. */\n  void run(int v) {\n",
+    );
+    for i in 0..60 {
+        java.push_str(&format!(
+            "    if (v == {i}) {{\n      System.out.println(\"value {i}\");\n    }}\n"
+        ));
+    }
+    java.push_str("  }\n\n  int size() { return 0; }\n}\n");
+    for (name, lang, text, first) in [
+        ("loop.go", Lang::Go, &go, "Loop"),
+        ("Queue.java", Lang::Java, &java, "Queue"),
+    ] {
+        let (cs, _) = chunk_file(name, lang, false, text, budget);
+        covers(&cs, text);
+        assert!(cs.len() > 3, "{name}: {} chunks", cs.len());
+        let defining = cs
+            .iter()
+            .find(|c| c.symbol.is_some())
+            .expect("a definition");
+        assert_eq!(defining.symbol.as_deref(), Some(first), "{name}");
+        for c in &cs {
+            let n = nws(&text[c.start as usize..c.end as usize]);
+            assert!(
+                n <= budget,
+                "{name}: lines {}-{} hold {n} > {budget}",
+                c.line_start,
+                c.line_end
+            );
+        }
+    }
+}

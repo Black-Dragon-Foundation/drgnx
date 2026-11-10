@@ -3,7 +3,7 @@
 
 use super::definers::Def;
 use super::merge::{self, Form};
-use super::{Chunk, Symbol};
+use super::{Chunk, Nws, Symbol};
 use tree_sitter::Node;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -510,21 +510,40 @@ fn callback_body(n: Node) -> Option<Node> {
 }
 
 /// An oversized item is cut before the members of its body (a wrapper's declaration's body; in JavaScript and
-/// TypeScript, a callback's body when the statement has none).
-fn cuts(kind: Kind, n: Node) -> Vec<(usize, usize)> {
+/// TypeScript, a callback's body when the statement has none), and inside a member that is over the budget itself, or
+/// that does not begin a line (Go's `statement_list`, a `{` on the header's line), before the forms nested in it.
+fn cuts(kind: Kind, n: Node, text: &str, nws: &Nws, budget: usize) -> Vec<(usize, usize)> {
     let body = match inner(n).child_by_field_name("body") {
         Some(b) => Some(b),
         None if matches!(kind, Kind::JavaScript | Kind::TypeScript | Kind::Tsx) => callback_body(n),
         None => None,
     };
-    let Some(body) = body else {
-        return Vec::new();
-    };
-    let mut cursor = body.walk();
-    body.named_children(&mut cursor)
+    let mut out = Vec::new();
+    if let Some(body) = body {
+        nested_cuts(body, text, nws, budget, &mut out);
+    }
+    out
+}
+
+/// The cut points inside N: each child that begins a line and fits the budget, the cut points inside the others.
+fn nested_cuts(n: Node, text: &str, nws: &Nws, budget: usize, out: &mut Vec<(usize, usize)>) {
+    let mut cursor = n.walk();
+    for c in n
+        .named_children(&mut cursor)
         .filter(|c| !c.kind().contains("comment"))
-        .map(|c| (c.start_byte(), c.end_byte()))
-        .collect()
+    {
+        let (s, e) = (c.start_byte(), c.end_byte());
+        let begins_line = text[..s]
+            .rfind('\n')
+            .map_or(&text[..s], |nl| &text[nl + 1..s])
+            .trim()
+            .is_empty();
+        if begins_line && (nws.count(s, e) <= budget || c.named_child_count() == 0) {
+            out.push((s, e));
+        } else {
+            nested_cuts(c, text, nws, budget, out);
+        }
+    }
 }
 
 pub(super) fn chunk(
@@ -543,6 +562,7 @@ pub(super) fn chunk(
         .children(&mut cursor)
         .filter(|n| !n.kind().contains("comment"))
         .collect();
+    let nws = Nws::new(text);
     let node_at = |start: usize| {
         nodes
             .binary_search_by_key(&start, |n| n.start_byte())
@@ -564,6 +584,10 @@ pub(super) fn chunk(
             None => Form::plain(s, e),
         },
         heading: &|_, _| None,
-        cuts: &|f| node_at(f.start).map(|n| cuts(kind, n)).unwrap_or_default(),
+        cuts: &|f| {
+            node_at(f.start)
+                .map(|n| cuts(kind, n, text, &nws, budget))
+                .unwrap_or_default()
+        },
     }))
 }

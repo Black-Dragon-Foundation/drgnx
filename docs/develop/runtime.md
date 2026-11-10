@@ -1185,7 +1185,9 @@ version 1 is chunked again at the next refresh, whether or not a file changed (a
 vector's key, embedded again).
 
 `PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
-1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only).
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only, 6: nested cuts). A parse version that moves chunk
+boundaries needs no `CHUNKER_VERSION` bump: the files are chunked again, and only a chunk whose text changed has a new
+key and is embedded again.
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1218,7 +1220,10 @@ pipeline over their top-level items. Definitions are `function_item`, `impl_item
 `trait_item`, `mod_item` and `macro_definition` (and type, const, static and union items) in Rust, with the
 methods of an `impl`, trait or module as symbols of their own; `function_definition`, the struct, union and enum
 specifiers, typedefs and `#define`s in C; `function_definition` in shell. The comment lines directly above an item
-(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body.
+(`///`, `//`, `#`) are its docstring. An oversized item is cut before the members of its body; a member that is over
+the budget itself, or that does not begin a line (Go's `statement_list`, a body whose `{` sits on the header's line),
+is cut before the forms nested in it, as deep as it takes, so a 2,000-line function becomes parts within the budget,
+each with the function's header.
 
 Python, JavaScript, TypeScript and TSX (`tree-sitter-python` 0.25, `tree-sitter-javascript` 0.25,
 `tree-sitter-typescript` 0.23 for both TypeScript grammars; MIT) use the same pipeline. Their wrappers are looked
