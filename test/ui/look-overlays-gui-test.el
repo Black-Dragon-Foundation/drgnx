@@ -109,5 +109,34 @@ ring of the accent (its top edge is the accent, its inside the tint, not an opaq
                                                       (drgnx-ui-look-overlays--rgb 'lazy-highlight))))
             (delete-overlay o)))))))
 
+(drgnx-look-gui-deftest drgnx-ui-look-overlays/a-match-inside-a-selection-shows ()
+  "Pattern D, the user's ruling of 2026-11-10: in dark the matches' tint is close to the selection, so a match that
+is not the current one has a thin outline of the accent; inside a selection its top edge stands 3:1 off the
+selection's fill, and its inside is the matches' tint, not the selection's."
+  (skip-unless (display-graphic-p))
+  (drgnx-ui-look-overlays--with
+    (let* ((s (drgnx-uitest-device-scale (selected-frame))) (origin (drgnx-uitest--text-origin (selected-window)))
+           (hex (lambda (rgb) (apply #'format "#%02x%02x%02x" rgb)))
+           (region (face-background 'region nil t)))
+      (cl-flet ((at (pos dx dy) (let ((xy (posn-x-y (posn-at-point pos))))
+                                  (list (round (* s (+ (car origin) (car xy) dx)))
+                                        (round (* s (+ (cdr origin) (cdr xy) dy)))))))
+        (let ((sel (drgnx-ui-look-overlays--put 'region 8 40))
+              (o (drgnx-ui-look-overlays--put 'lazy-highlight 12 18)))
+          (overlay-put o 'priority 1000)
+          (drgnx-test-wait-presented)
+          (unwind-protect
+              (let* ((snap (drgnx-uitest-snapshot)) (edge (at 14 (/ (frame-char-width) 2) 0))
+                     (mid (at 14 (/ (frame-char-width) 2) 3))
+                     (edge-px (cdr (drgnx-uitest-pixel snap (car edge) (cadr edge))))
+                     (mid-px (cdr (drgnx-uitest-pixel snap (car mid) (cadr mid)))))
+                (should (equal '(edge-on-selection t)
+                               (list 'edge-on-selection
+                                     (>= (drgnx-color-contrast (funcall hex edge-px) region) 3.0))))
+                (should (drgnx-ui-look-overlays--near mid-px (drgnx-ui-look-overlays--rgb 'lazy-highlight)))
+                (should-not (drgnx-ui-look-overlays--near mid-px (drgnx-ui-look-overlays--rgb 'region))))
+            (delete-overlay o)
+            (delete-overlay sel)))))))
+
 (provide 'look-overlays-gui-test)
 ;;; look-overlays-gui-test.el ends here

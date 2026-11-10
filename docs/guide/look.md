@@ -29,8 +29,10 @@ setup.
   same room. Hairlines come in three strengths: `drgnx-border-subtle` (under the tab row), `drgnx-border` (cards,
   dividers) and `drgnx-border-strong` (inputs, popups). See [face.md](face.md#faces).
 - **The selection and matches over text.** The region is the selection colour in a run rounded 3 px, which stops at
-  the line's end; search matches (`lazy-highlight`) are the accent at 25 % over the editor, so the text keeps its
-  syntax colours; the current match (`isearch`) is the same tint in a 1 px ring of the accent. Their boxes are drawn
+  the line's end; search matches (`lazy-highlight`) are the accent at 25 % over the editor (18 % in Dark, where each
+  one also has a thin outline of the accent at 72 %, so a match inside a selection still shows), and the text keeps its
+  syntax colours, at 4.5:1 on the selection and on a match (7:1 in High Contrast); the current match (`isearch`) is
+  the same tint in a 1 px ring of the accent. Their boxes are drawn
   inside the characters, so selecting or searching never moves text or changes a line's height. Rounding needs
   Nidhogg's compositor; elsewhere the runs are square.
 - **Native title strip.** `nidhogg-title-bar` and `nidhogg-title-bar-inactive` follow the theme.

@@ -77,6 +77,24 @@
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--status
                                        '(default drgnx-surface-panel drgnx-surface-raised)))
       (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--agents '(default drgnx-surface-raised)))
+      ;; text over the tints: code under the selection and the matches keeps its colour and its bar; secondary text
+      ;; on a selected row is `drgnx-selected-secondary' (subtle is under the bar there)
+      (add (drgnx-lint-contrast--pairs text drgnx-lint-contrast--syntax '(region lazy-highlight isearch)))
+      (add (drgnx-lint-contrast--pairs text '(drgnx-selected-secondary) '(drgnx-selected drgnx-selected-quiet)))
+      ;; the focus ring is a control's only cue of focus: 3:1 on what it is drawn over
+      (let* ((c (face-attribute 'drgnx-focus :box nil t)) (c (and (consp c) (plist-get c :color))))
+        (dolist (surface '(default drgnx-surface-panel drgnx-surface-raised))
+          (let ((ratio (and (stringp c) (drgnx-color-contrast c (drgnx-lint-contrast--bg surface)))))
+            (unless (and ratio (>= ratio 3.0))
+              (push (format "drgnx-focus ring (%s) on %s: %s, needs 3" c surface (and ratio (format "%.2f" ratio)))
+                    fails)))))
+      ;; a non-current match's outline, where it has one of its own colour, shows inside a selection: 3:1 on it
+      (let ((c (face-attribute 'lazy-highlight :box nil t)))
+        (when-let* ((c (and (consp c) (plist-get c :color))) ((stringp c))
+                    ((not (equal c (drgnx-lint-contrast--bg 'lazy-highlight))))
+                    (ratio (drgnx-color-contrast c (drgnx-lint-contrast--bg 'region))))
+          (unless (>= ratio 3.0)
+            (push (format "lazy-highlight outline (%s) on region: %.2f, needs 3" c ratio) fails))))
       ;; the documented exceptions: status marks on the selection need 3:1 only; disabled text is exempt, except in
       ;; high contrast where it needs 4.5:1
       (add (drgnx-lint-contrast--pairs 3.0 drgnx-lint-contrast--status '(drgnx-selected)))
@@ -95,10 +113,14 @@
     fails))
 
 (ert-deftest drgnx-lint/contrast-own-themes ()
-  "Pattern D: drgnx Dark, Light and High Contrast meet every pair of the look's contrast bars."
-  (pcase-dolist (`(,theme . ,variant) drgnx-lint-contrast--own)
-    (drgnx-lint-contrast--with theme nil
-      (should-not (when-let* ((fails (drgnx-lint-contrast--own-failures variant))) (cons theme fails))))))
+  "Pattern D: drgnx Dark, Light and High Contrast meet every pair of the look's contrast bars.  A failure lists every
+failing pair of every theme, not the first theme's alone, one per line (a string: ERT shortens a long list)."
+  (let (fails)
+    (pcase-dolist (`(,theme . ,variant) drgnx-lint-contrast--own)
+      (drgnx-lint-contrast--with theme nil
+        (dolist (f (drgnx-lint-contrast--own-failures variant)) (push (format "%s: %s" theme f) fails))))
+    (when fails
+      (ert-fail (format "%d failing pairs:\n%s" (length fails) (string-join (nreverse fails) "\n"))))))
 
 (ert-deftest drgnx-lint/contrast-third-party-themes ()
   "Pattern D: under modus-operandi, modus-vivendi, leuven and a Doom One stand-in, with derive run, subtle and muted text
