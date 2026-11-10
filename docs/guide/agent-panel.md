@@ -12,7 +12,8 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   it) or "Pair · editing your checkout"; on the right the **watch · review · debug** lens, the preset in force raised.
 - **Chips:** model, context ring, cost, mode, sandbox, MCP servers, files edited, checkpoints. A chip appears only when
   the hub reports it; none is made up.
-- **Steps:** a tool call is one line: a dot for its state, its title, its result after `·`, and its time and cost on the
+- **Steps:** a tool call is one line: a dot for its state, its title (a shell step: "Shell" and its command in the
+  code font), its result after `·`, and its time and cost on the
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
@@ -91,8 +92,9 @@ answer at once, without asking the hub. With nothing at point, `TAB` opens or fo
 ## Steering
 
 Under the transcript are the notes waiting for the agent's turn to end, one row each, and the composer: a field ("Steer
-the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and the
-**Stop after this step** and **Send** buttons.
+the agent…"; a click writes to the agent, as `s` does) and under it a bar with the model and mode chips and three
+buttons: **Fork** (**Fork the Chat**: a second agent from the chat's last step), the pause icon (stop after this step,
+as `p`) and Send, an arrow (as `s`).
 
 - `s` writes to the agent. While it works, the message is queued and goes in when the turn ends; **sending never cancels
   the turn**. In the message, `@` completes a file of the agent's folder and `/` at the start completes one of its
@@ -107,8 +109,8 @@ the agent…"; a click writes to the agent, as `s` does) and under it a bar with
 
 What the agent changed and what it asks sit under the transcript as cards.
 
-- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). Its header names the file,
-  the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
+- **Diff cards:** one for each hunk of each file the agent edited (flat, with a border). A header over it names the
+  file, the lines and which hunk it is ("215–217 · hunk 1 of 1"), with **Reject** and **Accept** at the right; each line
   shows its number (the new file's; a removed line, the old file's). `a` accepts the hunk: it writes
   the review mark the merge gate compares, and nothing is merged. `D` rejects it: the file goes back to pending and the
   agent is told, in a queued message, to take it back. The panel never writes to an agent's worktree and keeps no queue
