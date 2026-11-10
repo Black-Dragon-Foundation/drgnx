@@ -368,6 +368,11 @@ pub struct RunParams {
     /// has it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub off: Option<Vec<String>>,
+    /// A dim label row above the first match of each definition (the innermost one around it), from one parse of the
+    /// file; none at the top level or for a language without definitions. Default true (the setting
+    /// `drgnx-search-context`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<bool>,
 }
 
 /// `search/run`'s answer: RUN numbers the search (its match ids are `m:RUN:N`; the event `search-run-done` names it).

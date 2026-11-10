@@ -46,24 +46,73 @@ pub(super) fn buffer_snap(tick: u64, text: &str) -> Snap {
 }
 
 /// FILE's snapshot now; none when it cannot be read.
+#[cfg(test)]
 pub(super) fn snapshot(file: &Path) -> Option<Snap> {
+    read(file, &[], false).map(|r| r.snap)
+}
+
+/// Each match's innermost definition (none at the top level), shared by the matches in it.
+pub(super) type Ctx = Vec<Option<std::sync::Arc<crate::search::context::Def>>>;
+
+/// A file as a run read it for its matches: its snapshot and, with context on, each match's definition.
+#[derive(Clone, Debug)]
+pub(super) struct Read {
+    pub snap: Snap,
+    pub ctx: Ctx,
+}
+
+/// FILE read once for its matches MS: its snapshot, and each match's definition when CONTEXT; none when it cannot be
+/// read.
+pub(super) fn read(file: &Path, ms: &[Match], context: bool) -> Option<Read> {
     let meta = std::fs::metadata(file).ok()?;
-    #[cfg(unix)]
-    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
-    #[cfg(not(unix))]
-    let inode = 0;
-    let xxh3 = if meta.len() <= DIGEST_MAX {
-        Some(xxh3_64(&std::fs::read(file).ok()?))
+    let bytes = if meta.len() <= DIGEST_MAX {
+        Some(std::fs::read(file).ok()?)
     } else {
         None
     };
-    Some(Snap {
+    let ctx = match (&bytes, context) {
+        (Some(b), true) => std::str::from_utf8(b)
+            .map(|text| ctx_of(&file.to_string_lossy(), text, ms))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Some(Read {
+        snap: snap_of(&meta, bytes.as_deref()),
+        ctx,
+    })
+}
+
+/// Each of MS's innermost definition in FILE, whose text is TEXT (`search::context`); empty when it has none.
+pub(super) fn ctx_of(file: &str, text: &str, ms: &[Match]) -> Ctx {
+    let Some(defs) = crate::search::context::defs(file, text) else {
+        return Vec::new();
+    };
+    let mut last: Option<std::sync::Arc<crate::search::context::Def>> = None;
+    ms.iter()
+        .map(|m| {
+            let d = defs.at(m.line)?;
+            match &last {
+                Some(l) if l.start == d.start && l.end == d.end => {}
+                _ => last = Some(std::sync::Arc::new(d.clone())),
+            }
+            last.clone()
+        })
+        .collect()
+}
+
+/// The snapshot of a file of META whose bytes are BYTES (none past [`DIGEST_MAX`]).
+fn snap_of(meta: &std::fs::Metadata, bytes: Option<&[u8]>) -> Snap {
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Snap {
         size: meta.len(),
         mtime: meta.modified().ok(),
         inode,
-        xxh3,
+        xxh3: bytes.map(xxh3_64),
         tick: None,
-    })
+    }
 }
 
 /// One file's matches in a run: in the order the searcher gave them, each with its number in the run (its id
@@ -74,16 +123,45 @@ pub(super) struct Found {
     pub file: String,
     pub ms: Vec<Match>,
     pub ns: Vec<u32>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "recorded now; the edit set reads it to tell a file changed since the search"
-        )
-    )]
     pub snap: Option<Snap>,
     /// The file's buffer is open in chunks (too large to send): these are the matches on disk.
     pub large: bool,
+    /// Each match's definition (empty: none), and how many label rows they give ([`Found::labelled`]).
+    pub ctx: Ctx,
+    pub labels: usize,
+}
+
+impl Found {
+    /// FILE's matches MS (numbered NS) as READ gives them.
+    pub(super) fn new(file: String, ms: Vec<Match>, ns: Vec<u32>, read: Option<Read>) -> Found {
+        let (snap, ctx) = match read {
+            Some(r) => (Some(r.snap), r.ctx),
+            None => (None, Vec::new()),
+        };
+        let mut f = Found {
+            file,
+            ms,
+            ns,
+            snap,
+            large: false,
+            ctx,
+            labels: 0,
+        };
+        f.labels = (0..f.ms.len()).filter(|i| f.labelled(*i).is_some()).count();
+        f
+    }
+
+    /// Match I's label: its definition when it is the first match of it in a row (the match before is in another).
+    pub(super) fn labelled(&self, i: usize) -> Option<&crate::search::context::Def> {
+        let d = self.ctx.get(i)?.as_ref()?;
+        let before = i.checked_sub(1).and_then(|j| self.ctx.get(j)?.as_ref());
+        (!before.is_some_and(|b| std::sync::Arc::ptr_eq(b, d))).then_some(d.as_ref())
+    }
+
+    /// The file's rows: its header, its labels and its matches.
+    pub(super) fn rows(&self) -> usize {
+        1 + self.labels + self.ms.len()
+    }
 }
 
 /// The id of match N of run RUN (its node, its row's key).

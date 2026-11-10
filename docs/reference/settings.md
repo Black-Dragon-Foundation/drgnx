@@ -1626,6 +1626,23 @@ running.  Nil: only a running server (TEI, Ollama) makes vectors, and with none,
 | `:agents` | `never` |
 | `:schema` | `boolean` |
 
+## drgnx-search-context
+
+Non-nil: the Search view shows a dim label row (the definition's name) above the first match of each definition.
+
+| Key | Value |
+| --- | --- |
+| Default | `t` |
+| Type | `boolean` |
+| `:scope` | `global` |
+| `:workspace` | `never` |
+| `:merge` | `replace` |
+| `:on-error` | `last-good` |
+| `:apply` | - |
+| `:runtime` | - |
+| `:agents` | `never` |
+| `:schema` | - |
+
 ## drgnx-search-exclude
 
 Files matching one of these globs are not indexed; a workspace's are added to yours.

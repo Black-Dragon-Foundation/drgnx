@@ -28,6 +28,11 @@ shows first), and a new search replaces the rows without keeping typing waiting,
 changing above the ones you look at do not scroll them away. While the Search view is hidden (another sidebar view,
 the sidebar closed) it draws nothing; it catches up when it is shown again.
 
+In code files, a dim label row (`ƒ` and a name) goes above the first match inside each function, type or other
+definition, so you see where a match is without opening it; the next matches in the same definition follow without
+one, and a match outside every definition has none. Hover a label for the names around it (`impl P › get`). Labels
+are not matches: no tick box, and Next Match skips them. Turn them off with the setting `drgnx-search-context`.
+
 ## Modes: Text, Symbol, Meaning
 
 The mode chip says what Find means; clicking it, or **Search: Next Mode** (`M-m` in the view; `C-c C-m` in the Emacs

@@ -1494,7 +1494,7 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/outline` | user | `{base?: boolean, docs?: boolean, path: string, root: AbsPath}` | `{entries: [OutlineEntry], fresh: Fresh, lang: string, path: string}` | no |
 | `search/query` | user | `{base?: boolean, k?: natnum, root: AbsPath, scope?: "tests" \| "docs" \| "all" \| "code", text: Prompt}` | `QueryAnswer` | no |
 | `search/recent` | user | `{root: AbsPath}` | `{recent: [SearchSpec]}` | no |
-| `search/run` | user | `{ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
+| `search/run` | user | `{context?: boolean, ignore?: "index" \| "real", off?: [string], root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}, view: string}` | `{run: natnum}` | no |
 | `search/saved/delete` | user | `{name: string, root: AbsPath}` | `boolean` | yes |
 | `search/saved/list` | user | `{root: AbsPath}` | `{problems?: [string], saved: [SavedSearch]}` | no |
 | `search/saved/put` | user | `{name: string, pinned?: boolean, root: AbsPath, search: {exclude?: [string], include?: [string], query: {case?: boolean, mode: "text", regexp?: boolean, text: string, word?: boolean} \| {case?: boolean, mode: "symbol", name: string} \| {mode: "meaning", question: string}, replace?: string, scope?: {base?: string, changed_lines?: boolean, files?: [AbsPath], kind: "project" \| "file" \| "open" \| "changed" \| "staged" \| "branch"}}}` | `boolean` | yes |
@@ -2383,6 +2383,13 @@ snapshots; the search itself is `hrafn::grep`).
   most 100): one match per hit under its file, the hit's symbol as the match (else its first line), its first line
   and score after it. Both are read-only: a non-empty `replace` is refused at `search.replace`; scopes, globs and the
   open buffers do not apply.
+- **Context labels** (`context?`, default true; the editor sends false when `drgnx-search-context` is off): the thread
+  that reads each file for its snapshot also parses it once (`search/context.rs`, Hrafn's definitions; code languages
+  only, none past 2 MB; an open buffer's text the same way) and gives each match its innermost definition. A label row
+  `c:<run>:<n>` (`  ƒ name`, face `drgnx-replace-ctx`, the names around it in `help-echo`) goes above match `n` when
+  it is the first of its definition in a row; a top-level match gets none. A label is a row, not a node: no tick, no
+  `drgnx-work-id`, not in the model, not a stop for Next Match; the window and `upto` count it among the rows. The
+  index's outline is not used yet (a file is always parsed), and the match nodes carry no `ctx` field yet.
 - **Unticks carried across runs:** `off` is the ids of the last run's matches the editor's user unticked. The hub
   turns each into its match's key, a digest of the file, the text before and after the match, the match, its column
   and end; not its line, so a line added above a match keeps it. A key two matches of a run share is dropped, and

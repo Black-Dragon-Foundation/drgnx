@@ -372,4 +372,30 @@ line, which searches the same words by meaning; a search that found something of
     (drgnx-replace--hub-event "search-run-done" (list :view view :run 2 :files 0 :matches 0))
     (should-not (string-match-p "Try Meaning" (drgnx-replace-rows-test--status)))))
 
+(ert-deftest drgnx-replace-rows/context-labels-are-a-setting ()
+  "Pattern D: the hub puts a dim label row (face `drgnx-replace-ctx', the dim face's) above the first match of each
+definition; `drgnx-search-context' off asks it not to (`context' false), on sends nothing (the hub's default).  A
+label row is drawn as the hub sends it and is no match: pressing it shows nothing."
+  (should (eq 'drgnx-replace-dim (face-attribute 'drgnx-replace-ctx :inherit)))
+  (drgnx-replace-rows-test--with
+    (drgnx-replace--fill 'find "needle")
+    (let ((drgnx-search-context t))
+      (drgnx-replace--search-now)
+      (should-not (plist-member (cdar drgnx-replace-rows-test--calls) :context)))
+    (let ((drgnx-search-context nil))
+      (drgnx-replace--search-now)
+      (should (eq :false (plist-get (cdar drgnx-replace-rows-test--calls) :context))))
+    (drgnx-view-apply-patch (drgnx-replace-rows-test--patch view 0 1 (list (list :reset nil))))
+    (drgnx-view-apply-patch
+     (drgnx-replace-rows-test--patch
+      view 1 2 (list (list :insert (list :after nil
+                                         :rows (list (drgnx-replace-rows-test--row "f:a.rs" "[x] a.rs")
+                                                     (list :key "c:2:0" :text "  ƒ outer"
+                                                           :runs '((0 9 "drgnx-replace-ctx")))
+                                                     (drgnx-replace-rows-test--row "m:2:0" "  [x] needle()")))))))
+    (drgnx-view-draw-now drgnx-view)
+    (goto-char drgnx-replace--results)
+    (should (search-forward "ƒ outer" nil t))
+    (should (eq 'drgnx-replace-ctx (get-text-property (match-beginning 0) 'face)))))
+
 ;;; replace-rows-test.el ends here

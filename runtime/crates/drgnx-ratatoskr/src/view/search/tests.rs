@@ -1,5 +1,5 @@
 use super::rows::grep_doc_in;
-use super::run::{DIGEST_MAX, buffer_snap, match_id, snapshot};
+use super::run::{DIGEST_MAX, Snap, buffer_snap, match_id, snapshot};
 use super::*;
 use runstav::methods::view::{Display, ViewEnv};
 
@@ -16,15 +16,14 @@ fn founds(files: Vec<(String, Vec<Match>)>) -> Vec<Found> {
         .map(|(file, ms)| {
             let ns = (n..).take(ms.len()).collect();
             n += ms.len() as u32;
-            Found {
-                file,
-                ms,
-                ns,
-                snap: None,
-                large: false,
-            }
+            Found::new(file, ms, ns, None)
         })
         .collect()
+}
+
+/// A file read as SNAP, with no context.
+fn read_of(snap: Snap) -> Read {
+    Read { snap, ctx: vec![] }
 }
 
 fn env(class: &str, epoch: u64) -> ViewEnv {
@@ -1144,7 +1143,7 @@ fn the_run_records_each_files_snapshot() {
                 r,
                 file.clone(),
                 vec![m(&file, 1, "a ", "needle", "")],
-                Some(snap.clone()),
+                Some(read_of(snap.clone())),
             )
         })
         .unwrap();
@@ -1205,7 +1204,13 @@ fn a_buffers_matches_take_the_place_of_its_files() {
         m("/r/a.txt", 1, "", "needle", ""),
         m("/r/a.txt", 2, "two ", "needle", ""),
     ];
-    put(&greps, &mut s, id, "/r/a.txt", Put::Text(two, snap.clone()));
+    put(
+        &greps,
+        &mut s,
+        id,
+        "/r/a.txt",
+        Put::Text(two, read_of(snap.clone())),
+    );
     assert_eq!(held(&s), ["f:a.txt", "m:1:2", "m:1:3", "f:b.txt", "m:1:1"]);
     greps.current(CONN, "s", |run| {
         assert_eq!(run.files[0].snap, Some(snap.clone()));
@@ -1224,7 +1229,7 @@ fn a_buffers_matches_take_the_place_of_its_files() {
         &mut s,
         id,
         "/r/c.txt",
-        Put::Text(c, buffer_snap(1, "\n\nneedle\n")),
+        Put::Text(c, read_of(buffer_snap(1, "\n\nneedle\n"))),
     );
     assert_eq!(held(&s)[5..], ["f:c.txt", "m:1:4"]);
     put(
@@ -1232,7 +1237,7 @@ fn a_buffers_matches_take_the_place_of_its_files() {
         &mut s,
         id,
         "/r/a.txt",
-        Put::Text(vec![], buffer_snap(8, "")),
+        Put::Text(vec![], read_of(buffer_snap(8, ""))),
     );
     assert_eq!(held(&s), ["f:b.txt", "m:1:1", "f:c.txt", "m:1:4"]);
     greps.current(CONN, "s", |run| {
@@ -1320,4 +1325,100 @@ fn a_buffer_is_searched_where_its_file_would_be() {
     q.file = Some("/r/a.txt".into());
     assert!(in_scope(&q, "/r/a.txt"));
     assert!(!in_scope(&q, "/r/sub/b.rs"));
+}
+
+const CTX_RS: &str =
+    "fn outer() {\n    needle();\n    needle();\n}\nuse needle;\nfn other() {\n    needle\n}\n";
+
+/// CTX_RS's four matches of `needle`, as the searcher gives them in FILE.
+fn ctx_matches(file: &str) -> Vec<Match> {
+    vec![
+        m(file, 2, "    ", "needle", "();"),
+        m(file, 3, "    ", "needle", "();"),
+        m(file, 5, "use ", "needle", ";"),
+        m(file, 7, "    ", "needle", ""),
+    ]
+}
+
+/// [D] Context labels: a dim label row (`ƒ name`, its full path of names on hover) goes above the first match of each
+/// definition; the next matches in it follow without one; a top-level match gets none. A label is a row, not a node:
+/// the model holds the files and matches only, and a match's place among the rows counts the labels before it.
+#[test]
+fn a_label_row_goes_above_each_definitions_first_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.rs");
+    std::fs::write(&path, CTX_RS).unwrap();
+    let file = path.to_string_lossy().into_owned();
+    let ms = ctx_matches(&file);
+    let read = run::read(&path, &ms, true).expect("readable");
+    let mut s = store();
+    let greps = Greps::default();
+    let q = Query {
+        root: dir.path().to_path_buf(),
+        ..query()
+    };
+    let id = greps.start(CONN, "s", q, String::new(), &[]).0;
+    start_patches(&mut s, CONN, "s");
+    greps
+        .with(CONN, "s", id, |r| {
+            batch_patches(&mut s, CONN, "s", r, file.clone(), ms, Some(read))
+        })
+        .unwrap();
+    let rows = s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())]
+        .rows
+        .clone();
+    assert_eq!(
+        rows.iter().map(|r| r.key.as_str()).collect::<Vec<_>>(),
+        [
+            "f:a.rs", "c:1:0", "m:1:0", "m:1:1", "m:1:2", "c:1:3", "m:1:3"
+        ]
+    );
+    assert_eq!(rows[1].text, "  ƒ outer");
+    assert_eq!(rows[1].runs, vec![(0, 9, "drgnx-replace-ctx".to_string())]);
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .any(|(_, _, name, v)| name == "help-echo" && v == "outer")
+    );
+    assert!(
+        rows[1]
+            .props
+            .iter()
+            .all(|(_, _, name, _)| name != "drgnx-work-id")
+    );
+    assert_eq!(rows[5].text, "  ƒ other");
+    greps
+        .with(CONN, "s", id, |r| {
+            assert_eq!(row_index(r, "m:1:3"), Some(6));
+            assert_eq!(row_index(r, "m:1:2"), Some(4));
+            let d = grep_doc(&r.query.root, r.id, &r.files, None);
+            assert_eq!(d.nodes.len(), 5);
+            assert!(d.nodes.keys().all(|k| !k.starts_with("c:")));
+        })
+        .unwrap();
+}
+
+/// [D] No labels with context off (`drgnx-search-context`), for a language with no definitions (text), or for a file
+/// that cannot be read; the snapshot is the file's either way.
+#[test]
+fn context_off_or_a_text_file_gives_no_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let rs = dir.path().join("a.rs");
+    std::fs::write(&rs, CTX_RS).unwrap();
+    let txt = dir.path().join("a.txt");
+    std::fs::write(&txt, CTX_RS).unwrap();
+    let off = run::read(&rs, &ctx_matches(&rs.to_string_lossy()), false).unwrap();
+    assert!(off.ctx.iter().all(Option::is_none));
+    assert_eq!(Some(off.snap), snapshot(&rs));
+    let text = run::read(&txt, &ctx_matches(&txt.to_string_lossy()), true).unwrap();
+    assert!(text.ctx.iter().all(Option::is_none));
+    assert!(run::read(&dir.path().join("gone.rs"), &[], true).is_none());
+    let on = run::read(&rs, &ctx_matches(&rs.to_string_lossy()), true).unwrap();
+    let names: Vec<Option<&str>> = on
+        .ctx
+        .iter()
+        .map(|c| c.as_deref().map(|d| d.name.as_str()))
+        .collect();
+    assert_eq!(names, [Some("outer"), Some("outer"), None, Some("other")]);
 }

@@ -23,6 +23,7 @@
 (require 'filenotify)
 (require 'drgnx-modules)
 (require 'drgnx-registry)
+(require 'drgnx-setting)
 (require 'drgnx-timer)
 (require 'drgnx-wb)
 (require 'drgnx-view)
@@ -344,6 +345,12 @@ A file edited, killed or changed on disk since is left alone.  Returns (:undone 
 (defface drgnx-replace-new '((t :inherit diff-added)) "The text a replacement puts in." :group 'drgnx)
 (defface drgnx-replace-dim '((t :inherit shadow)) "Folders, the status line, reasons, toggles that are off." :group 'drgnx)
 (defface drgnx-replace-on '((t :inherit lazy-highlight :weight bold)) "A toggle that is on." :group 'drgnx)
+(defface drgnx-replace-ctx '((t :inherit drgnx-replace-dim))
+  "A context label row: the definition the matches below it are in." :group 'drgnx)
+
+(drgnx-defsetting drgnx-search-context t
+  "Non-nil: the Search view shows a dim label row (the definition's name) above the first match of each definition."
+  :type 'boolean :group 'drgnx :safe #'booleanp :scope 'global :workspace 'never :agents 'never)
 
 (defvar drgnx-replace-delay 0.25 "Seconds after typing stops before the Search view searches (or redraws).")
 (defvar drgnx-replace-bar-limit 5000 "The most matches the find bar highlights.")
@@ -1425,7 +1432,8 @@ text is sent too: the hub empties the rows and stops the search before.  The mat
                                                   (list :kind "project")))
                                    (when-let* ((_ text-p) (g (funcall globs 'include))) (list :include (vconcat g)))
                                    (when-let* ((_ text-p) (g (funcall globs 'exclude))) (list :exclude (vconcat g)))))
-             (and off (list :off (vconcat off)))))))
+             (and off (list :off (vconcat off)))
+             (and (not drgnx-search-context) (list :context :false))))))
 
 (defun drgnx-replace--rows-carry ()
   "The hub's match ids the user unticked (Sjá's ticked set), for the next search to keep: see `drgnx-replace--carry'."

@@ -3,6 +3,7 @@
 
 use super::Run;
 use super::run::{Found, match_id};
+use crate::search::context::Def;
 use crate::view::model::Doc;
 use drgnx_rows::{Row, RowBuilder};
 use hrafn::grep::{self, Match, Query};
@@ -282,8 +283,23 @@ fn row_of(run: &Run, m: &Match, n: u32) -> Row {
     match_row(&run.query, &run.replace, id, m, why)
 }
 
-/// The search's rows AT (a file's header and its matches, files in the order they were complete); none is built
-/// before it.
+/// The label row above match N of RUN, the first in definition D: `ƒ` and its name, dim; the names around it on hover.
+/// Not a node: no tick, no `drgnx-work-id`, not a stop for Next Match.
+pub(super) fn label_row(run: u64, n: u32, d: &Def) -> Row {
+    let mut b = RowBuilder::new(format!("c:{run}:{n}"));
+    b.push(&format!("  ƒ {}", flat(&d.name)), Some("drgnx-replace-ctx"));
+    let end = b.pos();
+    b.prop(0, end, "help-echo", json!(d.path.join(" › ")));
+    b.finish()
+}
+
+/// The rows of all FILES: each file's header, labels and matches.
+pub(super) fn rows_total(files: &[Found]) -> usize {
+    files.iter().map(Found::rows).sum()
+}
+
+/// The search's rows AT (a file's header, then its matches, each first match of a definition after its label; files
+/// in the order they were complete); none is built before it.
 pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut i = 0;
@@ -291,7 +307,7 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
         if i >= at.end {
             break;
         }
-        let n = 1 + f.ms.len();
+        let n = f.rows();
         if i + n <= at.start {
             i += n;
             continue;
@@ -299,16 +315,25 @@ pub(super) fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
         if at.contains(&i) {
             rows.push(header(&run.query.root, &f.file, f.large));
         }
-        let skip = at.start.saturating_sub(i + 1);
-        for (m, k) in
-            f.ms.iter()
-                .zip(&f.ns)
-                .skip(skip)
-                .take(at.end.saturating_sub(i + 1 + skip))
-        {
-            rows.push(row_of(run, m, *k));
+        i += 1;
+        for (j, (m, k)) in f.ms.iter().zip(&f.ns).enumerate() {
+            if i >= at.end {
+                break;
+            }
+            if let Some(d) = f.labelled(j) {
+                if at.contains(&i) {
+                    rows.push(label_row(run.id, *k, d));
+                }
+                i += 1;
+                if i >= at.end {
+                    break;
+                }
+            }
+            if at.contains(&i) {
+                rows.push(row_of(run, m, *k));
+            }
+            i += 1;
         }
-        i += n;
     }
     rows
 }
@@ -338,9 +363,15 @@ pub(super) fn row_index(run: &Run, key: &str) -> Option<usize> {
             if let (Some(first), Some(last)) = (f.ns.first(), f.ns.last())
                 && (*first..=*last).contains(&n)
             {
-                return Some(before + 1 + f.ns.binary_search(&n).ok()?);
+                let j = f.ns.binary_search(&n).ok()?;
+                let labels = if f.labels == 0 {
+                    0
+                } else {
+                    (0..=j).filter(|i| f.labelled(*i).is_some()).count()
+                };
+                return Some(before + 1 + labels + j);
             }
-            before += 1 + f.ms.len();
+            before += f.rows();
         }
         return None;
     }
@@ -349,7 +380,7 @@ pub(super) fn row_index(run: &Run, key: &str) -> Option<usize> {
         if key == file_id(&run.query.root, &f.file) {
             return Some(at);
         }
-        at += 1 + f.ms.len();
+        at += f.rows();
     }
     None
 }

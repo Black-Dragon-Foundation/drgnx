@@ -28724,6 +28724,13 @@
         "additionalProperties": false,
         "description": "`search/run`: run SEARCH over ROOT and send its matches to VIEW as rows (the event `view-patch`): a reset at once,\nthen each file's header and matches as it is complete. A newer search of the same view stops this one. The rows\npreview SEARCH's `replace` (old struck out, new beside it; a regexp search's `\\1` are the groups). Text mode with\nthe scopes Project and File (`scope.files`, the one file), so far; Symbol (a name's definitions, then its uses) and\nMeaning (the chunks a question finds, each with its symbol and score) ask the index, all their files at once, and\nare read-only: a `replace` is refused.",
         "properties": {
+          "context": {
+            "description": "A dim label row above the first match of each definition (the innermost one around it), from one parse of the\nfile; none at the top level or for a language without definitions. Default true (the setting\n`drgnx-search-context`).",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "ignore": {
             "anyOf": [
               {
