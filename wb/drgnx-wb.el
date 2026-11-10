@@ -237,14 +237,18 @@ no gap or padding."
 (defconst drgnx-wb--row-inset 6
   "Logical pixels between a row's fill and the card's edge, either side (`.tree' 6px): the dock windows' fringes.")
 
-(defun drgnx-wb-row-box ()
+(defun drgnx-wb-row-box (&optional ring)
   "A row's `:box': inside the row (negative widths, so nothing moves when it appears), in the fill's own colour (a
-flat button: only its rounded corners show); rounded where Glitnir draws.  No focus ring: the row's text and its tail
-\(an overlay string) are two box runs to Emacs, so a ring would show a seam between them and no right side."
-  (let ((w (- (drgnx-px-line 1))))
-    `(:line-width (,w . ,w) :style flat-button
-                  ,@(and (fboundp 'glitnir-active-p) (glitnir-active-p)
-                         (list :corner-radius (drgnx-px drgnx-wb--row-radius))))))
+flat button: only its rounded corners show), or with RING (a colour) a 1 px ring in it; rounded where Glitnir draws.
+A ring needs Glitnir: Nidhogg closes a box at a line's end on the tail's last stretch, and the selection puts its face
+on the row's newline too (`drgnx-wb-selection-sync'), so text and tail are one run."
+  (let ((w (- (drgnx-px-line 1))) (glitnir (and (fboundp 'glitnir-active-p) (glitnir-active-p))))
+    `(:line-width (,w . ,w) ,@(if (and ring glitnir) (list :color ring) '(:style flat-button))
+                  ,@(and glitnir (list :corner-radius (drgnx-px drgnx-wb--row-radius))))))
+
+(defun drgnx-wb--focus-colour ()
+  "The focus ring's colour: the theme's `drgnx-focus' ring, or nil."
+  (let ((c (plist-get (face-attribute 'drgnx-focus :box nil t) :color))) (and (stringp c) c)))
 
 (defvar drgnx-wb--hover-faces (make-hash-table :test #'equal)
   "(LINE RADIUS ROUNDED) → the hover's mouse face, shared by the rows (a scale change adds one).")
@@ -269,12 +273,14 @@ post-command sync only reads them.  Forgotten at a theme switch, a focus change 
 (defun drgnx-wb--row-faces-entry (focused)
   "The (FOCUSED FACE . END) entry of `drgnx-wb--row-faces', made on first use."
   (or (assq focused drgnx-wb--row-faces)
-      (let ((face `(:inherit ,(if focused 'drgnx-selected 'drgnx-selected-inactive) :box ,(drgnx-wb-row-box))))
+      (let ((face `(:inherit ,(if focused 'drgnx-selected 'drgnx-selected-inactive)
+                             :box ,(drgnx-wb-row-box (and focused (drgnx-wb--focus-colour))))))
         (car (push (cons focused (cons face (drgnx-wb--row-end face))) drgnx-wb--row-faces)))))
 
 (defun drgnx-wb-row-face (focused)
-  "The face of the selected row: FOCUSED (its window is the selected one), the selection (`.row.sel.focus', its ring
-not drawn: `drgnx-wb-row-box'); else the inactive selection (`.row.sel', VS Code's inactive selection), rounded alike.
+  "The face of the selected row: FOCUSED (its window is the selected one), the selection in the focus ring
+\(`.row.sel.focus', under Glitnir: `drgnx-wb-row-box'); else the inactive selection (`.row.sel', VS Code's inactive
+selection), rounded alike.
 The same object until `drgnx-wb--row-faces-clear'."
   (cadr (drgnx-wb--row-faces-entry focused)))
 
@@ -313,7 +319,10 @@ card's inset."
                           (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
                           (propertize " " 'display `(space :align-to (- right ,at-dots)))
                           (propertize c 'drgnx-row-control t)
-                          (propertize " " 'display `(space :align-to (- right ,end)))
+                          ;; the terminal's end; on a graphical frame a plain space, so the row's end is a stretch
+                          ;; of its own: Emacs draws a run of adjacent stretches with the first one's box edges, and
+                          ;; Nidhogg puts the closing edge on the last
+                          (propertize " " 'display `(when (not (display-graphic-p)) space :align-to (- right ,end)))
                           (drgnx-wb--row-end nil))))
     (when row (add-face-text-property 0 (length s) row t s))
     (put-text-property 0 (length s) 'mouse-face (if row (drgnx-wb--row-mouse-face row) (drgnx-wb-row-hover-face)) s)
@@ -326,6 +335,9 @@ text's colour, which shows the hidden control."
 
 (defvar-local drgnx-wb--selected-overlay nil "The overlay on the selected row (point's).")
 (defvar-local drgnx-wb--selected-tail nil "The tail overlay drawn in the selected row's face now.")
+(defvar-local drgnx-wb--selected-newline nil
+  "The overlay putting the selected row's face on its newline: the face at the line's end then has the row's box,
+so Emacs runs the box on into the tail at the end instead of closing it after the text.")
 
 (defun drgnx-wb-row-tail-overlay (eol mark face &optional control)
   "Put the tail (see `drgnx-wb-row-tail') of the row ending at EOL in an overlay over the row that remembers MARK,
@@ -376,6 +388,12 @@ touched."
     (move-overlay drgnx-wb--selected-overlay beg end)
     (unless (eq face (overlay-get drgnx-wb--selected-overlay 'face))
       (overlay-put drgnx-wb--selected-overlay 'face face))
+    (unless (overlayp drgnx-wb--selected-newline)
+      (setq drgnx-wb--selected-newline (make-overlay end end nil t))
+      (overlay-put drgnx-wb--selected-newline 'priority 5))
+    (move-overlay drgnx-wb--selected-newline end (min (point-max) (1+ end)))
+    (unless (eq face (overlay-get drgnx-wb--selected-newline 'face))
+      (overlay-put drgnx-wb--selected-newline 'face face))
     (dolist (o (overlays-in beg (min (point-max) (1+ end))))   ; post-command: a primitive loop, no closure
       (when (and (not tail) (or (overlay-get o 'drgnx-row-tail) (overlay-get o 'drgnx-row-end))) (setq tail o)))
     (let ((after (and (not tail) (cddr entry))))
@@ -411,7 +429,8 @@ remap)."
   (face-remap-add-relative 'default 'drgnx-ui-text 'drgnx-surface-panel)
   ;; the fringes are the rows' inset (`drgnx-wb--rows-fit'): in the island's colour, not the editor's
   (face-remap-add-relative 'fringe 'drgnx-surface-panel)
-  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--selected-tail nil drgnx-wb--rows-key nil)
+  (setq-local drgnx-wb--selected-overlay nil drgnx-wb--selected-tail nil drgnx-wb--selected-newline nil
+              drgnx-wb--rows-key nil)
   (add-hook 'post-command-hook #'drgnx-wb-selection-sync nil t)
   (unless (memq (current-buffer) drgnx-wb--rows-buffers) (push (current-buffer) drgnx-wb--rows-buffers))
   (drgnx-wb--rows-fit (let ((w (get-buffer-window nil t))) (if w (window-frame w) (selected-frame)))))
