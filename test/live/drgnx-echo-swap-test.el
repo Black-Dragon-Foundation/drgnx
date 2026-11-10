@@ -120,8 +120,9 @@
 (defconst drgnx-echo-swap-test--born
   "(let* ((f (seq-find (lambda (x) (and (display-graphic-p x) (not (frame-parent x)))) (frame-list))))
      (list :swaps drgnx-look-echo-swaps :box (and f (drgnx-look-echo-box f) t)
-           :no-row (and f (= (nth 3 (window-pixel-edges (frame-root-window f))) (frame-inner-height f)))))"
-  "In the session: the swaps so far, and whether the graphical frame has the box and no echo row.")
+           :no-row (and f (not (eq (window-frame (minibuffer-window f)) f)))))"
+  "In the session: the swaps so far, and whether the graphical frame has the box and no echo row (its minibuffer
+window is not its own).")
 
 (ert-deftest drgnx-live/echo-box-at-startup-swaps-no-frame ()
   (let* ((root (make-temp-file "drgnx-echo-start" t))
