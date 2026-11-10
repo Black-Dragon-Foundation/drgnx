@@ -1700,7 +1700,7 @@ Undo is off.
 
 `drgnx-view-define` returns NAME and stores a `drgnx-view-type` in `drgnx-view--types` (the fingerprint reads its
 names). SLICE is nil or at most `drgnx-view-slice` (0.004 s); DELAY is the throttle (nil: `drgnx-view-delay`, 0.1 s;
-0: the next timer pass); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
+0: the next timer pass; the first mark after a quiet spell draws one frame later, `drgnx-view-first-delay`); FOLLOW-TAIL keeps a window at the end; PATCHED (VIEW KEYS) runs after a draw with the keys
 it drew or grew, to put the view's own overlays back. Two keys are for hub-fed views (`drgnx-view-patch-attach
 ... :type NAME`, rendering with `drgnx-view-patch-render`): ACK non-nil sends `view/ack` after every applied patch,
 and EPOCH-RESET nil (default t) applies a patch of an older env epoch instead of holding it (a terminal's view: its
@@ -1794,9 +1794,13 @@ a `:full-draws`.
 
 ### Drawing live: the timer, the frame budget, visibility
 
-**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) DELAY #'drgnx-view--draw-buffer :args
-(list BUFFER) :min-interval DELAY :owner BUFFER)`: one draw DELAY after the first mark of a burst, at most one per
-DELAY. A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
+**The timer.** A mark arms `(drgnx-timer-soon (cons 'drgnx-view BUFFER) FIRST #'drgnx-view--draw-buffer :args
+(list BUFFER) :min-interval DELAY :owner BUFFER)`, FIRST `drgnx-view-first-delay` (16 ms, one frame; at most DELAY):
+the first mark after a quiet spell draws one frame later, and a stream draws at most once per DELAY. The frame's wait
+is the guard against a half burst: the hub writes a new search's reset and its first rows one after the other (1–3 ms
+apart, separate reads), and a draw at the end of the reset's batch would flash the list empty and then hold the rows
+for a throttle. Before 2026-11-10 the first draw waited the whole DELAY: 100 ms on every change after quiet (a
+search's first rows came 115 ms after it started, 11 ms of them the hub's). A type with DELAY 0 arms `soon` with 0 and no min-interval. `(drgnx-view-hurry VIEW)` arms the draw at the
 next timer pass whatever the DELAY, replacing one armed for later: for a change the user asked for and waits to see
 (the Work map's answer to a layout command; live changes keep the throttle). A slice that leaves work re-arms a second key,
 `(drgnx-timer-start (cons 'drgnx-view-more BUFFER) (drgnx-timer-chain-delay) …)` (0.0, or 16 ms while input is
@@ -2054,8 +2058,8 @@ from. drgnx never parses it: the hub client routes a line that starts `{"event":
   push answers `resync`). A row patch that names `model: N` tells Sjá (`nidhogg-view-named`) and touches its view; the
   draw's first slice (the type's SYNC, `drgnx-view-patch--sync`) drains the queued models up to N
   (`nidhogg-view-drain`), then inserts the rows, so a key answers from the model that is drawn. A model no row patch
-  names applies on the view's own timer (`(drgnx-view-model . VIEW)`, `nidhogg-view-due`) one `drgnx-view-delay`
-  later; one a patch named waits for that patch's draw. A model that does not apply at the drain drops the queue and
+  names applies on the view's own timer (`(drgnx-view-model . VIEW)`, `nidhogg-view-due`) one frame later after
+  a quiet spell (`drgnx-view-first-delay`), else at most once per `drgnx-view-delay`; one a patch named waits for that patch's draw. A model that does not apply at the drain drops the queue and
   asks for a reset.
 - **The hub goes:** `nidhogg-view-hub-lost` drops the queues and streams and marks every view stale (dimmed with the
   rows), and keys keep moving on what is drawn.

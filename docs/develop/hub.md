@@ -2384,7 +2384,8 @@ the search itself is `hrafn::grep`).
   the rows sent only.
 - **The model's cadence:** a file's batch adds its nodes and ids to what waits, and the model goes out with each file
   while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
-  editor's throttle `drgnx-view-delay`: it applies a model no row names one throttle after it comes, and every line it
+  editor's throttle `drgnx-view-delay`: it applies a model no row names one frame after it comes when it was quiet,
+  else one throttle after the last, and every line it
   reads costs it a redisplay pass), and before `search-grep-done` when anything waits. A send is what waited appended to
   what the editor holds (`Sent::append`: the nodes by id and one `splice` at the end of `order`, the ops `Doc::diff`
   would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is

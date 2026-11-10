@@ -33,7 +33,14 @@ finds it spent in the same pass draws its first rows only; the next pass starts 
   :type 'number :group 'drgnx)
 
 (defcustom drgnx-view-delay 0.1
-  "Seconds between a view's first mark and its draw, for a type that names no DELAY (the throttle)."
+  "Seconds between two draws of a view, for a type that names no DELAY (the throttle).  The first mark after a quiet
+spell draws sooner (`drgnx-view-first-delay')."
+  :type 'number :group 'drgnx)
+
+(defcustom drgnx-view-first-delay 0.016
+  "Seconds between the first mark after a quiet spell (no draw for the type's DELAY) and its draw: one frame.
+The change shows at once, and a burst arriving apart is drawn whole: a new search's reset and the first file's
+rows, which the hub writes one after the other (drawn at the end of the reset's batch, the list would flash empty)."
   :type 'number :group 'drgnx)
 
 (defconst drgnx-view--check-every 8
@@ -276,11 +283,11 @@ from the selected one (that terminal's) and their window trees.  Allocates nothi
 ;;;; Marks: a hash put or a queue push, then `drgnx-view--arm'
 
 (defun drgnx-view--arm (view &optional now)
-  "Arm VIEW's draw: the timer `(drgnx-view . BUFFER)', DELAY after the first mark of a burst, at most once per DELAY
-\(a DELAY of 0: at the next timer pass).  NOW: at the next timer pass whatever the DELAY, replacing a draw armed
-for later (`drgnx-view-hurry').  Nothing while VIEW's SYNC runs (that draw takes the marks), while a slice chain's
-continuation `(drgnx-view-more . BUFFER)' is pending (its next slice takes them), for a view no longer attached, or
-for a stale view that is still hidden: showing it arms the draw."
+  "Arm VIEW's draw: the timer `(drgnx-view . BUFFER)', `drgnx-view-first-delay' (at most DELAY) after the first mark
+of a burst, then at most once per DELAY (a DELAY of 0: at the next timer pass).  NOW: at the next timer pass
+whatever the DELAY, replacing a draw armed for later (`drgnx-view-hurry').  Nothing while VIEW's SYNC runs (that
+draw takes the marks), while a slice chain's continuation `(drgnx-view-more . BUFFER)' is pending (its next slice
+takes them), for a view no longer attached, or for a stale view that is still hidden: showing it arms the draw."
   (let ((buffer (drgnx-view--buffer view)))
     (when (and (not (eq view drgnx-view--syncing))
                (buffer-live-p buffer) (eq view (buffer-local-value 'drgnx-view buffer))
@@ -290,7 +297,7 @@ for a stale view that is still hidden: showing it arms the draw."
       (when now (drgnx-timer-cancel (cons 'drgnx-view buffer)))
       (let ((delay (if now 0 (or (drgnx-view-type-delay (drgnx-view--type view)) drgnx-view-delay))))
         (if (> delay 0)
-            (drgnx-timer-soon (cons 'drgnx-view buffer) delay #'drgnx-view--draw-buffer
+            (drgnx-timer-soon (cons 'drgnx-view buffer) (min delay drgnx-view-first-delay) #'drgnx-view--draw-buffer
                               :args (list buffer) :min-interval delay :owner buffer)
           (drgnx-timer-soon (cons 'drgnx-view buffer) 0 #'drgnx-view--draw-buffer
                             :args (list buffer) :owner buffer))))))
@@ -1755,10 +1762,11 @@ its model for the draw.  A gap or a full queue asks the hub for a reset; a queue
     (funcall drgnx-view-patch-send-function "view/resync" (list :view (drgnx-view-model-view state) :model t))))
 
 (defun drgnx-view-model--arm (state)
-  "One throttle from now, STATE's queued models no row patch named apply (`drgnx-view-model--due')."
+  "One frame from now after a quiet spell, else one throttle after the last time, STATE's queued models no row patch
+named apply (`drgnx-view-model--due'; `drgnx-view-first-delay', `drgnx-view-delay')."
   (let ((view (drgnx-view-model-view state)))
-    (drgnx-timer-soon (cons 'drgnx-view-model view) drgnx-view-delay #'drgnx-view-model--due
-                      :args (list view) :owner :core)))
+    (drgnx-timer-soon (cons 'drgnx-view-model view) drgnx-view-first-delay #'drgnx-view-model--due
+                      :args (list view) :owner :core :min-interval drgnx-view-delay)))
 
 (defun drgnx-view-model--drained (state r)
   "R, Sjá's answer to a drain of STATE's view, (APPLIED LAST VERSION): the faces by class go after a model applied and
