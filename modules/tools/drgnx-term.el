@@ -443,10 +443,11 @@ when it has none (a terminal frame's unspecified colour)."
     (if-let* ((rgb (drgnx-color-rgb c))) (drgnx-color-hex rgb) "")))
 
 (drgnx-epoch-define 'term-theme
-                    :doc "Raised when a theme is enabled or disabled (`drgnx-term--theme-changed'): colours are read again.")
+                    :doc "Raised when a theme is enabled or disabled, or a colour face of the terminal changes
+\(`drgnx-term--theme-changed'): colours are read again.")
 (drgnx-memo-define term-colours :on frame :keys ((drgnx-epoch 'term-theme))
                    :doc "The worker's `colours' for a frame (a text terminal's frame has other colours than a graphical
-one), read from the faces again only after a theme change.  Weak on the frame.")
+one), read from the faces again only after a theme change or a change of a face they read.  Weak on the frame.")
 
 (defun drgnx-term--colours ()
   "The `colours' entry's value: the faces' foreground, background and cursor, then `drgnx-term-color-0' to 15 when
@@ -956,6 +957,18 @@ with the path raw, or a path): the buffer's `default-directory' follows, for a l
               :text (if (string-empty-p (or title "")) body (format "%s: %s" title body))))
   (drgnx-notice-set 'term (mapcar #'cdr drgnx-term--notices)))
 
+(defconst drgnx-term--colour-faces
+  (cons 'drgnx-term-default (cons 'drgnx-term-cursor
+                                  (mapcar (lambda (n) (intern (format "drgnx-term-color-%d" n))) (number-sequence 0 15))))
+  "The faces `drgnx-term--colours' reads.")
+
+(defun drgnx-term--face-touched (face &rest _)
+  "`set-face-attribute' after-advice: a face the terminal's colours read changed with no theme change (Customize, a
+`set-face-attribute' in the user's config): the colours are read again once the changes of the moment are in, so the
+terminals follow at once, as they do for a theme."
+  (when (memq face drgnx-term--colour-faces)
+    (drgnx-timer-debounce 'term-face-change 0.1 #'drgnx-term--theme-changed :owner :core)))
+
 (defun drgnx-term--theme-changed (&optional _theme)
   "A theme was enabled or disabled: every terminal repaints from the faces now, without a reset, and its worker
 learns the new colours (a program reads them back)."
@@ -1178,7 +1191,9 @@ and the next Emacs of the session adopts them."
                        (add-hook 'drgnx-hub-connected-functions #'drgnx-term--connected)
                        (add-hook 'drgnx-view-model-functions #'drgnx-term--model-queued)
                        (add-hook 'enable-theme-functions #'drgnx-term--theme-changed)
-                       (add-hook 'disable-theme-functions #'drgnx-term--theme-changed)))
+                       (add-hook 'disable-theme-functions #'drgnx-term--theme-changed)
+                       (drgnx-module-advice #'set-face-attribute :after term-face-touched (face &rest _)
+                         (drgnx-term--face-touched face))))
 
 (provide 'drgnx-term)
 ;;; drgnx-term.el ends here
