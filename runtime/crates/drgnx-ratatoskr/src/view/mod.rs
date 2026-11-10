@@ -170,6 +170,24 @@ impl Store {
         Some(Self::model_event(hub, view, out))
     }
 
+    /// CONN's VIEW's model, one windowed list, moves by M over the same entries ([`model::Sent::move_window`]):
+    /// the `view-model` of the move alone, or `None` when it cannot say it (none sent, a reset due, the total changed)
+    /// and the builder publishes the whole.
+    pub fn move_model(
+        &mut self,
+        conn: u64,
+        view: &str,
+        m: model::WindowMove,
+        node: impl FnMut(usize) -> serde_json::Value,
+    ) -> Option<ViewModel> {
+        let hub = self.hub;
+        let out = self
+            .models
+            .get_mut(&(conn, view.to_owned()))?
+            .move_window(m, node)?;
+        Some(Self::model_event(hub, view, out))
+    }
+
     /// CONN's editor asks for VIEW's model again: a reset of what it was last sent.
     pub fn resync_model(&mut self, conn: u64, view: &str) -> Option<ViewModel> {
         let hub = self.hub;

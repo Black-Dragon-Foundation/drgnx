@@ -202,7 +202,7 @@ the steps it rests on in the chain class; open on it opens the conclusion with i
 
 (ert-deftest drgnx-work-trail-nav/a-long-trail-pages-at-its-edge ()
   "Pattern C: on a trail of 2,000 steps whose model holds the last 500, `up' from the window's first step stays (Sjá
-answers `more'), asks the hub once for the window centred there (`view/window' steps from 1250) and keeps the key;
+answers `more'), asks the hub once for the window a step before it (half the window: `view/window' steps from 1250) and keeps the key;
 keys held meanwhile answer at once from the window held and ask nothing more; when the model with the moved window is
 drained, the kept key runs and selects the step above.  Needs Sjá's `window' read and a `follow' that answers
 `more' (Nidhogg after .6's tarball): skipped without them, failed on the line (strict)."

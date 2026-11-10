@@ -2287,9 +2287,12 @@ and version it last sent (`view::Store`'s models, `view::model`), and sends what
 - **Windows.** A list longer than its builder sends whole is a window `{total, from}` of it. `view/window {view, list,
   from}` (user) asks for the window from FROM (a position in the whole list): the hub keeps it per (connection, view,
   list) and the view's builder (a trail's `steps`, a search's or an Explorer's `order`) sends its model again with
-  it, a diff that says the list whole (and, for a trail, its rows). Its answer is false for a view no such builder
+  it, a diff that says the list whole (and, for a trail, its rows). A search that has not grown since its last model
+  sends the move alone (`Sent::move_window`): the ids the new window drops, the nodes it adds (only those are built;
+  no node is compared) and the list, so a move costs what it changes. Its answer is false for a view no such builder
   holds. A view's from goes when its model starts again (a subscribe), when it closes and with its connection; the
-  editor centres the window on the key that stopped at its edge (core.md, "Keys through the model").
+  editor moves the window a step past the key that stopped at its edge (half the window, at most 2,000), or centres
+  it on a `walk-to`'s entry (core.md, "Keys through the model").
 - **The model goes first.** A builder writes the model before the rows built from it (`work::map`'s `publish`), and
   each `view-patch` carries `model: N`, the version its rows were built from; the editor applies its queued models up
   to N at the draw. A change only the model sees (a field the rows don't show) sends a model and no patch.
@@ -2380,8 +2383,10 @@ the search itself is `hrafn::grep`).
   would send, made from the batches alone, so the hub never rebuilds and diffs the whole model per send). The whole is
   sent, and diffed, for a run's first batch and when the editor's model is not this run's up to what waits (a reset
   due, a class's env that arrived); `Doc::diff` sends any changed list as the splice of what lies between its common
-  prefix and suffix, or whole when that is shorter, when its window's `from` moved, or when its total moved by other
-  than the ids added less those removed, which is how Sjá moves a window's total. Past 20,000 entries the list is a
+  prefix and suffix, or whole when that is shorter or when its total moved by other than the ids added less those
+  removed, which is how Sjá moves a window's total. A window whose `from` moved over the same total goes as at most
+  two splices that name the new `from` (the ids after the part both windows hold, then those before it; Sjá sets
+  `from` and keeps the total), or whole when the windows share no ids or that is shorter. Past 20,000 entries the list is a
   window whose total grows with no id to carry it, so each send is the window whole, sent when the search has doubled
   it, while rows go out and at the end. What waits goes with the next batch or at the end: a search whose files come
   more than 100 ms apart sends each with the next. Measured at 10k matches in 100 files (pinned lab): six model lines;

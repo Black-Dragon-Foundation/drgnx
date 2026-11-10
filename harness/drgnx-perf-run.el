@@ -713,6 +713,14 @@ collection, against before it opened, plus its buffer's text)."
       (defvar drgnx-perf--sw-lines 0 "The model lines the hub sent while the workload ran.")
       (defvar drgnx-perf--sw-arrived nil "When the first model line since it was cleared came (`float-time').")
       (defvar drgnx-perf--sw-handled 0.0 "The seconds the model lines' handler ran since it was cleared.")
+      ;; a page ends when the drain runs the waiting key, timed there (the wait's `accept-process-output' may sleep out
+      ;; its tick: Nidhogg's reader delivers lines without waking it)
+      (defvar drgnx-perf--sw-end nil "When the last page ended (`float-time').")
+      (defun drgnx-perf--sw-drained-ad (f &rest args)
+        (let* ((buf (drgnx-perf--sw-view)) (was (buffer-local-value 'drgnx-view-nav--pending buf)))
+          (prog1 (apply f args)
+            (when (and was (not (buffer-local-value 'drgnx-view-nav--pending buf)))
+              (setq drgnx-perf--sw-end (float-time))))))
       (defun drgnx-perf--sw-line (f &rest args)
         (let ((t0 (float-time)))
           (setq drgnx-perf--sw-lines (1+ drgnx-perf--sw-lines))
@@ -753,6 +761,7 @@ again in the next window; the entries the selection went from and to.  An error 
 held more than the window."
         (with-current-buffer (drgnx-perf--sw-view)
           (advice-add 'drgnx-hub--model-line :around #'drgnx-perf--sw-line)
+          (advice-add 'drgnx-view-nav-drained :around #'drgnx-perf--sw-drained-ad)
           ;; a new env between runs may search again (`drgnx-replace--hub-resubscribe'): its end first
           (unless (drgnx-perf--wait 120 (lambda () (and (eql 30000 (cdr drgnx-replace--hub-counts)) (not (drgnx-replace--busy-p))
                                                         (nidhogg-view-get (drgnx-perf--sw-h) 'window "order"))))
@@ -782,7 +791,7 @@ held more than the window."
                  (at from))
             (dotimes (_ 200)
               (let ((t0 (float-time)))
-                (setq drgnx-perf--sw-arrived nil drgnx-perf--sw-handled 0.0)
+                (setq drgnx-perf--sw-arrived nil drgnx-perf--sw-handled 0.0 drgnx-perf--sw-end nil)
                 (drgnx-replace--rows-step 1)
                 (push (* 1000 (- (float-time) t0)) keys)
                 (when (drgnx-view-nav-paging-p)
@@ -791,7 +800,7 @@ held more than the window."
                       (error "Premise: the window asked at %s did not come (pending %S, window %S, model lines since %d)"
                              (drgnx-view-nav-selection) (car drgnx-view-nav--pending)
                              (nidhogg-view-get h 'window "order") (- drgnx-perf--sw-lines lines))))
-                  (push (* 1000 (- (float-time) t0)) pages)
+                  (push (* 1000 (- (or drgnx-perf--sw-end (float-time)) t0)) pages)
                   (push (* 1000 (- drgnx-perf--sw-arrived t0)) lines)
                   (push (* 1000 drgnx-perf--sw-handled) handled))
                 (let ((i (drgnx-perf--sw-index h (drgnx-view-nav-selection))))
@@ -801,6 +810,7 @@ held more than the window."
                   (setq at i))
                 (setq most (max most (length (nidhogg-view-get h 'list "order"))))))
             (advice-remove 'drgnx-hub--model-line #'drgnx-perf--sw-line)
+            (advice-remove 'drgnx-view-nav-drained #'drgnx-perf--sw-drained-ad)
             (when (> most 20000) (error "Premise: Sjá held %d entries, more than the window's 20,000" most))
             (unless (> at 20000) (error "Premise: 200 Next Match keys from %d stopped at %d, inside the first window" from at))
             (list :key_ms (mapcar #'drgnx-perf--round2 (drgnx-perf-stats keys))

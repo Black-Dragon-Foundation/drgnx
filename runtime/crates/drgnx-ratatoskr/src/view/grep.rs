@@ -227,9 +227,70 @@ fn grep_doc(files: &[(String, Vec<Match>)], from: Option<usize>) -> Doc {
     grep_doc_in(files, MODEL_WINDOW, from)
 }
 
+/// The entries of a search's model window: every node id it holds (`held`: the parent of a window that starts inside a
+/// file first, outside `order`, then `order`'s ids), where each comes from (a file, and the match or none for the
+/// file's own entry), and the window: its total and first entry.
+struct Window<'a> {
+    total: usize,
+    from: usize,
+    held: Vec<String>,
+    order: std::ops::Range<usize>,
+    from_files: Vec<(&'a str, Option<&'a Match>)>,
+}
+
+impl Window<'_> {
+    /// `held[i]`'s wire object.
+    fn node(&self, i: usize) -> Value {
+        match self.from_files[i] {
+            (file, None) => file_node(file).1,
+            (file, Some(m)) => match_node(&file_id(file), m).1,
+        }
+    }
+}
+
+/// FILES' window of at most WINDOW entries from entry FROM (clamped so the window is full): its ids only, no node built.
+fn window_of(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>) -> Window<'_> {
+    let total = entries_of(files);
+    let from = from.unwrap_or(0).min(total.saturating_sub(window));
+    let end = from + window;
+    let mut w = Window {
+        total,
+        from,
+        held: Vec::new(),
+        order: 0..0,
+        from_files: Vec::new(),
+    };
+    let mut parent = false;
+    let mut at = 0;
+    for (file, ms) in files {
+        if at >= end {
+            break;
+        }
+        let n = 1 + ms.len();
+        if at + n <= from {
+            at += n;
+            continue;
+        }
+        parent |= at < from;
+        w.held.push(file_id(file));
+        w.from_files.push((file, None));
+        at += 1;
+        let skip = from.saturating_sub(at);
+        at += skip;
+        for m in ms.iter().skip(skip).take(end.saturating_sub(at)) {
+            w.held.push(match_id(m));
+            w.from_files.push((file, Some(m)));
+            at += 1;
+        }
+    }
+    w.order = usize::from(parent)..w.held.len();
+    w
+}
+
 /// [`grep_doc`] holding at most WINDOW entries, from entry FROM (clamped so the window is full). A window that starts
 /// inside a file holds the file's node too, outside `order`: Sjá shows a match under its file.
 fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize, from: Option<usize>) -> Doc {
+    let w = window_of(files, window, from);
     let mut d = Doc {
         descriptor: json!({
             "scheme": "tree",
@@ -243,37 +304,12 @@ fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize, from: Option<usize
         }),
         ..Doc::default()
     };
-    let total = entries_of(files);
-    let from = from.unwrap_or(0).min(total.saturating_sub(window));
-    let end = from + window;
-    let mut order = Vec::new();
-    let mut at = 0;
-    for (file, ms) in files {
-        if at >= end {
-            break;
-        }
-        let n = 1 + ms.len();
-        if at + n <= from {
-            at += n;
-            continue;
-        }
-        let (fid, node) = file_node(file);
-        d.nodes.insert(fid.clone(), node);
-        if at >= from {
-            order.push(fid.clone());
-        }
-        at += 1;
-        let skip = from.saturating_sub(at);
-        at += skip;
-        for m in ms.iter().skip(skip).take(end.saturating_sub(at)) {
-            let (id, node) = match_node(&fid, m);
-            d.nodes.insert(id.clone(), node);
-            order.push(id);
-            at += 1;
-        }
+    for (i, id) in w.held.iter().enumerate() {
+        d.nodes.insert(id.clone(), w.node(i));
     }
-    if total > order.len() {
-        d.windows.insert("order".into(), (total, from));
+    let order = w.held[w.order.clone()].to_vec();
+    if w.total > order.len() {
+        d.windows.insert("order".into(), (w.total, w.from));
     }
     d.lists.insert("order".into(), order);
     d
@@ -552,13 +588,30 @@ impl Views {
             .is_some()
     }
 
-    /// `view/window` of CONN's VIEW: its search's model again, with `order`'s window where the editor asked; false when
-    /// VIEW has no search.
+    /// `view/window` of CONN's VIEW: `order`'s window where the editor asked, sent as the move alone when the search
+    /// has not grown since the last model (the nodes it adds, the ids it drops, the list), else its model again; false
+    /// when VIEW has no search.
     pub(super) fn grep_window(&self, f: &Front, conn: u64, view: &str) -> bool {
         self.greps
             .current(conn, view, |run| {
                 let from = self.window_from(conn, view, "order");
-                self.publish_model(f, conn, view, grep_doc(&run.files, from));
+                // the same entries in another window: the move alone (the nodes held stay as they are)
+                let w = window_of(&run.files, MODEL_WINDOW, from);
+                let m = super::model::WindowMove {
+                    name: "order",
+                    window: (w.total, w.from),
+                    held: &w.held,
+                    order: w.order.clone(),
+                };
+                let moved = lock(&self.store).move_model(conn, view, m, |i| w.node(i));
+                match moved {
+                    Some(m) => {
+                        f.send_to(conn, "view-model", super::Store::model_data(m));
+                    }
+                    None => {
+                        self.publish_model(f, conn, view, grep_doc(&run.files, from));
+                    }
+                }
             })
             .is_some()
     }

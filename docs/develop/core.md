@@ -2093,13 +2093,15 @@ ID). `drgnx-view-nav-selection` and `drgnx-view-nav-field NAME &optional ID` rea
 - **Windows:** a list longer than the hub sends whole is a window of it (`{name, ids, total, from}`): a trail past
   500 steps (`steps`, its last ones), a search or an Explorer past 20,000 entries (`order`, its first ones). A key
   that stops at the window's edge gets `(ID . more)` from Sjá (`walk`, `walk-to`, and a `follow` whose link names a
-  direction). The view then asks the hub for the window centred on that edge, `view/window` `(:view V :list L :from
-  F)` (L: the walked list, or for `follow` the buffer's `drgnx-view-nav-list`, `"order"` by default, `"steps"` in a
+  direction). The view then asks the hub for the window a step past that edge (half the window, at most
+  `drgnx-view-nav-window-step`, 2,000: a page costs what it adds), or for a `walk-to` the window centred on its
+  entry, `view/window` `(:view V :list L :from F)` (L: the walked list, or for `follow` the buffer's `drgnx-view-nav-list`, `"order"` by default, `"steps"` in a
   trail; F from Sjá's `(nidhogg-view-get H 'window L)`), once while one is asked, and keeps the key in
   `drgnx-view-nav--pending` (one per buffer, the newest wins). When a model whose window moved is drained
   (`drgnx-view-model--drained` calls `drgnx-view-nav-drained`), the key runs again; point goes to the selection
   after the rows drawn from that model. Nothing waits for the hub: keys pressed meanwhile answer from the window
-  held. The hub keeps the from per (view, list) and its builder sends the model with that window, whole (hub.md).
+  held. The hub keeps the from per (view, list) and its builder sends the model with that window; a search that has not
+  grown since sends the move alone (the nodes it adds, the ids it drops, the list: `Sent::move_window`, hub.md).
 - **A broken view** (Sjá's breaker tripped after two panics): a key answers nil and the buffer posts a `render` `fail`
   condition keyed `(view-broken . VIEW)`, which the doctor's `views` row fails on; the view's last instance closing
   clears it. The doctor's `view-model` row fails on an Emacs without `nidhogg-view-push` (no Sjá, or a Nidhogg older
