@@ -99,12 +99,22 @@ SNAP is the snapshot, SINCE when it began running (float seconds) and NOW the ti
   (let* ((snap drgnx-agent-panel--snap)
          (name (or (plist-get snap :name) drgnx-agent-panel--session "agent"))
          (lens (drgnx-agent-panel--lens)))
-    (concat " " (drgnx-look-icon 'bot 'drgnx-accent) " "
-            (propertize name 'face 'drgnx-agent-panel-title)
-            (propertize (format " · %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since (float-time)))
-                        'face 'drgnx-agent-panel-subtle)
-            (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 12)))))) lens
-            "\n")))
+    (let* ((head (concat " " (drgnx-look-icon 'bot 'drgnx-accent) " " (propertize name 'face 'drgnx-agent-panel-title)))
+           (status (propertize (format " · %s" (drgnx-agent-panel--status-line snap drgnx-agent-panel--busy-since (float-time)))
+                               'face 'drgnx-agent-panel-subtle))
+           (width (drgnx-agent-panel--width))
+           ;; what is left between the name and the lens, with 12 px either side of the lens
+           (room (and width (- width (string-pixel-width head) (string-pixel-width lens) (drgnx-px 24)))))
+      (concat head (if room (drgnx-agent-panel--fit status room) status)
+              (propertize " " 'display `(space :align-to (- right (,(+ (string-pixel-width lens) (drgnx-px 12)))))) lens
+              "\n"))))
+
+(defun drgnx-agent-panel--fit (s px)
+  "S cut to at most PX pixels wide, ending in … when cut (nothing when not even that fits)."
+  (if (<= (string-pixel-width s) px) s
+    (let ((n (length s)))
+      (while (and (> n 0) (> (string-pixel-width (concat (substring s 0 n) "…")) px)) (cl-decf n))
+      (if (> n 0) (concat (substring s 0 n) (propertize "…" 'face (get-text-property 0 'face s))) ""))))
 
 (defun drgnx-agent-panel--chips (snap)
   "The chips the snapshot feeds, a list of strings; one the hub did not feed is not there."
@@ -256,9 +266,9 @@ else when the chat's toggle for its type is on."
            (if drgnx-agent-panel-disclosure (mapconcat #'symbol-name drgnx-agent-panel-disclosure ", ") "titles only")
            (if drgnx-agent-panel--defaults-unsaved " (not saved: your settings file refused it)" "")))
 
-(defface drgnx-agent-panel-tag '((t :inherit (drgnx-ui-caption drgnx-text-subtle)))
+(defface drgnx-agent-panel-tag '((t :inherit drgnx-pill))
   "A step type of the strip whose detail is closed." :group 'drgnx-agent-panel)
-(defface drgnx-agent-panel-tag-on '((t :inherit drgnx-chip))
+(defface drgnx-agent-panel-tag-on '((t :inherit drgnx-pill-on))
   "A step type of the strip whose detail is open (agent-panel.html `.disc .t.open')." :group 'drgnx-agent-panel)
 
 (defvar-local drgnx-agent-panel--strip-width nil
@@ -290,7 +300,7 @@ are the header's lens."
          (pills (mapcar (lambda (ty)
                           (let ((map (make-sparse-keymap)))
                             (define-key map [mouse-1] (lambda () (interactive) (drgnx-agent-panel-toggle-type ty)))
-                            (propertize (symbol-name ty)
+                            (propertize (format " %s " ty)
                                         'face (if (memq ty drgnx-agent-panel--disclosure) 'drgnx-agent-panel-tag-on
                                                 'drgnx-agent-panel-tag)
                                         'mouse-face 'drgnx-hover 'keymap map)))

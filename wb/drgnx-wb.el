@@ -374,17 +374,24 @@ and its own back after."
   "Non-nil when the current buffer's window is the selected window."
   (let ((window (get-buffer-window (current-buffer)))) (and window (eq window (selected-window)))))
 
+(defvar-local drgnx-wb-selection-unfocused nil
+  "Non-nil in the dock buffer whose selected row shows while another window has focus: the Explorer's, which follows
+the current buffer.  The sidebar shows one selected row (window-dark.html); the others show theirs only with focus.")
+
 (defun drgnx-wb-selection-sync ()
   "Mark point's row as the selected one (`drgnx-wb-row-face'): the selection with the focus ring while this
-buffer's window is the selected window, the inactive selection otherwise.  The fill covers the row's text, its tail
-\(drawn again in the face) or, on a row with none, a stretch to the right edge.  Cheap: three overlays at most are
-touched.  A line marked `drgnx-row-inert' (an empty state) is text, not a row: nothing is selected on it."
-  (if (get-text-property (pos-bol) 'drgnx-row-inert)
+buffer's window is the selected window, the inactive selection otherwise, and that only in the buffer that keeps it
+\(`drgnx-wb-selection-unfocused').  The fill covers the row's text, its tail (drawn again in the face) or, on a row
+with none, a stretch to the right edge.  Cheap: three overlays at most are touched.  A line marked `drgnx-row-inert'
+\(an empty state) is text, not a row: nothing is selected on it."
+  (if (or (get-text-property (pos-bol) 'drgnx-row-inert)
+          (not (or drgnx-wb-selection-unfocused (drgnx-wb--focused-p))))
       (drgnx-wb--selection-off)
     (drgnx-wb--selection-on)))
 
 (defun drgnx-wb--selection-off ()
-  "No row is selected: point is on an empty state (`drgnx-row-inert'), which is text, not a row."
+  "No row is selected: point is on an empty state (`drgnx-row-inert'), which is text, not a row, or the buffer shows
+no selection without focus."
   (dolist (o (list drgnx-wb--selected-overlay drgnx-wb--selected-newline))
     (when (overlayp o) (delete-overlay o)))
   (drgnx-wb--tail-paint drgnx-wb--selected-tail nil)
