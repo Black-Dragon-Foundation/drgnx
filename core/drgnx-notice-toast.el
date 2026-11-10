@@ -173,7 +173,8 @@ thing waiting on you)."
       (undecorated . t) (no-accept-focus . t) (no-focus-on-map . t) (no-other-frame . t) (skip-taskbar . t)
       (unsplittable . t) (no-special-glyphs . t) (desktop-dont-save . t)
       (internal-border-width . ,(drgnx-notice-toast--px parent 10)) (border-width . 0)
-      (child-frame-border-width . ,(drgnx-notice-toast--px parent ring))
+      ;; a line: whole device pixels (`drgnx-px-line'), none when the chrome has no ring
+      (child-frame-border-width . ,(if (> ring 0) (drgnx-px-line ring parent) 0))
       (menu-bar-lines . 0) (tool-bar-lines . 0) (tab-bar-lines . 0) (left-fringe . 0) (right-fringe . 0)
       (vertical-scroll-bars) (horizontal-scroll-bars) (cursor-type . nil) (visibility . nil)
       ,@(seq-remove (lambda (p) (memq (car p) '(child-frame-border-width transition))) chrome)

@@ -223,3 +223,18 @@ terminal, plus the box's 1 px).  Pattern D (the frame's kind is stubbed)."
               (drgnx-test-advance 2.5)
               (should-not (drgnx-decor-cursor-label-state (current-buffer) 'claude)))
           (advice-remove 'move-overlay 'decor-count))))))
+
+(ert-deftest drgnx-decor/boxes-follow-the-scale ()
+  "Pattern D: a box in logical pixels at a frame's scale: a card's edge (a thin line) 1, 1, 1, 2 device pixels at 1,
+1.25, 4/3 and 2; the focus ring 2, 3, 3, 4; a card's radius 8, 10, 11, 16; an inside line (negative) keeps its side;
+a zero width stays zero."
+  (drgnx-decor-test--glitnir t
+    (pcase-dolist (`(,s ,edge ,ring ,radius) '((1.0 1 2 8) (1.25 1 3 10) (1.3333333333333333 1 3 11) (2.0 2 4 16)))
+      (cl-letf (((symbol-function 'drgnx-pixels-scale) (lambda (&optional _f) s)))
+        (let ((card (drgnx-decor-scale-box (drgnx-decor-box 'drgnx-card-single) nil))
+              (focus (drgnx-decor-scale-box (drgnx-decor-box 'drgnx-focus-ring) nil)))
+          (should (equal (plist-get card :line-width) edge))
+          (should (equal (plist-get card :corner-radius) radius))
+          (should (equal (plist-get focus :line-width) ring))
+          (should (equal (plist-get (drgnx-decor-scale-box '(:line-width (-2 . 0)) nil) :line-width)
+                         (cons (- ring) 0))))))))

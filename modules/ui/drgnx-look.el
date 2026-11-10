@@ -48,6 +48,8 @@
 (declare-function drgnx-look-fonts-on "drgnx-look-fonts" ())
 (declare-function drgnx-look-fonts-off "drgnx-look-fonts" ())
 (declare-function drgnx-decor-faces-on "drgnx-decor" ())
+(declare-function drgnx-decor-scale-on "drgnx-decor" ())
+(declare-function drgnx-decor-scale-off "drgnx-decor" ())
 (declare-function drgnx-decor-activate "drgnx-decor" ())
 
 ;;;; Chrome (Glitnir, the compositor)
@@ -576,6 +578,8 @@ only the one remap is reapplied."
                        (drgnx-state-subscribe 'selected-changed #'drgnx-look--cards-selected-changed :lane 'now)
                        (drgnx-modules-push-undo "island faces" #'drgnx-look--islands-off)
                        (drgnx-look--islands-on)
+                       (drgnx-modules-push-undo "boxes at each frame's scale" #'drgnx-decor-scale-off)
+                       (drgnx-decor-scale-on)
                        ;; a card's side edge is a fringe beside the gap: pressing it drags the gap too
                        (drgnx-module-define-key 'global-map [right-fringe down-mouse-1] #'drgnx-look-edge-drag)
                        (drgnx-module-define-key 'global-map [left-fringe down-mouse-1] #'drgnx-look-edge-drag)
