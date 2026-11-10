@@ -86,6 +86,15 @@
   (should (= 1.0 (drgnx-look-fonts-px-to-ratio 13.5)))
   (should (= 0.889 (drgnx-look-fonts-px-to-ratio 12))))
 
+(ert-deftest drgnx-look-fonts/px-to-height-on-naglfar-is-points ()
+  "Pattern D: on Naglfar a logical pixel is a point (macOS counts 72 a logical inch), so 13.5 px is :height 135 and
+the code font looks the size it does on Linux; elsewhere 13.5 px stays 101."
+  (cl-letf (((symbol-function 'drgnx-look-fonts--points-p) (lambda () t)))
+    (should (= 135 (drgnx-look-fonts-px-to-height 13.5)))
+    (should (= 120 (drgnx-look-fonts-px-to-height 12))))
+  (cl-letf (((symbol-function 'drgnx-look-fonts--points-p) (lambda () nil)))
+    (should (= 101 (drgnx-look-fonts-px-to-height 13.5)))))
+
 (ert-deftest drgnx-look-fonts/setting-beats-a-theme ()
   "Pattern D: a theme that names a family wins over the default; a setting wins over the theme and writes only the
 attributes the user set, as the face's override spec."

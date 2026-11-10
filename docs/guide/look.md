@@ -137,7 +137,9 @@ A role's plist has these keys, and you give only the ones you want to change:
 - `:family` a family name, or `ui` / `code` for "the same as that role";
 - `:fallback` families to try, in order, when the family is not installed;
 - `:size` a **ratio to the code size** (1.0 is the code size, 13.5 px), so zooming (`View: Zoom In`) scales every role
-  together; 13 px is 0.963, and a size typed on the settings page as pixels is stored as that ratio;
+  together; 13 px is 0.963, and a size typed on the settings page as pixels is stored as that ratio. A pixel here is
+  a logical pixel (a point on macOS), so 13.5 px is the same size on the screen on Linux (10.1 pt at 96 dpi) and on
+  macOS (13.5 pt);
 - `:weight` a weight name such as `regular`, `semibold` or `bold`;
 - `:line-height` (the code roles) pixels per line;
 - `:ligatures` (the code role) `t` or `nil`.
@@ -223,8 +225,10 @@ tabs' faces and the header rows' band (`drgnx-wb-bar`) name no `:height` at all.
 
 `drgnx-look-density` is `compact`, `comfortable` (the default) or `roomy`, and applies at once. Sizes are logical
 pixels (a frame at scale 2 draws twice as many). At a fractional scale a size rounds half up, so a 26 px row is 33
-device pixels at 125 % and a 38 px row 48, and a thin line (a card's edge, a divider) is always whole: 1 device pixel
-at 125 % and 133 %, 2 at 200 %:
+device pixels at 125 % and a 38 px row 48 (the status bar's 24 px row is 30, its 2 px gaps 3), and a thin line (a
+card's edge, a divider) is always whole: 1 device pixel at 125 % and 133 %, 2 at 200 %. The boxes of cards, chips,
+buttons and focus rings follow each frame's own scale, its UI scale included: a 2 px focus ring is 3 device pixels
+at 125 % and a card's 8 px corner 10:
 
 | Thing | Compact | Comfortable | Roomy |
 | --- | --- | --- | --- |
@@ -248,6 +252,28 @@ code role's `:line-height`); while it is set it still wins, as a default `line-s
 rows take the new tree row, every editor's tab row the new tab row and every status bar its new height. They are made
 in the pixels of the frame that shows them, again when its scale changes (a frame moved to a ×2 monitor), and a
 sidebar made before any graphical frame (a daemon's) gets its rows when a graphical frame first shows it.
+
+## UI scale
+
+`drgnx-look-scale` makes everything bigger on top of the display's own scale: every size above and every font, from
+100 % (the default) to 200 % in steps of 5. It applies at once to every frame, frames made later included, with no
+restart. At 110 % on a 125 % display a 26 px row is 36 device pixels (26 × 1.25 × 1.1, rounded half up) and a 16 px
+icon 22, and the fonts are opened at 96 dpi × 1.25 × 1.1, so each is the size a fresh start at that scale gives.
+When a frame's display scale changes (you change it in the display settings, or drag the frame to a monitor at
+another scale), every size follows at once, the code line, the gap, the bars and the boxes included, and a scale
+back where it was gives every size back exactly.
+
+- **Zoom In** and **Zoom Out** (`C-=` and `C--` in the VS Code profile) add or take 10 %; **Reset Zoom** (`C-0`)
+  gives 100 %. After one, `+`, `-` or `0` repeat it. Each step is saved in your settings.el.
+- **UI Scale…** (the palette) asks for a percent.
+- **Per monitor:** `drgnx-look-scale-monitors` maps a monitor's name to its own percent, say
+  `(("eDP-1" . 125))` for the laptop panel; a frame there takes it instead of the global one, and changes when it moves
+  to another monitor or its monitor is unplugged. **UI Scale for This Monitor…** sets it for the selected frame's
+  monitor, or clears it when you answer `default`.
+- The Emacs profile leaves `C-x C-+` and the rest to stock `text-scale`, which sizes one buffer's text; the UI scale is
+  in the palette there.
+
+Turning the look off gives every frame its own sizes back; the setting stays for the next time.
 
 ## Popups and the palette
 

@@ -19,10 +19,10 @@
 (require 'drgnx-setting)
 (require 'drgnx-state)
 (require 'drgnx-type-faces)
+(require 'drgnx-pixels)
 
 (defvar drgnx-look-font-code)
 (defvar drgnx-look-fonts-applied-hook)
-(declare-function frame-scale-factor "frame" (&optional frame))
 (declare-function drgnx-module-running-p "drgnx-modules" (module))
 
 (defconst drgnx-look-density-table
@@ -46,10 +46,6 @@ change applies at once."
         (d (or density drgnx-look-density)))
     (nth (pcase d ('compact 1) ('comfortable 2) ('roomy 3) (_ 2)) row)))
 
-(defun drgnx-look-density--scale (frame)
-  "FRAME's scale (a frame pixel is a device pixel on the native shell); 1.0 without one."
-  (if (fboundp 'frame-scale-factor) (float (frame-scale-factor frame)) 1.0))
-
 (defun drgnx-look-density-code-line ()
   "The code line's height in logical pixels: the code role's `:line-height' when the user set it, else the density's."
   (let ((value (default-value 'drgnx-look-font-code))
@@ -66,7 +62,7 @@ change applies at once."
   "The `line-spacing' FRAME needs, in device pixels: the code line less the frame's line height.  nil when the
 user set a default `line-spacing', which then stays."
   (unless (default-value 'line-spacing)
-    (max 0 (- (round (* (drgnx-look-density-code-line) (drgnx-look-density--scale frame)))
+    (max 0 (- (drgnx-px (drgnx-look-density-code-line) frame)
               (frame-char-height frame)))))
 
 (defun drgnx-look-density-apply-frame (frame)
@@ -116,8 +112,8 @@ user set a default `line-spacing', which then stays."
 (defun drgnx-look-ui-line-spacing (&optional line-px density scale)
   "The cons (TOP . BOTTOM) that brings a UI buffer's rows from LINE-PX device pixels (default the selected frame's
 line height) to the tree row at DENSITY and SCALE: the extra pixels half above and half below, the odd one below."
-  (let* ((scale (or scale (drgnx-look-density--scale nil)))
-         (row (round (* (drgnx-look-density-value 'tree-row density) scale)))
+  (let* ((scale (or scale (drgnx-pixels-scale)))
+         (row (drgnx-px (drgnx-look-density-value 'tree-row density) nil scale))
          (extra (max 0 (- row (or line-px (frame-char-height)))))
          (top (/ extra 2)))
     (cons top (- extra top))))

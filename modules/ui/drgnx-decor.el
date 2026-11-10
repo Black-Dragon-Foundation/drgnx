@@ -75,6 +75,67 @@ buttons are not here: their ring and radius are `drgnx-control''s, from the them
       (let ((attrs (copy-sequence (cdar (get (car entry) 'face-defface-spec)))))
         (drgnx-module-face-spec (car entry) `((t ,@(plist-put attrs :box (drgnx-decor-box (car entry))))))))))
 
+;;;; Boxes at each frame's scale
+
+(defconst drgnx-decor--scaled-faces
+  '(drgnx-chip drgnx-badge drgnx-focus-ring drgnx-card-top drgnx-card-mid drgnx-card-bottom drgnx-card-single
+               drgnx-hover drgnx-focus drgnx-control drgnx-control-primary)
+  "The faces whose `:box' is in logical pixels: on each frame its line width goes through `drgnx-px-line' and its
+corner radius through `drgnx-px'.")
+
+(defun drgnx-decor--scale-width (w frame)
+  "A box line width W (logical, negative drawn inside) in FRAME's pixels."
+  (if (and (numberp w) (/= w 0)) (* (if (< w 0) -1 1) (drgnx-px-line (abs w) frame)) w))
+
+(defun drgnx-decor-scale-box (box frame)
+  "The `:box' value BOX, in logical pixels, in FRAME's own pixels."
+  (cond ((numberp box) (drgnx-decor--scale-width box frame))
+        ((consp box)
+         (let ((b (copy-sequence box)) (lw (plist-get box :line-width)) (r (plist-get box :corner-radius)))
+           (when lw
+             (setq b (plist-put b :line-width (if (consp lw)
+                                                  (cons (drgnx-decor--scale-width (car lw) frame)
+                                                        (drgnx-decor--scale-width (cdr lw) frame))
+                                                (drgnx-decor--scale-width lw frame)))))
+           (when (numberp r) (setq b (plist-put b :corner-radius (drgnx-px r frame))))
+           b))
+        (t box)))
+
+(defun drgnx-decor-scale-frame (frame &optional logical)
+  "Give FRAME its own boxes of `drgnx-decor--scaled-faces': each face as its specs (defface, themes, the module's)
+make it on FRAME, its box at FRAME's scale; with LOGICAL only the specs' (undoing it)."
+  (when (and (frame-live-p frame) (display-graphic-p frame))
+    (dolist (face drgnx-decor--scaled-faces)
+      (when (facep face)
+        (face-spec-recalc face frame)
+        (unless logical
+          (let* ((box (face-attribute face :box frame)) (want (drgnx-decor-scale-box box frame)))
+            (unless (equal want box)
+              (set-face-attribute face frame :box want))))))))
+
+(defun drgnx-decor--scale-all (&rest _)
+  "Every frame's boxes at its scale (a theme, the density or the UI scale changed)."
+  (dolist (f (frame-list)) (drgnx-decor-scale-frame f)))
+
+(defun drgnx-decor-scale-on ()
+  "Boxes at each frame's scale, now and when a frame is made, its scale changes, a theme comes or the UI scale or
+density changes, until `drgnx-decor-scale-off'."
+  (add-hook 'after-make-frame-functions #'drgnx-decor-scale-frame)
+  (add-hook 'nidhogg-frame-scale-change-functions #'drgnx-decor-scale-frame)
+  (add-hook 'enable-theme-functions #'drgnx-decor--scale-all 95)
+  (add-hook 'disable-theme-functions #'drgnx-decor--scale-all 95)
+  (add-hook 'drgnx-look-density-changed-hook #'drgnx-decor--scale-all)
+  (drgnx-decor--scale-all))
+
+(defun drgnx-decor-scale-off ()
+  "Undo `drgnx-decor-scale-on': the hooks go and every frame's boxes are the logical ones again."
+  (remove-hook 'after-make-frame-functions #'drgnx-decor-scale-frame)
+  (remove-hook 'nidhogg-frame-scale-change-functions #'drgnx-decor-scale-frame)
+  (remove-hook 'enable-theme-functions #'drgnx-decor--scale-all)
+  (remove-hook 'disable-theme-functions #'drgnx-decor--scale-all)
+  (remove-hook 'drgnx-look-density-changed-hook #'drgnx-decor--scale-all)
+  (dolist (f (frame-list)) (drgnx-decor-scale-frame f t)))
+
 ;;;; Chips, buttons, card rows
 
 (defun drgnx-decor-chip (text &optional face icon)

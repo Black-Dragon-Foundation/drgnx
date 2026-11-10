@@ -66,9 +66,13 @@ its own faces.  Call it when a row's memo changes, never on every redisplay."
 terminal, a port that lays out in logical pixels) a frame pixel is a logical pixel."
   (or (featurep 'nidhogg-wayland) (featurep 'naglfar)))
 
-(defun drgnx-pixels-ui-scale (&optional _frame)
-  "The UI scale on FRAME: 1.0 (the look's own sizes)."
-  1.0)
+(defun drgnx-pixels-ui-scale (&optional frame)
+  "The UI scale on FRAME (default the selected frame): its root frame's `drgnx-ui-scale' parameter, which the look's
+UI scale sets (modules/ui/drgnx-look-scale.el); 1.0 without one."
+  (let ((f (or frame (selected-frame))))
+    (while (frame-parent f) (setq f (frame-parent f)))
+    (let ((s (frame-parameter f 'drgnx-ui-scale)))
+      (if (numberp s) (float s) 1.0))))
 
 (defun drgnx-pixels-scale (&optional frame)
   "FRAME's frame pixels per logical pixel: its display scale on a native shell (1.0 elsewhere) times the UI scale."
