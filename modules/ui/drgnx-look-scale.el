@@ -18,7 +18,7 @@
 (require 'drgnx-pixels)
 
 (defvar drgnx-look-density-changed-hook)
-(declare-function nidhogg-set-frame-text-zoom "nhwl-scale" (frame zoom))
+(declare-function nidhogg-set-frame-text-zoom "nidhogg-scale" (frame zoom))
 (declare-function drgnx-settings-defaults-save "drgnx-settings-defaults" (var value))
 (declare-function drgnx-module-running-p "drgnx-modules" (module))
 (declare-function drgnx-look-density-apply "drgnx-look-density")
