@@ -653,6 +653,12 @@ The width is noted `:by auto' (`drgnx-state-note-intent'): a width you chose is 
   (when-let* ((windows (drgnx-wb--dock-windows)))
     (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
     (when (memq (selected-window) windows) (drgnx-wb-focus-editor))
+    (drgnx-wb--delete-dock windows)))
+
+(defun drgnx-wb--delete-dock (windows)
+  "Delete the dock's WINDOWS.  Their width goes to the editor groups in proportion to their widths, as showing the
+dock takes it back, so a hide and a show leave each group as wide as it was."
+  (let ((window-combination-resize t))
     (dolist (w windows) (when (window-live-p w) (delete-window w)))))
 
 (defvar drgnx-wb-view-providers nil
@@ -672,7 +678,7 @@ sidebar is shown first.  A view with no sections is a `user-error' and changes n
       (when-let* ((windows (drgnx-wb--dock-windows)))
         (drgnx-state-note-intent nil :sizes 'left (window-pixel-width (car windows)) :by 'auto)
         (when in-dock (drgnx-wb-focus-editor))
-        (dolist (w windows) (when (window-live-p w) (delete-window w))))
+        (drgnx-wb--delete-dock windows))
       (drgnx-state-note-intent nil :view nil view)            ; who asked: the running write's, or the default
       (drgnx-wb-show-sidebar)
       (when-let* ((_ in-dock) (w (car (drgnx-wb--dock-windows))))

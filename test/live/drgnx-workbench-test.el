@@ -31,6 +31,37 @@
       (drgnx-ui-stop (plist-get s :name))
       (delete-directory root t))))
 
+(ert-deftest drgnx-live/the-dock-gives-the-editor-groups-their-sizes-back ()
+  ;; Two editor groups side by side: C-b hides the sidebar and C-b shows it again; each group is as wide as it was
+  ;; (the sidebar's width comes back from where it went, not out of one group).
+  (let* ((root (make-temp-file "drgnx-wb" t))
+         (process-environment (cons (concat "DRGNX_UI_STATE=" root) process-environment))
+         (s (drgnx-ui-start "drgnx" "1400x850" 30))
+         (sess (drgnx-ui-own-session (plist-get s :name)))
+         (probe "(drgnx-uitest--json
+                   (list :groups (vconcat (mapcar #'window-pixel-width (drgnx-groups-list)))
+                         :dock (if (seq-some (lambda (w) (eq (window-parameter w 'drgnx-role) 'dock))
+                                             (window-list nil 'nomini))
+                                   t :false)))"))
+    (unwind-protect
+        (progn
+          (drgnx-ui-call sess "(progn (drgnx-wb-show-sidebar) (drgnx-wb-focus-editor) (drgnx-groups-split-right)
+                                      (drgnx-uitest--json (list :ok t)))")
+          (drgnx-ui-measure sess nil)
+          (let ((before (drgnx-ui-call sess probe)))
+            (should (eq (plist-get before :dock) t))
+            (should (= (length (plist-get before :groups)) 2))
+            (drgnx-ui-measure sess (list (list :keys "C-b")))
+            (let ((hidden (drgnx-ui-call sess probe)))
+              (should (eq (plist-get hidden :dock) :false))
+              (message "dock-split before %S hidden %S" before hidden))
+            (drgnx-ui-measure sess (list (list :keys "C-b")))
+            (let ((after (drgnx-ui-call sess probe)))
+              (message "dock-split after %S" after)
+              (should (equal (plist-get after :groups) (plist-get before :groups))))))
+      (drgnx-ui-stop (plist-get s :name))
+      (delete-directory root t))))
+
 (ert-deftest drgnx-live/panel-and-right-dock-are-pixel-stable ()
   ;; Real keys (VS Code profile): C-` toggles the panel, C-M-b the right dock — 10 times each, sizes
   ;; ±0 px, focus never taken; M-x describe-function car RET puts *Help* in the panel's Help tab.

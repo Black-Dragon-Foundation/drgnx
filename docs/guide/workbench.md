@@ -53,7 +53,8 @@ file tree, the Search view with the cursor in its Find field), like VS Code's `C
 Focus Explorer, Focus Outline and the like also switch the sidebar to their view first. The Search view is there from
 the start (its module sets up in the startup stage), so its key works in the first second too. Swapping the view another way
 (`drgnx-wb-show-view`, as a layout does; there are no clickable view tabs yet) swaps the sections in place, at the same width, and leaves focus where it was (a focus inside the
-sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had.
+sidebar moves to the new view's first section); with the sidebar hidden it shows it. Hiding and showing the sidebar brings back the view it had, and gives each editor
+group back the width it had: the sidebar's width goes to the groups and comes back from them in proportion.
 
 **Turning a module off** hides its panes (a panel tab, a right-dock tab) and removes its sections and tabs; nothing
 else in the workbench moves. The size you gave a pane and its place in front are remembered: turn the module on again
