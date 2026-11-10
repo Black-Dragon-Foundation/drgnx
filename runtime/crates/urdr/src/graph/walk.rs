@@ -194,7 +194,7 @@ fn live(as_of: Option<i64>) -> String {
 async fn guarded<R, F>(pool: &ReadPool, end: Instant, f: F) -> Result<R, Stop>
 where
     R: Send + 'static,
-    F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
+    F: FnOnce(&mut Connection) -> rusqlite::Result<R> + Send + 'static,
 {
     let late = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&late);
