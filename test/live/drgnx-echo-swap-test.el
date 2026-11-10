@@ -1,5 +1,6 @@
 ;;; drgnx-echo-swap-test.el --- live: a full workbench survives the echo box's frame swap (config=drgnx) -*- lexical-binding: t -*-
 ;; test-class: cond
+;; test-pattern: handshake
 ;; A frame cannot gain or lose its minibuffer, so turning the echo box on or off (`drgnx-look-echo-row') replaces each
 ;; graphical frame with one like it.  Here the frame holds the whole workbench: the Buffers and Explorer docks, two
 ;; editor groups (a split) with tabs, an auxiliary window, the agent panel (the mock agent, when $DRGNX_RATATOSKR_BIN names one) and the
