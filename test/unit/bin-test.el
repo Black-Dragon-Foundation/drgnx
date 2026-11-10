@@ -888,7 +888,9 @@ than any `drgnx-test-wait', so only the signal can end it while a test waits)."
 (defun drgnx-bin-test--env (dir parent &rest more)
   (append more   ; first: it wins over the unsets below
           (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config") (concat "TMPDIR=" parent)
-                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE")))
+                "DRGNX_TEST_SELECTOR=\"tmp-probe/leaks\"" "DRGNX_TEST_RESULTS" "DRGNX_RUN_TMP" "DRGNX_TEST_SHUFFLE"
+                ;; the outer run's file choice (a run of this file alone sets it) would replace the nested run's suite
+                "DRGNX_TEST_ONLY")))
 
 (defun drgnx-bin-test--spawn (env &rest args)
   "Start bin/drgnx ARGS with ENV; return the process."
@@ -1090,7 +1092,9 @@ macOS (no /proc there)."
                                drgnx-bin-test--bin
                                (append (list (concat "HOME=" dir) (concat "DRGNX_CONFIG_DIR=" dir "/config")
                                              (concat "DRGNX_CONTAINER=" rt) "DRGNX_TEST_IMAGE=cpu-image")
-                                       env)
+                                       env
+                                       ;; the outer run's file choice must not reach the container's argv
+                                       '("DRGNX_TEST_ONLY"))
                                "test" "--container" args))))
     (split-string (drgnx-bin-test--slurp log) "\n" t)))
 
