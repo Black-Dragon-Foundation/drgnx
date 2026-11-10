@@ -1,5 +1,5 @@
 url https://github.com/expressjs/express
 commit 43fca52d28a422c8be48fd489cbd4f2d6152bab6
 language JavaScript
-licence (The MIT License) Copyright (c) 2009-2014 TJ Holowaychuk <tj@vision-media.ca> 
+licence MIT
 fetched at test time by commit; never vendored
