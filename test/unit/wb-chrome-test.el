@@ -311,6 +311,24 @@ call, no bus flush: the `windows-changed' `now' subscriber."
       (should (string-match-p "b\\.txt" (substring-no-properties (window-parameter w 'tab-line-format))))
       (should (string-match-p "b\\.txt" (format "%S" (window-parameter w 'header-line-format)))))))
 
+(ert-deftest drgnx-chrome/tab-line-is-made-again-when-the-row-colour-changes ()
+  "A theme switch enables the new theme before its faces reach the frame, so a line made in between keeps the old
+row colour (light's tab row had dark's lift above the shown tab): the row's colour is part of what the line shows."
+  (drgnx-chrome-test--with dir
+    (drgnx-chrome-test--open dir "a.txt")
+    (let ((w (selected-window)) (made 0) (bg "#18191e") (orig (symbol-function 'drgnx-chrome--tab))
+          (face-bg (symbol-function 'face-background)))
+      (cl-letf (((symbol-function 'drgnx-chrome--tab) (lambda (&rest args) (setq made (1+ made)) (apply orig args)))
+                ((symbol-function 'face-background)
+                 (lambda (face &rest r) (if (eq face 'drgnx-chrome-tab) bg (apply face-bg face r)))))
+        (drgnx-chrome--tab-line w)
+        (setq made 0)
+        (drgnx-chrome--tab-line w)
+        (should (= made 0))
+        (setq bg "#f6f6f8")
+        (drgnx-chrome--tab-line w)
+        (should (= made 1))))))
+
 (ert-deftest drgnx-chrome/tab-line-memo-hits ()
   "The tab line is made once for 20 self-inserts and 20 applies, and again when a tab's name or modified flag changes."
   (drgnx-chrome-test--with dir

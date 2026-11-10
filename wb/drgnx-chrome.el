@@ -304,7 +304,8 @@ the window: one entry per live window, one string each.")
 (defun drgnx-chrome--tab-line-key (w rows)
   "What W's tab line shows, as a list for `equal': the shown buffer, the active group, ROWS, each tab's buffer, name,
 file and modified flag, and the settings its tabs are drawn with (glyphs, icons, fonts, corners, the frame's kind, the
-enabled themes: the row's colour and hairline are read from them, `drgnx-chrome--tab-paint')."
+enabled themes: the row's colour and hairline are read from them, `drgnx-chrome--tab-paint'), and the row's colour
+itself: a switch enables the new theme before its faces reach the frame, and a line made in between kept the old one."
   (list (window-buffer w) (eq w (drgnx-signal-editor-window)) rows
         (mapcar (lambda (b) (list b (buffer-name b) (buffer-file-name b) (and (buffer-modified-p b) t)))
                 (drgnx-chrome-tabs w))
@@ -312,7 +313,8 @@ enabled themes: the row's colour and hairline are read from them, `drgnx-chrome-
         (window-pixel-width w) (nth 1 (window-fringes w)) drgnx-chrome-transient-tabs
         (bound-and-true-p drgnx-face-glyphs) (bound-and-true-p drgnx-look-icons) drgnx-pixels-generation
         (and (fboundp 'glitnir-active-p) (glitnir-active-p) t) (drgnx-state-frame-kind (window-frame w))
-        (frame-char-width (window-frame w)) (frame-char-height (window-frame w)) custom-enabled-themes))
+        (frame-char-width (window-frame w)) (frame-char-height (window-frame w)) custom-enabled-themes
+        (face-background 'drgnx-chrome-tab (window-frame w) t)))
 
 (defun drgnx-chrome--tab-line (w)
   "W's tab line: the one kept while what it shows (`drgnx-chrome--tab-line-key') is the same, else made tab by tab

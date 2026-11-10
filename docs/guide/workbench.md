@@ -18,8 +18,8 @@ is the same on every row (worked out in pixels, kept in columns, so a terminal s
 `⋯` off its last two columns, whichever frame drew the rows): `M` and `R` in the warning colour, `U` and `A` in the success colour, `D` and conflicts in the
 failure colour, and `●` on a folder with changes. A `⋯` follows it in the Explorer, a `×` (close) in the Buffers panel,
 where a file with unsaved changes shows `●` there instead, always. The `⋯` and the `×`
-are drawn in the row's own colour, so it is invisible, until the pointer is on the row; the row at point always shows it,
-and so does every row on a terminal. The row at point is the selection: with the focus ring while the panel has the
+are drawn in the row's own colour, so it is invisible, until the pointer is on the row, the row at point's too;
+every row on a terminal shows it. The row at point is the selection: with the focus ring while the panel has the
 focus, quiet while another window has it.
 
 Everything here is built on plain Emacs — no treemacs, no ibuffer — does what people use those for (and VS

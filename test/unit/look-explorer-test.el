@@ -133,8 +133,9 @@ one, and `drgnx-selected-quiet' when another window is."
             (should (eq 'drgnx-selected-quiet (overlay-get o 'face)))))))))
 
 (ert-deftest drgnx-look-explorer/ellipsis-hidden-shown-on-point-and-selected ()
-  "Pattern D: on a graphical frame a row's ⋯ is drawn in the hidden face; the row at point shows it in its real
-face; every row carries the one mouse face that lights the control."
+  "Pattern D, window-dark.html: on a graphical frame a row's ⋯ is drawn in the hidden face, the row at point's too
+(it shows on hover only); a terminal shows it on every row; every row carries the one mouse face that lights the
+control."
   (drgnx-explorer-edge--with root
     (drgnx-look-explorer-test--as 'gui nil
       (let* ((buf (drgnx-explorer--buffer)) (a (drgnx-look-explorer-test--row "README.md"))
@@ -144,9 +145,9 @@ face; every row carries the one mouse face that lights the control."
         (set-window-buffer (selected-window) buf)
         (with-current-buffer buf (goto-char b) (drgnx-wb-selection-sync))
         (should (eq 'drgnx-control-hidden (funcall face-at a)))
-        (should (eq 'drgnx-ui-close (funcall face-at b)))
+        (should (eq 'drgnx-control-hidden (funcall face-at b)))
         (with-current-buffer buf (goto-char a) (drgnx-wb-selection-sync))
-        (should (eq 'drgnx-ui-close (funcall face-at a)))
+        (should (eq 'drgnx-control-hidden (funcall face-at a)))
         (should (eq 'drgnx-control-hidden (funcall face-at b)))
         (with-current-buffer buf
           (should (equal '(drgnx-hover-row) (ensure-list (get-text-property a 'mouse-face))))

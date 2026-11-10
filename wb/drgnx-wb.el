@@ -230,9 +230,10 @@ no gap or padding."
     ((or 'deleted 'conflict) 'drgnx-status-fail)
     (_ 'drgnx-status-info)))
 
-(defun drgnx-wb-row-tail (mark face shown &optional control)
-  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control, SHOWN in
-its real face or hidden until the row is hovered.  CONTROL is the ⋯ by default; a CONTROL with a face of its own (the
+(defun drgnx-wb-row-tail (mark face _shown &optional control)
+  "The string at a row's right edge: MARK (a string or nil) in FACE and the code face, then the control: on a
+graphical frame hidden until the row is hovered, the row at point's too (window-dark.html; _SHOWN no longer reveals
+it), on a terminal shown.  CONTROL is the ⋯ by default; a CONTROL with a face of its own (the
 Buffers panel's ● of a modified file) is always shown in it.  The control carries `drgnx-row-control', so a click
 can tell it from the row.  Both are placed from the window's right edge, so the marks of
 all rows line up; the whole string carries the row's mouse face.
@@ -250,7 +251,8 @@ painted it."
                         (if mark (propertize mark 'face (list face 'drgnx-code-small)) "")
                         (propertize " " 'display `(space :align-to (- right ,at-dots)))
                         (let ((c (or control drgnx-wb--control)))
-                          (propertize (if (get-text-property 0 'face c) c (drgnx-look-hover-control c shown))
+                          ;; on a graphical frame on hover only, the row at point's too (window-dark.html)
+                          (propertize (if (get-text-property 0 'face c) c (drgnx-look-hover-control c nil))
                                       'drgnx-row-control t))
                         (propertize " " 'display `(space :align-to (- right ,end))))
                 'mouse-face 'drgnx-hover-row)))
