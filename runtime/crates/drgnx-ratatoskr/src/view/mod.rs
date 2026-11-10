@@ -129,6 +129,25 @@ impl Store {
         Some(s.extend(nodes).map(|out| Self::model_event(hub, view, out)))
     }
 
+    /// CONN's VIEW's model gains NODES, new, and their IDS at the end of list NAME ([`model::Sent::append`]): the
+    /// `view-model` of that change alone, or `None` when there is no model to append to (none sent, a reset due, a
+    /// windowed list) and the builder publishes the whole.
+    pub fn append_model(
+        &mut self,
+        conn: u64,
+        view: &str,
+        nodes: Vec<(String, serde_json::Value)>,
+        name: &str,
+        ids: Vec<String>,
+    ) -> Option<ViewModel> {
+        let hub = self.hub;
+        let out = self
+            .models
+            .get_mut(&(conn, view.to_owned()))?
+            .append(nodes, name, ids)?;
+        Some(Self::model_event(hub, view, out))
+    }
+
     /// CONN's editor asks for VIEW's model again: a reset of what it was last sent.
     pub fn resync_model(&mut self, conn: u64, view: &str) -> Option<ViewModel> {
         let hub = self.hub;

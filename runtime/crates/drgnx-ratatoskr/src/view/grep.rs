@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// The rows a search sends a view: the first this many, and as many again each time the editor asks (the panel's shape,
 /// `agents/panel/look`); the model holds every match.
@@ -46,11 +47,22 @@ pub(super) struct Run {
     limit: usize,
     /// The rows sent so far: the first `sent` rows of `files`.
     sent: usize,
-    /// The entries (files and matches) the model last sent held: the model grows when the search has doubled it (each
-    /// send carries the whole list of ids), when rows go out, and at the end.
+    /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
+    /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
+    /// rows go out, and at the end.
     model_sent: usize,
+    /// The least time between two model sends ([`MODEL_EVERY`]; tests set it).
+    model_every: Duration,
+    /// When the model was last sent.
+    model_at: Option<Instant>,
+    /// The batches' nodes and ids not sent yet, in order.
+    waiting: (Vec<(String, Value)>, Vec<String>),
     cancel: Arc<AtomicBool>,
 }
+
+/// A search sends its model at most this often: the editor applies a model no row names one throttle
+/// (`drgnx-view-delay`, 0.1 s) after it comes, and every line it reads costs it a redisplay pass.
+const MODEL_EVERY: Duration = Duration::from_millis(100);
 
 /// The searches, one per (connection, view).
 #[derive(Default)]
@@ -78,6 +90,9 @@ impl Greps {
             limit: WINDOW,
             sent: 0,
             model_sent: 0,
+            model_every: MODEL_EVERY,
+            model_at: None,
+            waiting: (Vec::new(), Vec::new()),
             cancel: cancel.clone(),
         };
         if let Some(old) = lock(&self.runs).insert((conn, view.to_owned()), run) {
@@ -175,6 +190,37 @@ fn entries_of(files: &[(String, Vec<Match>)]) -> usize {
     files.iter().map(|(_, ms)| 1 + ms.len()).sum()
 }
 
+/// FILE's node in the model: its id and wire object.
+fn file_node(file: &str) -> (String, Value) {
+    let fid = file_id(file);
+    let name = Path::new(file)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let node = json!({"id": fid, "kind": "file", "flags": 1,
+                      "fields": [["label", name], ["path", file]]});
+    (fid, node)
+}
+
+/// M's node in the model, a child of the file node FID: its id and wire object.
+fn match_node(fid: &str, m: &Match) -> (String, Value) {
+    let id = match_id(m);
+    let node = json!({"id": id, "kind": "match", "flags": 0, "parent": fid,
+                      "fields": [["label", format!("{}{}{}", m.before.trim_start(), m.text, m.after)],
+                                 ["file", m.file], ["line", m.line], ["col", m.col], ["end", m.end],
+                                 ["text", m.text]]});
+    (id, node)
+}
+
+/// FILE's batch MS as the model's nodes and the ids it adds to `order`.
+fn batch_nodes(file: &str, ms: &[Match]) -> (Vec<(String, Value)>, Vec<String>) {
+    let (fid, node) = file_node(file);
+    let mut nodes = vec![(fid.clone(), node)];
+    nodes.extend(ms.iter().map(|m| match_node(&fid, m)));
+    let ids = nodes.iter().map(|(id, _)| id.clone()).collect();
+    (nodes, ids)
+}
+
 /// The search's model: a `tree` of FILES in the rows' order, each open, with its matches as children.
 fn grep_doc(files: &[(String, Vec<Match>)]) -> Doc {
     grep_doc_in(files, MODEL_WINDOW)
@@ -201,26 +247,12 @@ fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize) -> Doc {
         if order.len() >= window {
             break;
         }
-        let fid = file_id(file);
-        let name = Path::new(file)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        d.nodes.insert(
-            fid.clone(),
-            json!({"id": fid, "kind": "file", "flags": 1,
-                   "fields": [["label", name], ["path", file]]}),
-        );
+        let (fid, node) = file_node(file);
+        d.nodes.insert(fid.clone(), node);
         order.push(fid.clone());
         for m in ms.iter().take(window - order.len()) {
-            let id = match_id(m);
-            d.nodes.insert(
-                id.clone(),
-                json!({"id": id, "kind": "match", "flags": 0, "parent": fid,
-                       "fields": [["label", format!("{}{}{}", m.before.trim_start(), m.text, m.after)],
-                                  ["file", m.file], ["line", m.line], ["col", m.col], ["end", m.end],
-                                  ["text", m.text]]}),
-            );
+            let (id, node) = match_node(&fid, m);
+            d.nodes.insert(id.clone(), node);
             order.push(id);
         }
     }
@@ -371,8 +403,27 @@ fn start_patches(store: &mut Store, conn: u64, view: &str) -> Vec<Patch> {
         .collect()
 }
 
-/// A file's matches: the model with them (none when nothing changed), then the rows after the ones sent, an insert (a
-/// reset for a class whose env just changed), which name its version.
+/// RUN's model as the editor should hold it now, when it holds less: the batches waiting appended to what it holds
+/// when that is this run's model up to them (never the whole rebuilt and diffed per send), else the whole.
+fn flush_model(store: &mut Store, conn: u64, view: &str, run: &mut Run) -> Option<ViewModel> {
+    let entries = entries_of(&run.files);
+    if run.model_sent >= entries {
+        return None;
+    }
+    let (nodes, ids) = std::mem::take(&mut run.waiting);
+    let appends =
+        run.model_sent > 0 && run.model_sent + ids.len() == entries && entries <= MODEL_WINDOW;
+    run.model_sent = entries;
+    run.model_at = Some(Instant::now());
+    appends
+        .then(|| store.append_model(conn, view, nodes, "order", ids))
+        .flatten()
+        .or_else(|| store.publish_model(conn, view, grep_doc(&run.files)))
+}
+
+/// A file's matches: the model with them when it is due ([`flush_model`]; none when nothing changed or a throttle
+/// window has not passed), then the rows after the ones sent, an insert (a reset for a class whose env just changed),
+/// which name its version.
 fn batch_patches(
     store: &mut Store,
     conn: u64,
@@ -382,11 +433,25 @@ fn batch_patches(
     ms: Vec<Match>,
 ) -> (Option<ViewModel>, Vec<Patch>) {
     let mut rows = file_rows(run, &file, &ms);
+    let (nodes, ids) = batch_nodes(&file, &ms);
     run.files.push((file, ms));
     // only what the window still has room for
     rows.truncate(run.limit.saturating_sub(run.sent));
     let entries = entries_of(&run.files);
-    let model = if !rows.is_empty() || entries >= 2 * run.model_sent {
+    let model = if entries <= MODEL_WINDOW {
+        // the batch's nodes wait; they go when rows go out (the rows name the model they were built from), or once a
+        // throttle window has passed since the last send, with the others waiting (SJA-MODEL-CADENCE-1)
+        run.waiting.0.extend(nodes);
+        run.waiting.1.extend(ids);
+        let due = !rows.is_empty() || run.model_at.is_none_or(|t| t.elapsed() >= run.model_every);
+        if due {
+            flush_model(store, conn, view, run)
+        } else {
+            None
+        }
+    } else if !rows.is_empty() || entries >= 2 * run.model_sent {
+        // past the model's window `order` is a window of the first entries: only its total grows, whole each time
+        run.waiting = (Vec::new(), Vec::new());
         run.model_sent = entries;
         store.publish_model(conn, view, grep_doc(&run.files))
     } else {
@@ -492,10 +557,9 @@ impl Views {
 
     fn grep_done(&self, f: &Front, conn: u64, view: &str, id: u64, error: Option<String>) {
         self.greps.with(conn, view, id, |run| {
-            // the model is whole before the search is done
-            if run.model_sent < entries_of(&run.files) {
-                run.model_sent = entries_of(&run.files);
-                self.publish_model(f, conn, view, grep_doc(&run.files));
+            // the model is whole before the search is done: what waits goes now
+            if let Some(m) = flush_model(&mut lock(&self.store), conn, view, run) {
+                f.send_to(conn, "view-model", super::Store::model_data(m));
             }
             let done = GrepDone {
                 view: view.to_owned(),

@@ -448,14 +448,14 @@ fn replace_previews_the_window_only() {
     assert!(n > 0 && n <= WINDOW, "{n}");
 }
 
-/// Once the rows' window is full the model is sent when the search has doubled it (each send is a delta, but each send
-/// costs the editor a redisplay and a queue entry: 101 sends cost five times the CPU of 9), and what is sent in all is
-/// about one whole model, since a list that grew by appending goes as a splice at its end.
+/// Every file sends a model, and what is sent in all is about one whole model, since a list that grew by appending goes
+/// as a splice at its end.
 #[test]
-fn the_model_grows_by_doubling_and_costs_about_one_whole_model() {
+fn every_file_sends_a_model_and_all_of_them_cost_about_one_whole_model() {
     let mut s = store();
     let greps = Greps::default();
     let id = run_of(&greps, "");
+    every_batch(&greps, id);
     start_patches(&mut s, CONN, "s");
     let (mut sends, mut bytes) = (0, 0);
     for f in 0..100 {
@@ -473,7 +473,7 @@ fn the_model_grows_by_doubling_and_costs_about_one_whole_model() {
             bytes += model.model.to_string().len();
         }
     }
-    assert!((3..=20).contains(&sends), "{sends} models for 100 files");
+    assert_eq!(sends, 100, "{sends} models for 100 files");
     let whole = greps
         .current(CONN, "s", |run| {
             grep_doc(&run.files).reset().to_string().len()
@@ -546,4 +546,112 @@ fn the_model_stream_is_the_fixture_sja_loads() {
         assert_eq!(list_ops.len(), 1);
         assert!(list_ops[0].get("splice").is_some(), "{list_ops:?}");
     }
+}
+
+/// Every file's batch sends a model, of that batch alone: its nodes and a splice at the end of `order`, built without
+/// the whole model (SJA-MODEL-CADENCE-1: rebuilding and diffing the whole per batch cost the hub seconds at 10k
+/// matches). What the editor then holds is the model whole.
+#[test]
+fn every_batch_sends_its_own_nodes_and_a_splice() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    every_batch(&greps, id);
+    start_patches(&mut s, CONN, "s");
+    let mut held = Vec::new();
+    // past the rows' window, so the later batches bring no rows; lines 4, 8 and 12 sort apart from their order
+    for f in 0..300 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms: Vec<Match> = (1..=3)
+            .map(|i| m(&file, i * 4, "a ", "needle", ""))
+            .collect();
+        held.push((file.clone(), ms.clone()));
+        let (model, _) = greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+            })
+            .unwrap();
+        let data = Store::model_data(model.expect("a model per batch"));
+        if f > 0 {
+            let ops = data["model"]["ops"].as_array().unwrap();
+            assert_eq!(ops.len(), 2, "{ops:?}");
+            assert_eq!(ops[0]["nodes"].as_array().unwrap().len(), 4);
+            assert_eq!(
+                ops[1]["splice"],
+                json!({"name": "order", "at": 4 * f, "remove": 0,
+                       "ids": [format!("f:{file}"), format!("m:{file}:4:2"), format!("m:{file}:8:2"), format!("m:{file}:12:2")]})
+            );
+        }
+    }
+    assert!(
+        s.publish_model(CONN, "s", grep_doc(&held)).is_none(),
+        "the editor holds the model whole"
+    );
+}
+
+/// RUN ID's models go out with every batch (no throttle window), as when batches come further apart than one.
+fn every_batch(greps: &Greps, id: u64) {
+    greps
+        .with(CONN, "s", id, |run| {
+            run.model_every = std::time::Duration::ZERO
+        })
+        .unwrap();
+}
+
+/// Within one of the editor's throttle windows the batches that bring no rows send nothing: their appends wait, and
+/// the next send carries them all, one `nodes` op and one splice (the editor applies a model no row names a throttle
+/// later anyway, and each line it reads costs it a redisplay pass). Rows name the model they were built from, so a
+/// batch with rows sends at once.
+#[test]
+fn appends_within_a_throttle_window_go_in_one_send() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    greps
+        .with(CONN, "s", id, |run| {
+            run.model_every = std::time::Duration::from_secs(3600)
+        })
+        .unwrap();
+    start_patches(&mut s, CONN, "s");
+    let mut held = Vec::new();
+    let mut sends = Vec::new();
+    // 101 rows a file: the first two fill the rows' window
+    for f in 0..10 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms: Vec<Match> = (1..=100).map(|l| m(&file, l, "a ", "needle", "")).collect();
+        held.push((file.clone(), ms.clone()));
+        let (model, _) = greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.clone(), ms)
+            })
+            .unwrap();
+        sends.push(model.is_some());
+    }
+    assert_eq!(
+        sends,
+        [
+            true, true, false, false, false, false, false, false, false, false
+        ]
+    );
+    let m = greps
+        .with(CONN, "s", id, |run| flush_model(&mut s, CONN, "s", run))
+        .unwrap()
+        .expect("the waiting appends");
+    let ops = Store::model_data(m)["model"]["ops"].clone();
+    let ops = ops.as_array().unwrap();
+    assert_eq!(ops.len(), 2, "{ops:?}");
+    assert_eq!(ops[0]["nodes"].as_array().unwrap().len(), 8 * 101);
+    assert_eq!(ops[1]["splice"]["at"], json!(2 * 101));
+    assert_eq!(ops[1]["splice"]["ids"].as_array().unwrap().len(), 8 * 101);
+    assert!(
+        greps
+            .with(CONN, "s", id, |run| flush_model(&mut s, CONN, "s", run))
+            .unwrap()
+            .is_none(),
+        "nothing waits"
+    );
+    assert!(
+        s.publish_model(CONN, "s", grep_doc(&held)).is_none(),
+        "the editor holds the model whole"
+    );
 }
