@@ -19,6 +19,7 @@
 (require 'drgnx-timer)
 (require 'drgnx-icons)
 (require 'drgnx-pixels)
+(require 'drgnx-ui-kit)                 ; the buttons
 
 (declare-function drgnx-agent-panel--key-at "drgnx-agent-panel")
 (declare-function drgnx-agent-panel-explain-note-always "drgnx-agent-panel-explain")
@@ -43,8 +44,9 @@
 (defvar drgnx-history--buffers)
 (defvar nidhogg-history-origin)
 
-(defface drgnx-agent-panel-ring '((t :inherit drgnx-status-attention :box (:line-width 2)))
-  "The ring round a card that waits on you." :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-perm-head '((t :inherit (drgnx-ui-text drgnx-chip-attention) :weight bold))
+  "The card of a request that waits on you (window-dark.html `.acard.perm'): its ring is in the attention colour (a
+card's ring takes its text's colour), on the attention tint." :group 'drgnx-agent-panel)
 
 (defconst drgnx-agent-panel-cards-max-files 20 "How many edited files get diff cards at most.")
 
@@ -82,14 +84,19 @@
 ;;;; Rows
 
 (defun drgnx-agent-panel-cards--box (lines props)
-  "LINES (strings without newlines) as a card: top, middle and bottom rows in the card faces, PROPS on every row."
+  "LINES (strings without newlines, or (TEXT . FACE)) as a card to the panel's right edge, 12 px in: top, middle and
+bottom rows in the card faces, PROPS on every row.  Each row's newline is outside the card's face: the card faces
+extend, so in it the run would go on to the window's edge and the ring stay open there."
   (let ((n (length lines)) (i -1))
     (mapconcat (lambda (l)
                  (cl-incf i)
                  (let ((card (cond ((= n 1) 'drgnx-card-single) ((= i 0) 'drgnx-card-top)
                                    ((= i (1- n)) 'drgnx-card-bottom) (t 'drgnx-card-mid))))
-                   (apply #'propertize (concat " " (if (consp l) (car l) l) " \n")
-                          'face (if (consp l) (list (cdr l) card) card) props)))
+                   (concat (apply #'propertize
+                                  (concat " " (if (consp l) (car l) l)
+                                          (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))
+                                  'face (if (consp l) (list (cdr l) card) card) props)
+                           (apply #'propertize "\n" props))))
                lines "")))
 
 (defun drgnx-agent-panel-cards--action (label command face help)
@@ -158,11 +165,24 @@ per run of one face, so its several faces would cut the ring; each card line is 
             (append (plist-get request :options) nil)))
 
 (defun drgnx-agent-panel-cards--perm-row (id)
+  "Request ID as a card (window-dark.html `.acard.perm'): what the agent asks, one line ringed in the attention colour
+on its tint, and under it Allow (the primary), Always and Deny as buttons with their keys.  The buttons sit under the
+card, not in it: their boxes would cut its ring."
   (if-let* ((r (drgnx-agent-panel-cards--request id)))
-      (concat (propertize (concat "  " (drgnx-agent-panel--one-line (or (plist-get r :title) "the agent asks") 70) "\n")
-                          'face 'drgnx-agent-panel-ring 'drgnx-agent-panel-perm id)
-              (propertize (concat "    ↵ Allow · A Always · D Deny\n")
-                          'face 'drgnx-agent-panel-ring 'drgnx-agent-panel-perm id))
+      (concat (propertize (concat " " (drgnx-look-icon 'shield) " "
+                                  (drgnx-agent-panel--one-line (or (plist-get r :title) "the agent asks") 70) "?"
+                                  (propertize " " 'display `(space :align-to (- right (,(drgnx-px 12))))))
+                          'face '(drgnx-agent-panel-perm-head drgnx-card-single) 'drgnx-agent-panel-perm id)
+              ;; the newline outside the card's face: in it the run would go on to the window's edge, the ring open
+              (propertize "\n" 'drgnx-agent-panel-perm id)
+              (propertize (concat " " (drgnx-agent-panel-cards--action " Allow ↵ " #'drgnx-agent-panel-allow
+                                                                       'drgnx-ui-button-primary "RET: allow it once")
+                                  " " (drgnx-agent-panel-cards--action " Always A " #'drgnx-agent-panel-always
+                                                                       'drgnx-ui-button "A: allow it from now on")
+                                  " " (drgnx-agent-panel-cards--action " Deny D " #'drgnx-agent-panel-reject
+                                                                       'drgnx-ui-button "D: deny it")
+                                  "\n")
+                          'drgnx-agent-panel-perm id))
     "\n"))
 
 ;;;; Commands

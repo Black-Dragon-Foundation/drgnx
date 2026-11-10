@@ -14,6 +14,7 @@
 (require 'drgnx-palette)                ; the palette scene's commands and history
 (declare-function drgnx-pane-show "drgnx-panes")
 (declare-function drgnx-panel-replay--wait "panel-replay-fixture")
+(declare-function drgnx-agent-panel-cards--permissions "drgnx-agent-panel-cards")
 
 (declare-function drgnx-uitest--json "drgnx-uitest")
 (declare-function drgnx-trust-folder "drgnx-trust")
@@ -267,19 +268,19 @@ from 201."
       (setq drgnx-panel-replay-prefix 3)
       (defalias 'drgnx-panel-replay-program
         (lambda ()
-          ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, and an edit
-          ;; that asks (the hub answers it in this setup: see LOOK-FIX-AGENT-PANEL-REST-1)
+          ;; the mockup's figures: a slow run (past `drgnx-agent-panel-slow-seconds'), a quick one, then a read
+          ;; that asks and stays open, so the permission card shows.  The replay session is a chat: the matrix
+          ;; answers a chat's edit or run Never (no card), and asks for its reads
           (concat "tool:read src/main.el\\nsay Reading the gateway: replies to a closed client are lost.\\n"
                   "tool:run sleep 11; echo 1 of 14 failed\\nsay 1 of 14 failed: gateway/reply-after-close.\\n"
                   "tool:edit src/main.el\\nsay Queue the reply when the client went away.\\n"
                   "tool:run sleep 2; echo 9 of 14 passed\\n"
-                  "ask:announced {\"kind\": \"edit\", \"title\": \"Edit src/main.el\"}\nsay done")))
+                  "ask:tool {\"kind\": \"read\", \"title\": \"Read the gateway's log\"}\nsay done")))
       (setq drgnx-look-scene--panel (drgnx-panel-replay-up bin))
-      ;; the turn runs on past the prefix: the scene shows it ended, every step with its time
+      ;; the turn runs on past the prefix to its ask: the scene shows every step's time and the open card
       (unless (drgnx-panel-replay--wait 30 (lambda () (with-current-buffer drgnx-look-scene--panel
-                                                        (save-excursion (goto-char (point-min))
-                                                                        (search-forward "turn ended" nil t)))))
-        (push "agent: the turn did not end within 30 s" drgnx-look-scene--errors))))
+                                                        (drgnx-agent-panel-cards--permissions))))
+        (push "agent: no permission card within 30 s" drgnx-look-scene--errors))))
   (drgnx-look-scene--answer :panel (if (buffer-live-p drgnx-look-scene--panel) (buffer-name drgnx-look-scene--panel) :null)))
 
 (defun drgnx-look-scene--editor ()
