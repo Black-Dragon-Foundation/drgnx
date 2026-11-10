@@ -34,6 +34,14 @@ selector is passed into the scenario session too.
 
 ### One Emacs per test file
 
+The GUI tests (`--ui`) are the exception: one session runs them all, so a row that leaves a frame size, a window's
+tab or header line, a mode or a default mode line behind breaks a later row with pixels that are merely elsewhere.
+The look's rows are defined with `drgnx-look-gui-deftest` (`test/fixtures/look-gui-fixture.el`), an `ert-deftest`
+that starts with `drgnx-look-gui-check-clean`: the session must be as it was before the first row (frame size, scale,
+font and the parameters that move pixels, the selected window and its parameters, focus, modes, themes, global hooks
+and mode lines). A failure names what differs, and the row that left it puts it back in its own unwind. Rows are never
+reordered or rerun to pass.
+
 `bin/drgnx test` and each unit shard of `bin/drgnx check` run every test file in a batch Emacs of its own, as Emacs's
 own `make check` does: a hook, timer, advice, feature or variable a file leaves behind never reaches the next file,
 so a test cannot pass or fail because of the file that happened to run before it. Within a file, ERT still runs the

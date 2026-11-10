@@ -7,6 +7,7 @@
 ;; the panel row uses a window of its own whose buffer is remapped to the panel face.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -29,7 +30,7 @@
                (`(,l ,tp ,r ,b) (mapcar (lambda (e) (round (* s e))) (window-pixel-edges window))))
     (drgnx-uitest-pixel (drgnx-uitest-snapshot) (+ l (floor (* x-frac (- r l)))) (+ tp (floor (* y-frac (- b tp)))))))
 
-(ert-deftest drgnx-ui-look-themes/surface-pixels ()
+(drgnx-look-gui-deftest drgnx-ui-look-themes/surface-pixels ()
   (drgnx-uitest-bare-frame)
   (let ((buf (get-buffer-create " *look-themes*")))
     (unwind-protect

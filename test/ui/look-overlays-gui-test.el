@@ -5,6 +5,7 @@
 ;; each overlay face is put on a span of it by an overlay.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -59,7 +60,7 @@ boxes scaled.  Everything undone after."
   "Non-nil when pixels A and B are within 6 of each other in every channel (an arc's edge is antialiased)."
   (cl-every (lambda (x y) (<= (abs (- x y)) 6)) a b))
 
-(ert-deftest drgnx-ui-look-overlays/a-box-never-moves-text ()
+(drgnx-look-gui-deftest drgnx-ui-look-overlays/a-box-never-moves-text ()
   "Pattern D: the region, `lazy-highlight' and `isearch' over a span inside a line and over a span across a line's
 end leave every character where it was, in x and y: their boxes are drawn inside the glyphs."
   (skip-unless (display-graphic-p))
@@ -71,7 +72,7 @@ end leave every character where it was, in x and y: their boxes are drawn inside
             (unwind-protect (should (equal (list face span plain) (list face span (drgnx-ui-look-overlays--xys))))
               (delete-overlay o))))))))
 
-(ert-deftest drgnx-ui-look-overlays/the-region-is-rounded-and-isearch-ringed ()
+(drgnx-look-gui-deftest drgnx-ui-look-overlays/the-region-is-rounded-and-isearch-ringed ()
   "Pattern D, window-dark.html `.ln .sel' and design \"Matches\": under Glitnir the region's run has rounded corners
 \(its top-left pixel is the editor's colour, its inside, above the text, the selection's), and a region across a
 line's end stops there (six columns past it is the editor's colour); the current match is the matches' tint inside a

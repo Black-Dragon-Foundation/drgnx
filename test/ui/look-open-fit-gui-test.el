@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-ui-look-open-fit--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
@@ -34,7 +35,7 @@ known after the first redisplay, and the store sees the change on the next obser
       (drgnx-signal--flush)
       (drgnx-test-wait-presented))))
 
-(ert-deftest drgnx-ui-look-open-fit/a-pixel-of-frame-never-moves-the-explorer ()
+(drgnx-look-gui-deftest drgnx-ui-look-open-fit/a-pixel-of-frame-never-moves-the-explorer ()
   "Four open files: the Open section's body is their rows exactly (no empty row below the last), or the whole rows
 that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel leaves the Explorer's top where it was."
   (let* ((root (drgnx-uitest-root-frame))
@@ -50,8 +51,10 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
           (load-theme 'drgnx-dark t)
           (drgnx-look-density-on)
           (drgnx-state-mode 1)
-          (drgnx-buffers-setup)
-          (drgnx-explorer-setup)
+          ;; set up as a module's setup does, so their hooks, subscriptions and focus functions are recorded and undone
+          (let ((drgnx-modules--current 'look-open-fit-row) (drgnx-modules--setup-load load-file-name))
+            (drgnx-buffers-setup)
+            (drgnx-explorer-setup))
           (dolist (n '("a.txt" "b.txt" "c.txt" "d.txt"))
             (let ((f (expand-file-name n dir)))
               (write-region "x\n" nil f nil 'silent)
@@ -76,8 +79,10 @@ that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel le
               (drgnx-ui-look-open-fit--settle)
               (should (equal (list dh (frame-inner-height root) (window-pixel-top explorer) (window-body-height open t))
                              (list dh (frame-inner-height root) top want))))))
-      (drgnx-state-mode -1)
       (drgnx-wb-hide-sidebar)
+      (dolist (u (alist-get 'look-open-fit-row drgnx-modules--stacks)) (funcall (cdr u)))
+      (setf (alist-get 'look-open-fit-row drgnx-modules--stacks nil t) nil)
+      (drgnx-state-mode -1)
       (drgnx-look-density-off)
       (mapc #'disable-theme custom-enabled-themes)
       (set-frame-size root (car size) (cadr size) t)

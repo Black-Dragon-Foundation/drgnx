@@ -6,6 +6,7 @@
 ;; the buttons and chips to the session's evidence folder when there is one.
 
 (require 'ert)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
@@ -29,7 +30,7 @@
   "HEX as the (A R G B) a snapshot gives."
   (cons 255 (mapcar (lambda (i) (string-to-number (substring hex i (+ i 2)) 16)) '(1 3 5))))
 
-(ert-deftest drgnx-ui-look-components/a-button-is-26-px-on-its-fill ()
+(drgnx-look-gui-deftest drgnx-ui-look-components/a-button-is-26-px-on-its-fill ()
   "A UI-kit button (and the primary one) on a line of its own makes the line 26 logical pixels (24 inside the 1 px
 ring), and the inside of the button is the theme's fill: the quiet selection, the accent's fill for the primary."
   (skip-unless (display-graphic-p))
@@ -68,7 +69,7 @@ ring), and the inside of the button is the theme's fill: the quiet selection, th
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-components/keycaps-and-buttons-are-in-the-ui-font ()
+(drgnx-look-gui-deftest drgnx-ui-look-components/keycaps-and-buttons-are-in-the-ui-font ()
   "In a buffer whose default font is the code font (the start page's), a keycap is drawn in the caption role's family
 and a button in the UI text role's; under Glitnir a button's corner is rounded (its corner pixel is not its fill)."
   (skip-unless (display-graphic-p))
@@ -107,7 +108,7 @@ and a button in the UI text role's; under Glitnir a button's corner is rounded (
       (mapc #'disable-theme custom-enabled-themes)
       (kill-buffer buf))))
 
-(ert-deftest drgnx-ui-look-components/the-start-page-keys-clear-their-column ()
+(drgnx-look-gui-deftest drgnx-ui-look-components/the-start-page-keys-clear-their-column ()
   "The start page's key table: in a buffer in the code font (the page's), the description after the widest keys
 (`C-k C-r', four caps) starts at least 16 logical pixels after the last cap's ring, where the page's column puts it."
   (skip-unless (display-graphic-p))
