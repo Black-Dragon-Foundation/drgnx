@@ -12,14 +12,15 @@
   '((dark . drgnx-dark) (light . drgnx-light) (hc . drgnx-high-contrast)))
 
 (defconst drgnx-themes-test--designs
-  ;; design section 3.4, as the table prints them (after the review's stronger subtle and comment)
+  ;; design section 3.4, as the table prints them (after the review's stronger subtle and comment, and the contrast
+  ;; ruling of 2026-11-10: dark's comment, light's comment, high contrast's selection)
   '((dark (gap . "#0a0b0d") (editor . "#15161a") (panel . "#18191e") (sel . "#243150") (fg . "#e4e5ea")
-          (muted . "#a2a5b2") (subtle . "#878b98") (comment . "#858996") (accent . "#7aa5ff") (focus . "#7aa5ff")
+          (muted . "#a2a5b2") (subtle . "#878b98") (comment . "#9599a4") (accent . "#7aa5ff") (focus . "#7aa5ff")
           (attention . "#ff9566"))
     (light (gap . "#dfe0e6") (editor . "#ffffff") (panel . "#f6f6f8") (sel . "#dbe5fb") (fg . "#1c1e23")
-           (muted . "#545866") (subtle . "#656977") (comment . "#686c7a") (accent . "#2c5fd4") (focus . "#2c5fd4")
+           (muted . "#545866") (subtle . "#656977") (comment . "#595d69") (accent . "#2c5fd4") (focus . "#2c5fd4")
            (attention . "#b8461a"))
-    (hc (gap . "#000000") (editor . "#000000") (panel . "#000000") (sel . "#1f3a7a") (fg . "#ffffff")
+    (hc (gap . "#000000") (editor . "#000000") (panel . "#000000") (sel . "#1a3166") (fg . "#ffffff")
         (muted . "#d6d8de") (subtle . "#bfc2ca") (comment . "#bfc2ca") (accent . "#a8c6ff") (focus . "#ffd36b")
         (attention . "#ffb38a") (sel-fg . "#ffffff"))))
 
@@ -157,17 +158,20 @@ ringed in the strong border, with no fill of its own."
                                (plist-get box :color) (plist-get box :line-width)))))))))
 
 ;; window-dark.html `.ln .sel' (the selection, radius 3) and design "Matches" (a 25 % accent tint; the current match
-;; gets the accent ring)
+;; gets the accent ring); dark's matches are 18 % and edged in the accent at 72 % (the user's ruling of 2026-11-10)
 (ert-deftest drgnx-themes/overlays-are-tints-in-inside-boxes ()
-  "The region is `sel' in a box of its own colour; `lazy-highlight' is the accent at 25 % over the editor in the same
-kind of box; `isearch' is that tint ringed 1 px in the accent, and keeps the text's own colour.  Every box is drawn
+  "The region is `sel' in a box of its own colour; `lazy-highlight' is the `match' tint (the accent over the editor)
+in a box of `match-edge'; `isearch' is that tint ringed 1 px in the accent, and keeps the text's own colour.  Every box is drawn
 inside the glyphs (negative widths), so it never moves text or grows a row; under Glitnir it is rounded 3 (logical; the
 decoration faces scale it per frame).  The region stops at the line's end: no square block past it."
   (pcase-dolist (`(,variant . ,theme) drgnx-themes-test--themes)
     (drgnx-themes-test--with theme
-      (let ((tint (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant) 0.25)))
+      (let ((tint (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant)
+                                    (if (eq variant 'dark) 0.18 0.25)))
+            (edge (drgnx-color-over (drgnx-look-token 'accent variant) (drgnx-look-token 'editor variant)
+                                    (if (eq variant 'dark) 0.72 0.25))))
         (pcase-dolist (`(,face ,bg ,style ,ring) `((region ,(drgnx-look-token 'sel variant) flat-button nil)
-                                                   (lazy-highlight ,tint flat-button nil)
+                                                   (lazy-highlight ,tint nil ,edge)
                                                    (isearch ,tint nil ,(drgnx-look-token 'accent variant))))
           (let* ((p (drgnx-faces--clause-plist face 'gui)) (box (plist-get p :box)))
             (should (equal (list face bg '(-1 . -1) style ring (and (featurep 'glitnir) 3))

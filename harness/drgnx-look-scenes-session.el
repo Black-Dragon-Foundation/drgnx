@@ -365,8 +365,8 @@ from 201."
 
 (defun drgnx-look-scene--highlights (theme)
   "THEME's highlights in one shot: two editor groups (the focused card's ring), the gateway file with the current
-line, a multi-line region, a rectangle, isearch's current and other matches, show-paren, eglot's symbol, Flymake's
-marks; a diff with a refined pair beside it; a hovered row in the Explorer and in Open."
+line, a multi-line region with a match inside it, a rectangle, isearch's current and other matches, show-paren,
+eglot's symbol, Flymake's marks; a diff with a refined pair beside it; a hovered row in the Explorer and in Open."
   (drgnx-look-scene--theme theme)
   (drgnx-look-scene--try "highlights"
     (require 'flymake) (require 'eglot) (require 'paren)     ; their faces
@@ -405,7 +405,11 @@ marks; a diff with a refined pair beside it; a hovered row in the Explorer and i
       (with-current-buffer (window-buffer left)
         (save-excursion
           (goto-char (point-min)) (forward-line 224) (move-to-column 1)
-          (let ((beg (point))) (forward-line 2) (move-to-column 20) (drgnx-look-scene--hl-put beg (point) 'region)))))
+          (let ((beg (point))) (forward-line 2) (move-to-column 20) (drgnx-look-scene--hl-put beg (point) 'region))
+          ;; a match inside it (over the region, as isearch's matches are)
+          (forward-line -1) (move-to-column 4)
+          (overlay-put (drgnx-look-scene--hl-put (point) (progn (move-to-column 16) (point)) 'lazy-highlight)
+                       'priority 20))))
     ;; a hovered row in Open and in the Explorer (the pointer's `mouse-face', drawn as its face: the row's text and
     ;; its tail at the right edge, which the pointer lights with it)
     (dolist (w (window-list nil 'never))

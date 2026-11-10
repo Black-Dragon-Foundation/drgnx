@@ -186,12 +186,12 @@ A tint is composited over the variant's `editor'."
          (nidhogg-title-bar :foreground ,(c 'fg) :background ,(c 'gap))
          (nidhogg-title-bar-inactive :foreground ,(c 'muted) :background ,(c 'gap)))
        ;; search, matches, completion
-       ;; matches are the accent at 25 % over the text, which keeps its colours; the current one is ringed in the
-       ;; accent (design "Matches"); boxes inside the glyphs, as the region's
-       `((isearch :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25) :extend nil
+       ;; matches are the accent's `match' tint over the text, which keeps its colours; the current one is ringed in
+       ;; the accent (design "Matches"), the others edged in `match-edge'; boxes inside the glyphs, as the region's
+       `((isearch :background ,(c 'match) :extend nil
                   :box (:line-width (-1 . -1) :color ,(c 'accent) ,@(and (featurep 'glitnir) '(:corner-radius 3))))
-         (lazy-highlight :background ,(drgnx-color-over (c 'accent) (c 'editor) 0.25) :extend nil
-                         :box (:line-width (-1 . -1) :style flat-button ,@(and (featurep 'glitnir) '(:corner-radius 3))))
+         (lazy-highlight :background ,(c 'match) :extend nil
+                         :box (:line-width (-1 . -1) :color ,(c 'match-edge) ,@(and (featurep 'glitnir) '(:corner-radius 3))))
          (match :background ,(c 'accent-tint))
          (show-paren-match :background ,(c 'accent-tint) :weight bold)
          (show-paren-mismatch :foreground ,(c 'error) :background ,(c 'error-tint))

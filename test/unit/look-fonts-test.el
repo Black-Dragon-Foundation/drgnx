@@ -163,6 +163,23 @@ and the resolution names where it came from."
        (pcase-dolist (`(,a . ,v) was) (set-face-attribute 'default t a v))
        (dolist (fr (frame-list)) (face-spec-recalc 'default fr)))))
 
+(defun drgnx-look-fonts-test--session-font ()
+  "`default''s font attributes for new frames and on the selected frame, and every frame's `font'."
+  (list (mapcar (lambda (a) (cons a (face-attribute 'default a t))) '(:family :foundry :height :weight :slant :width))
+        (mapcar (lambda (a) (cons a (face-attribute 'default a))) '(:family :height :weight))
+        (mapcar (lambda (f) (cons f (frame-parameter f 'font))) (frame-list))))
+
+(ert-deftest drgnx-look-fonts/off-puts-the-session-font-back ()
+  "Pattern D: on, then off: `default''s attributes (for new frames and on each frame) and every frame's `font' are
+the session's again; off undoes all of on, at once."
+  (drgnx-look-fonts-test--clean
+    (drgnx-look-fonts-test--default-kept
+      (let ((was (drgnx-look-fonts-test--session-font)))
+        (drgnx-look-fonts-on)
+        (should (equal "JetBrains Mono" (face-attribute 'default :family)))   ; on changed it
+        (drgnx-look-fonts-off)
+        (should (equal was (drgnx-look-fonts-test--session-font)))))))
+
 (ert-deftest drgnx-look-fonts/the-code-font-reaches-default-under-a-theme ()
   "Pattern D: drgnx Dark styles `default' (its colours), so Emacs skips `default's defface spec; the code role's
 defaults reach it all the same, whether the theme comes before the faces are written or after, and so does the
