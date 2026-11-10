@@ -45,9 +45,12 @@
 
 (defmacro drgnx-ui-look-bars--with-bar (&rest body)
   "BODY in a bare frame with one window on an Emacs Lisp buffer, the status bar on, and a right segment `edge' whose
-text is one block on the `region' face.  Everything undone after."
+text is one block on the `region' face.  Everything undone after: the modes, the default mode line and the window's
+parameters (a row that runs the chrome leaves its tab and header lines there; the next look row reuses the window)."
   (declare (indent 0))
   `(let ((state-was (bound-and-true-p drgnx-state-mode)) (bar-was (bound-and-true-p drgnx-statusbar-mode))
+         (mode-line-was (default-value 'mode-line-format))   ; the bar's off adds the modal indicator to it
+         (window (selected-window)) (params-was (window-parameters))   ; the chrome sets its tab and header lines
          (drgnx-statusbar--segments (make-hash-table :test #'eq)) (drgnx-statusbar--errors nil)
          (drgnx-statusbar-left nil) (drgnx-statusbar-right '(edge)) (drgnx-statusbar-compact '(edge))
          (buf (get-buffer-create "*look-bars*")))
@@ -69,6 +72,9 @@ text is one block on the `region' face.  Everything undone after."
          (drgnx-statusbar-mode (if bar-was 1 -1))
          (drgnx-state-mode (if state-was 1 -1)))
        (set-window-parameter (selected-window) 'mode-line-format nil)
+       (when (window-live-p window)
+         (pcase-dolist (`(,p . ,_) (window-parameters window)) (set-window-parameter window p (alist-get p params-was))))
+       (setq-default mode-line-format mode-line-was)
        (kill-buffer buf))))
 
 (defun drgnx-ui-look-bars--right-gap ()

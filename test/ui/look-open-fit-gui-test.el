@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-ui-look-open-fit--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
@@ -37,6 +38,7 @@ known after the first redisplay, and the store sees the change on the next obser
 (ert-deftest drgnx-ui-look-open-fit/a-pixel-of-frame-never-moves-the-explorer ()
   "Four open files: the Open section's body is their rows exactly (no empty row below the last), or the whole rows
 that fit in 0.3 of the frame, and growing or shrinking the frame by one pixel leaves the Explorer's top where it was."
+  (drgnx-look-gui-check-clean)
   (let* ((root (drgnx-uitest-root-frame))
          (dir (file-name-as-directory (make-temp-file "look-open-fit" t)))
          (size (list (frame-pixel-width root) (frame-pixel-height root)))

@@ -11,6 +11,7 @@
 (require 'seq)
 (require 'drgnx-wait-fixture (expand-file-name "../fixtures/wait-fixture" (file-name-directory (macroexp-file-name))))
 (require 'drgnx-uitest)
+(require 'drgnx-look-gui-fixture (expand-file-name "../fixtures/look-gui-fixture" (file-name-directory (macroexp-file-name))))
 
 (defconst drgnx-ui-look-explorer--repo
   (expand-file-name "../../" (file-name-as-directory (or (getenv "DRGNX_UI_TEST") default-directory))))
@@ -25,9 +26,11 @@
 
 (defmacro drgnx-ui-look-explorer--with (root &rest body)
   "BODY with the Explorer rooted at ROOT (a temporary folder with a.txt, b.txt and c.txt, all `modified' in git) shown
-in the selected window of a bare frame under the dark theme.  Everything undone after."
+in the selected window of a bare frame under the dark theme, after checking that the session is clean
+\(`drgnx-look-gui-check-clean').  Everything undone after."
   (declare (indent 1))
-  `(let* ((,root (file-name-as-directory (make-temp-file "look-explorer" t)))
+  `(let* ((_ (drgnx-look-gui-check-clean))          ; a row before this one left nothing behind
+          (,root (file-name-as-directory (make-temp-file "look-explorer" t)))
           (drgnx-explorer--roots nil) (drgnx-explorer-compact-folders nil))
      (dolist (n '("a.txt" "b.txt" "c.txt")) (write-region "" nil (expand-file-name n ,root) nil 'silent))
      (drgnx-uitest-bare-frame)
