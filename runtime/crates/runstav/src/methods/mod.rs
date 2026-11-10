@@ -307,6 +307,7 @@ params! {
     SearchUsages(search::UsagesParams),
     SearchGrepReplace(search::GrepReplaceParams),
     SearchGrepLook(search::GrepLookParams),
+    SearchGrepSkipped(search::GrepSkippedParams),
     ExplorerSubscribe(search::ExplorerParams),
     SearchServerPlan(search::ServerKindParams),
     SearchServerStart(search::ServerStartParams),

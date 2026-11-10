@@ -15,7 +15,7 @@ use crate::front::Front;
 use drgnx_rows::{Op, Patch, Row, RowBuilder};
 use hrafn::grep::{self, Match, Query};
 use runstav::methods::search::{
-    GrepDone, GrepLookParams, GrepParams, GrepReplaceParams, GrepStarted,
+    GrepDone, GrepLookParams, GrepParams, GrepReplaceParams, GrepSkippedParams, GrepStarted,
 };
 use runstav::methods::view::ViewModel;
 use runstav::wire::{Error, ErrorCode};
@@ -30,8 +30,15 @@ use std::time::{Duration, Instant};
 /// `agents/panel/look`); the model holds every match.
 pub(super) const WINDOW: usize = 200;
 
-/// A row asked for with `upto` comes with this many rows after it.
+/// A row asked for with `upto` comes with this many rows after it (and, past [`FAR`], before it).
 pub(super) const MARGIN: usize = 100;
+
+/// A row `upto` asks for further than this past the rows sent comes in a block of rows around it, after a gap row,
+/// not with every row before it (SJA-ROWS-FAR-1: 19,000 rows at once were over the hub's 16 MiB per client).
+pub(super) const FAR: usize = 2 * WINDOW;
+
+/// The gap row's key: the rows between the first ones sent and a far block (`fill` sends them).
+const GAP: &str = "gap";
 
 /// A preview keeps this much of the text before a match, and cuts longer text to its tail after an ellipsis.
 const BEFORE_KEPT: usize = 16;
@@ -47,6 +54,10 @@ pub(super) struct Run {
     limit: usize,
     /// The rows sent so far: the first `sent` rows of `files`.
     sent: usize,
+    /// The rows of `files` sent after a gap row (a jump past [`FAR`]), when they do not meet the first `sent`.
+    block: Option<std::ops::Range<usize>>,
+    /// Match id → why Replace All skipped it (`search/grep-skipped`): its row shows it.
+    reasons: BTreeMap<String, String>,
     /// The entries (files and matches) the model last sent held. Up to [`MODEL_WINDOW`] the batches' nodes and ids
     /// are appended, at most one send per `model_every`; past it the model grows when the search has doubled it, when
     /// rows go out, and at the end.
@@ -89,6 +100,8 @@ impl Greps {
             files: Vec::new(),
             limit: WINDOW,
             sent: 0,
+            block: None,
+            reasons: BTreeMap::new(),
             model_sent: 0,
             model_every: MODEL_EVERY,
             model_at: None,
@@ -316,8 +329,8 @@ fn grep_doc_in(files: &[(String, Vec<Match>)], window: usize, from: Option<usize
 }
 
 /// M's row: a tick box, the text around the match (the match struck out and the replacement beside it when REPLACE
-/// is not empty and still fits the match).
-fn match_row(q: &Query, replace: &str, m: &Match) -> Row {
+/// is not empty and still fits the match), and WHY Replace All skipped it, if it did.
+fn match_row(q: &Query, replace: &str, m: &Match, why: Option<&str>) -> Row {
     let before = m.before.trim_start();
     let kept: Vec<char> = before.chars().collect();
     let before = if kept.len() > BEFORE_KEPT {
@@ -351,42 +364,100 @@ fn match_row(q: &Query, replace: &str, m: &Match) -> Row {
         }
     }
     b.push(&flat(&m.after), None);
+    if let Some(why) = why {
+        b.push(&format!("  — {why}"), Some("drgnx-replace-dim"));
+    }
     let end = b.pos();
     b.prop(0, end, "drgnx-replace-match", match_json(m));
     b.prop(0, end, "drgnx-work-id", json!(match_id(m)));
     b.finish()
 }
 
+/// Why Replace All skipped M, if it did.
+fn why<'a>(run: &'a Run, m: &Match) -> Option<&'a str> {
+    if run.reasons.is_empty() {
+        return None;
+    }
+    run.reasons.get(&match_id(m)).map(String::as_str)
+}
+
+/// M's row in RUN.
+fn row_of(run: &Run, m: &Match) -> Row {
+    match_row(&run.query, &run.replace, m, why(run, m))
+}
+
 /// FILE's rows: its header and one row per match.
 fn file_rows(run: &Run, file: &str, ms: &[Match]) -> Vec<Row> {
     let mut rows = vec![header(&run.query.root, file)];
-    rows.extend(ms.iter().map(|m| match_row(&run.query, &run.replace, m)));
+    rows.extend(ms.iter().map(|m| row_of(run, m)));
     rows
 }
 
-/// The first LIMIT rows of the search's rows (a file's header and its matches, files in the order they were complete).
-fn rows_upto(run: &Run, limit: usize) -> Vec<Row> {
+/// The search's rows AT (a file's header and its matches, files in the order they were complete); none is built
+/// before it.
+fn rows_in(run: &Run, at: std::ops::Range<usize>) -> Vec<Row> {
     let mut rows = Vec::new();
-    'files: for (file, ms) in &run.files {
-        if rows.len() >= limit {
+    let mut i = 0;
+    for (file, ms) in &run.files {
+        if i >= at.end {
             break;
         }
-        rows.push(header(&run.query.root, file));
-        for m in ms {
-            if rows.len() >= limit {
-                break 'files;
-            }
-            rows.push(match_row(&run.query, &run.replace, m));
+        let n = 1 + ms.len();
+        if i + n <= at.start {
+            i += n;
+            continue;
         }
+        if at.contains(&i) {
+            rows.push(header(&run.query.root, file));
+        }
+        let skip = at.start.saturating_sub(i + 1);
+        for m in ms
+            .iter()
+            .skip(skip)
+            .take(at.end.saturating_sub(i + 1 + skip))
+        {
+            rows.push(row_of(run, m));
+        }
+        i += n;
     }
     rows
 }
 
-/// The rows the views have: the window.  Sets `sent` to their number.
-fn window_rows(run: &mut Run) -> Vec<Row> {
-    let rows = rows_upto(run, run.limit);
-    run.sent = rows.len();
+/// The first LIMIT rows of the search's rows.
+fn rows_upto(run: &Run, limit: usize) -> Vec<Row> {
+    rows_in(run, 0..limit)
+}
+
+/// The gap row: N rows between the first ones sent and the block (they come when it is in sight, `fill`).
+fn gap_row(n: usize) -> Row {
+    let mut b = RowBuilder::new(GAP.to_owned());
+    b.push(&format!("  ⋯ {n} more"), Some("drgnx-replace-dim"));
+    b.finish()
+}
+
+/// The rows the views have: the first `sent` (as many as the window has room for and the search found), then, after
+/// a gap row, the block.  A block the first rows reach is theirs: the gap goes.
+fn view_rows(run: &mut Run) -> Vec<Row> {
+    let total = entries_of(&run.files);
+    run.sent = run.limit.min(total);
+    if let Some(b) = run.block.clone()
+        && run.sent >= b.start
+    {
+        run.limit = run.limit.max(b.end);
+        run.sent = run.limit.min(total);
+        run.block = None;
+    }
+    let mut rows = rows_upto(run, run.sent);
+    if let Some(b) = run.block.clone() {
+        rows.push(gap_row(b.start - run.sent));
+        rows.extend(rows_in(run, b));
+    }
     rows
+}
+
+/// The rows the views have, as [`view_rows`] (sets `sent`).
+fn window_rows(run: &mut Run) -> Vec<Row> {
+    view_rows(run)
 }
 
 /// The position among the search's rows of the row KEY (a file's header or a match), if it is there yet.
@@ -516,6 +587,15 @@ fn batch_patches(
     if rows.is_empty() {
         return (model, Vec::new());
     }
+    if run.block.is_some() {
+        // the rows go before the gap row: the whole as it is now, a diff
+        let all = view_rows(run);
+        let patches = keys(store, conn, view)
+            .iter()
+            .filter_map(|k| store.publish(k, all.clone(), &[]))
+            .collect();
+        return (model, patches);
+    }
     run.sent += rows.len();
     let all = rows_upto(run, run.limit);
     let patches = keys(store, conn, view)
@@ -530,38 +610,95 @@ fn batch_patches(
 
 /// What the editor asks of the window (`search/grep-look`).
 pub(super) enum Look<'a> {
-    /// One window more.
+    /// One window more at the end of the rows (of the block, after a jump).
     More,
-    /// The row with this key, and a margin of rows after it.
+    /// The rows before the gap row, one window more (the gap row is in sight).
+    Fill,
+    /// The row with this key, and a margin of rows after it; past [`FAR`] a block around it after a gap row.
     Upto(&'a str),
 }
 
-/// The window grown as LOOK asks: the rows it gains after the last row sent, an insert for each class.
+/// The window grown as LOOK asks, sent as a diff for each class: rows inserted where they go (after the last row sent,
+/// before the gap row, or around the block), the gap row's count replaced, the gap row gone once the rows meet.
 fn look_patches(store: &mut Store, conn: u64, view: &str, run: &mut Run, look: Look) -> Vec<Patch> {
-    let want = match look {
-        Look::More => run.limit + WINDOW,
-        Look::Upto(key) => match row_index(run, key) {
-            Some(i) => i + 1 + MARGIN,
-            None => return Vec::new(),
+    match look {
+        Look::More => match &mut run.block {
+            Some(b) => b.end += WINDOW,
+            None => run.limit += WINDOW,
         },
-    };
-    if want <= run.limit {
-        return Vec::new();
+        Look::Fill => {
+            if run.block.is_none() {
+                return Vec::new();
+            }
+            run.limit = run.sent + WINDOW;
+        }
+        Look::Upto(key) => {
+            let Some(i) = row_index(run, key) else {
+                return Vec::new();
+            };
+            if i < run.limit || run.block.as_ref().is_some_and(|b| b.contains(&i)) {
+                return Vec::new();
+            }
+            let want = i + 1 + MARGIN;
+            if want <= run.sent + FAR {
+                run.limit = want;
+            } else {
+                let start = i.saturating_sub(MARGIN);
+                run.block = Some(match run.block.clone() {
+                    // next to the block (Next or Previous Match walking out of it): it grows
+                    Some(b) if start <= b.end && want >= b.start => {
+                        b.start.min(start)..b.end.max(want)
+                    }
+                    _ => start..want,
+                });
+            }
+        }
     }
-    run.limit = want;
-    let all = rows_upto(run, want);
-    if all.len() <= run.sent {
-        return Vec::new();
+    let total = entries_of(&run.files);
+    if let Some(b) = &mut run.block {
+        b.end = b.end.min(total);
     }
-    let new = all[run.sent..].to_vec();
-    run.sent = all.len();
+    let rows = view_rows(run);
     keys(store, conn, view)
         .iter()
-        .filter_map(|k| match store.append(k, new.clone()) {
-            Some(p) => Some(p),
-            None => store.publish(k, all.clone(), &[]),
-        })
+        .filter_map(|k| store.publish(k, rows.clone(), &[]))
         .collect()
+}
+
+/// Replace All's leftovers (`search/grep-skipped`): RUN keeps only the matches WHY names, each showing its reason, and
+/// its files; the search stops (what it lists is what Replace All left). The model then, and the rows, for each class.
+fn skip_patches(
+    store: &mut Store,
+    conn: u64,
+    view: &str,
+    run: &mut Run,
+    why: BTreeMap<String, String>,
+) -> (Option<ViewModel>, Vec<Patch>) {
+    run.cancel.store(true, Ordering::Relaxed);
+    let files = std::mem::take(&mut run.files);
+    run.files = files
+        .into_iter()
+        .filter_map(|(file, ms)| {
+            let ms: Vec<Match> = ms
+                .into_iter()
+                .filter(|m| why.contains_key(&match_id(m)))
+                .collect();
+            (!ms.is_empty()).then_some((file, ms))
+        })
+        .collect();
+    run.reasons = why;
+    run.waiting = (Vec::new(), Vec::new());
+    run.model_sent = entries_of(&run.files);
+    run.limit = WINDOW;
+    run.block = None;
+    store.forget_windows(conn, view);
+    let model = store.publish_model(conn, view, grep_doc(&run.files, None));
+    let rows = view_rows(run);
+    let patches = keys(store, conn, view)
+        .iter()
+        .filter_map(|k| store.publish(k, rows.clone(), &[]))
+        .collect();
+    (model, patches)
 }
 
 /// The rows as they are now, for the classes whose rows differ (replace text changed, an env arrived).
@@ -726,15 +863,35 @@ pub fn start(f: &Front, c: &Caller, p: GrepParams) -> Result<GrepStarted, Error>
 /// beyond them).
 pub fn look(f: &Front, c: &Caller, p: GrepLookParams) -> Result<bool, Error> {
     let views = &f.core.views;
-    let ask = match (&p.upto, p.more) {
-        (Some(key), _) => Look::Upto(key),
-        (None, Some(true)) => Look::More,
-        _ => return Err(invalid("more", "more, or upto a row's key")),
+    let ask = match (&p.upto, p.more, p.fill) {
+        (Some(key), _, _) => Look::Upto(key),
+        (None, Some(true), _) => Look::More,
+        (None, _, Some(true)) => Look::Fill,
+        _ => return Err(invalid("more", "more, fill, or upto a row's key")),
     };
     Ok(views
         .greps
         .current(c.conn_id, &p.view, |run| {
             for patch in look_patches(&mut lock(&views.store), c.conn_id, &p.view, run, ask) {
+                f.send_to(c.conn_id, "view-patch", json!(patch));
+            }
+        })
+        .is_some())
+}
+
+/// `search/grep-skipped`: VIEW lists only the matches Replace All skipped, each with its reason.
+pub fn skipped(f: &Front, c: &Caller, p: GrepSkippedParams) -> Result<bool, Error> {
+    let views = &f.core.views;
+    let why = p.skipped.into_iter().map(|s| (s.id, s.why)).collect();
+    Ok(views
+        .greps
+        .current(c.conn_id, &p.view, |run| {
+            let (model, patches) =
+                skip_patches(&mut lock(&views.store), c.conn_id, &p.view, run, why);
+            if let Some(m) = model {
+                f.send_to(c.conn_id, "view-model", super::Store::model_data(m));
+            }
+            for patch in patches {
                 f.send_to(c.conn_id, "view-patch", json!(patch));
             }
         })

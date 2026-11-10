@@ -1485,8 +1485,9 @@ result may (a transcript entry's ACP fields, a job's tasks).
 | `search/embedders` | user | `{}` | `{builtin: BuiltinInfo, prefer?: string, servers: [ServerInfo]}` | no |
 | `search/files` | user | `{ignore?: "index" \| "real", n?: natnum, query: string, root: AbsPath, view: string}` | `{query: natnum}` | no |
 | `search/grep` | user | `{case?: boolean, exclude?: [string], file?: AbsPath, ignore?: "index" \| "real", include?: [string], regexp?: boolean, replace?: string, root: AbsPath, text: string, view: string, word?: boolean}` | `{query: natnum}` | no |
-| `search/grep-look` | user | `{more?: boolean, upto?: string, view: string}` | `boolean` | no |
+| `search/grep-look` | user | `{fill?: boolean, more?: boolean, upto?: string, view: string}` | `boolean` | no |
 | `search/grep-replace` | user | `{replace: string, view: string}` | `boolean` | no |
+| `search/grep-skipped` | user | `{skipped: [{id: string, why: string}], view: string}` | `boolean` | no |
 | `search/index` | user | `{now?: boolean, rebuild?: boolean, root: AbsPath}` | `{started: boolean}` | yes |
 | `search/map` | user | `{base?: boolean, budget?: natnum, focus?: [string], names?: [string], root: AbsPath, scope?: "code" \| "all"}` | `{files: [MapFile], files_total: natnum, fresh: Fresh, text: string, tokens: natnum}` | no |
 | `search/model-download` | user | `{consent: {bytes: natnum}, model: Id}` | `{started: boolean}` | yes |
@@ -2370,10 +2371,15 @@ the search itself is `hrafn::grep`).
 - **The window** (the agent panel's shape, `agents/panel/look`): the hub keeps every match and Sjá's model holds them
   (so Next Match, Previous Match and Replace All, which read the model, act on all of them), but the rows sent are
   the first 200 (a file's header and its matches, in the order the files were complete) and no more until the editor
-  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, upto?}` goes on:
-  `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
-  Match went to a match beyond them): the rows up to it and 100 after it. A search still streaming fills the room a
-  look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
+  asks; the totals (files, matches) come with `search-grep-done`. `search/grep-look {view, more?, fill?, upto?}` goes
+  on: `more` is one window more (the editor's window neared the end of the rows), `upto` a row's key (Next or Previous
+  Match went to a match beyond them): the rows up to it and 100 after it. A row more than 400 rows (`FAR`) past the
+  rows sent comes in a block, the 100 rows before it, it and the 100 after, after a gap row (key `gap`, "⋯ N more"),
+  never every row before it (SJA-ROWS-FAR-1: a jump past ~19,000 rows was one patch over the 16 MiB a client may have
+  queued, and the hub dropped the editor); `more` then grows the block, an `upto` next to it grows it either way, and
+  `fill` (the editor shows the gap row) is one window more before the gap; when those rows reach the block the gap row
+  goes. Each look is the rows the editor should hold, sent as a diff (inserts where they go, the gap row's count
+  replaced). A search still streaming fills the room a look made. The answer is `false` when the view has no search. A replacement's preview (`search/grep-replace`) patches
   the rows sent only.
 - **The model's cadence:** a file's batch adds its nodes and ids to what waits, and the model goes out with each file
   while rows go out (the rows name the model they were built from), else at most once per 100 ms (`MODEL_EVERY`, the
@@ -2395,6 +2401,8 @@ the search itself is `hrafn::grep`).
   coalesced, 0.84 times the doubling cadence's CPU with framing on and 0.82 times off.
 - `search/grep-replace {view, replace}` changes the replacement the rows preview: the hub patches the rows that
   change (`replace` ops) and searches nothing again.
+- `search/grep-skipped {view, skipped: [{id, why}]}` is what Replace All left: the search stops, its files and matches
+  become the ones named (each row shows why after the match), and the model and the rows go out as diffs.
 - `ignore` is `index` (no dot paths, no secret-looking names, the filters of the index) or `real` (only what
   `.gitignore` files and the globs name). Without it the setting `drgnx-search-ignore-rules` decides (`index` by
   default); it is a runtime setting, so the hub reads the user's value.

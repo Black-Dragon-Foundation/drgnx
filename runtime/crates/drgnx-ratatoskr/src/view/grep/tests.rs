@@ -724,3 +724,133 @@ fn a_window_move_is_the_diff_of_the_whole() {
         }
     }
 }
+
+/// [D] Replace All's leftovers (`search/grep-skipped`, SJA-SEARCH-1 (3)): the search lists only the skipped matches,
+/// each with its reason after the text, under their files; the model holds them alone, and the search stops.
+#[test]
+fn skipped_leaves_the_skipped_matches_with_their_reasons() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for file in ["/r/a.txt", "/r/b.txt"] {
+        let ms = (1..=2).map(|i| m(file, i, "x ", "needle", " y")).collect();
+        greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file.into(), ms)
+            })
+            .unwrap();
+    }
+    let why = BTreeMap::from([(
+        "m:/r/b.txt:2:2".to_string(),
+        "changed since the search".to_string(),
+    )]);
+    let (model, patches) = greps
+        .current(CONN, "s", |run| skip_patches(&mut s, CONN, "s", run, why))
+        .unwrap();
+    assert!(model.is_some());
+    assert!(!patches.is_empty());
+    greps.current(CONN, "s", |run| {
+        assert!(run.cancel.load(Ordering::Relaxed));
+        let left: Vec<(&str, Vec<String>)> = run
+            .files
+            .iter()
+            .map(|(f, ms)| (f.as_str(), ms.iter().map(match_id).collect()))
+            .collect();
+        assert_eq!(left, [("/r/b.txt", vec!["m:/r/b.txt:2:2".to_string()])]);
+        let doc = grep_doc(&run.files, None);
+        assert_eq!(doc.lists["order"], ["f:/r/b.txt", "m:/r/b.txt:2:2"]);
+    });
+    let rows = &s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())].rows;
+    assert_eq!(
+        rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
+        ["[x] b.txt", "  [x] x needle y  — changed since the search"]
+    );
+}
+
+/// The keys of the rows the editor holds.
+fn held(s: &Store) -> Vec<String> {
+    s.pairs[&(CONN, "s".to_string(), "gui-1".to_string())]
+        .rows
+        .iter()
+        .map(|r| r.key.clone())
+        .collect()
+}
+
+/// [D] SJA-ROWS-FAR-1: a jump far past the rows sent (`upto` a match 29,000 rows on, of a 30,300-row search) sends the
+/// rows around it after a gap row, well under 1 MiB, never every row before it (19,000 rows were over the hub's
+/// 16 MiB per client); `more` grows the block, `upto` just before it grows it back, `fill` (the gap in sight) grows the
+/// rows before the gap, and when they meet the block the gap goes.
+#[test]
+fn a_far_jump_sends_the_rows_around_it_after_a_gap() {
+    let mut s = store();
+    let greps = Greps::default();
+    let id = run_of(&greps, "");
+    start_patches(&mut s, CONN, "s");
+    for f in 0..300 {
+        let file = format!("/r/f{f:03}.txt");
+        let ms = (1..=100)
+            .map(|l| m(&file, l, "a ", "needle", " in"))
+            .collect();
+        greps
+            .with(CONN, "s", id, |run| {
+                batch_patches(&mut s, CONN, "s", run, file, ms)
+            })
+            .unwrap();
+    }
+    let look = |s: &mut Store, l: Look| {
+        greps
+            .current(CONN, "s", |run| look_patches(s, CONN, "s", run, l))
+            .unwrap()
+    };
+    let size = |ps: &[Patch]| serde_json::to_string(ps).unwrap().len();
+    // f287.txt:30 is row 287 * 101 + 30 = 29,017
+    let key = "m:/r/f287.txt:30:2".to_owned();
+    let jump = look(&mut s, Look::Upto(&key));
+    assert!(size(&jump) < 1 << 20, "{} bytes", size(&jump));
+    let rows = held(&s);
+    let at = rows
+        .iter()
+        .position(|k| *k == key)
+        .expect("the row asked for");
+    let gap = rows.iter().position(|k| k == "gap").expect("a gap row");
+    assert_eq!(gap, WINDOW, "the first window, then the gap");
+    assert_eq!(rows.len() - at - 1, MARGIN);
+    assert_eq!(at - gap - 1, MARGIN);
+    // more: the block grows at its end
+    let n = rows.len();
+    let more = look(&mut s, Look::More);
+    assert!(size(&more) < 1 << 20);
+    assert_eq!(held(&s).len(), n + WINDOW);
+    // the match just before the block: the block grows back, the gap row stays
+    let first = held(&s)[gap + 1].clone();
+    let before = greps
+        .current(CONN, "s", |run| {
+            let i = row_index(run, &first).unwrap();
+            rows_upto(run, i).pop().unwrap().key
+        })
+        .unwrap();
+    look(&mut s, Look::Upto(&before));
+    let rows = held(&s);
+    assert!(rows.contains(&before));
+    assert_eq!(rows.iter().filter(|k| *k == "gap").count(), 1);
+    // fill until the rows before the gap reach the block: the gap goes, every row is there once, in order
+    for _ in 0..200 {
+        if !held(&s).iter().any(|k| k == "gap") {
+            break;
+        }
+        let fill = look(&mut s, Look::Fill);
+        assert!(size(&fill) < 1 << 20);
+    }
+    let rows = held(&s);
+    assert!(!rows.iter().any(|k| k == "gap"));
+    let all = greps
+        .current(CONN, "s", |run| {
+            rows_upto(run, rows.len())
+                .into_iter()
+                .map(|r| r.key)
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(rows, all);
+}

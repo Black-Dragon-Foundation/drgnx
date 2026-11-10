@@ -176,6 +176,7 @@
   "search/files": ["user"],
   "search/grep": ["user"],
   "search/grep-look": ["user"],
+  "search/grep-skipped": ["user"],
   "search/grep-replace": ["user"],
   "search/index": ["user"],
   "search/model-download": ["user"],
