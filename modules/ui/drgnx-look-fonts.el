@@ -740,9 +740,36 @@ again (which gives your Lisp's attributes back)."
   (setq drgnx-look-fonts--lisp-layer nil drgnx-look-fonts--custom-file nil drgnx-look-fonts--desktop nil
         drgnx-look-fonts--default-before nil))
 
+(defvar drgnx-look-fonts--session nil
+  "(ATTRIBUTES . FRAMES) before `drgnx-look-fonts-on': `default''s attributes for new frames, and each graphical
+frame's `font' parameter (FRAME . FONT).  The specs alone do not give these back: a frame keeps the font its
+`default' was realised with.  `drgnx-look-fonts-off' restores them and forgets them.")
+
+(defun drgnx-look-fonts--note-session ()
+  "Record `drgnx-look-fonts--session', once per turn on."
+  (unless drgnx-look-fonts--session
+    (setq drgnx-look-fonts--session
+          (cons (face-all-attributes 'default t)
+                (cl-loop for f in (frame-list) when (display-graphic-p f) collect (cons f (frame-parameter f 'font)))))))
+
+(defun drgnx-look-fonts--restore-session ()
+  "`default''s attributes for new frames and every live graphical frame's font as before the module: a frame made
+while it was on gets the font the first recorded frame had."
+  (when-let* ((s drgnx-look-fonts--session))
+    (setq drgnx-look-fonts--session nil)
+    (pcase-dolist (`(,attr . ,value) (car s))
+      (ignore-errors (set-face-attribute 'default t attr value)))
+    (let ((fallback (cdr (car (cdr s)))))
+      (dolist (f (frame-list))
+        (when-let* (((frame-live-p f)) ((display-graphic-p f)) ((not (frame-parent f)))
+                    (font (or (cdr (assq f (cdr s))) fallback)))
+          (unless (equal font (frame-parameter f 'font)) (set-frame-parameter f 'font font)))))))
+
 (defun drgnx-look-fonts-on ()
   "The role faces follow the settings: snapshot your Lisp's attributes (when init has ended, else at its end;
-`default' is noted now, before config.el), write the specs, write them again after every theme change."
+`default' is noted now, before config.el), write the specs, write them again after every theme change.  The
+session's font is recorded first, for `drgnx-look-fonts-off'."
+  (drgnx-look-fonts--note-session)
   (unless after-init-time (drgnx-look-fonts--note-default))
   (add-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
   (add-hook 'disable-theme-functions #'drgnx-look-fonts--after-theme)
@@ -756,8 +783,9 @@ again (which gives your Lisp's attributes back)."
     (add-hook 'after-init-hook #'drgnx-look-fonts--after-init 90)))
 
 (defun drgnx-look-fonts-off ()
-  "Undo `drgnx-look-fonts-on': no override spec, the defface specs as they were, the family alternatives gone.
-Your Lisp's attributes and Customize entries stay."
+  "Undo `drgnx-look-fonts-on': no override spec, the defface specs as they were, the family alternatives gone, and
+the session's font back on every frame (`drgnx-look-fonts--session').  Your Lisp's attributes and Customize entries
+stay."
   (remove-hook 'enable-theme-functions #'drgnx-look-fonts--after-theme)
   (remove-hook 'disable-theme-functions #'drgnx-look-fonts--after-theme)
   (remove-hook 'after-init-hook #'drgnx-look-fonts--after-init)
@@ -781,7 +809,8 @@ Your Lisp's attributes and Customize entries stay."
   (drgnx-look-fonts--set-alternatives nil)
   (when drgnx-look-fonts--absolute         ; the faces are relative again: the scaled buffers' remaps without them
     (setq drgnx-look-fonts--absolute nil drgnx-look-fonts--absolute-code nil)
-    (drgnx-look-fonts--rescale-buffers)))
+    (drgnx-look-fonts--rescale-buffers))
+  (drgnx-look-fonts--restore-session))
 
 (provide 'drgnx-look-fonts)
 ;;; drgnx-look-fonts.el ends here

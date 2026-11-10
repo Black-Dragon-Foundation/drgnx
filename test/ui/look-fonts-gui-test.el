@@ -20,19 +20,6 @@
 (defvar drgnx-look-font-code)
 (defvar drgnx-look-font-ui)
 
-(defvar drgnx-ui-look-fonts--session
-  (list (frame-parameter nil 'font) (face-all-attributes 'default t))
-  "The session's font before these rows: the frame's `font' and `default''s attributes for new frames.  The fonts' off
-puts the face specs back, not these.")
-
-(defun drgnx-ui-look-fonts--off ()
-  "`drgnx-look-fonts-off', then the session's font as it was (`drgnx-ui-look-fonts--session'): the next look row reads
-pixels in it."
-  (drgnx-look-fonts-off)
-  (pcase-dolist (`(,attr . ,value) (nth 1 drgnx-ui-look-fonts--session))
-    (ignore-errors (set-face-attribute 'default t attr value)))
-  (set-frame-parameter (drgnx-uitest-root-frame) 'font (nth 0 drgnx-ui-look-fonts--session)))
-
 (drgnx-look-gui-deftest drgnx-ui-look-fonts/live-apply-every-frame ()
   "Pattern D: a size change of the code role resizes `default' on two frames, with no restart; the old size comes
 back with the old value."
@@ -52,7 +39,25 @@ back with the old value."
             (drgnx-test-wait-presented)
             (should (equal before (mapcar (lambda (f) (frame-char-height f)) (list first second))))))
       (delete-frame second)
-      (drgnx-ui-look-fonts--off))))
+      (drgnx-look-fonts-off))))
+
+(drgnx-look-gui-deftest drgnx-ui-look-fonts/off-puts-the-session-font-back ()
+  "Pattern D: on, then off: the frame's `font' and `default''s attributes (for new frames and on the frame) are the
+session's again; off undoes all of on, at once."
+  (skip-unless (display-graphic-p))
+  (let* ((f (selected-frame))
+         (now (lambda () (list (frame-parameter f 'font) (face-attribute 'default :family f)
+                               (mapcar (lambda (a) (face-attribute 'default a t)) '(:family :foundry :height :weight)))))
+         (was (funcall now)))
+    (unwind-protect
+        (progn
+          (drgnx-look-fonts-on)
+          (drgnx-test-wait-presented)
+          (should-not (equal was (funcall now)))          ; on changed the font
+          (drgnx-look-fonts-off)
+          (drgnx-test-wait-presented)
+          (should (equal was (funcall now))))
+      (drgnx-look-fonts-off))))
 
 (drgnx-look-gui-deftest drgnx-ui-look-fonts/the-code-font-under-each-theme ()
   "Pattern D: under each of drgnx's themes (they style `default', so Emacs skips its defface spec) the frame's
@@ -81,7 +86,7 @@ and one loaded after alike."
                   (load-theme theme t))
                 (drgnx-test-wait-presented)
                 (should (equal (list theme t) (list theme (> (frame-char-height) (* 1.5 plain)))))))))
-      (drgnx-ui-look-fonts--off)
+      (drgnx-look-fonts-off)
       (drgnx-look-fonts-reset)
       (mapc #'disable-theme custom-enabled-themes)
       (mapc (lambda (th) (load-theme th t)) (reverse was)))))
@@ -100,7 +105,7 @@ and one loaded after alike."
           (let ((row (drgnx-doctor-check 'fonts (list :font-fallbacks (drgnx-look-fonts-fallback-report)))))
             (should (eq 'warn (car row)))
             (should (string-match-p "ui: Drgnx Missing Family Sans" (cadr row)))))
-      (drgnx-ui-look-fonts--off))))
+      (drgnx-look-fonts-off))))
 
 (provide 'look-fonts-gui-test)
 ;;; look-fonts-gui-test.el ends here

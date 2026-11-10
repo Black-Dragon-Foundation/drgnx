@@ -199,6 +199,8 @@ Emacs's fast paths for the default face.
 
 A change applies at once to every frame. The settings page waits 300 ms after the last change of a role before it
 redraws, so a size slider or typed digits do not redraw on every key.
+Turning ui/look off gives every frame the font it had before, at once, and `default` its attributes for new
+frames; your Lisp's attributes and Customize entries stay.
 
 ### Ligatures
 
