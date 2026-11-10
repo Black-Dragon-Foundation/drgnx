@@ -585,18 +585,6 @@ fn is_test(path: &str) -> bool {
     comps.iter().any(|c| *c == "test" || *c == "tests")
         || name.ends_with("-test.el")
         || name.ends_with("_test.rs")
-        || name.ends_with("_test.go")
-        || name.ends_with("Test.java")
-        || name.ends_with("Tests.java")
-        || (name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py")))
-        || [".test.", ".spec."].iter().any(|m| {
-            name.find(m).is_some_and(|i| {
-                matches!(
-                    &name[i + m.len()..],
-                    "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts"
-                )
-            })
-        })
 }
 
 fn lang_of(path: &str, head: &[u8]) -> Lang {

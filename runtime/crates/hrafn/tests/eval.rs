@@ -346,24 +346,28 @@ fn report(rows: &[EvalRow], worse: &[&str]) -> Report {
 }
 
 /// Pattern D. The gate: the lower bound of the paired MRR@10 difference must stay above -0.01 overall and -0.03 in
-/// each stratum; two reports over different rows are refused.
+/// each stratum of 30 rows or more (a smaller one is reported, not gated); two reports over different rows are refused.
 #[test]
 fn compare_noninferiority_rule() {
-    let rows = rows_of(&[("symbol", 400), ("docs", 20)]);
+    let rows = rows_of(&[("symbol", 400), ("docs", 30), ("config", 29)]);
     let base = report(&rows, &[]);
     // the same: passes, difference exactly 0
     let v = compare(&base, &report(&rows, &[])).unwrap();
     assert!(v.pass, "{v:?}");
     assert_eq!(v.overall.mean, 0.0);
-    // one row of 420 slips a rank: inside both bounds
+    // one row of 459 slips a rank: inside both bounds
     let v = compare(&base, &report(&rows, &["symbol-000"])).unwrap();
     assert!(v.pass, "{v:?}");
     assert!(v.overall.mean < 0.0 && v.overall.lo > -0.01);
-    // one row of the 20-row stratum slips: overall is fine, the stratum's bound is not
+    // one row of the 30-row stratum slips: overall is fine, the stratum's bound is not
     let v = compare(&base, &report(&rows, &["docs-000"])).unwrap();
     assert!(!v.pass, "{v:?}");
     assert!(v.overall.lo > -0.01, "{v:?}");
     assert!(v.reasons.iter().any(|r| r.contains("docs")), "{v:?}");
+    // one row of the 29-row stratum slips: its bound is as low, but it is reported, not gated
+    let v = compare(&base, &report(&rows, &["config-000"])).unwrap();
+    assert!(v.pass, "{v:?}");
+    assert!(v.strata["config"].lo < -0.03, "{v:?}");
     // everything slips: overall fails
     let all: Vec<String> = rows.iter().map(|r| r.query.clone()).collect();
     let all: Vec<&str> = all.iter().map(String::as_str).collect();

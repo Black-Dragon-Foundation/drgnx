@@ -13,8 +13,8 @@ mod metrics;
 
 pub use r#gen::{HISTORY_LIMIT, clean_subject, generate, read_set, write_sets};
 pub use metrics::{
-    Delta, Gate, Judged, OVERALL_FLOOR, Report, RowScore, STRATUM_FLOOR, Summary, Verdict, ci,
-    compare, compare_on, judge,
+    Delta, GATED_STRATUM_ROWS, Gate, Judged, OVERALL_FLOOR, Report, RowScore, STRATUM_FLOOR,
+    Summary, Verdict, ci, compare, compare_on, judge,
 };
 
 use crate::query::{Answer, Hit, Query, Scope};

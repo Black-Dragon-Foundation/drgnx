@@ -213,6 +213,8 @@ pub struct Verdict {
 /// The lower bound of the overall MRR@10 difference must stay above this, and each stratum's above the second.
 pub const OVERALL_FLOOR: f64 = -0.01;
 pub const STRATUM_FLOOR: f64 = -0.03;
+/// A stratum of fewer rows is reported but does not gate: its interval is too wide for the floor to mean anything.
+pub const GATED_STRATUM_ROWS: usize = 30;
 
 /// What the gate compares: chunk-level MRR@10 (a target's symbol must match), or file MRR@10 (any hit in a target
 /// file), which is fair to a chunker that gives a language no symbols.
@@ -228,7 +230,8 @@ pub fn compare(a: &Report, b: &Report) -> Result<Verdict, String> {
 }
 
 /// B against A on the same queries: paired bootstrap of the difference of GATE's metric. B passes when the interval's
-/// lower bound is at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum, B's index has no coverage
+/// lower bound is at least [`OVERALL_FLOOR`] overall and [`STRATUM_FLOOR`] in every stratum of at least
+/// [`GATED_STRATUM_ROWS`] rows (smaller ones are reported only), B's index has no coverage
 /// error and its exact-symbol recall (when measured) is 1.0. Reports over different queries are refused, and so is the
 /// file gate over a report that has no file ranks.
 pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String> {
@@ -272,7 +275,7 @@ pub fn compare_on(a: &Report, b: &Report, gate: Gate) -> Result<Verdict, String>
     let mut strata = BTreeMap::new();
     for s in a.strata.keys() {
         let d = pair(&|r| &r.stratum == s);
-        if d.lo < STRATUM_FLOOR {
+        if d.n >= GATED_STRATUM_ROWS && d.lo < STRATUM_FLOOR {
             reasons.push(format!(
                 "stratum {s}: the lower bound of the {label} difference is {:.4}, below {STRATUM_FLOOR}",
                 d.lo

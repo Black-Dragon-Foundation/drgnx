@@ -270,6 +270,9 @@ fn files_are_classified_by_extension_and_shebang() {
     ] {
         assert_eq!(lang.as_str(), name);
     }
+    // tests are known by their directory; a test file by name alone is code (no demotion: HRAFN-TEST-NAMES-1)
+    assert_eq!(classify("pkg/tests/test_io.py", b"").1, Class::Test);
+    assert_eq!(classify("src/test/java/QueueTest.java", b"").1, Class::Test);
     for path in [
         "pkg/test_io.py",
         "pkg/io_test.py",
@@ -278,15 +281,7 @@ fn files_are_classified_by_extension_and_shebang() {
         "src/a.test.js",
         "pkg/store_test.go",
         "src/main/QueueTest.java",
-    ] {
-        assert_eq!(classify(path, b"").1, Class::Test, "{path}");
-    }
-    for path in [
         "src/contest.py",
-        "src/latest.ts",
-        "src/inspect.js",
-        "pkg/latest.go",
-        "src/main/Testing.java",
     ] {
         assert_eq!(classify(path, b"").1, Class::Code, "{path}");
     }

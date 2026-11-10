@@ -1185,7 +1185,7 @@ version 1 is chunked again at the next refresh, whether or not a file changed (a
 vector's key, embedded again).
 
 `PARSE_VERSION` covers what a parse derives besides the chunks (a symbol's lines and signature, the languages parsed;
-1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts).
+1: lines and signatures, 2: Python, JavaScript, TypeScript and TSX, 3: Go and Java, 4: JavaScript callbacks' cuts, 5: test files by directory only).
 When the store's `parse_version` is older, the next refresh parses every file again as for a new chunker, but the
 chunks' keys do not change, so no vector is embedded again; worktrees re-seed lazily. `tests/chunk_golden.rs` pins the
 chunks and symbols of Rust, C, shell, Lisp, Org and Markdown as the chunker made them before version 1: a change there
@@ -1228,8 +1228,8 @@ body starts with, else the `#` lines above. JavaScript and TypeScript define fun
 ones too) with their methods, a `const`/`let`/`var` whose value is an arrow function or a function expression, and in
 TypeScript interfaces, type aliases, enums and namespaces (whose declarations are members); the doc is a `/** … */`
 comment directly above, else the `//` lines. Files: `.py .pyi`, `.js .mjs .cjs .jsx`, `.ts .mts .cts`, `.tsx`, and
-extensionless files whose `#!` line runs `python…` or `node`. Tests also by name: `test_*.py`, `*_test.py` and
-`*.test.*`/`*.spec.*` scripts. A member without a doc of its own takes its class's, as a Rust method takes its
+extensionless files whose `#!` line runs `python…` or `node`. Their tests are known by directory (`test/`, `tests/`)
+only: a `*.test.ts` or `*_test.go` beside the code is code, so search does not demote it. A member without a doc of its own takes its class's, as a Rust method takes its
 `impl`'s. A signature is cut at the body's `{`: the first outside parentheses and brackets, so a destructured
 parameter stays in it. A JavaScript or TypeScript statement over the budget with no body of its own (a test file's
 `describe("…", function () { it(…) … })`) is cut before the statements of its last callback's body.
@@ -1239,8 +1239,7 @@ is in the signature; a method is top-level, so it has no container), types (`str
 aliases) and top-level constants and variables; a declaration of several specs (`var ( … )`) gives each its own span;
 the doc is the `//` lines above. Java defines classes, interfaces (annotation types too), enums and records, with their
 methods, constructors and nested types as members; the doc is the `/** … */` comment above (annotations are inside
-the declaration, so the comment sits above them). Files: `.go`, `.java`; tests also `*_test.go`, `*Test.java`,
-`*Tests.java`.
+the declaration, so the comment sits above them). Files: `.go`, `.java`.
 
 Org and Markdown chunk by the heading tree (`chunk/outline.rs`): a chunk's header is its outline path (`A > B`), a
 heading with nothing under it joins the next one, source blocks and fences stay whole under the budget, property
@@ -1392,8 +1391,9 @@ with no SQLite, no tree-sitter and no C, so the crate builds for `aarch64-linux-
   file MRR@10 (file level: the first hit in a target file, whatever its symbol) with bootstrap intervals per stratum,
   and writes the run as JSON. `eval compare [--by chunk|file] A.json B.json` is the gate: the lower bound of the paired
   difference of MRR@10 (or, `--by file`, of file MRR@10, which is fair to a chunker that gives a language no symbols)
-  must be at least -0.01 overall and -0.03 per stratum, the index has no coverage error and exact-symbol recall@1 is
-  1.0. A report from before file MRR was measured is refused by `--by file`. It needs no hub.
+  must be at least -0.01 overall and -0.03 per stratum of 30 rows or more (a smaller stratum is reported, not gated),
+  the index has no coverage error and exact-symbol recall@1 is 1.0. A report from before file MRR was measured is
+  refused by `--by file`. It needs no hub.
 - **The MCP tools (`search/mcp.rs`).** A session whose `mcp/session` came while `drgnx-agents-mcp` holds `search` gets
   `search.sock` beside `mcp.sock` (recorded in the session's row, so it is bound again at a restart and closed with the
   session): the tools `search` (`query`, `scope`, `k`), `symbols` (`name`, `match`, `kind`, `path`, `scope`, `k`) and
