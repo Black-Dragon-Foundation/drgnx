@@ -118,6 +118,7 @@ to its top.  The hub gives at most 50."
 (declare-function drgnx-agent-panel--row-toggle "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--redraw-steps "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel--strip-row "drgnx-agent-panel-steps")
+(declare-function drgnx-agent-panel--resized "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-init "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-teardown "drgnx-agent-panel-steps")
 (declare-function drgnx-agent-panel-steps-setup "drgnx-agent-panel-steps")
@@ -671,6 +672,9 @@ stays in it.  Every fifth update opens a new block, the others grow the last one
 ;;;; The module
 
 (defun drgnx-agent-panel--setup ()
+  ;; the strip follows the panel's width through the state store
+  (drgnx-state-subscribe 'windows-changed #'drgnx-agent-panel--resized)
+  (drgnx-state-subscribe 'pane-resized #'drgnx-agent-panel--resized)
   (drgnx-command-define 'agents-panel :category "Agents" :title "Open the Agent Panel"
                         :command #'drgnx-agent-panel-open
                         :doc "One agent session's steps, live, in the right dock")
