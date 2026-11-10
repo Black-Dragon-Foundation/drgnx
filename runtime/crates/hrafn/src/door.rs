@@ -117,10 +117,12 @@ mod gix_door;
 pub use gix_door::GixDoor;
 
 /// The attributes that name a conversion between the working tree and the blob.
+#[cfg(feature = "host")]
 const CONVERSIONS: [&str; 5] = ["filter", "text", "eol", "ident", "working-tree-encoding"];
 
 /// Whether a path converts, from its values of `CONVERSIONS` in order, as `git check-attr` prints them (`set`,
 /// `unset`, `unspecified` or the value), and whether `core.autocrlf` is on (`true` or `input`).
+#[cfg(feature = "host")]
 fn converts(values: &[&str; 5], autocrlf: bool) -> bool {
     let given = |v: &str| v != "unspecified" && v != "unset";
     let [filter, text, eol, ident, encoding] = *values;
@@ -134,6 +136,7 @@ fn converts(values: &[&str; 5], autocrlf: bool) -> bool {
         || given(encoding)
 }
 
+#[cfg(feature = "host")]
 fn autocrlf_on(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("true" | "input"))
 }
