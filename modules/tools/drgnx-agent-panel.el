@@ -80,8 +80,13 @@ to its top.  The hub gives at most 50."
   :group 'drgnx-agent-panel)
 (defface drgnx-agent-panel-md-rule '((t :inherit drgnx-border)) "A horizontal rule in an agent message."
   :group 'drgnx-agent-panel)
-(defface drgnx-agent-panel-added '((t :inherit diff-added)) "An added line of a step's diff." :group 'drgnx-agent-panel)
-(defface drgnx-agent-panel-removed '((t :inherit diff-removed)) "A removed line of a step's diff."
+(defface drgnx-agent-panel-added '((t :inherit (diff-added drgnx-code-small))) "An added line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-removed '((t :inherit (diff-removed drgnx-code-small))) "A removed line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-context '((t :inherit drgnx-code-small)) "An unchanged line of a step's diff."
+  :group 'drgnx-agent-panel)
+(defface drgnx-agent-panel-output '((t :inherit drgnx-code-small)) "A line of a tool's output."
   :group 'drgnx-agent-panel)
 
 ;;;; The panel's state, per buffer
@@ -541,6 +546,8 @@ signal when no hub serves)."
 (define-derived-mode drgnx-agent-panel-mode special-mode "Agent"
   "One agent session's steps, live."
   (setq-local truncate-lines t cursor-type nil)
+  ;; the panel's text in the UI font (agent-panel.html); output, diffs and code name the code font's faces
+  (face-remap-add-relative 'default 'drgnx-ui-text)
   (add-hook 'window-scroll-functions #'drgnx-agent-panel--scrolled nil t)
   (add-hook 'kill-buffer-hook #'drgnx-agent-panel--killed nil t))
 

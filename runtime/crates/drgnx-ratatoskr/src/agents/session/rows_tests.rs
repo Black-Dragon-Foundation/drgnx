@@ -75,6 +75,44 @@ fn hunks_split_at_30_lines() {
     assert!(faces(hunks[5]).contains(&"drgnx-agent-panel-added"));
 }
 
+/// agent-panel.html: the panel's prose is in the UI font, its output and diffs in the code font, so every line of a
+/// tool's output and of a hunk names a face (a line with none would take the panel's UI font).
+#[test]
+fn output_and_hunk_lines_are_code() {
+    let small = tool(
+        json!({"title": "Run", "kind": "execute", "status": "failed",
+                            "content": "Ran 14 tests\n1 unexpected"}),
+    );
+    let rows = rows_of(&small, &Look::default(), &BTreeMap::new(), false);
+    let out: Vec<&Row> = rows.iter().filter(|r| r.key.starts_with("e:3/d")).collect();
+    assert!(!out.is_empty(), "{:?}", keys(&rows));
+    for r in &out {
+        assert_eq!(faces(r), ["drgnx-agent-panel-output"], "{}", r.key);
+    }
+    let long: String = (0..40).map(|i| format!("line {i}\n")).collect();
+    let large =
+        tool(json!({"title": "Run", "kind": "execute", "status": "failed", "content": long}));
+    let rows = rows_of(&large, &Look::default(), &BTreeMap::new(), false);
+    for k in ["e:3/d:0", "e:3/d:2"] {
+        let r = rows.iter().find(|r| r.key == k).expect(k);
+        assert_eq!(faces(r), ["drgnx-agent-panel-output"], "{k}");
+    }
+    let e = tool(
+        json!({"title": "Edit a.el", "kind": "edit", "status": "completed",
+                        "content": [{"type": "diff", "path": "a.el", "oldText": "a\nb\nc\n", "newText": "a\nB\nc\n"}]}),
+    );
+    let rows = rows_of(&e, &open_edits(), &BTreeMap::new(), false);
+    let h = rows
+        .iter()
+        .find(|r| r.key == "e:3/h:0")
+        .expect("a hunk row");
+    assert!(
+        faces(h).contains(&"drgnx-agent-panel-context"),
+        "{:?}",
+        faces(h)
+    );
+}
+
 #[test]
 fn summary_is_one_line() {
     let e = tool(

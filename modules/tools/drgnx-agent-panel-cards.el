@@ -98,7 +98,9 @@
        (cons (cons (format "%s  %s   (a accept · D reject)" (drgnx-agent-panel--one-line path 50) (plist-get hunk :header))
                    'bold)
              (mapcar (lambda (l) (cons (truncate-string-to-width l 100 nil nil "…")
-                                       (pcase (and (not (string-empty-p l)) (aref l 0)) (?+ 'diff-added) (?- 'diff-removed) (_ 'default))))
+                                       (pcase (and (not (string-empty-p l)) (aref l 0))
+                                         (?+ 'drgnx-agent-panel-added) (?- 'drgnx-agent-panel-removed)
+                                         (_ 'drgnx-agent-panel-context))))
                      (seq-take body 30)))
        (list 'drgnx-agent-panel-hunk (cons path i))))))
 

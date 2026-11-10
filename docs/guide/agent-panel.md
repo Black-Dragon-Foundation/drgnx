@@ -16,6 +16,8 @@ Turn it off with the module `tools/agent-panel` (see [modules](modules.md)); eve
   right in the code font. A slow step (over `drgnx-agent-panel-slow-seconds`) or an expensive one (over
   `drgnx-agent-panel-expensive-cost`) shows that figure in the warning colour. The agent's thinking is folded under the
   step it belongs to; `TAB` opens or folds it, with the step's detail.
+- **Fonts:** the panel's text is in the UI font; a tool's output, the diffs (in the steps and on the cards) and code in
+  a message are in the code font.
 - **Checkpoints:** `R` on a step opens the revert card for it (the edit history's revert: nothing changes until you
   apply it) and `F` forks a second agent from it; the prompt of a fork says what one more run like it costs when the
   forecast is there. A step with no checkpoint to go back to refuses `R`. A step a revert undid is marked `↶ undone`; the rows reload by themselves when a revert, redo or take is applied.

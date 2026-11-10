@@ -2480,8 +2480,10 @@ the rows themselves are `agents/session/rows.rs`, pure).
   and its time and cost right-aligned, in `drgnx-agent-panel-warn` past 10 s or $0.50); `e:I/p:N` the lines under a
   step (each hook's verdict that refused, changed, failed or was busy, `hooked at the hub's server`, and `allowed by
   your Always`); `e:I/t`, `e:I/t:N` its thinking, folded to a line count or open (40 lines); `e:I/d:N` its output
-  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines); `e:I/h:N` its diff
-  hunks when open (ACP `diff` items, or a paired chat's `edit_file` old and new text), at most 30 lines a row;
+  when open (12 lines, or a large one's first and last 10 around a count of the hidden lines), in
+  `drgnx-agent-panel-output`; `e:I/h:N` its diff hunks when open (ACP `diff` items, or a paired chat's `edit_file` old
+  and new text), at most 30 lines a row, unchanged lines in `drgnx-agent-panel-context` (the panel's own text is in the
+  UI font, so every code line names a code face);
   `b:I:N` block N of an agent message, its Markdown spans as runs; `more` above the first row when earlier entries
   are not shown. A subagent's step is indented and drawn in one of the six agent faces, by its `Task` call.
 - **Props.** Every row carries `drgnx-agent-panel-entry` (the entry's index); a step that can be reverted to

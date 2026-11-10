@@ -14,6 +14,8 @@
 (drgnx-test-modules-preload '(tools/agent-panel))
 
 (defvar drgnx-agent-panel--stats-render)
+(defvar drgnx-agent-panel--diffs)
+(declare-function drgnx-agent-panel-cards--diff-row "drgnx-agent-panel-cards")
 (defvar drgnx-agent-panel--subscribed)
 (defvar drgnx-hub--events)
 (declare-function drgnx-agent-panel-buffer "drgnx-agent-panel")
@@ -850,3 +852,30 @@ panel in the right island (agent-panel.html), not as a tab of the editor."
   (drgnx-test-with-modules '(tools/agent-panel)
     (should (fboundp 'drgnx-pane-show))
     (should (eq 'right (plist-get (drgnx-pane-kind 'agent-panel) :home)))))
+
+(ert-deftest drgnx-agent-panel/prose-in-the-ui-font-output-in-code ()
+  "agent-panel.html: the panel's text (header, chips, steps, messages) is in the UI font, a tool's output, the diffs
+and code in the code font."
+  (drgnx-agent-panel-test--with
+    (with-current-buffer buf
+      (should (memq 'drgnx-ui-text (ensure-list (alist-get 'default face-remapping-alist)))))
+    (dolist (f '(drgnx-agent-panel-output drgnx-agent-panel-context drgnx-agent-panel-added drgnx-agent-panel-removed
+                                          drgnx-agent-panel-code drgnx-agent-panel-md-code))
+      (should (facep f))
+      (should (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small)))
+    ;; a diff card's lines too
+    (load (expand-file-name "modules/tools/drgnx-work-review" drgnx-dir) nil t)
+    (with-current-buffer buf
+      (setq drgnx-agent-panel--diffs (list (cons "a.txt" "@@ -1,2 +1,2 @@\n ctx\n-a\n+b\n")))
+      (let ((card (drgnx-agent-panel-cards--diff-row "a.txt" 0)))
+        (dolist (line '("+b" "-a" " ctx"))
+          (let ((face (get-text-property (1+ (string-search line card)) 'face card)))
+            (should (seq-some (lambda (f) (drgnx-agent-panel-test--inherits-p f 'drgnx-code-small))
+                              (ensure-list face)))))))))
+
+(defun drgnx-agent-panel-test--inherits-p (face target)
+  "Whether FACE is TARGET or inherits it, through any depth."
+  (or (eq face target)
+      (and (facep face)
+           (seq-some (lambda (p) (drgnx-agent-panel-test--inherits-p p target))
+                     (ensure-list (face-attribute face :inherit nil))))))
